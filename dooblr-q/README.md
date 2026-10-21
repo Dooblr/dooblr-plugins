@@ -2,11 +2,13 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.4.1:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
+**Version 0.5.0:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
-live frequency-response display over a background spectrum analyzer with Freeze, and
+live frequency-response display over a smoothed spectrum analyzer with a continuously
+updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
 automated tests. (0.3.0 added the analyzer, Freeze and Tilt. 0.4.1 removed 0.4.0's per-band
-stereo width: "Width" now means the band's bandwidth.)
+stereo width: "Width" now means the band's bandwidth. 0.5.0 added undo/redo, the band-tab
+switches, the live Freeze overlay and display smoothing.)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -20,6 +22,8 @@ Source/
   DSP/DynamicEQBand.h/.cpp     One band: smoothing, side-chain detector, envelope, dynamic gain
   DSP/FirEqEngine.h/.cpp       Natural/Linear phase: kernel design + partitioned FFT convolution
   Analysis/SpectrumAnalyzer.*  Lock-free analyzer FIFO, FFT analyzer, long-term average, freeze (no GUI)
+  Analysis/SpectrumDisplay.*   Display smoothing: 1/12-octave + per-point rise/fall (no GUI)
+  UndoHistory.h/.cpp           Undo/redo of UI gestures on juce::UndoManager (50 steps)
   Parameters.h/.cpp            Parameter IDs, ranges, defaults (APVTS layout)
   PluginProcessor.h/.cpp       Buses, processBlock, bypass, state
   PluginEditor.h/.cpp          Editor layout and parameter attachments
@@ -176,9 +180,39 @@ Handle mouse actions:
 - Scroll over a handle to change Q; Option/Alt-drag a handle vertically to change Q.
 - Disabled bands show grey, hollow handles.
 
-Below the display are a band selector and the selected band's controls: on/off, type,
-frequency, gain, Q, dynamic on/off, range, threshold, attack, release. Controls that
+Below the display are six band tabs and the selected band's controls: on/off, type,
+frequency, gain, Width, dynamic on/off, range, threshold, attack, release. Controls that
 currently have no audible effect (e.g. gain on a cut filter) are dimmed but still work.
+
+Each band tab has a small **on/off switch on its left** (bound to that band's on/off
+parameter): clicking the switch turns the band on or off without selecting the tab;
+clicking anywhere else on the tab selects the band. The switch is filled in the band's
+colour when on and drawn as a dim outline when off. It follows the parameter from
+anywhere (Band on toggle, double-click on a handle, automation) and is undoable.
+
+### Undo / redo
+
+- **Cmd-Z** (macOS) / **Ctrl-Z** (Windows) undoes; **Cmd-Shift-Z** / **Ctrl-Shift-Z** or
+  **Cmd-Y** / **Ctrl-Y** redoes. Small **Undo** / **Redo** buttons in the header do the same
+  and are greyed out when there is nothing to undo or redo.
+- Up to **50 actions** are kept (the oldest are dropped).
+- One action = one user gesture: a whole knob or slider drag, a handle drag (frequency and
+  gain together), a bandwidth-handle drag, an Option-drag, a type or phase-mode change, a
+  toggle, a band-tab switch click, a double-click on a handle. Quick scroll-wheel steps on
+  one control (less than 0.6 s apart) merge into one action.
+- Only the plug-in's own UI creates entries. Host automation (and loading a session or
+  preset) changes parameters without gestures and never fills the history; loading a
+  state clears it. Undo/redo report their changes to the host as normal edits.
+- Implementation: `ParameterUndoHistory` (Source/UndoHistory.*) listens for parameter
+  gestures and records one `juce::UndoManager` transaction per gesture. It deliberately
+  does not pass an UndoManager to the `AudioProcessorValueTreeState`: APVTS records into
+  it from its 10–50 Hz flush timer, which would also record host automation and split
+  gestures across timer ticks.
+- Keyboard focus: the editor takes keyboard focus when you click anywhere in it, and
+  claims Cmd/Ctrl-Z(-Shift)/Y only (other keys go to the host). **Host caveat:** whether
+  the host passes the key to the plug-in window at all is up to the host. In Ableton Live
+  the plug-in window must be the focused window (click inside it first); if Live still
+  handles Cmd-Z itself (Live's own undo), use the Undo / Redo buttons.
 
 ### Spectrum analyzer and Freeze
 
@@ -192,29 +226,48 @@ The response display has a spectrum analyzer behind the grid, curve and handles.
   music reads roughly flat. It only changes the drawing.
 - Scale: the analyzer has its own dBFS scale, 0 dBFS at the top to −90 dBFS at the
   bottom (labelled −30 and −60 dBFS on the right), independent of the EQ's ±24 dB scale.
-- The live spectrum (soft blue-grey) has an instant attack and falls at 36 dB/s.
+- The live spectrum (soft blue-grey): per FFT frame an instant attack and a 30 dB/s fall,
+  then display smoothing (below).
 
-Freeze is a long-term snapshot:
+Freeze shows the long-term average:
 
-- From the moment you Clear (or un-freeze), the analyzer keeps a running **power
-  average** of every FFT frame, plus a per-bin peak-hold. The readout shows
-  `Averaging: N s`.
-- **Freeze** captures that average as a static pink overlay (`Frozen: N s` = how much
-  audio it covers). The live spectrum keeps moving on top, so you can compare what is
-  playing now with what played before, or the same section before/after an EQ move.
-- **Peak**: also draws the peak-hold as a dashed line (the frozen one while frozen).
-- Pressing **Freeze** again hides the overlay and starts a new averaging window.
-  **Clear** removes the overlay and restarts the average.
-- The analyzer settings (visibility, source, tilt, peak) live in the plug-in instance
-  and survive closing/reopening the editor, but they and the frozen capture are
-  **not saved** with the session or preset.
+- From the last **Clear** the analyzer keeps a running **power average** of every FFT
+  frame, plus a per-bin peak-hold. The readout shows `Averaging: N s`.
+- **Freeze** shows that average as a pink overlay (`Frozen: N s` = how much audio it
+  covers). It is not a static snapshot: while frozen the average keeps accumulating the
+  live audio, and the overlay is redrawn every frame, gliding as it changes. The live
+  spectrum keeps moving on top, so you see the current audio against the long-term
+  balance.
+- **Clear** restarts the average (and the peak-hold); Freeze stays on and the overlay
+  rebuilds from the new audio. Turning **Freeze** off hides the overlay (the average
+  keeps running).
+- **Peak**: also draws the peak-hold since the last Clear as a dashed line.
+- The readout counts in 0.1 s steps in a fixed-width font (it only repaints when the
+  text changes, so it does not flicker or jitter).
+- The analyzer settings (visibility, source, tilt, peak, freeze) live in the plug-in
+  instance and survive closing/reopening the editor, but they are **not saved** with
+  the session or preset.
+
+Display smoothing (message thread only; the audio thread is unchanged):
+
+- Frequency: the live spectrum and the overlay are drawn on a 480-point log-frequency
+  grid (20 Hz–20 kHz). Each point is the power average of the bins within its 1/12-octave
+  band; at low frequencies, where a band holds fewer than ~3 bins, it is a Catmull-Rom
+  interpolation between the neighbouring bins (limited so it never overshoots), blended
+  smoothly into the average. As with any fractional-octave smoothing, a pure tone reads
+  lower than its per-bin level (a −6 dBFS 1 kHz sine shows about −11 dBFS); the dashed
+  peak-hold line is not smoothed and still shows tone peaks.
+- Time: per grid point a one-pole filter in dB, advanced by the real elapsed time (so it
+  behaves the same at any frame rate): live rise 30 ms, fall 160 ms; the overlay glides
+  with 250 ms.
+- Drawing: quadratic-curve paths through the grid points (no polyline corners).
 
 Analyzer details: 4096-point FFT, periodic Hann window, 75% overlap (hop 1024; 11.7 Hz
 bins and a frame every 21 ms at 48 kHz). Calibration: a sine of peak amplitude A reads
 20·log10(A) dBFS, so a full-scale sine reads 0 dBFS when it sits on a bin and up to
-1.42 dB lower between bins (Hann scalloping). The floor is −120 dBFS. On screen, each
-pixel column shows the loudest bin within ±1/24 octave, interpolating at low
-frequencies where the bins are sparser.
+1.42 dB lower between bins (Hann scalloping). The floor is −120 dBFS. On screen the
+live spectrum and overlay are smoothed as described above; the peak-hold line shows the
+loudest bin within ±1/24 octave.
 
 CPU / real-time: the audio thread only mixes to mono and copies into a preallocated
 lock-free FIFO (32768 samples), and only while an editor shows the analyzer (an atomic
@@ -348,8 +401,23 @@ tests the same compiled code that goes into the VST3:
 - spectrum analyzer core (no GUI): on-bin sine calibration (−6.02 dBFS for A = 0.5),
   1 kHz full-scale in bin 85, live release, white noise flat within 1 dB, silence at
   exactly the floor with no NaN/Inf, FIFO overflow bounded and counted, variable block
-  sizes lose nothing, two tones both present in the average, freeze unaffected by later
-  input, unfreeze/clear reset, sample-rate change resets;
+  sizes lose nothing, two tones both present in the average, the average keeps
+  accumulating while frozen (a 9 kHz tone raises it there by ~80 dB), unfreeze does not
+  reset it, Clear resets it and keeps Freeze on, sample-rate change resets;
+- display smoothing: flat input stays flat; white noise spread across 1–20 kHz 4.9 dB per
+  bin / 1.9 dB old display → 1.1 dB smoothed; live flicker at 5 kHz 0.73 → 0.10 dB per frame;
+  smaller low-end corners; a tone still peaks at its frequency; rise/fall time constants
+  hold at any frame rate and the fall is slower than the rise;
+- undo/redo: 300 host-automation changes (message thread and another thread) create no
+  entries; a knob drag, a handle drag (frequency + gain), a type change, a band-tab switch,
+  a double-click enable and a bandwidth-handle drag are one step each; undo walks back
+  through them exactly, redo reapplies; a new edit clears redo; Cmd/Ctrl-Z,
+  Cmd/Ctrl-Shift-Z and Cmd/Ctrl-Y work and other keys are not claimed; the Undo/Redo buttons
+  work and their enabled state follows the history; quick wheel ticks merge; 60 actions keep
+  exactly the last 50; loading a state clears the history;
+- band-tab switches: one per tab, on its left and inside it; states follow the
+  parameters; clicks on the switch toggle the band without selecting the tab, clicks on
+  the tab select it without toggling; undoable; on = band colour, off = dim;
 - analyzer transparency: `processBlock` output is bit-identical with the analyzer off,
   on post-EQ and on pre-EQ; post-EQ analysis includes the output gain, pre-EQ does not;
 - Tilt: display maths and measured audio give −3 / 0 / +3 dB for a +6 dB tilt at 1 kHz
@@ -372,13 +440,16 @@ tests the same compiled code that goes into the VST3:
   and moves the lower handle 40 px the other way; inward narrows; scrolling changes Q;
   the Width knob shows octaves and setting 1.00 / 2.00 oct gives Q 1.414 / 0.667;
 - editor: version label = `JucePlugin_VersionString` = CMake project version; Freeze,
-  Peak, Clear, Spectrum controls and the readout; closing the editor stops the feed.
+  Peak, Clear, Spectrum controls and the readout; while frozen the overlay keeps changing
+  with new audio and the readout counts up; display levels stay finite; closing the
+  editor stops the feed.
 
 Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 `build/Tests/DooblrQTests` to save images of the rendered editor. It writes `editor.png`,
 plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png`,
 `editor-tilt.png`, `editor-spectrum-live.png`, `editor-spectrum-frozen.png`,
-`editor-width-handles.png` and `editor-overview.png` (spectrum + frozen overlay + width handles).
+`editor-width-handles.png`, `editor-overview.png` (spectrum + frozen overlay + width handles)
+and `editor-v0.5.png` (the same, showing the band-tab switches and the Undo/Redo buttons).
 
 ## Validation that still needs doing manually
 

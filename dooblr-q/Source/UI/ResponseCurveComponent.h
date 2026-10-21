@@ -8,6 +8,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "../Analysis/SpectrumDisplay.h"
 #include "../DSP/DynamicEQBand.h"
 #include "../Parameters.h"
 
@@ -91,6 +92,18 @@ namespace dooblrq::ui
             timer; public so tests can drive it). Returns the number of new FFT frames. */
         int updateAnalyzer();
 
+        /** Advances the smoothed live spectrum and frozen overlay by dtSeconds (called by the
+            timer with the real elapsed time; public so tests can drive it). */
+        void updateDisplay (double dtSeconds);
+
+        /** Smoothed display levels (dBFS before tilt) on the display's log-frequency grid. */
+        const analysis::SpectrumDisplay& getLiveDisplay() const noexcept { return liveDisplay; }
+        const analysis::SpectrumDisplay& getOverlayDisplay() const noexcept { return overlayDisplay; }
+
+        /** Display time constants (seconds). The overlay glides as the long-term average grows. */
+        static constexpr double liveRiseSeconds = 0.03, liveFallSeconds = 0.16;
+        static constexpr double overlaySeconds = 0.25;
+
         float spectrumDbToY (double decibels) const;
 
         /** True if the curve needs redrawing (a parameter changed since the last paint). */
@@ -115,6 +128,8 @@ namespace dooblrq::ui
 
         ResponseModel makeResponseModel (bool includeDynamics) const;
         juce::Path makeSpectrumPath (const std::vector<float>& binDb, bool closed) const;
+        juce::Path makeDisplayPath (const analysis::SpectrumDisplay& display, bool closed) const;
+        juce::Path makeSmoothPath (const std::vector<juce::Point<float>>& points, bool closed) const;
         void drawSpectrum (juce::Graphics& g);
 
         int bandAt (juce::Point<float> position) const;
@@ -139,6 +154,10 @@ namespace dooblrq::ui
         float dragStartQ = 1.0f;
 
         std::atomic<bool> repaintPending { true };
+
+        analysis::SpectrumDisplay liveDisplay, overlayDisplay;
+        bool overlayPrimed = false;
+        double lastDisplayTime = 0.0;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ResponseCurveComponent)
     };

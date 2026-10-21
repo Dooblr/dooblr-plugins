@@ -18,6 +18,44 @@ namespace
 }
 
 //==============================================================================
+BandTabSwitch::BandTabSwitch (int bandIndexToUse)
+    : bandIndex (bandIndexToUse)
+{
+    setComponentID ("bandSwitch" + juce::String (bandIndex + 1));
+    setTooltip ("Band " + juce::String (bandIndex + 1) + " on/off");
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void BandTabSwitch::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    juce::ignoreUnused (down);
+
+    const auto on = getToggleState();
+    const auto colour = dooblrq::ui::bandColour (bandIndex);
+    const auto pill = getLocalBounds().toFloat().withSizeKeepingCentre ((float) switchWidth, (float) switchHeight).reduced (0.5f);
+    const auto radius = pill.getHeight() * 0.5f;
+
+    if (on)
+    {
+        g.setColour (colour.withAlpha (highlighted ? 1.0f : 0.9f));
+        g.fillRoundedRectangle (pill, radius);
+    }
+    else
+    {
+        g.setColour (Palette::background.withAlpha (0.6f));
+        g.fillRoundedRectangle (pill, radius);
+        g.setColour (Palette::textMuted.withAlpha (highlighted ? 0.8f : 0.45f));
+        g.drawRoundedRectangle (pill, radius, 1.0f);
+    }
+
+    const auto knobSize = pill.getHeight() - 4.0f;
+    const auto knob = juce::Rectangle<float> (knobSize, knobSize)
+                          .withCentre ({ on ? pill.getRight() - radius : pill.getX() + radius, pill.getCentreY() });
+    g.setColour (on ? Palette::background : Palette::textMuted.withAlpha (highlighted ? 0.9f : 0.6f));
+    g.fillEllipse (knob);
+}
+
+//==============================================================================
 DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor& processorToEdit)
     : AudioProcessorEditor (processorToEdit),
       audioProcessor (processorToEdit),
@@ -51,6 +89,33 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
                              "and phase, ~21 ms latency. Linear Phase: no phase shift, ~91 ms latency (at 48 kHz).");
     addAndMakeVisible (phaseModeBox);
 
+    const auto shortcut = [] (const char* mac, const char* other)
+    {
+       #if JUCE_MAC
+        juce::ignoreUnused (other);
+        return juce::String (mac);
+       #else
+        juce::ignoreUnused (mac);
+        return juce::String (other);
+       #endif
+    };
+
+    undoButton.setComponentID ("undo");
+    undoButton.setTooltip ("Undo (" + shortcut ("Cmd-Z", "Ctrl-Z") + ")");
+    undoButton.onClick = [this] { audioProcessor.getUndoHistory().undo(); updateUndoButtons(); };
+    redoButton.setComponentID ("redo");
+    redoButton.setTooltip ("Redo (" + shortcut ("Cmd-Shift-Z", "Ctrl-Y") + ")");
+    redoButton.onClick = [this] { audioProcessor.getUndoHistory().redo(); updateUndoButtons(); };
+
+    for (auto* button : { &undoButton, &redoButton })
+    {
+        button->setWantsKeyboardFocus (false);
+        addAndMakeVisible (button);
+    }
+
+    audioProcessor.getUndoHistory().getUndoManager().addChangeListener (this);
+    updateUndoButtons();
+
     auto& state = audioProcessor.getParameterState();
     phaseModeAttachment = std::make_unique<ComboBoxAttachment> (state, params::phaseMode, phaseModeBox);
     outputAttachment = std::make_unique<SliderAttachment> (state, params::outputGain, outputSlider);
@@ -69,6 +134,14 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
         button.setClickingTogglesState (true);
         button.onClick = [this, b] { if (bandButtons[(size_t) b].getToggleState()) selectBand (b); };
         addAndMakeVisible (button);
+
+        // On/off switch inside the tab, on its left. It is a child of the tab, so clicks on it
+        // toggle the band without selecting the tab; clicks elsewhere on the tab select it.
+        auto& bandSwitch = bandSwitches[(size_t) b];
+        bandSwitch = std::make_unique<BandTabSwitch> (b);
+        button.addAndMakeVisible (*bandSwitch);
+        bandSwitchAttachments[(size_t) b] = std::make_unique<ButtonAttachment> (
+            state, params::bandId (b, params::band::enabled), *bandSwitch);
     }
 
     enabledButton.setComponentID (params::band::enabled);
@@ -125,15 +198,21 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
 
     selectBand (0);
 
+    // Keyboard focus for Cmd/Ctrl-Z: the editor takes focus when clicked anywhere inside.
+    setWantsKeyboardFocus (true);
+    addMouseListener (this, true);
+
     setResizable (true, true);
     setResizeLimits (minimumWidth, minimumHeight, maximumWidth, maximumHeight);
     setSize (defaultWidth, defaultHeight);
 
-    startTimerHz (15);
+    startTimerHz (30);
 }
 
 DooblrQAudioProcessorEditor::~DooblrQAudioProcessorEditor()
 {
+    removeMouseListener (this);
+    audioProcessor.getUndoHistory().getUndoManager().removeChangeListener (this);
     // No editor, no analysis: the audio thread stops feeding the FIFO.
     audioProcessor.setAnalyzerRunning (false);
     stopTimer();
@@ -195,9 +274,11 @@ void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
     freezeButton.setClickingTogglesState (true);
     freezeButton.setToggleState (analyzer.isFrozen(), juce::dontSendNotification);
     freezeButton.setColour (juce::TextButton::buttonOnColourId, dooblrq::ui::Palette::frozen.withAlpha (0.35f));
-    freezeButton.setTooltip ("Capture the spectrum averaged since the last Clear as an overlay");
+    freezeButton.setTooltip ("Show the long-term average since the last Clear as an overlay; it keeps "
+                             "accumulating and updating while frozen");
     freezeButton.onClick = [this, &analyzer]
     {
+        // Freeze shows the running long-term average as an overlay; un-freezing only hides it.
         if (freezeButton.getToggleState())
             analyzer.freeze();
         else
@@ -208,7 +289,7 @@ void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
     };
 
     clearButton.setComponentID ("clear");
-    clearButton.setTooltip ("Restart the averaging window and remove the frozen overlay");
+    clearButton.setTooltip ("Restart the long-term average (and peak hold)");
     clearButton.onClick = [this, &analyzer]
     {
         analyzer.clear();
@@ -217,6 +298,9 @@ void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
     };
 
     styleLabel (analyzerReadout, {}, 12.0f, Palette::textMuted, juce::Justification::centredRight);
+    // Fixed-width digits so the counting readout does not jitter.
+    analyzerReadout.setFont (juce::Font (juce::FontOptions (juce::Font::getDefaultMonospacedFontName(), 11.5f, juce::Font::plain)));
+    analyzerReadout.setMinimumHorizontalScale (1.0f);
     analyzerReadout.setComponentID ("analyzerReadout");
 
     for (auto* component : std::initializer_list<juce::Component*> { &spectrumButton, &sourceBox, &tiltBox, &peakButton,
@@ -243,11 +327,55 @@ void DooblrQAudioProcessorEditor::updateAnalyzerControls()
     if (! view.visible)
         text = "Analyzer off";
     else if (analyzer.isFrozen())
-        text = "Frozen: " + juce::String (analyzer.getFrozenSeconds(), 1) + " s";
+        text = "Frozen: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s";
     else
         text = "Averaging: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s";
 
-    analyzerReadout.setText (text, juce::dontSendNotification);
+    if (analyzerReadout.getText() != text) // only repaint when the 0.1 s text changes
+        analyzerReadout.setText (text, juce::dontSendNotification);
+}
+
+//==============================================================================
+bool DooblrQAudioProcessorEditor::keyPressed (const juce::KeyPress& key)
+{
+    const auto command = juce::ModifierKeys::commandModifier; // Cmd on macOS, Ctrl elsewhere
+    const auto shift = juce::ModifierKeys::shiftModifier;
+    auto& history = audioProcessor.getUndoHistory();
+
+    if (key == juce::KeyPress ('z', command, 0))
+    {
+        history.undo();
+        updateUndoButtons();
+        return true; // claim it, so the host does not also undo
+    }
+
+    if (key == juce::KeyPress ('z', command | shift, 0) || key == juce::KeyPress ('y', command, 0))
+    {
+        history.redo();
+        updateUndoButtons();
+        return true;
+    }
+
+    return false; // everything else goes to the host
+}
+
+void DooblrQAudioProcessorEditor::mouseDown (const juce::MouseEvent&)
+{
+    // Called for clicks on any child too (mouse listener). Leave text entry focused.
+    if (dynamic_cast<juce::TextEditor*> (juce::Component::getCurrentlyFocusedComponent()) == nullptr)
+        grabKeyboardFocus();
+}
+
+void DooblrQAudioProcessorEditor::updateUndoButtons()
+{
+    const auto& history = audioProcessor.getUndoHistory();
+    undoButton.setEnabled (history.canUndo());
+    redoButton.setEnabled (history.canRedo());
+}
+
+void DooblrQAudioProcessorEditor::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    updateUndoButtons();
 }
 
 void DooblrQAudioProcessorEditor::setUpKnob (Knob& knob, const juce::String& caption, const char* parameterSuffix)
@@ -333,6 +461,7 @@ void DooblrQAudioProcessorEditor::timerCallback()
 {
     updateBandIndicators();
     updateAnalyzerControls();
+    updateUndoButtons();
 }
 
 //==============================================================================
@@ -366,18 +495,26 @@ void DooblrQAudioProcessorEditor::resized()
     headerArea = bounds.removeFromTop (60);
     {
         auto header = headerArea.reduced (32, 10);
-        auto titleColumn = header.removeFromLeft (260);
+        auto titleColumn = header.removeFromLeft (172);
         titleLabel.setBounds (titleColumn.removeFromTop (titleColumn.getHeight() * 3 / 5));
         subtitleLabel.setBounds (titleColumn);
 
-        versionLabel.setBounds (header.removeFromRight (60));
-        header.removeFromRight (16);
-        outputSlider.setBounds (header.removeFromRight (200).withSizeKeepingCentre (200, 24));
-        outputCaption.setBounds (header.removeFromRight (56));
-        header.removeFromRight (16);
+        header.removeFromLeft (8);
+        undoButton.setBounds (header.removeFromLeft (50).withSizeKeepingCentre (50, 24));
+        header.removeFromLeft (4);
+        redoButton.setBounds (header.removeFromLeft (50).withSizeKeepingCentre (50, 24));
+        header.removeFromLeft (12);
+
+        versionLabel.setBounds (header.removeFromRight (52));
+        header.removeFromRight (12);
+        // The output slider takes what is left after the fixed-size controls.
+        const auto sliderWidth = juce::jlimit (100, 200, header.getWidth() - (52 + 12 + 52 + 12 + 112 + 8 + 136));
+        outputSlider.setBounds (header.removeFromRight (sliderWidth).withSizeKeepingCentre (sliderWidth, 24));
+        outputCaption.setBounds (header.removeFromRight (52));
+        header.removeFromRight (12);
         stereoLinkButton.setBounds (header.removeFromRight (112).withSizeKeepingCentre (112, 24));
         header.removeFromRight (8);
-        phaseModeBox.setBounds (header.removeFromRight (140).withSizeKeepingCentre (140, 26));
+        phaseModeBox.setBounds (header.removeFromRight (136).withSizeKeepingCentre (136, 26));
     }
 
     toolbarArea = bounds.removeFromTop (38);
@@ -401,8 +538,13 @@ void DooblrQAudioProcessorEditor::resized()
     controlsArea = bounds.removeFromBottom (180);
     auto bandRow = bounds.removeFromBottom (40).reduced (16, 6);
     const auto buttonWidth = bandRow.getWidth() / params::numBands;
-    for (auto& button : bandButtons)
+    for (size_t b = 0; b < bandButtons.size(); ++b)
+    {
+        auto& button = bandButtons[b];
         button.setBounds (bandRow.removeFromLeft (buttonWidth).reduced (3, 0));
+        bandSwitches[b]->setBounds (6, (button.getHeight() - BandTabSwitch::switchHeight - 6) / 2,
+                                    BandTabSwitch::switchWidth + 6, BandTabSwitch::switchHeight + 6);
+    }
 
     responseCurve.setBounds (bounds.reduced (16, 10));
 

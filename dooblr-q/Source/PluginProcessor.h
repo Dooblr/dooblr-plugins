@@ -8,6 +8,7 @@
 #include "DSP/DynamicEQBand.h"
 #include "DSP/FirEqEngine.h"
 #include "Parameters.h"
+#include "UndoHistory.h"
 
 class DooblrQAudioProcessor final : public juce::AudioProcessor
 {
@@ -55,6 +56,9 @@ public:
 
     //==============================================================================
     juce::AudioProcessorValueTreeState& getParameterState() noexcept { return parameters; }
+
+    /** Undo/redo of UI gestures (up to 50 steps); host automation is not recorded. */
+    dooblrq::ParameterUndoHistory& getUndoHistory() noexcept { return undoHistory; }
 
     /** Live dynamic gain offset of a band in dB, for display. Lock-free. */
     float getBandDynamicGainDb (int bandIndex) const noexcept;
@@ -133,6 +137,7 @@ private:
     };
 
     juce::AudioProcessorValueTreeState parameters;
+    dooblrq::ParameterUndoHistory undoHistory { *this }; // after parameters: listens to them
 
     std::array<BandParameterPointers, dooblrq::params::numBands> bandParameters;
     std::atomic<float>* outputGainDb = nullptr;

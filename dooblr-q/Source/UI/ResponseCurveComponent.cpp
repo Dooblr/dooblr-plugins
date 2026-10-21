@@ -65,11 +65,23 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::timerCallback()
     {
-        // Redraw on parameter changes, on new analyzer frames, and continuously while a
-        // dynamic band is moving.
+        // Redraw on parameter changes, on new analyzer frames, while the smoothed spectrum
+        // is still moving, and continuously while a dynamic band is moving.
         const auto newFrames = updateAnalyzer();
+        const auto now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const auto dt = lastDisplayTime > 0.0 ? now - lastDisplayTime : 1.0 / 60.0;
+        lastDisplayTime = now;
 
-        if (repaintPending.exchange (false) || newFrames > 0 || anyDynamicsActive())
+        auto spectrumMoving = false;
+
+        if (processor.isAnalyzerRunning() && processor.getAnalyzerViewSettings().visible)
+        {
+            updateDisplay (dt);
+            spectrumMoving = liveDisplay.getLastMovement() > 0.05f
+                             || (processor.getSpectrumAnalyzer().isFrozen() && overlayDisplay.getLastMovement() > 0.02f);
+        }
+
+        if (repaintPending.exchange (false) || newFrames > 0 || spectrumMoving || anyDynamicsActive())
             repaint();
     }
 
@@ -83,42 +95,117 @@ namespace dooblrq::ui
         return analyzer.pull (processor.getAnalyzerFifo());
     }
 
+    void ResponseCurveComponent::updateDisplay (double dtSeconds)
+    {
+        auto& analyzer = processor.getSpectrumAnalyzer();
+        const auto rate = analyzer.getSampleRate();
+
+        liveDisplay.prepare (rate, analysis::SpectrumAnalyzer::numBins);
+        overlayDisplay.prepare (rate, analysis::SpectrumAnalyzer::numBins);
+        liveDisplay.advance (analyzer.getLiveDb(), dtSeconds, liveRiseSeconds, liveFallSeconds);
+
+        // The overlay is the live long-term average: it glides as the average grows and
+        // starts from the current average (not from silence) when Freeze is engaged or the
+        // first frames after a Clear arrive.
+        if (! analyzer.isFrozen() || analyzer.getAccumulatedFrames() == 0)
+        {
+            overlayPrimed = false;
+            return;
+        }
+
+        if (! overlayPrimed)
+        {
+            overlayDisplay.snapTo (analyzer.getAverageDb());
+            overlayPrimed = true;
+        }
+        else
+        {
+            overlayDisplay.advance (analyzer.getAverageDb(), dtSeconds, overlaySeconds, overlaySeconds);
+        }
+    }
+
     float ResponseCurveComponent::spectrumDbToY (double decibels) const
     {
         const auto area = plotArea();
         return juce::jmap ((float) decibels, spectrumTopDb, spectrumBottomDb, area.getY(), area.getBottom());
     }
 
+    juce::Path ResponseCurveComponent::makeSmoothPath (const std::vector<juce::Point<float>>& points, bool closed) const
+    {
+        // Quadratic segments through the midpoints: a smooth curve without polyline corners.
+        juce::Path path;
+
+        if (points.size() < 2)
+            return path;
+
+        const auto area = plotArea();
+
+        if (closed)
+        {
+            path.startNewSubPath (points.front().x, area.getBottom());
+            path.lineTo (points.front());
+        }
+        else
+        {
+            path.startNewSubPath (points.front());
+        }
+
+        for (size_t i = 1; i + 1 < points.size(); ++i)
+        {
+            const auto mid = (points[i] + points[i + 1]) * 0.5f;
+            path.quadraticTo (points[i], mid);
+        }
+
+        path.lineTo (points.back());
+
+        if (closed)
+        {
+            path.lineTo (points.back().x, area.getBottom());
+            path.closeSubPath();
+        }
+
+        return path;
+    }
+
     juce::Path ResponseCurveComponent::makeSpectrumPath (const std::vector<float>& binDb, bool closed) const
     {
+        // Peak-hold line: the maximum within +/- 1/24 octave (not smoothed, so tone peaks show).
         const auto area = plotArea();
         const auto sampleRate = processor.getSpectrumAnalyzer().getSampleRate();
         const auto tilt = (double) processor.getAnalyzerViewSettings().tiltDbPerOctave;
-        constexpr auto step = 2.0f;
+        constexpr auto step = 1.5f;
         constexpr auto octaveSpan = 1.0 / 12.0;
 
-        juce::Path path;
+        std::vector<juce::Point<float>> points;
 
         for (auto x = area.getX(); x <= area.getRight() + 0.5f; x += step)
         {
             const auto frequency = xToFrequency (x);
             const auto db = (double) analysis::SpectrumAnalyzer::levelAt (binDb, frequency, sampleRate, octaveSpan)
                             + tilt * std::log2 (frequency / 1000.0);
-            const auto y = juce::jlimit (area.getY(), area.getBottom(), spectrumDbToY (db));
-
-            if (x <= area.getX())
-                path.startNewSubPath (x, closed ? area.getBottom() : y);
-
-            path.lineTo (x, y);
+            points.emplace_back (x, juce::jlimit (area.getY(), area.getBottom(), spectrumDbToY (db)));
         }
 
-        if (closed)
+        return makeSmoothPath (points, closed);
+    }
+
+    juce::Path ResponseCurveComponent::makeDisplayPath (const analysis::SpectrumDisplay& display, bool closed) const
+    {
+        const auto area = plotArea();
+        const auto tilt = (double) processor.getAnalyzerViewSettings().tiltDbPerOctave;
+        const auto& levels = display.getLevels();
+
+        std::vector<juce::Point<float>> points;
+        points.reserve (levels.size());
+
+        for (int i = 0; i < display.getNumPoints(); ++i)
         {
-            path.lineTo (area.getRight(), area.getBottom());
-            path.closeSubPath();
+            const auto frequency = display.getFrequency (i);
+            const auto db = (double) levels[(size_t) i] + tilt * std::log2 (frequency / 1000.0);
+            points.emplace_back (frequencyToX (frequency), juce::jlimit (area.getY(), area.getBottom(), spectrumDbToY (db)));
         }
 
-        return path;
+        return makeSmoothPath (points, closed);
     }
 
     void ResponseCurveComponent::drawSpectrum (juce::Graphics& g)
@@ -132,8 +219,8 @@ namespace dooblrq::ui
 
         if (view.showPeak && (analyzer.isFrozen() || analyzer.getAccumulatedFrames() > 0))
         {
-            // Peak-hold since the last Clear (or of the frozen capture while frozen).
-            const auto& peak = analyzer.isFrozen() ? analyzer.getFrozenPeakDb() : analyzer.getPeakDb();
+            // Peak-hold since the last Clear.
+            const auto& peak = analyzer.getPeakDb();
             juce::Path dashed;
             const float dashes[] { 4.0f, 3.0f };
             juce::PathStrokeType (1.0f).createDashedStroke (dashed, makeSpectrumPath (peak, false), dashes, 2);
@@ -141,20 +228,21 @@ namespace dooblrq::ui
             g.fillPath (dashed);
         }
 
-        if (analyzer.isFrozen())
+        if (analyzer.isFrozen() && overlayPrimed)
         {
-            const auto frozenPath = makeSpectrumPath (analyzer.getFrozenAverageDb(), true);
+            // The long-term average, still accumulating while frozen.
             g.setColour (Palette::frozen.withAlpha (0.05f));
-            g.fillPath (frozenPath);
-            g.setColour (Palette::frozen.withAlpha (0.75f));
-            g.strokePath (makeSpectrumPath (analyzer.getFrozenAverageDb(), false), juce::PathStrokeType (1.5f));
+            g.fillPath (makeDisplayPath (overlayDisplay, true));
+            g.setColour (Palette::frozen.withAlpha (0.8f));
+            g.strokePath (makeDisplayPath (overlayDisplay, false),
+                          juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
 
-        const auto livePath = makeSpectrumPath (analyzer.getLiveDb(), true);
         g.setColour (Palette::spectrum.withAlpha (0.11f));
-        g.fillPath (livePath);
-        g.setColour (Palette::spectrum.withAlpha (0.30f));
-        g.strokePath (makeSpectrumPath (analyzer.getLiveDb(), false), juce::PathStrokeType (1.0f));
+        g.fillPath (makeDisplayPath (liveDisplay, true));
+        g.setColour (Palette::spectrum.withAlpha (0.32f));
+        g.strokePath (makeDisplayPath (liveDisplay, false),
+                      juce::PathStrokeType (1.1f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
         // The analyzer has its own scale (dBFS, before tilt at 1 kHz); label it on the right.
         const auto area = plotArea();

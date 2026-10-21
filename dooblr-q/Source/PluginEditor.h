@@ -11,8 +11,22 @@
 
 class DooblrQAudioProcessor;
 
+/** The small on/off switch on the left of each band tab (bound to that band's "enabled"). */
+class BandTabSwitch final : public juce::ToggleButton
+{
+public:
+    explicit BandTabSwitch (int bandIndexToUse);
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override;
+
+    static constexpr int switchWidth = 24, switchHeight = 13;
+
+private:
+    int bandIndex;
+};
+
 class DooblrQAudioProcessorEditor final : public juce::AudioProcessorEditor,
-                                          private juce::Timer
+                                          private juce::Timer,
+                                          private juce::ChangeListener
 {
 public:
     explicit DooblrQAudioProcessorEditor (DooblrQAudioProcessor& processorToEdit);
@@ -27,6 +41,13 @@ public:
 
     /** Refreshes the Freeze button and the "Averaging / Frozen: N s" readout (timer; public for tests). */
     void updateAnalyzerControls();
+
+    /** Cmd-Z / Ctrl-Z undo, Cmd-Shift-Z / Ctrl-Shift-Z / Ctrl-Y redo (while the editor has focus). */
+    bool keyPressed (const juce::KeyPress& key) override;
+    void mouseDown (const juce::MouseEvent& event) override;
+
+    /** Enables the Undo / Redo buttons to match the history (public for tests). */
+    void updateUndoButtons();
 
     static constexpr int defaultWidth  = 980;
     static constexpr int defaultHeight = 640;
@@ -47,6 +68,7 @@ private:
     };
 
     void timerCallback() override;
+    void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void setUpKnob (Knob& knob, const juce::String& caption, const char* parameterSuffix);
     void updateBandIndicators();
     void setUpAnalyzerControls();
@@ -58,6 +80,7 @@ private:
     juce::Slider outputSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::ToggleButton stereoLinkButton { "Stereo link" };
     juce::ComboBox phaseModeBox;
+    juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
 
     dooblrq::ui::ResponseCurveComponent responseCurve;
 
@@ -68,6 +91,7 @@ private:
     juce::Label analyzerReadout;
 
     std::array<juce::TextButton, dooblrq::params::numBands> bandButtons;
+    std::array<std::unique_ptr<BandTabSwitch>, dooblrq::params::numBands> bandSwitches;
 
     juce::ToggleButton enabledButton { "Band on" };
     juce::ComboBox typeBox;
@@ -84,6 +108,7 @@ private:
     std::unique_ptr<SliderAttachment> outputAttachment;
     std::unique_ptr<ButtonAttachment> stereoLinkAttachment;
     std::unique_ptr<ComboBoxAttachment> phaseModeAttachment;
+    std::array<std::unique_ptr<ButtonAttachment>, dooblrq::params::numBands> bandSwitchAttachments;
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, dynamicsAttachment;
     std::unique_ptr<ComboBoxAttachment> typeAttachment;

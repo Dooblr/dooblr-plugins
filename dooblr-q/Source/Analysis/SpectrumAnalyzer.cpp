@@ -78,8 +78,6 @@ namespace dooblrq::analysis
           liveDb ((size_t) numBins, floorDb),
           averageDb ((size_t) numBins, floorDb),
           peakDb ((size_t) numBins, floorDb),
-          frozenAverageDb ((size_t) numBins, floorDb),
-          frozenPeakDb ((size_t) numBins, floorDb),
           powerSum ((size_t) numBins, 0.0)
     {
         // Periodic Hann window: its coherent gain (sum) is exactly fftSize / 2.
@@ -110,7 +108,7 @@ namespace dooblrq::analysis
         inputFill = 0;
         std::fill (latestDb.begin(), latestDb.end(), floorDb);
         std::fill (liveDb.begin(), liveDb.end(), floorDb);
-        clear();
+        resetAccumulation();
     }
 
     int SpectrumAnalyzer::pull (AnalyzerFifo& fifo)
@@ -211,26 +209,8 @@ namespace dooblrq::analysis
         return (double) framesAccumulated * hopSize / sampleRate;
     }
 
-    void SpectrumAnalyzer::freeze()
-    {
-        frozenAverageDb = getAverageDb();
-        frozenPeakDb = peakDb;
-        frozenSeconds = getAccumulatedSeconds();
-        frozen = true;
-    }
-
-    void SpectrumAnalyzer::unfreeze()
-    {
-        frozen = false;
-        resetAccumulation();
-    }
-
     void SpectrumAnalyzer::clear()
     {
-        frozen = false;
-        frozenSeconds = 0.0;
-        std::fill (frozenAverageDb.begin(), frozenAverageDb.end(), floorDb);
-        std::fill (frozenPeakDb.begin(), frozenPeakDb.end(), floorDb);
         resetAccumulation();
     }
 

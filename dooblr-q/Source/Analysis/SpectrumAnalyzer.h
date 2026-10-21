@@ -40,8 +40,9 @@ namespace dooblrq::analysis
     };
 
     /**
-        FFT spectrum analyzer with live ballistics, a long-term average and a freeze
-        snapshot. Runs entirely on the consumer (message) thread; not thread-safe itself.
+        FFT spectrum analyzer with live ballistics and a long-term average that can be
+        shown as a "frozen" overlay. Runs entirely on the consumer (message) thread; not
+        thread-safe itself.
 
         Calibration: 4096-point FFT, periodic Hann window, 75% overlap (hop 1024).
         Levels are in dBFS per bin, scaled so a sine of peak amplitude A reads
@@ -49,8 +50,9 @@ namespace dooblrq::analysis
         reads up to 1.42 dB lower (Hann scalloping). Silence reads floorDb.
 
         Accumulation: a running power average (and per-bin peak hold) of every frame
-        since the last clear()/unfreeze(), so it represents "everything that has played"
-        in that window, weighted equally.
+        since the last clear(), so it represents "everything that has played" in that
+        window, weighted equally. Freeze shows that average as an overlay; it keeps
+        accumulating (and the overlay keeps updating) while frozen.
     */
     class SpectrumAnalyzer
     {
@@ -60,7 +62,7 @@ namespace dooblrq::analysis
         static constexpr int numBins = fftSize / 2 + 1;
         static constexpr int hopSize = fftSize / 4;
         static constexpr float floorDb = -120.0f;
-        static constexpr float liveReleaseDbPerSecond = 36.0f;
+        static constexpr float liveReleaseDbPerSecond = 30.0f;
 
         SpectrumAnalyzer();
 
@@ -80,23 +82,21 @@ namespace dooblrq::analysis
         /** Per-bin dBFS with display ballistics: instant attack, liveReleaseDbPerSecond decay. */
         const std::vector<float>& getLiveDb() const noexcept { return liveDb; }
 
-        /** Per-bin power average since the last clear/unfreeze. */
+        /** Per-bin power average since the last clear(). */
         const std::vector<float>& getAverageDb();
-        /** Per-bin maximum since the last clear/unfreeze. */
+        /** Per-bin maximum since the last clear(). */
         const std::vector<float>& getPeakDb() const noexcept { return peakDb; }
         double getAccumulatedSeconds() const noexcept;
         juce::int64 getAccumulatedFrames() const noexcept { return framesAccumulated; }
 
-        /** Captures the current average and peak as a static snapshot. Accumulation continues. */
-        void freeze();
-        /** Drops the snapshot and starts a new accumulation window. */
-        void unfreeze();
+        /** Shows the long-term average as an overlay. It is not a static snapshot: the
+            average keeps accumulating live audio, so the overlay keeps updating. */
+        void freeze() noexcept { frozen = true; }
+        /** Hides the overlay (the average keeps running; clear() restarts it). */
+        void unfreeze() noexcept { frozen = false; }
         bool isFrozen() const noexcept { return frozen; }
-        const std::vector<float>& getFrozenAverageDb() const noexcept { return frozenAverageDb; }
-        const std::vector<float>& getFrozenPeakDb() const noexcept { return frozenPeakDb; }
-        double getFrozenSeconds() const noexcept { return frozenSeconds; }
 
-        /** Resets the accumulation and removes any frozen snapshot. */
+        /** Restarts the long-term average and peak hold. The Freeze state is kept. */
         void clear();
 
         /** Level for display at a frequency: the maximum of the bins within +/- span/2
@@ -112,13 +112,12 @@ namespace dooblrq::analysis
 
         juce::dsp::FFT fft { fftOrder };
         std::vector<float> window, input, fftData, scratch;
-        std::vector<float> latestDb, liveDb, averageDb, peakDb, frozenAverageDb, frozenPeakDb;
+        std::vector<float> latestDb, liveDb, averageDb, peakDb;
         std::vector<double> powerSum;
 
         int inputFill = 0;
         juce::int64 framesAccumulated = 0;
         double sampleRate = 48000.0;
         bool frozen = false;
-        double frozenSeconds = 0.0;
     };
 }

@@ -497,6 +497,7 @@ void DooblrQAudioProcessor::setStateInformation (const void* data, int sizeInByt
     // Newer, unknown state versions are still loaded: parameters are matched by ID,
     // and IDs this version does not know are ignored by the value tree state.
     parameters.replaceState (state);
+    undoHistory.clear(); // a loaded state starts a fresh history
 }
 
 //==============================================================================

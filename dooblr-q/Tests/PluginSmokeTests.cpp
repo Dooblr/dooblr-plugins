@@ -3,6 +3,7 @@
 
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
+#include "Analysis/SpectrumDisplay.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1042,21 +1043,24 @@ namespace
                    "accumulated time counts the frames (hop 1024)");
 
             analyzer.freeze();
-            const auto frozen = analyzer.getFrozenAverageDb();
-            const auto frozenPeak = analyzer.getFrozenPeakDb();
-            const auto frozenSeconds = analyzer.getFrozenSeconds();
-            check (analyzer.isFrozen() && frozen == average, "freeze captures the current average");
+            const auto framesAtFreeze = analyzer.getAccumulatedFrames();
+            const auto nineBefore = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
+            check (analyzer.isFrozen() && analyzer.getAverageDb() == average, "freeze shows the current long-term average");
 
             const auto other = makeSine (9000.0, 0.9f, sampleRate, 48000);
             analyzer.pushSamples (other.data(), (int) other.size());
-            check (analyzer.getFrozenAverageDb() == frozen && analyzer.getFrozenPeakDb() == frozenPeak
-                       && juce::exactlyEqual (analyzer.getFrozenSeconds(), frozenSeconds),
-                   "the frozen capture is unaffected by later input");
+            const auto nineAfter = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
+            note ("while frozen, a 1 s 9 kHz tone moves the overlay at 9 kHz from " + format (nineBefore) + " to "
+                  + format (nineAfter) + " dBFS; " + std::to_string (analyzer.getAccumulatedFrames() - framesAtFreeze) + " frames added");
+            check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() > framesAtFreeze && nineAfter > nineBefore + 40.0f,
+                   "the frozen overlay keeps accumulating live audio");
             check (Analyzer::levelAt (analyzer.getLiveDb(), 9000.0, sampleRate, 1.0 / 12.0) > -3.0f,
                    "the live spectrum keeps moving while frozen");
 
+            const auto framesBeforeUnfreeze = analyzer.getAccumulatedFrames();
             analyzer.unfreeze();
-            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0, "unfreeze hides the capture and restarts accumulation");
+            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == framesBeforeUnfreeze,
+                   "unfreeze hides the overlay without resetting the average");
 
             analyzer.pushSamples (other.data(), (int) other.size());
             analyzer.freeze();
@@ -1065,9 +1069,10 @@ namespace
             {
                 return std::all_of (v.begin(), v.end(), [] (float x) { return juce::exactlyEqual (x, Analyzer::floorDb); });
             };
-            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getFrozenAverageDb())
+            check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0
                        && floorOnly (analyzer.getAverageDb()) && floorOnly (analyzer.getPeakDb()),
-                   "clear resets the accumulation and the frozen capture");
+                   "clear restarts the average and peak hold and keeps Freeze on");
+            analyzer.unfreeze();
 
             analyzer.pushSamples (other.data(), (int) other.size());
             analyzer.setSampleRate (44100.0);
@@ -1410,6 +1415,7 @@ namespace
             buffer.copyFrom (1, 0, signal.data() + start, n);
             processInBlocks (processor, buffer, { 512 });
             curve.updateAnalyzer();
+            curve.updateDisplay ((double) n / 48000.0); // as the 60 Hz timer would, in audio time
         }
     }
 
@@ -1478,32 +1484,86 @@ namespace
                "readout shows the averaging time");
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-live");
 
+        check (readout->getFont().getTypefaceName() == juce::Font::getDefaultMonospacedFontName(),
+               "the readout uses fixed-width digits");
+
+        const auto allFinite = [] (const std::vector<float>& v)
+        {
+            return std::all_of (v.begin(), v.end(), [] (float x) { return std::isfinite (x); });
+        };
+        const auto maxDifference = [] (const std::vector<float>& a, const std::vector<float>& b)
+        {
+            auto d = 0.0f;
+            for (size_t i = 0; i < std::min (a.size(), b.size()); ++i)
+                d = std::max (d, std::abs (a[i] - b[i]));
+            return d;
+        };
+
         clickToggle (*freeze);
+        curve->updateDisplay (1.0 / 60.0);
         dooblrEditor->updateAnalyzerControls();
         const auto frozenText = readout->getText();
         note ("after Freeze: readout \"" + frozenText.toStdString() + "\"");
-        check (analyzer.isFrozen() && frozenText.startsWith ("Frozen: ") && frozenText.endsWith (" s"), "Freeze captures and shows \"Frozen: N s\"");
-        check (std::abs (frozenText.fromFirstOccurrenceOf ("Frozen: ", false, false).getDoubleValue() - analyzer.getFrozenSeconds()) < 0.06,
-               "the readout shows the frozen duration");
+        check (analyzer.isFrozen() && frozenText.startsWith ("Frozen: ") && frozenText.endsWith (" s"), "Freeze shows \"Frozen: N s\"");
+        check (std::abs (frozenText.fromFirstOccurrenceOf ("Frozen: ", false, false).getDoubleValue() - analyzer.getAccumulatedSeconds()) < 0.06,
+               "the readout shows the averaging time");
+        const auto overlayAtFreeze = curve->getOverlayDisplay().getLevels();
+        check (*std::max_element (overlayAtFreeze.begin(), overlayAtFreeze.end()) > -80.0f,
+               "the overlay starts from the current average, not from silence");
 
-        // Material B: brighter mix; live moves, the overlay stays.
-        const auto frozenCopy = analyzer.getFrozenAverageDb();
+        // Material B: brighter mix; the overlay keeps updating (long-term average), the readout counts on.
         clickToggle (*peak);
-        playThroughEditor (processor, *curve, makeMusicLike (48000 * 2, sampleRate, 2, 0.9f));
-        check (analyzer.getFrozenAverageDb() == frozenCopy, "the frozen overlay does not change while live audio plays");
+        const auto secondsAtFreeze = analyzer.getAccumulatedSeconds();
+        std::vector<double> readoutValues;
+        auto overlayStepMax = 0.0f;
+        auto previousOverlay = overlayAtFreeze;
+        const auto materialB = makeMusicLike (48000 * 3, sampleRate, 2, 0.9f);
+
+        for (int part = 0; part < 6; ++part)
+        {
+            const auto begin = materialB.begin() + part * 24000;
+            playThroughEditor (processor, *curve, std::vector<float> (begin, begin + 24000));
+            dooblrEditor->updateAnalyzerControls();
+            readoutValues.push_back (readout->getText().fromFirstOccurrenceOf ("Frozen: ", false, false).getDoubleValue());
+            overlayStepMax = std::max (overlayStepMax, maxDifference (previousOverlay, curve->getOverlayDisplay().getLevels()));
+            previousOverlay = curve->getOverlayDisplay().getLevels();
+        }
+
+        const auto overlayChange = maxDifference (overlayAtFreeze, curve->getOverlayDisplay().getLevels());
+        note ("3 s of brighter material while frozen: overlay moved up to " + format (overlayChange) + " dB (largest change per 0.5 s "
+              + format (overlayStepMax) + " dB); readout " + format (readoutValues.front(), 1) + " -> " + format (readoutValues.back(), 1)
+              + " s; average now " + format (analyzer.getAccumulatedSeconds(), 1) + " s");
+        check (analyzer.isFrozen() && overlayChange > 1.0f, "the frozen overlay keeps updating while frozen");
+        check (analyzer.getAccumulatedSeconds() > secondsAtFreeze + 2.9, "the average keeps accumulating while frozen");
+        check (std::is_sorted (readoutValues.begin(), readoutValues.end()) && readoutValues.back() > readoutValues.front() + 2.0,
+               "the frozen readout counts up");
+        check (allFinite (curve->getLiveDisplay().getLevels()) && allFinite (curve->getOverlayDisplay().getLevels())
+                   && allFinite (analyzer.getAverageDb()),
+               "display levels are finite (no NaN/Inf)");
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-frozen");
         dooblrEditor->selectBand (2); // shows its bandwidth handles over the spectrum and frozen overlay
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-overview");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.5");
 
+        const auto framesBeforeUnfreeze = analyzer.getAccumulatedFrames();
         clickToggle (*freeze);
-        check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0, "un-freezing hides the overlay and restarts averaging");
+        dooblrEditor->updateAnalyzerControls();
+        check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == framesBeforeUnfreeze
+                   && readout->getText().startsWith ("Averaging: "),
+               "un-freezing hides the overlay; the average keeps running");
         playThroughEditor (processor, *curve, makeMusicLike (48000, sampleRate, 3, 0.5f));
         clickToggle (*freeze);
         clear->onClick();
+        curve->updateDisplay (1.0 / 60.0);
         dooblrEditor->updateAnalyzerControls();
-        check (! analyzer.isFrozen() && ! freeze->getToggleState() && analyzer.getAccumulatedFrames() == 0
-                   && readout->getText() == "Averaging: 0.0 s",
-               "Clear resets the capture, the button and the readout");
+        check (analyzer.isFrozen() && freeze->getToggleState() && analyzer.getAccumulatedFrames() == 0
+                   && readout->getText() == "Frozen: 0.0 s",
+               "Clear restarts the average and the readout; Freeze stays on");
+        playThroughEditor (processor, *curve, makeMusicLike (12000, sampleRate, 4, 0.5f));
+        check (analyzer.getAccumulatedFrames() > 0 && allFinite (curve->getOverlayDisplay().getLevels()),
+               "after Clear the overlay restarts from the new audio");
+        clickToggle (*freeze);
+        check (! analyzer.isFrozen() && ! freeze->getToggleState(), "Freeze off hides the overlay");
 
         clickToggle (*spectrum);
         check (! processor.isAnalyzerRunning() && ! freeze->isEnabled(), "turning the spectrum off stops the feed and disables its controls");
@@ -1993,6 +2053,446 @@ namespace
 
     }
 
+    //==============================================================================
+    // Smoothed spectrum display (frequency + temporal smoothing)
+    void testSpectrumDisplay()
+    {
+        using Display = dooblrq::analysis::SpectrumDisplay;
+        constexpr double sampleRate = 48000.0;
+
+        Display display;
+        display.prepare (sampleRate, Analyzer::numBins);
+
+        // Flat bins read flat (the smoothing preserves level).
+        std::vector<float> flat ((size_t) Analyzer::numBins, -40.0f), result;
+        display.computeTarget (flat, result);
+        const auto [flatMin, flatMax] = std::minmax_element (result.begin(), result.end());
+        check (*flatMin > -40.01f && *flatMax < -39.99f, "flat input gives a flat display");
+
+        // Spectral jaggedness of white noise (should be flat): standard deviation across
+        // 1-20 kHz of (a) per-bin levels, (b) the old display (max within 1/12 octave), (c) the
+        // new 1/12-octave smoothed display.
+        Analyzer analyzer;
+        analyzer.setSampleRate (sampleRate);
+        juce::Random random (7);
+        std::vector<float> noise (96000);
+        for (auto& x : noise)
+            x = random.nextFloat() * 0.5f - 0.25f;
+        analyzer.pushSamples (noise.data(), 48000);
+        const auto frame = analyzer.getLatestFrameDb();
+        display.computeTarget (frame, result);
+        Display unsmoothed (Display::defaultNumPoints, 20.0, 20000.0, 1.0e-4);
+        unsmoothed.prepare (sampleRate, Analyzer::numBins);
+        std::vector<float> perBin;
+        unsmoothed.computeTarget (frame, perBin);
+
+        const auto spread = [&] (auto levelAtPoint, double fromHz, double toHz)
+        {
+            double sum = 0.0, sumSquares = 0.0;
+            auto count = 0;
+            for (int i = 0; i < display.getNumPoints(); ++i)
+            {
+                if (display.getFrequency (i) < fromHz || display.getFrequency (i) > toHz)
+                    continue;
+                const auto v = (double) levelAtPoint (i);
+                sum += v;
+                sumSquares += v * v;
+                ++count;
+            }
+            const auto mean = sum / std::max (1, count);
+            return std::sqrt (std::max (0.0, sumSquares / std::max (1, count) - mean * mean));
+        };
+        const auto rawAt = [&] (int i) { return Analyzer::levelAt (frame, display.getFrequency (i), sampleRate, 1.0 / 12.0); };
+        const auto perBinAt = [&] (int i) { return perBin[(size_t) i]; };
+        const auto smoothAt = [&] (int i) { return result[(size_t) i]; };
+        const auto spreadPerBin = spread (perBinAt, 1000.0, 20000.0), spreadOld = spread (rawAt, 1000.0, 20000.0),
+                   spreadSmooth = spread (smoothAt, 1000.0, 20000.0);
+        note ("white noise, one frame, spread across 1-20 kHz: per-bin " + format (spreadPerBin) + " dB, old display "
+              + format (spreadOld) + " dB, smoothed " + format (spreadSmooth) + " dB");
+        check (spreadSmooth < 0.5 * spreadPerBin && spreadSmooth < spreadOld, "1/12-octave smoothing flattens the noise floor");
+
+        // Frame-to-frame flicker at 5 kHz with the live time constants (hop = 21 ms).
+        {
+            Display live;
+            live.prepare (sampleRate, Analyzer::numBins);
+            int point = 0;
+            while (display.getFrequency (point) < 5000.0)
+                ++point;
+            double rawFlicker = 0.0, smoothFlicker = 0.0;
+            float previousRaw = 0.0f, previousSmooth = 0.0f;
+            int frames = 0;
+            for (int start = 48000; start + Analyzer::hopSize <= (int) noise.size(); start += Analyzer::hopSize)
+            {
+                analyzer.pushSamples (noise.data() + start, Analyzer::hopSize);
+                live.advance (analyzer.getLiveDb(), (double) Analyzer::hopSize / sampleRate, 0.03, 0.16);
+                const auto raw = Analyzer::levelAt (analyzer.getLiveDb(), live.getFrequency (point), sampleRate, 1.0 / 12.0);
+                const auto smooth = live.getLevels()[(size_t) point];
+                if (frames++ > 10)
+                {
+                    rawFlicker += std::abs (raw - previousRaw);
+                    smoothFlicker += std::abs (smooth - previousSmooth);
+                }
+                previousRaw = raw;
+                previousSmooth = smooth;
+            }
+            rawFlicker /= std::max (1, frames - 11);
+            smoothFlicker /= std::max (1, frames - 11);
+            note ("live flicker at 5 kHz (mean change per frame): old display " + format (rawFlicker) + " dB, smoothed " + format (smoothFlicker) + " dB");
+            check (smoothFlicker < 0.5 * rawFlicker, "temporal smoothing at least halves the frame-to-frame flicker");
+        }
+
+        // Low-frequency curve has no corners: second differences stay small.
+        auto maxCorner = 0.0;
+        for (int i = 2; i < display.getNumPoints(); ++i)
+            if (display.getFrequency (i) < 100.0)
+                maxCorner = std::max (maxCorner, std::abs ((double) result[(size_t) i] - 2.0 * result[(size_t) i - 1] + result[(size_t) i - 2]));
+        auto rawCorner = 0.0;
+        for (int i = 2; i < display.getNumPoints(); ++i)
+            if (display.getFrequency (i) < 100.0)
+                rawCorner = std::max (rawCorner, std::abs ((double) rawAt (i) - 2.0 * rawAt (i - 1) + rawAt (i - 2)));
+        note ("largest second difference below 100 Hz: raw " + format (rawCorner, 3) + " dB, smoothed " + format (maxCorner, 3) + " dB");
+        check (maxCorner < rawCorner, "the low end is a smoother curve than straight segments between bins");
+
+        // A sine still shows a clear peak at its frequency.
+        Analyzer toneAnalyzer;
+        toneAnalyzer.setSampleRate (sampleRate);
+        std::vector<float> tone (16384);
+        for (size_t i = 0; i < tone.size(); ++i)
+            tone[i] = 0.5f * (float) std::sin (juce::MathConstants<double>::twoPi * 1000.0 * (double) i / sampleRate);
+        toneAnalyzer.pushSamples (tone.data(), (int) tone.size());
+        display.computeTarget (toneAnalyzer.getLatestFrameDb(), result);
+        const auto peakIndex = (int) std::distance (result.begin(), std::max_element (result.begin(), result.end()));
+        note ("0.5 sine at 1 kHz: smoothed display peak " + format (result[(size_t) peakIndex]) + " dBFS at "
+              + format (display.getFrequency (peakIndex), 0) + " Hz (per-bin level -6.02 dBFS)");
+        check (std::abs (std::log2 (display.getFrequency (peakIndex) / 1000.0)) < 1.0 / 24.0 && result[(size_t) peakIndex] > -20.0f,
+               "a tone still shows as a peak at its frequency");
+
+        // Temporal smoothing: one-pole in dB, independent of the frame rate.
+        std::vector<float> quiet ((size_t) Analyzer::numBins, -100.0f), loud ((size_t) Analyzer::numBins, -20.0f);
+        Display a, b;
+        a.prepare (sampleRate, Analyzer::numBins);
+        b.prepare (sampleRate, Analyzer::numBins);
+        a.snapTo (quiet);
+        b.snapTo (quiet);
+        a.advance (loud, 0.03, 0.03, 0.16);
+        for (int i = 0; i < 10; ++i)
+            b.advance (loud, 0.003, 0.03, 0.16);
+        const auto expected = -100.0 + 80.0 * (1.0 - std::exp (-1.0));
+        note ("rise after one time constant: " + format (a.getLevels()[200]) + " dB (expected " + format (expected) + "), at 10x the frame rate "
+              + format (b.getLevels()[200]) + " dB");
+        check (std::abs (a.getLevels()[200] - expected) < 0.01 && std::abs (a.getLevels()[200] - b.getLevels()[200]) < 0.01,
+               "the display rises with the set time constant at any frame rate");
+
+        a.snapTo (loud);
+        a.advance (quiet, 0.03, 0.03, 0.16);
+        const auto fell = -20.0f - a.getLevels()[200];
+        note ("fall in 30 ms: " + format (fell) + " dB (rise was " + format (80.0 * (1.0 - std::exp (-1.0))) + " dB)");
+        check (fell > 1.0f && fell < 80.0f * (1.0f - std::exp (-1.0f)), "decay is slower than the attack");
+    }
+
+    //==============================================================================
+    // Undo / redo
+    std::vector<float> allParameterValues (DooblrQAudioProcessor& processor)
+    {
+        std::vector<float> values;
+        for (auto* parameter : processor.getParameters())
+            values.push_back (parameter->getValue());
+        return values;
+    }
+
+    bool sameValues (const std::vector<float>& a, const std::vector<float>& b)
+    {
+        if (a.size() != b.size())
+            return false;
+        for (size_t i = 0; i < a.size(); ++i)
+            if (std::abs (a[i] - b[i]) > 1.0e-5f)
+                return false;
+        return true;
+    }
+
+    /** What a UI control does: begin gesture, set, end gesture. */
+    void uiGesture (DooblrQAudioProcessor& processor, const juce::String& id, float value)
+    {
+        auto* parameter = processor.getParameterState().getParameter (id);
+        parameter->beginChangeGesture();
+        parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+        parameter->endChangeGesture();
+    }
+
+    void testUndo()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        DooblrQAudioProcessor processor;
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::gain, 3.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        auto* curve = dynamic_cast<Curve*> (findById (*editor, "responseCurve"));
+        auto* undoButton = dynamic_cast<juce::Button*> (findById (*editor, "undo"));
+        auto* redoButton = dynamic_cast<juce::Button*> (findById (*editor, "redo"));
+        auto* frequencyKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::frequency));
+        auto* typeBox = dynamic_cast<juce::ComboBox*> (findById (*editor, params::band::type));
+        auto* bandSwitch = dynamic_cast<juce::Button*> (findById (*editor, "bandSwitch4"));
+        check (dooblrEditor && curve && undoButton && redoButton && frequencyKnob && typeBox && bandSwitch,
+               "editor, Undo/Redo buttons and controls exist");
+
+        if (! (dooblrEditor && curve && undoButton && redoButton && frequencyKnob && typeBox && bandSwitch))
+            return;
+
+        auto& history = processor.getUndoHistory();
+        history.clear();
+        dooblrEditor->updateUndoButtons();
+        check (history.getMaxTransactions() == 50, "history limit is 50 actions");
+        check (! undoButton->isEnabled() && ! redoButton->isEnabled(), "Undo/Redo are disabled with no history");
+        check (editor->getWantsKeyboardFocus(), "the editor accepts keyboard focus");
+
+        // Host automation (no gestures), on the message thread and on another thread: not recorded.
+        for (int i = 0; i < 100; ++i)
+            setBand (processor, 0, params::band::gain, (float) (i % 10) - 5.0f);
+        std::thread automation ([&processor]
+        {
+            for (int i = 0; i < 200; ++i)
+                if (auto* p = processor.getParameterState().getParameter (params::bandId (1, params::band::gain)))
+                    p->setValueNotifyingHost ((float) (i % 7) / 7.0f);
+        });
+        automation.join();
+        check (! history.canUndo() && history.getNumUndoableSteps() == 0, "300 host automation changes create no undo entries");
+
+        std::vector<std::vector<float>> states { allParameterValues (processor) };
+        const auto record = [&] (const std::string& name, int expectedSteps)
+        {
+            states.push_back (allParameterValues (processor));
+            check (history.getNumUndoableSteps() == expectedSteps && ! sameValues (states[states.size() - 2], states.back()),
+                   name + " is one undo step");
+        };
+
+        // 1. Knob drag (band 1 frequency) through the slider's own mouse handlers.
+        dooblrEditor->selectBand (0);
+        const auto knobCentre = frequencyKnob->getLocalBounds().getCentre().toFloat();
+        simulateDrag (*frequencyKnob, knobCentre, knobCentre + juce::Point<float> (0.0f, -60.0f));
+        note ("knob drag: band 1 frequency " + format (getParameter (processor, params::bandId (0, params::band::frequency)), 1) + " Hz");
+        record ("a frequency-knob drag", 1);
+
+        // 2. Handle drag of band 3 (frequency and gain together).
+        const auto handle = curve->handlePosition (2);
+        simulateDrag (*curve, handle, handle + juce::Point<float> (50.0f, -30.0f));
+        record ("a handle drag (frequency + gain)", 2);
+        const auto afterHandle = states.back();
+
+        // 3. Combo change (band 1 type) through the attachment.
+        typeBox->setSelectedItemIndex ((int) dsp::FilterType::highShelf, juce::sendNotificationSync);
+        record ("a type change", 3);
+
+        // 4. Band-tab switch toggles band 4.
+        bandSwitch->setToggleState (! bandSwitch->getToggleState(), juce::sendNotificationSync);
+        record ("a band-tab switch", 4);
+
+        // 5. Double-click on band 5's handle toggles it on.
+        simulateDoubleClick (*curve, curve->handlePosition (4));
+        record ("a double-click enable", 5);
+
+        // 6. Bandwidth-handle drag of the selected band 3.
+        dooblrEditor->selectBand (2);
+        const auto upper = curve->widthHandlePositions (2).second;
+        simulateDrag (*curve, upper, upper + juce::Point<float> (30.0f, 0.0f));
+        record ("a bandwidth-handle drag", 6);
+
+        dooblrEditor->updateUndoButtons();
+        check (undoButton->isEnabled() && ! redoButton->isEnabled(), "Undo enabled, Redo disabled after edits");
+
+        // Undo step by step restores each earlier state exactly.
+        auto stepwise = true;
+        for (int k = 1; k <= 6; ++k)
+        {
+            history.undo();
+            stepwise = stepwise && sameValues (allParameterValues (processor), states[(size_t) (6 - k)]);
+        }
+        check (stepwise && ! history.canUndo(), "undo walks back through all 6 gestures, one at a time");
+        check (sameValues (allParameterValues (processor), states.front()), "after 6 undos everything is as before the edits");
+
+        // Redo.
+        history.redo();
+        history.redo();
+        check (sameValues (allParameterValues (processor), afterHandle), "redo reapplies the knob and handle drags (frequency and gain together)");
+        dooblrEditor->updateUndoButtons();
+        check (undoButton->isEnabled() && redoButton->isEnabled(), "Undo and Redo both enabled mid-history");
+
+        // A new edit after undo drops the redo branch.
+        uiGesture (processor, params::outputGain, -3.0f);
+        check (! history.canRedo() && history.getNumUndoableSteps() == 3, "a new edit after undo clears redo");
+
+        // Keyboard: Cmd/Ctrl-Z, Cmd/Ctrl-Shift-Z, Cmd/Ctrl-Y.
+        const auto command = juce::ModifierKeys::commandModifier;
+        const auto beforeKey = allParameterValues (processor);
+        check (dooblrEditor->keyPressed (juce::KeyPress ('z', command, 0)), "Cmd/Ctrl-Z is claimed by the editor");
+        check (std::abs (getParameter (processor, params::outputGain)) < 1.0e-4f, "Cmd/Ctrl-Z undoes the last action");
+        check (dooblrEditor->keyPressed (juce::KeyPress ('z', command | juce::ModifierKeys::shiftModifier, 0))
+                   && sameValues (allParameterValues (processor), beforeKey),
+               "Cmd/Ctrl-Shift-Z redoes it");
+        history.undo();
+        check (dooblrEditor->keyPressed (juce::KeyPress ('y', command, 0)) && sameValues (allParameterValues (processor), beforeKey),
+               "Cmd/Ctrl-Y redoes it");
+        check (! dooblrEditor->keyPressed (juce::KeyPress ('k', command, 0)) && ! dooblrEditor->keyPressed (juce::KeyPress ('z')),
+               "other keys are left to the host");
+
+        // Undo / Redo buttons.
+        dooblrEditor->updateUndoButtons();
+        undoButton->onClick();
+        check (std::abs (getParameter (processor, params::outputGain)) < 1.0e-4f, "the Undo button undoes");
+        redoButton->onClick();
+        check (std::abs (getParameter (processor, params::outputGain) + 3.0f) < 1.0e-3f, "the Redo button redoes");
+
+        // Wheel ticks in quick succession merge into one step.
+        const auto stepsBeforeWheel = history.getNumUndoableSteps();
+        const auto qBeforeWheel = getParameter (processor, params::bandId (2, params::band::q));
+        juce::MouseWheelDetails wheel {};
+        wheel.deltaY = 0.05f;
+        for (int i = 0; i < 5; ++i)
+            curve->mouseWheelMove (makeMouseEvent (*curve, curve->handlePosition (2), curve->handlePosition (2), 0, false), wheel);
+        check (history.getNumUndoableSteps() == stepsBeforeWheel + 1, "5 quick scroll-wheel ticks are one undo step");
+        history.undo();
+        check (std::abs (getParameter (processor, params::bandId (2, params::band::q)) - qBeforeWheel) < 1.0e-4f,
+               "undoing the scroll restores Q");
+
+        // Limit: 60 gestures keep only the last 50.
+        history.clear();
+        std::vector<std::vector<float>> limitStates { allParameterValues (processor) };
+        for (int i = 0; i < 60; ++i)
+        {
+            // Alternate parameters so no two consecutive gestures merge.
+            if (i % 2 == 0)
+                uiGesture (processor, params::outputGain, -10.0f + 0.25f * (float) i);
+            else
+                uiGesture (processor, params::bandId (0, params::band::gain), -10.0f + 0.25f * (float) i);
+            limitStates.push_back (allParameterValues (processor));
+        }
+        const auto stored = history.getNumUndoableSteps();
+        auto undone = 0;
+        while (history.undo())
+            ++undone;
+        note ("60 gestures: " + std::to_string (stored) + " stored, " + std::to_string (undone) + " undone");
+        check (stored == 50 && undone == 50, "60 actions keep exactly the last 50");
+        check (sameValues (allParameterValues (processor), limitStates[10]), "undoing all 50 lands on the state after action 10");
+
+        // A loaded state starts a new history.
+        uiGesture (processor, params::outputGain, 2.0f);
+        juce::MemoryBlock block;
+        processor.getStateInformation (block);
+        processor.setStateInformation (block.getData(), (int) block.getSize());
+        check (! history.canUndo() && ! history.canRedo(), "loading a state clears the history");
+
+        processor.editorBeingDeleted (editor.get());
+        editor.reset();
+    }
+
+    //==============================================================================
+    // On/off switches in the band tabs
+    int countColourPixels (const juce::Image& image, juce::Colour colour)
+    {
+        auto count = 0;
+        for (int y = 0; y < image.getHeight(); ++y)
+            for (int x = 0; x < image.getWidth(); ++x)
+            {
+                const auto p = image.getPixelAt (x, y);
+                const auto distance = std::abs (p.getRed() - colour.getRed()) + std::abs (p.getGreen() - colour.getGreen())
+                                      + std::abs (p.getBlue() - colour.getBlue());
+                count += distance < 40 && p.getAlpha() > 200 ? 1 : 0;
+            }
+        return count;
+    }
+
+    void clickComponent (juce::Component& c)
+    {
+        const auto at = c.getLocalBounds().getCentre().toFloat();
+        c.mouseDown (makeMouseEvent (c, at, at, 1, false));
+        c.mouseUp (makeMouseEvent (c, at, at, 1, false));
+    }
+
+    void testBandTabSwitches()
+    {
+        DooblrQAudioProcessor processor;
+        setBand (processor, 0, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        check (dooblrEditor != nullptr, "editor exists");
+
+        if (dooblrEditor == nullptr)
+            return;
+
+        processor.getUndoHistory().clear();
+        dooblrEditor->selectBand (0);
+
+        auto layoutOk = true, statesMatch = true, hitTestOk = true;
+
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            auto* tab = dynamic_cast<juce::Button*> (findById (*editor, "band" + juce::String (b + 1)));
+            auto* sw = dynamic_cast<juce::Button*> (findById (*editor, "bandSwitch" + juce::String (b + 1)));
+
+            if (tab == nullptr || sw == nullptr)
+            {
+                layoutOk = false;
+                continue;
+            }
+
+            layoutOk = layoutOk && sw->getParentComponent() == tab && sw->isVisible()
+                       && sw->getX() >= 0 && sw->getRight() < tab->getWidth() / 4
+                       && sw->getY() >= 0 && sw->getBottom() <= tab->getHeight();
+            statesMatch = statesMatch && sw->getToggleState() == processor.getBandSettings (b).enabled;
+            hitTestOk = hitTestOk && tab->getComponentAt (sw->getBounds().getCentre()) == sw
+                        && tab->getComponentAt (tab->getLocalBounds().getCentre()) == tab;
+        }
+
+        check (layoutOk, "each band tab has its switch on the left side, inside the tab");
+        check (statesMatch, "switch states match the bands' enabled parameters");
+        check (hitTestOk, "clicks on the switch go to the switch, clicks elsewhere to the tab");
+
+        auto* tab4 = dynamic_cast<juce::Button*> (findById (*editor, "band4"));
+        auto* switch4 = dynamic_cast<juce::Button*> (findById (*editor, "bandSwitch4"));
+        auto* switch6 = dynamic_cast<juce::Button*> (findById (*editor, "bandSwitch6"));
+
+        if (tab4 == nullptr || switch4 == nullptr || switch6 == nullptr)
+            return;
+
+        // Click the switch (through its own mouse handlers): toggles band 4, tab selection unchanged.
+        clickComponent (*switch4);
+        check (processor.getBandSettings (3).enabled && switch4->getToggleState(), "clicking the switch turns band 4 on");
+        check (dooblrEditor->getSelectedBand() == 0 && ! tab4->getToggleState(), "clicking the switch does not select the tab");
+        const auto onImage = switch4->createComponentSnapshot (switch4->getLocalBounds());
+
+        clickComponent (*switch4);
+        check (! processor.getBandSettings (3).enabled && ! switch4->getToggleState(), "clicking it again turns band 4 off");
+        const auto offImage = switch4->createComponentSnapshot (switch4->getLocalBounds());
+
+        // Clicking the rest of the tab selects it.
+        clickComponent (*tab4);
+        check (dooblrEditor->getSelectedBand() == 3 && tab4->getToggleState(), "clicking the tab body selects band 4");
+        check (! processor.getBandSettings (3).enabled, "selecting the tab does not toggle the band");
+
+        // Parameter changes from elsewhere (host, curve double-click) update the switch.
+        setBand (processor, 5, params::band::enabled, 1.0f);
+        check (switch6->getToggleState(), "the switch follows the parameter");
+
+        // Undoable.
+        check (processor.getUndoHistory().getNumUndoableSteps() == 2, "each switch click is one undo step");
+        processor.getUndoHistory().undo();
+        check (processor.getBandSettings (3).enabled && switch4->getToggleState(), "undo reverts the last switch click");
+
+        // On uses the band colour, off is dim.
+        const auto onPixels = countColourPixels (onImage, dooblrq::ui::bandColour (3));
+        const auto offPixels = countColourPixels (offImage, dooblrq::ui::bandColour (3));
+        note ("band-colour pixels in switch 4: on " + std::to_string (onPixels) + ", off " + std::to_string (offPixels));
+        check (onPixels > 100 && offPixels == 0, "on is drawn in the band colour, off is dim");
+
+        processor.editorBeingDeleted (editor.get());
+        editor.reset();
+    }
+
     struct TestCase
     {
         const char* name;
@@ -2030,6 +2530,9 @@ int main()
         { "mode switching and dynamics per mode",   testModeSwitchingAndDynamics },
         { "Width (bandwidth in octaves)",           testBandwidth },
         { "editor bandwidth handles",               testWidthHandles },
+        { "smoothed spectrum display",              testSpectrumDisplay },
+        { "undo / redo (50 steps, keys, buttons)",  testUndo },
+        { "band tab on/off switches",               testBandTabSwitches },
         { "CPU per phase mode",                     testCpuUsage },
     };
 
