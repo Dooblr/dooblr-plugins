@@ -91,7 +91,14 @@ if(TARGET DooblrQ_VST3)
     # leaves a stale signature whenever that file changes (e.g. a version bump). Re-sign
     # last so the bundle always passes `codesign --verify --deep --strict`.
     if(APPLE AND dooblrq_vst3_artefact)
+        #
+        # The build output must also not carry com.apple.quarantine: this project lives in
+        # a File Provider (iCloud) synced ~/Documents, and the bundle folder in the build
+        # tree picked up a quarantine flag. Copies (ditto, Finder) carry it along, and
+        # Gatekeeper then refuses to let a host dlopen the plug-in ("library load disallowed
+        # by system policy"), so DAWs report it as not loadable. Strip it before signing.
         add_custom_command(TARGET DooblrQ_VST3 POST_BUILD
+            COMMAND sh -c "xattr -r -d com.apple.quarantine \"$1\" 2>/dev/null; exit 0" sh "${dooblrq_vst3_artefact}"
             COMMAND codesign --force --sign - "${dooblrq_vst3_artefact}"
             COMMAND codesign --verify --deep --strict "${dooblrq_vst3_artefact}"
             VERBATIM)
@@ -102,6 +109,15 @@ if(TARGET DooblrQ_VST3)
             OUTPUT  "${CMAKE_BINARY_DIR}/artefact-paths/DooblrQ_VST3-$<CONFIG>.txt"
             CONTENT "${dooblrq_vst3_artefact}\n")
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# Load check tool (used by scripts/build.sh to load the installed bundle like a host)
+# ---------------------------------------------------------------------------
+option(DOOBLRQ_BUILD_LOADCHECK "Build DooblrQLoadCheck, the host-style load test" ON)
+
+if(DOOBLRQ_BUILD_LOADCHECK AND APPLE)
+    add_subdirectory(Tools/LoadCheck)
 endif()
 
 # ---------------------------------------------------------------------------

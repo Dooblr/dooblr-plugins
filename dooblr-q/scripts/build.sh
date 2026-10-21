@@ -9,9 +9,11 @@
 #   RUN_TESTS        1 to build and run the smoke tests, 0 to skip (default: 1)
 #   INSTALL_VST3     1 to install the bundle into the VST3 folder after a successful build
 #                    and test run, 0 to skip (default: 1)
-#   INSTALL_VST3_DIR VST3 folder to install into. Default: /Library/Audio/Plug-Ins/VST3 if
-#                    dooblr-q.vst3 is already installed there, otherwise
-#                    ~/Library/Audio/Plug-Ins/VST3. Never uses sudo.
+#   INSTALL_VST3_DIR VST3 folder to install into. Default: /Library/Audio/Plug-Ins/VST3,
+#                    unless dooblr-q.vst3 is already installed only in
+#                    ~/Library/Audio/Plug-Ins/VST3 (then that copy is updated). Never uses sudo.
+#   LOAD_CHECK       1 to load every delivered bundle like a host (dlopen + JUCE VST3
+#                    hosting, see Tools/LoadCheck) and fail if it does not load (default: 1)
 #   COPY_TO_PROJECT  1 to also copy the bundle to <repo>/dooblr-q.vst3 (default: 0)
 #   JOBS             parallel build jobs (default: number of CPUs)
 #   CMAKE_GENERATOR  honoured by CMake itself; defaults to Ninja when available,
@@ -25,6 +27,7 @@ CONFIG="${CONFIG:-Release}"
 RUN_TESTS="${RUN_TESTS:-1}"
 INSTALL_VST3="${INSTALL_VST3:-1}"
 COPY_TO_PROJECT="${COPY_TO_PROJECT:-0}"
+LOAD_CHECK="${LOAD_CHECK:-1}"
 BUNDLE_NAME="dooblr-q.vst3"
 
 if [[ -z "${JOBS:-}" ]]; then
@@ -49,6 +52,19 @@ cmake "${configure_args[@]}"
 
 echo "==> Building DooblrQ_VST3"
 cmake --build "$BUILD_DIR" --config "$CONFIG" --target DooblrQ_VST3 --parallel "$JOBS"
+
+if [[ "$LOAD_CHECK" == "1" ]]; then
+    echo "==> Building DooblrQLoadCheck"
+    cmake --build "$BUILD_DIR" --config "$CONFIG" --target DooblrQLoadCheck --parallel "$JOBS"
+    loadcheck="$(head -n 1 "$BUILD_DIR/artefact-paths/DooblrQLoadCheck-$CONFIG.txt" 2>/dev/null || true)"
+
+    if [[ -z "$loadcheck" || ! -x "$loadcheck" ]]; then
+        echo "error: DooblrQLoadCheck was not built" >&2
+        exit 1
+    fi
+fi
+
+project_version="$(sed -n 's/^CMAKE_PROJECT_VERSION:STATIC=//p' "$BUILD_DIR/CMakeCache.txt")"
 
 if [[ "$RUN_TESTS" == "1" ]]; then
     echo "==> Building DooblrQTests"
@@ -103,9 +119,21 @@ deliver_bundle() {
     fi
 
     if command -v ditto >/dev/null 2>&1; then
-        ditto "$artefact" "$destination"   # preserves the bundle's code signature
+        # Preserves the bundle's code signature; --noqtn drops any quarantine flag.
+        ditto --noqtn "$artefact" "$destination"
     else
         cp -R "$artefact" "$destination"
+    fi
+
+    # A quarantined bundle passes codesign but Gatekeeper refuses to let hosts load it
+    # ("library load disallowed by system policy"), so make sure none is left anywhere.
+    if command -v xattr >/dev/null 2>&1; then
+        xattr -r -d com.apple.quarantine "$destination" 2>/dev/null || true
+
+        if xattr -r "$destination" 2>/dev/null | grep -q "com.apple.quarantine"; then
+            echo "error: $destination still carries com.apple.quarantine" >&2
+            exit 1
+        fi
     fi
 
     if ! diff -r -q "$artefact" "$destination" >/dev/null; then
@@ -115,9 +143,17 @@ deliver_bundle() {
 
     if command -v codesign >/dev/null 2>&1; then
         codesign --verify --deep --strict "$destination"
-        echo "  identical to build output; signature verified (codesign --verify --deep --strict)"
+        echo "  identical to build output; no quarantine; signature verified (codesign --verify --deep --strict)"
     else
         echo "  identical to build output"
+    fi
+
+    if [[ "$LOAD_CHECK" == "1" ]]; then
+        echo "==> Loading $destination like a host"
+        if ! "$loadcheck" "$destination" "$project_version"; then
+            echo "error: $destination does not load; hosts will reject it" >&2
+            exit 1
+        fi
     fi
 
     echo "  $destination"
@@ -128,12 +164,12 @@ if [[ "$INSTALL_VST3" == "1" ]]; then
     user_vst3_dir="$HOME/Library/Audio/Plug-Ins/VST3"
 
     if [[ -z "${INSTALL_VST3_DIR:-}" ]]; then
-        # Update an existing system-wide install in place rather than creating a
-        # second copy that hosts would scan as a duplicate.
-        if [[ -d "$system_vst3_dir/$BUNDLE_NAME" ]]; then
-            INSTALL_VST3_DIR="$system_vst3_dir"
-        else
+        # /Library is where plug-ins live on this machine. Only update a per-user copy
+        # when that is the sole existing install, so hosts never scan two copies.
+        if [[ -d "$user_vst3_dir/$BUNDLE_NAME" && ! -d "$system_vst3_dir/$BUNDLE_NAME" ]]; then
             INSTALL_VST3_DIR="$user_vst3_dir"
+        else
+            INSTALL_VST3_DIR="$system_vst3_dir"
         fi
     fi
 

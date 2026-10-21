@@ -245,11 +245,24 @@ No runtime network dependencies (`JUCE_WEB_BROWSER=0`, `JUCE_USE_CURL=0`).
 Configures `build/` in Release, builds `DooblrQ_VST3`, builds and runs the
 tests with CTest, and then installs the bundle, replacing only `dooblr-q.vst3` in the VST3 folder:
 
-- The install goes to `/Library/Audio/Plug-Ins/VST3` if dooblr-q is already installed there.
-  Otherwise it goes to `~/Library/Audio/Plug-Ins/VST3`.
+- The install goes to `/Library/Audio/Plug-Ins/VST3`, unless dooblr-q is installed only in
+  `~/Library/Audio/Plug-Ins/VST3` (then that copy is updated).
 - It never uses sudo. If the folder isn't writable, the script stops and reports it.
-- The installed copy is checked against the build output and verified with
-  `codesign --verify --deep --strict`.
+- The installed copy is checked against the build output, must carry no
+  `com.apple.quarantine` flag, and is verified with `codesign --verify --deep --strict`.
+- Finally the installed bundle is loaded like a host would load it, by
+  `DooblrQLoadCheck` (Tools/LoadCheck): `dlopen` + `GetPluginFactory`, then JUCE's VST3
+  hosting scans it, instantiates it, checks the version and processes audio. The script fails
+  if this fails (`LOAD_CHECK=0` skips it).
+
+**Why the quarantine check:** this project lives in an iCloud-synced (File Provider)
+`~/Documents`, and the bundle folder in the build tree picked up `com.apple.quarantine`.
+Copying it preserved the flag. A quarantined ad-hoc-signed plug-in still passes `codesign`,
+but macOS refuses to load it into a host ("library load disallowed by system policy";
+Finder shows "Apple could not verify dooblr-q.vst3 is free of malware"). Ableton then reports
+"The bundle couldn't be loaded" / "not a plugin". The build strips the flag from the build
+output after linking (POST_BUILD), and the install copies with `ditto --noqtn` and checks
+again.
 
 Rescan plug-ins in your DAW (or restart it) to load a new build.
 
@@ -260,6 +273,7 @@ BUILD_DIR=build-debug CONFIG=Debug INSTALL_VST3=0 ./scripts/build.sh   # Debug b
 RUN_TESTS=0 ./scripts/build.sh                                         # skip tests
 INSTALL_VST3=0 ./scripts/build.sh                                      # build only
 INSTALL_VST3_DIR=~/Library/Audio/Plug-Ins/VST3 ./scripts/build.sh      # choose the folder
+LOAD_CHECK=0 ./scripts/build.sh                                        # skip the host-style load test
 COPY_TO_PROJECT=1 ./scripts/build.sh                                   # also copy to ./dooblr-q.vst3
 JOBS=4 ./scripts/build.sh
 ```
@@ -271,6 +285,8 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release --target DooblrQ_VST3 --parallel
 cmake --build build --config Release --target DooblrQTests --parallel
 ctest --test-dir build -C Release --output-on-failure
+cmake --build build --config Release --target DooblrQLoadCheck --parallel
+"$(cat build/artefact-paths/DooblrQLoadCheck-Release.txt)" /Library/Audio/Plug-Ins/VST3/dooblr-q.vst3
 ```
 
 The build output is `build/DooblrQ_artefacts/Release/VST3/dooblr-q.vst3`
