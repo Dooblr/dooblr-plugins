@@ -6,6 +6,7 @@
 
 #include "Analysis/SpectrumAnalyzer.h"
 #include "DSP/DynamicEQBand.h"
+#include "DSP/FirEqEngine.h"
 #include "Parameters.h"
 
 class DooblrQAudioProcessor final : public juce::AudioProcessor
@@ -92,10 +93,30 @@ public:
     /** Coefficients are recomputed every this many samples. */
     static constexpr int coefficientUpdateInterval = 16;
 
+    /** Phase mode currently running on the audio thread (may lag the parameter by a block). */
+    dooblrq::params::PhaseMode getActivePhaseMode() const noexcept
+    {
+        return (dooblrq::params::PhaseMode) activePhaseMode.load (std::memory_order_relaxed);
+    }
+
+    /** Latency of a phase mode at a sample rate (what setLatencySamples reports). */
+    static int latencyFor (dooblrq::params::PhaseMode mode, double sampleRate) noexcept;
+
+    /** In Natural/Linear phase, kernels follow parameter and dynamic-gain changes at most
+        this often (samples at 44.1/48 kHz; scaled with the rate). */
+    static constexpr int kernelUpdateInterval = 512;
+
+    /** For tests: the FIR engine (valid in Natural/Linear phase). */
+    const dooblrq::dsp::FirEqEngine& getFirEngine() const noexcept { return firEngine; }
+
 private:
     static BusesProperties createBusesProperties();
     void clearOutputOnlyChannels (juce::AudioBuffer<float>& buffer) const noexcept;
     void updateBandSettings (bool snap) noexcept;
+    void applyPhaseMode (int mode, bool fadeIn) noexcept;
+    void updateKernel (bool immediate) noexcept;
+    void processFirBlock (float* const* channels, int numChannels, int numSamples, bool linked, bool outputDry) noexcept;
+    void applySwitchFade (float* const* channels, int numChannels, int numSamples) noexcept;
 
     struct BandParameterPointers
     {
@@ -109,6 +130,7 @@ private:
         std::atomic<float>* threshold = nullptr;
         std::atomic<float>* attack = nullptr;
         std::atomic<float>* release = nullptr;
+        std::atomic<float>* width = nullptr;
     };
 
     juce::AudioProcessorValueTreeState parameters;
@@ -116,11 +138,23 @@ private:
     std::array<BandParameterPointers, dooblrq::params::numBands> bandParameters;
     std::atomic<float>* outputGainDb = nullptr;
     std::atomic<float>* stereoLink = nullptr;
+    std::atomic<float>* phaseMode = nullptr;
 
     std::array<dooblrq::dsp::DynamicEQBand, dooblrq::params::numBands> bands;
     juce::SmoothedValue<float> outputGain { 1.0f };
 
     std::atomic<double> preparedSampleRate { 0.0 };
+
+    // Natural / Linear phase (audio thread only, preallocated in prepareToPlay).
+    static constexpr int firChunkSize = dooblrq::dsp::FirEqEngine::partitionSize;
+    static constexpr int switchFadeLength = 256;
+    dooblrq::dsp::FirEqEngine firEngine;
+    std::atomic<int> activePhaseMode { 0 };
+    std::array<dooblrq::dsp::KernelBand, dooblrq::params::numBands> appliedKernel {};
+    int samplesSinceKernel = 0, switchFadeRemaining = 0;
+    juce::AudioBuffer<float> detectionScratch, dryScratch;
+    std::array<std::vector<float>, 2> dryRing;
+    int dryRingPosition = 0;
 
     dooblrq::analysis::AnalyzerFifo analyzerFifo;
     dooblrq::analysis::SpectrumAnalyzer spectrumAnalyzer;

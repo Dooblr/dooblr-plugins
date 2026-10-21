@@ -94,6 +94,66 @@ namespace dooblrq::dsp
         return finalise (w, k, 0.0, k, 0.0);
     }
 
+    SvfCoefficients makeWidthRegionCoefficients (FilterType type, double frequency, double q,
+                                                 double sampleRate) noexcept
+    {
+        const auto p = makeWidthRegionPrototype (type, q);
+        return finalise (prewarp (frequency, sampleRate) * p.scale, p.k, p.m0, p.m1, p.m2);
+    }
+
+    AnalogPrototype makeEqPrototype (FilterType type, double q, double gainDb) noexcept
+    {
+        // Mirrors makeEqCoefficients: same k and output mix, with the frequency scale that
+        // makeEqCoefficients applies to the prewarped g.
+        const auto k = 1.0 / std::max (q, 0.025);
+        const auto a = std::pow (10.0, gainDb / 40.0);
+
+        switch (type)
+        {
+            case FilterType::bell:
+            {
+                const auto kBell = 1.0 / (std::max (q, 0.025) * a);
+                return { 1.0, kBell, 1.0, kBell * (a * a - 1.0), 0.0 };
+            }
+            case FilterType::lowShelf:  return { 1.0 / std::sqrt (a), k, 1.0, k * (a - 1.0), a * a - 1.0 };
+            case FilterType::highShelf: return { std::sqrt (a), k, a * a, k * (1.0 - a) * a, 1.0 - a * a };
+            case FilterType::lowCut:    return { 1.0, k, 1.0, -k, -1.0 };
+            case FilterType::highCut:   return { 1.0, k, 0.0, 0.0, 1.0 };
+            case FilterType::notch:     return { 1.0, k, 1.0, -k, 0.0 };
+            case FilterType::tilt:      return { std::sqrt (a), k, a, k * (1.0 - a), (1.0 - a * a) / a };
+        }
+
+        return {};
+    }
+
+    AnalogPrototype makeWidthRegionPrototype (FilterType type, double q) noexcept
+    {
+        constexpr auto butterworthK = 1.4142135623730951;
+
+        switch (type)
+        {
+            case FilterType::lowShelf:
+                return { 1.0, butterworthK, 0.0, 0.0, 1.0 };
+            case FilterType::highShelf:
+            case FilterType::tilt:
+                return { 1.0, butterworthK, 1.0, -butterworthK, -1.0 };
+            case FilterType::bell:
+            case FilterType::lowCut:
+            case FilterType::highCut:
+            case FilterType::notch:
+                break;
+        }
+
+        const auto k = 1.0 / std::max (q, 0.025);
+        return { 1.0, k, 0.0, k, 0.0 };
+    }
+
+    std::complex<double> analogResponseAt (const AnalogPrototype& p, double bandFrequency, double frequency) noexcept
+    {
+        const std::complex<double> s (0.0, frequency / (std::max (bandFrequency, 1.0) * p.scale));
+        return p.m0 + (p.m1 * s + p.m2) / (s * s + p.k * s + 1.0);
+    }
+
     std::complex<double> responseAt (const SvfCoefficients& c, double frequency, double sampleRate) noexcept
     {
         // The TPT SVF maps the analogue prototype through the bilinear transform with

@@ -2,9 +2,10 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.3.0:** six-band dynamic EQ (now with a Tilt band type) with a native JUCE
-editor, a live frequency-response display over a background spectrum analyzer with
-Freeze, and automated tests.
+**Version 0.4.0:** six-band dynamic EQ with Tilt bands, per-band stereo width, three
+phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
+live frequency-response display over a background spectrum analyzer with Freeze, and
+automated tests. (0.3.0 added the analyzer, Freeze and Tilt.)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -15,7 +16,8 @@ The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 CMakeLists.txt                 Project, pinned JUCE dependency, plug-in target (DooblrQ)
 Source/
   DSP/SvfFilter.h/.cpp         TPT state-variable filter, coefficients, analytic response
-  DSP/DynamicEQBand.h/.cpp     One band: smoothing, side-chain detector, envelope, dynamic gain
+  DSP/DynamicEQBand.h/.cpp     One band: smoothing, side-chain detector, envelope, dynamic gain, width
+  DSP/FirEqEngine.h/.cpp       Natural/Linear phase: kernel design + partitioned FFT convolution
   Analysis/SpectrumAnalyzer.*  Lock-free analyzer FIFO, FFT analyzer, long-term average, freeze (no GUI)
   Parameters.h/.cpp            Parameter IDs, ranges, defaults (APVTS layout)
   PluginProcessor.h/.cpp       Buses, processBlock, bypass, state
@@ -47,13 +49,19 @@ Six bands (`params::numBands` in `Source/Parameters.h`), each with:
 | Threshold | −60 – 0 dB | −24 dB |
 | Attack | 0.1 – 200 ms | 10 ms |
 | Release | 5 – 2000 ms | 120 ms |
+| Width | 0 – 200 % stereo width inside the band's region (100 % = unchanged) | 100 % |
 
 Band defaults: 1 Low Cut 30 Hz, 2 Low Shelf 120 Hz, 3 Bell 400 Hz,
 4 Bell 1.5 kHz, 5 Bell 4 kHz, 6 High Shelf 10 kHz. All bands start disabled,
 so a fresh instance is an exact pass-through.
 
-Global: **Output Gain** (±24 dB) and **Stereo Link** (on by default: one
-detector drives both channels; off: each channel gets its own dynamic gain).
+Global: **Output Gain** (±24 dB), **Stereo Link** (on by default: one
+detector drives both channels; off: each channel gets its own dynamic gain) and
+**Phase Mode** (Zero Latency by default; see below).
+
+Width and Phase Mode were added in 0.4.0. They come after every older parameter (old
+parameter order and IDs are unchanged), and a session saved before they existed loads
+them at their neutral defaults (100 %, Zero Latency).
 
 ### DSP
 
@@ -83,9 +91,65 @@ detector drives both channels; off: each channel gets its own dynamic gain).
 - Zero latency. Bypass is an exact pass-through.
 - No allocation, locks, logging or file access on the audio thread.
 
+### Stereo width (per band)
+
+Each band can widen or narrow the stereo image in its own frequency region, like
+Pro-Q's per-band stereo controls. Internally the band works in mid/side: the side
+signal S becomes `S + (width - 1) × region(S)`, where region is a unity-peak band-pass at
+the band's frequency and Q for a bell, a low-pass at the corner for a low shelf and a
+high-pass for a high shelf or tilt. So 0 % removes the side signal at the band centre
+(mono there), 200 % doubles it, 100 % is unchanged; the mid signal is untouched, and side
+content outside the region is kept. Low/High Cut and Notch remove content rather than
+shape a region, so Width does nothing on them (the knob is dimmed). On a mono instance
+Width is disabled. Exactly 100 % skips the mid/side path, so it is bit-exact.
+Per-band Left/Right/Mid/Side placement (Pro-Q's other stereo option) is not implemented.
+
+### Phase modes
+
+| Mode | What it does | Latency @ 44.1 / 48 / 96 kHz |
+|---|---|---|
+| Zero Latency | The original minimum-phase SVF filters (bilinear transform). | 0 |
+| Natural Phase | FIR built from each band's analogue prototype, magnitude **and** phase, so the response is not "cramped" near Nyquist and the phase is the analogue filter's. 4096-tap kernel with 768 samples of pre-delay. | 1024 / 1024 / 1792 samples (23 / 21 / 19 ms) |
+| Linear Phase | Symmetric FIR from the analogue magnitude, no phase shift. 8192-tap Hann-windowed kernel. | 4352 / 4352 / 8448 samples (99 / 91 / 88 ms) |
+
+Kernel lengths double at 88.2/96 kHz and quadruple above 100 kHz, so their length in
+milliseconds stays about the same. Latency = kernel delay + 256 samples of partition
+buffering. It is reported to the host with `setLatencySamples` and updated when the mode
+changes. How quickly a host re-applies delay compensation after a change during playback
+depends on the host (not tested in a DAW yet).
+
+How it works:
+
+- Convolution is uniformly partitioned overlap-save (256-sample partitions, 512-point FFTs);
+  stereo runs as mid/side so the side kernel can include each band's Width.
+- Dynamics still work: the zero-latency band filters and detectors run on a copy of the
+  input to measure each band's dynamic gain, and the kernel is rebuilt from static +
+  dynamic gains when anything has moved (at most every 512 samples at 44.1/48 kHz),
+  crossfading to the new kernel over 256 samples. Because the audio is delayed and the
+  detector is not, the gain change effectively has the mode's latency as look-ahead.
+- Kernel rebuilds happen on the audio thread, in preallocated memory (no locks or
+  allocation), so offline renders are deterministic.
+- Bypass is latency-compensated: in Natural/Linear Phase the bypassed output is the input
+  delayed by exactly the reported latency, and the EQ keeps running underneath so
+  bypass/un-bypass is click-free and aligned.
+- Switching modes changes the latency, so the output jumps; it is faded in over 256 samples.
+- The display draws the analogue response in Natural/Linear Phase (what those modes
+  play) and the bilinear response in Zero Latency.
+
+Measured CPU (this Mac, Release, 48 kHz stereo, 512-sample blocks, 6 bands on with one
+dynamic and one width band): Zero Latency ≈ 0.4 %, Natural ≈ 3.8 %, Linear ≈ 6.7 % of one core.
+
+Limitations: FIR modes have a finite frequency resolution (5.9 Hz bins at 48 kHz for
+Linear, 11.7 Hz for Natural), so very narrow/deep low-frequency features are smoothed
+(e.g. a 0 % width null at 1 kHz is about −37 dB deep in Linear Phase vs −130 dB in Zero
+Latency), and low, high-Q bands that ring longer than the kernel are truncated (most
+audible in Natural Phase). Linear Phase has pre-ringing on sharp boosts, as all
+linear-phase EQs do. With Stereo Link off, the FIR modes use the louder channel's dynamic
+gain for both channels.
+
 ### Editor
 
-Dark, resizable editor (default 980×640). It has a frequency-response display computed
+Dark, resizable editor (default 980×640). The header has the Phase Mode selector. It has a frequency-response display computed
 from the same filter maths as the DSP. It draws the static curve and, when dynamics are
 active, the live curve, using each band's current dynamic gain. The display redraws
 immediately on any parameter change (automation from the audio thread is picked up within
@@ -109,6 +173,14 @@ Handle mouse actions:
 - Drag it to change frequency and, for bell, shelf and tilt types, gain.
 - Dragging a disabled band's handle switches the band on.
 - Double-click a handle to toggle its band on or off.
+- The selected band also shows two small **bandwidth handles** on the curve at
+  centre ÷ 2^(BW/2) and centre × 2^(BW/2) (BW = bandwidth in octaves from Q). Drag either
+  one sideways: outward widens (lower Q), inward narrows; the other mirrors it so the
+  centre frequency stays put, and a readout shows octaves and Q while dragging. The
+  cursor becomes a left-right arrow over them. The same pair is shown for shelves, cuts
+  and tilt, where it marks the transition width that Q controls.
+- Scroll over a handle to change Q; Option/Alt-drag a handle vertically to change Q.
+- A band with a width other than 100 % shows it under its handle (e.g. "W 160%").
 - Disabled bands show grey, hollow handles.
 
 Below the display are a band selector and the selected band's controls: on/off, type,
@@ -231,7 +303,7 @@ Windows VST3 uses the same `CMakeLists.txt` with `-G "Visual Studio 17 2022"`.
 | Bundle ID | `com.dooblr.dooblrq` |
 | Buses | Mono→mono or stereo→stereo (default stereo) |
 | MIDI | None |
-| Latency / tail | 0 samples / 0.5 s |
+| Latency / tail | 0 (Zero Latency), 1024 (Natural), 4352 (Linear) samples at 48 kHz / 0.5 s |
 | State | APVTS value tree with a `stateVersion` attribute (currently 1; analyzer settings are not saved) |
 
 ## Tests
@@ -275,13 +347,28 @@ tests the same compiled code that goes into the VST3:
   (and mirror for −6 dB); Q changes the transition; dynamic tilt tilts darker on loud
   material; dragging the handle sets the amount and the handle stays on the curve;
 - a hand-written pre-Tilt (v0.2.x format) saved state restores every band type;
+- phase modes: reported latency per mode at 44.1/48/96 kHz and after switching while
+  running; a +12 dB bell measures +12 dB at its centre in every mode; near Nyquist the
+  FIR modes follow the analogue design (+7.6 dB at 20 kHz for a +9 dB 15 kHz bell at
+  44.1 kHz, vs +1.4 dB bilinear); analogue prototypes match the digital filters below
+  Nyquist; the linear-phase impulse response peaks at the reported latency and is
+  symmetric; neutral settings are identity after delay compensation (error < 2e-7);
+  bypass is the input delayed by exactly the latency, aligned across toggles; random
+  mode switching stays finite; dynamics give the same gain in all three modes; CPU per mode;
+- width: 0 % silences in-band side (−130 dB zero latency, −37 dB linear) while keeping
+  side content outside the band and the mid; 200 % gives +6.02 dB; 100 % is unchanged
+  (bit-exact in Zero Latency); mono ignores width; old sessions load with neutral width;
+- editor: dragging the upper bandwidth handle 40 px outward lowers Q, keeps the centre,
+  and moves the lower handle 40 px the other way; inward narrows; scrolling changes Q;
+  Width is disabled on mono;
 - editor: version label = `JucePlugin_VersionString` = CMake project version; Freeze,
   Peak, Clear, Spectrum controls and the readout; closing the editor stops the feed.
 
 Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 `build/Tests/DooblrQTests` to save images of the rendered editor. It writes `editor.png`,
 plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png`,
-`editor-tilt.png`, `editor-spectrum-live.png` and `editor-spectrum-frozen.png`.
+`editor-tilt.png`, `editor-spectrum-live.png`, `editor-spectrum-frozen.png` and
+`editor-width-handles.png`.
 
 ## Validation that still needs doing manually
 

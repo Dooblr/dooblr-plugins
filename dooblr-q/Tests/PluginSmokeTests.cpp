@@ -187,8 +187,12 @@ namespace
         check (processor->getTotalNumInputChannels() == 2, "default input is stereo");
         check (processor->getTotalNumOutputChannels() == 2, "default output is stereo");
         check (processor->hasEditor(), "has an editor");
-        check (processor->getParameters().size() == params::numBands * 10 + 2,
-               "exposes 10 parameters per band plus output gain and stereo link");
+        check (processor->getParameters().size() == params::numBands * 11 + 3,
+               "exposes 11 parameters per band plus output gain, stereo link and phase mode");
+        check (processor->getParameters()[params::numBands * 10]->getName (64) == "Output Gain"
+                   && processor->getParameters()[params::numBands * 10 + 2]->getName (64) == "Band 1 Width"
+                   && processor->getParameters().getLast()->getName (64) == "Phase Mode",
+               "parameters added in 0.4.0 come after all older ones (old indices unchanged)");
 
         std::unique_ptr<juce::AudioProcessor> fromFactory (createPluginFilter());
         check (fromFactory != nullptr && fromFactory->getName() == "dooblr-q",
@@ -1291,7 +1295,12 @@ namespace
         juce::MemoryBlock block;
         juce::AudioProcessor::copyXmlToBinary (*xml, block);
         DooblrQAudioProcessor processor;
+        setBand (processor, 0, params::band::width, 50.0f);           // settings the old session did not have
+        setParameter (processor, params::phaseMode, (float) params::PhaseMode::linearPhase);
         processor.setStateInformation (block.getData(), (int) block.getSize());
+        check (juce::exactlyEqual (processor.getBandSettings (0).widthPercent, 100.0f)
+                   && juce::roundToInt (getParameter (processor, params::phaseMode)) == 0,
+               "parameters missing from an old session load at their neutral defaults (width 100 %, Zero Latency)");
 
         using T = dsp::FilterType;
         const T expected[] { T::lowCut, T::lowShelf, T::notch, T::highCut, T::bell, T::highShelf };
@@ -1482,6 +1491,536 @@ namespace
         check (! processor.isAnalyzerRunning(), "closing the editor stops the analyzer feed");
     }
 
+    //==============================================================================
+    // Phase modes
+    using PhaseMode = params::PhaseMode;
+
+    const char* phaseName (PhaseMode mode)
+    {
+        switch (mode)
+        {
+            case PhaseMode::naturalPhase: return "Natural";
+            case PhaseMode::linearPhase:  return "Linear";
+            case PhaseMode::zeroLatency:  break;
+        }
+
+        return "Zero";
+    }
+
+    constexpr PhaseMode allPhaseModes[] { PhaseMode::zeroLatency, PhaseMode::naturalPhase, PhaseMode::linearPhase };
+
+    /** Amplitude of a sinusoid at an integer frequency over exactly `length` samples (DFT bin). */
+    double toneAmplitude (const float* data, int length, double frequency, double sampleRate)
+    {
+        double re = 0.0, im = 0.0;
+
+        for (int i = 0; i < length; ++i)
+        {
+            const auto phase = 2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate;
+            re += (double) data[i] * std::cos (phase);
+            im -= (double) data[i] * std::sin (phase);
+        }
+
+        return 2.0 * std::sqrt (re * re + im * im) / length;
+    }
+
+    void testPhaseModeLatency()
+    {
+        struct Expected { double rate; int natural, linear; };
+        const Expected expected[] { { 44100.0, 1024, 4352 }, { 48000.0, 1024, 4352 }, { 96000.0, 1792, 8448 } };
+
+        for (const auto& e : expected)
+        {
+            std::string line = format (e.rate / 1000.0, 1) + " kHz latency:";
+
+            for (const auto mode : allPhaseModes)
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                prepare (processor, juce::AudioChannelSet::stereo(), e.rate, 512);
+                const auto want = mode == PhaseMode::zeroLatency ? 0 : (mode == PhaseMode::naturalPhase ? e.natural : e.linear);
+                line += std::string (" ") + phaseName (mode) + " " + std::to_string (processor.getLatencySamples()) + " smp ("
+                        + format (1000.0 * processor.getLatencySamples() / e.rate, 1) + " ms)";
+                check (processor.getLatencySamples() == want && DooblrQAudioProcessor::latencyFor (mode, e.rate) == want,
+                       std::string ("reported latency, ") + phaseName (mode) + " at " + format (e.rate, 0) + " Hz");
+            }
+
+            note (line);
+        }
+
+        // Changing the mode while running updates the reported latency at the next block.
+        DooblrQAudioProcessor processor;
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+        juce::AudioBuffer<float> buffer (2, 512);
+        buffer.clear();
+        setParameter (processor, params::phaseMode, (float) PhaseMode::linearPhase);
+        processInBlocks (processor, buffer, { 512 });
+        check (processor.getLatencySamples() == 4352 && processor.getActivePhaseMode() == PhaseMode::linearPhase,
+               "switching to Linear Phase while running reports 4352 samples");
+        setParameter (processor, params::phaseMode, (float) PhaseMode::zeroLatency);
+        processInBlocks (processor, buffer, { 512 });
+        check (processor.getLatencySamples() == 0, "switching back to Zero Latency reports 0");
+    }
+
+    void testPhaseModeResponse()
+    {
+        constexpr double sampleRate = 48000.0;
+
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            setBand (processor, 3, params::band::enabled, 1.0f);
+            setBand (processor, 3, params::band::type, (float) dsp::FilterType::bell);
+            setBand (processor, 3, params::band::frequency, 1000.0f);
+            setBand (processor, 3, params::band::gain, 12.0f);
+            setBand (processor, 3, params::band::q, 1.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            const auto centre = measureSineGainDb (processor, 1000.0, 0.25f, sampleRate, 1.0);
+            processor.reset();
+            const auto low = measureSineGainDb (processor, 60.0, 0.25f, sampleRate, 1.0);
+            processor.reset();
+            const auto high = measureSineGainDb (processor, 16000.0, 0.25f, sampleRate, 1.0);
+            note (std::string (phaseName (mode)) + ": +12 dB bell at 1 kHz measures " + format (centre, 3) + " dB at 1 kHz, "
+                  + format (low, 3) + " dB at 60 Hz, " + format (high, 3) + " dB at 16 kHz");
+            check (std::abs (centre - 12.0) < 0.1, std::string (phaseName (mode)) + ": +12 dB bell measures +12 dB at its centre");
+            check (std::abs (low) < 0.3 && std::abs (high) < 0.3, std::string (phaseName (mode)) + ": far from the bell stays flat");
+        }
+
+        // Near Nyquist: the zero-latency (bilinear) bell is cramped, the FIR modes follow the analogue shape.
+        constexpr double rate = 44100.0;
+        const auto proto = dsp::makeEqPrototype (dsp::FilterType::bell, 0.7, 9.0);
+        const auto analogDb = juce::Decibels::gainToDecibels (std::abs (dsp::analogResponseAt (proto, 15000.0, 20000.0)));
+        const auto digitalDb = juce::Decibels::gainToDecibels (
+            dsp::magnitudeAt (dsp::makeEqCoefficients (dsp::FilterType::bell, 15000.0, 0.7, 9.0, rate), 20000.0, rate));
+        std::string line = "+9 dB bell at 15 kHz (Q 0.7, 44.1 kHz), level at 20 kHz: analogue target " + format (analogDb)
+                           + " dB, bilinear " + format (digitalDb) + " dB; measured";
+
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            setBand (processor, 3, params::band::enabled, 1.0f);
+            setBand (processor, 3, params::band::frequency, 15000.0f);
+            setBand (processor, 3, params::band::gain, 9.0f);
+            setBand (processor, 3, params::band::q, 0.7f);
+            prepare (processor, juce::AudioChannelSet::stereo(), rate, 512);
+            const auto measured = measureSineGainDb (processor, 20000.0, 0.25f, rate, 1.0);
+            line += std::string (" ") + phaseName (mode) + " " + format (measured);
+            const auto expected = mode == PhaseMode::zeroLatency ? digitalDb : analogDb;
+            check (std::abs (measured - expected) < 0.25,
+                   std::string (phaseName (mode)) + ": 20 kHz level matches its design (" + (mode == PhaseMode::zeroLatency ? "bilinear" : "analogue") + ")");
+        }
+
+        note (line);
+        check (analogDb - digitalDb > 1.0, "the analogue target is not cramped near Nyquist");
+
+        // The analogue prototypes equal the digital filters well below Nyquist (all types).
+        auto prototypesMatch = true;
+        for (int t = 0; t < dsp::numFilterTypes; ++t)
+        {
+            const auto type = (dsp::FilterType) t;
+            const auto c = dsp::makeEqCoefficients (type, 1000.0, 0.9, 7.0, 192000.0);
+            const auto p = dsp::makeEqPrototype (type, 0.9, 7.0);
+
+            for (const auto f : { 100.0, 700.0, 1000.0, 1400.0, 3000.0 })
+            {
+                if (type == dsp::FilterType::notch && f > 900.0 && f < 1100.0)
+                    continue; // both are ~0 at the notch centre
+
+                const auto d = std::abs (dsp::responseAt (c, f, 192000.0));
+                const auto a = std::abs (dsp::analogResponseAt (p, 1000.0, f));
+                prototypesMatch = prototypesMatch && std::abs (juce::Decibels::gainToDecibels (d / a, -200.0)) < 0.02;
+            }
+        }
+        check (prototypesMatch, "analogue prototypes match the digital filters far below Nyquist (all 7 types, < 0.02 dB)");
+    }
+
+    void testLinearPhaseImpulse()
+    {
+        constexpr double sampleRate = 48000.0;
+        DooblrQAudioProcessor processor;
+        setParameter (processor, params::phaseMode, (float) PhaseMode::linearPhase);
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::gain, 8.0f);   // bell 400 Hz
+        setBand (processor, 5, params::band::enabled, 1.0f);
+        setBand (processor, 5, params::band::gain, -6.0f);  // high shelf 10 kHz
+        prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+        const auto latency = processor.getLatencySamples();
+        juce::AudioBuffer<float> buffer (2, latency * 3);
+        buffer.clear();
+        buffer.setSample (0, 0, 1.0f);
+        buffer.setSample (1, 0, 1.0f);
+        processInBlocks (processor, buffer, { 512 });
+
+        const auto* out = buffer.getReadPointer (0);
+        auto peak = 0;
+        for (int i = 1; i < buffer.getNumSamples(); ++i)
+            if (std::abs (out[i]) > std::abs (out[peak]))
+                peak = i;
+
+        const auto half = processor.getFirEngine().getKernelLength() / 2;
+        float asymmetry = 0.0f, energyOutside = 0.0f;
+        for (int k = 1; k < half; ++k)
+            asymmetry = std::max (asymmetry, std::abs (out[latency + k] - out[latency - k]));
+        for (int i = 0; i < buffer.getNumSamples(); ++i)
+            if (i < latency - half || i > latency + half)
+                energyOutside = std::max (energyOutside, std::abs (out[i]));
+
+        note ("linear-phase impulse: peak at sample " + std::to_string (peak) + " (latency " + std::to_string (latency)
+              + "), peak " + format (out[peak], 4) + ", max |h[L+k] - h[L-k]| " + juce::String (asymmetry, 9).toStdString()
+              + ", max outside the kernel " + juce::String (energyOutside, 9).toStdString());
+        check (peak == latency, "the impulse response peaks exactly at the reported latency");
+        check (asymmetry < 1.0e-5f, "the impulse response is symmetric about the latency (linear phase)");
+        check (energyOutside < 1.0e-6f, "nothing outside the kernel span");
+
+        const auto& kernel = processor.getFirEngine().getKernel (0);
+        auto kernelSymmetric = true;
+        for (int k = 1; k < half; ++k)
+            kernelSymmetric = kernelSymmetric && std::abs (kernel[(size_t) (half + k)] - kernel[(size_t) (half - k)]) < 1.0e-6f;
+        check (kernelSymmetric, "the designed kernel is symmetric");
+    }
+
+    void testLongModesNeutralAndBypass()
+    {
+        constexpr double sampleRate = 48000.0;
+
+        for (const auto mode : { PhaseMode::naturalPhase, PhaseMode::linearPhase })
+        {
+            for (const auto allEnabled : { false, true })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+
+                if (allEnabled)
+                    for (int b = 0; b < params::numBands; ++b)
+                    {
+                        setBand (processor, b, params::band::enabled, 1.0f);
+                        setBand (processor, b, params::band::type, (float) dsp::FilterType::bell);
+                    }
+
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 1024);
+                const auto latency = processor.getLatencySamples();
+                juce::AudioBuffer<float> input (2, 48000);
+                fillWithNoise (input, 5, 0.5f);
+                juce::AudioBuffer<float> output (input);
+                processInBlocks (processor, output, { 1024, 7, 333, 512 });
+
+                float error = 0.0f;
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = latency; i < input.getNumSamples(); ++i)
+                        error = std::max (error, std::abs (output.getSample (ch, i) - input.getSample (ch, i - latency)));
+
+                note (std::string (phaseName (mode)) + (allEnabled ? ", all bands on at 0 dB" : ", defaults")
+                      + ": max |out[n] - in[n - latency]| = " + juce::String (error, 9).toStdString());
+                check (error < 2.0e-6f, std::string (phaseName (mode)) + ": neutral settings are identity after delay compensation");
+            }
+
+            // Bypass: input delayed by exactly the latency, and continuous across bypass toggles.
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            const auto latency = processor.getLatencySamples();
+            juce::AudioBuffer<float> input (2, 512 * 40);
+            fillWithNoise (input, 9, 0.5f);
+            juce::AudioBuffer<float> output (input);
+            juce::MidiBuffer midi;
+            float bypassError = 0.0f, activeError = 0.0f;
+
+            for (int block = 0; block < 40; ++block)
+            {
+                juce::AudioBuffer<float> view (output.getArrayOfWritePointers(), 2, block * 512, 512);
+                const auto bypassed = (block / 5) % 2 == 1;
+
+                if (bypassed)
+                    processor.processBlockBypassed (view, midi);
+                else
+                    processor.processBlock (view, midi);
+
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < 512; ++i)
+                    {
+                        const auto n = block * 512 + i;
+                        if (n < latency)
+                            continue;
+                        const auto difference = std::abs (output.getSample (ch, n) - input.getSample (ch, n - latency));
+                        (bypassed ? bypassError : activeError) = std::max (bypassed ? bypassError : activeError, difference);
+                    }
+            }
+
+            note (std::string (phaseName (mode)) + " bypass toggling every 5 blocks: bypassed max error " + juce::String (bypassError, 9).toStdString()
+                  + ", active max error " + juce::String (activeError, 9).toStdString());
+            check (bypassError == 0.0f, std::string (phaseName (mode)) + ": bypass outputs the input delayed by exactly the latency");
+            check (activeError < 2.0e-6f, std::string (phaseName (mode)) + ": bypass/active toggles stay aligned and click-free");
+        }
+    }
+
+    void testModeSwitchingAndDynamics()
+    {
+        constexpr double sampleRate = 48000.0;
+
+        {
+            DooblrQAudioProcessor processor;
+            configureBusyEq (processor);
+            setBand (processor, 2, params::band::width, 160.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            juce::Random random (3);
+            auto finite = true;
+            float peak = 0.0f;
+
+            for (int block = 0; block < 400; ++block)
+            {
+                if (block % 7 == 0)
+                    setParameter (processor, params::phaseMode, (float) random.nextInt (3));
+
+                const auto length = 1 + random.nextInt (512);
+                juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, 0, length);
+                fillWithNoise (view, block, 0.8f);
+                processor.processBlock (view, midi);
+                finite = finite && allFinite (view);
+                peak = std::max (peak, view.getMagnitude (0, length));
+            }
+
+            note ("random phase-mode switching every 7 blocks (400 blocks): peak output " + format (peak, 2));
+            check (finite && peak < 8.0f, "switching phase modes during playback stays finite and bounded");
+        }
+
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            configureDynamicBand (processor, -12.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            const auto quiet = measureSineGainDb (processor, 1000.0, 0.00316f, sampleRate, 1.0);
+            const auto loud = measureSineGainDb (processor, 1000.0, 0.5f, sampleRate, 1.0);
+            note (std::string (phaseName (mode)) + " dynamics (range -12, threshold -30): quiet " + format (quiet) + " dB, loud "
+                  + format (loud) + " dB (dynamic gain " + format (processor.getBandDynamicGainDb (3)) + " dB)");
+            check (std::abs (quiet) < 0.2 && loud < -11.0 && loud > -12.5,
+                   std::string (phaseName (mode)) + ": dynamics work (quiet unchanged, loud cut by ~the range)");
+        }
+    }
+
+    void testCpuUsage()
+    {
+        constexpr double sampleRate = 48000.0;
+        constexpr int seconds = 10;
+        std::string line = "CPU, 10 s stereo @ 48 kHz, 512-sample blocks, 6 bands on (one dynamic, one width):";
+
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            configureBusyEq (processor);
+            for (int b = 0; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::width, 150.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            juce::Random random (11);
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+
+            for (int block = 0; block < seconds * 48000 / 512; ++block)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < 512; ++i)
+                        buffer.setSample (ch, i, (random.nextFloat() - 0.5f) * ((block / 40) % 2 == 0 ? 1.0f : 0.05f));
+                processor.processBlock (buffer, midi);
+            }
+
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+            line += std::string (" ") + phaseName (mode) + " " + format (100.0 * elapsed / (seconds * 1000.0), 2) + " % of one core";
+            check (elapsed < seconds * 1000.0, std::string (phaseName (mode)) + ": runs faster than real time");
+        }
+
+        note (line);
+    }
+
+    //==============================================================================
+    // Per-band stereo width
+    void testWidth()
+    {
+        constexpr double sampleRate = 48000.0;
+        const auto length = 96000;
+        const auto pi2 = 2.0 * juce::MathConstants<double>::pi;
+
+        // Mid: 1 kHz; side: 100 Hz, 1 kHz, 10 kHz (all integer Hz, measured over exactly 1 s).
+        juce::AudioBuffer<float> input (2, length);
+        for (int i = 0; i < length; ++i)
+        {
+            const auto t = i / sampleRate;
+            const auto mid = 0.2 * std::sin (pi2 * 1000.0 * t);
+            const auto side = 0.1 * std::sin (pi2 * 100.0 * t) + 0.1 * std::sin (pi2 * 1000.0 * t + 0.3)
+                              + 0.1 * std::sin (pi2 * 10000.0 * t);
+            input.setSample (0, i, (float) (mid + side));
+            input.setSample (1, i, (float) (mid - side));
+        }
+
+        struct Levels { double side100, side1k, side10k, mid1k; };
+        const auto run = [&] (PhaseMode mode, float width, juce::AudioBuffer<float>* keep)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            setBand (processor, 3, params::band::enabled, 1.0f);
+            setBand (processor, 3, params::band::type, (float) dsp::FilterType::bell);
+            setBand (processor, 3, params::band::frequency, 1000.0f);
+            setBand (processor, 3, params::band::q, 2.0f);
+            setBand (processor, 3, params::band::width, width);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            juce::AudioBuffer<float> buffer (input);
+            processInBlocks (processor, buffer, { 512 });
+
+            std::vector<float> side ((size_t) 48000), mid ((size_t) 48000);
+            for (int i = 0; i < 48000; ++i)
+            {
+                const auto l = buffer.getSample (0, 48000 + i), r = buffer.getSample (1, 48000 + i);
+                side[(size_t) i] = 0.5f * (l - r);
+                mid[(size_t) i] = 0.5f * (l + r);
+            }
+
+            if (keep != nullptr)
+                *keep = buffer;
+
+            return Levels { toneAmplitude (side.data(), 48000, 100.0, sampleRate), toneAmplitude (side.data(), 48000, 1000.0, sampleRate),
+                            toneAmplitude (side.data(), 48000, 10000.0, sampleRate), toneAmplitude (mid.data(), 48000, 1000.0, sampleRate) };
+        };
+
+        const auto db = [] (double amplitude) { return juce::Decibels::gainToDecibels (amplitude / 0.1, -200.0); };
+
+        for (const auto mode : { PhaseMode::zeroLatency, PhaseMode::linearPhase })
+        {
+            const auto narrow = run (mode, 0.0f, nullptr);
+            const auto wide = run (mode, 200.0f, nullptr);
+            const auto same = run (mode, 100.0f, nullptr);
+            note (std::string (phaseName (mode)) + " width on a 1 kHz bell (Q 2), side levels re input: 0% -> 100 Hz "
+                  + format (db (narrow.side100)) + ", 1 kHz " + format (db (narrow.side1k)) + ", 10 kHz " + format (db (narrow.side10k))
+                  + " dB; 200% -> 1 kHz " + format (db (wide.side1k)) + " dB (100 Hz " + format (db (wide.side100)) + ", 10 kHz "
+                  + format (db (wide.side10k)) + "); mid 1 kHz at 0% " + format (juce::Decibels::gainToDecibels (narrow.mid1k / 0.2)) + " dB");
+            // The FIR kernel (5.9 Hz bins, Hann window) cannot reproduce an infinitely deep null.
+            const auto nullLimit = mode == PhaseMode::zeroLatency ? -40.0 : -30.0;
+            check (db (narrow.side1k) < nullLimit, std::string (phaseName (mode)) + ": width 0% makes the side signal at the band centre ~silent");
+            check (std::abs (db (narrow.side100)) < 0.5 && std::abs (db (narrow.side10k)) < 0.5,
+                   std::string (phaseName (mode)) + ": width 0% keeps side content outside the band");
+            check (std::abs (db (wide.side1k) - 6.02) < 0.1, std::string (phaseName (mode)) + ": width 200% doubles the side signal at the centre");
+            check (std::abs (juce::Decibels::gainToDecibels (narrow.mid1k / 0.2)) < 0.05 && std::abs (juce::Decibels::gainToDecibels (wide.mid1k / 0.2)) < 0.05,
+                   std::string (phaseName (mode)) + ": width leaves the mid signal alone");
+            check (std::abs (db (same.side1k)) < 0.02, std::string (phaseName (mode)) + ": width 100% leaves the side signal unchanged");
+        }
+
+        // 100 % width is bit-exact (zero latency); mono ignores width entirely.
+        juce::AudioBuffer<float> neutral, untouched;
+        run (PhaseMode::zeroLatency, 100.0f, &neutral);
+        check (bitIdentical (neutral, input, 2), "width 100% on a 0 dB band is bit-identical to the input");
+
+        const auto mono = [&] (float width)
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 3, params::band::enabled, 1.0f);
+            setBand (processor, 3, params::band::gain, 4.0f);
+            setBand (processor, 3, params::band::width, width);
+            prepare (processor, juce::AudioChannelSet::mono(), sampleRate, 512);
+            juce::AudioBuffer<float> buffer (1, 48000);
+            buffer.copyFrom (0, 0, input, 0, 0, 48000);
+            processInBlocks (processor, buffer, { 512 });
+            return buffer;
+        };
+        check (bitIdentical (mono (0.0f), mono (100.0f), 1), "on a mono layout width has no effect");
+    }
+
+    //==============================================================================
+    // Editor: bandwidth handles, phase mode control
+    void testWidthHandles()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        DooblrQAudioProcessor processor;
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::frequency, 1000.0f);
+        setBand (processor, 2, params::band::gain, 6.0f);
+        setBand (processor, 2, params::band::q, 1.0f);
+        setBand (processor, 2, params::band::width, 160.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        auto* curve = dynamic_cast<Curve*> (findById (*editor, "responseCurve"));
+        check (dooblrEditor != nullptr && curve != nullptr, "editor and curve exist");
+
+        if (dooblrEditor == nullptr || curve == nullptr)
+            return;
+
+        check (findById (*editor, params::phaseMode) != nullptr && findById (*editor, params::band::width) != nullptr,
+               "phase mode selector and width knob exist");
+
+        dooblrEditor->selectBand (2);
+        check (curve->widthHandlesVisible(), "the selected, enabled band shows bandwidth handles");
+
+        const auto [lowerBefore, upperBefore] = curve->widthHandlePositions (2);
+        const auto centreX = curve->frequencyToX (1000.0);
+        const auto qBefore = processor.getBandSettings (2).q;
+        note ("before: Q " + format (qBefore) + " (" + format (Curve::qToOctaves (qBefore)) + " oct), lower x " + format (lowerBefore.x, 1)
+              + ", centre x " + format (centreX, 1) + ", upper x " + format (upperBefore.x, 1));
+        check (std::abs ((centreX - lowerBefore.x) - (upperBefore.x - centreX)) < 0.5f, "handles start symmetric about the centre");
+        check (std::abs (lowerBefore.y - curve->decibelsToY (curve->responseDecibelsAt (curve->xToFrequency (lowerBefore.x), false))) < 0.5f,
+               "bandwidth handles sit on the curve");
+
+        constexpr float dragPixels = 40.0f;
+        const auto target = upperBefore + juce::Point<float> (dragPixels, 0.0f);
+        curve->mouseDown (makeMouseEvent (*curve, upperBefore, upperBefore, 1, false));
+        for (int i = 1; i <= 8; ++i)
+            curve->mouseDrag (makeMouseEvent (*curve, upperBefore + (target - upperBefore) * ((float) i / 8.0f), upperBefore, 1, true));
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-width-handles");
+        curve->mouseUp (makeMouseEvent (*curve, target, upperBefore, 1, true));
+
+        const auto s = processor.getBandSettings (2);
+        const auto [lowerAfter, upperAfter] = curve->widthHandlePositions (2);
+        const auto upperMoved = upperAfter.x - upperBefore.x;
+        const auto lowerMoved = lowerBefore.x - lowerAfter.x;
+        note ("dragged the upper handle " + format (dragPixels, 0) + " px outward: Q " + format (s.q) + " (" + format (Curve::qToOctaves (s.q))
+              + " oct), centre " + format (s.frequency, 1) + " Hz, upper moved " + format (upperMoved, 2) + " px, lower moved "
+              + format (lowerMoved, 2) + " px outward");
+        check (s.q < qBefore && Curve::qToOctaves (s.q) > Curve::qToOctaves (qBefore), "dragging outward widens the band (lower Q)");
+        check (std::abs (s.frequency - 1000.0f) < 0.01f, "the centre frequency is unchanged");
+        check (std::abs (upperMoved - dragPixels) < 1.0f, "the dragged handle follows the mouse");
+        check (std::abs (upperMoved - lowerMoved) < 1.0f, "the opposite handle mirrors it (same pixel distance in log-frequency)");
+
+        // Inward narrows again; the scroll wheel also changes Q.
+        const auto [lowerNow, upperNow] = curve->widthHandlePositions (2);
+        juce::ignoreUnused (upperNow);
+        simulateDrag (*curve, lowerNow, lowerNow + juce::Point<float> (30.0f, 0.0f));
+        check (processor.getBandSettings (2).q > s.q, "dragging a handle inward narrows the band");
+
+        const auto qBeforeWheel = processor.getBandSettings (2).q;
+        juce::MouseWheelDetails wheel {};
+        wheel.deltaY = 0.25f;
+        curve->mouseWheelMove (makeMouseEvent (*curve, curve->handlePosition (2), curve->handlePosition (2), 0, false), wheel);
+        check (processor.getBandSettings (2).q > qBeforeWheel * 1.3f, "scrolling over a handle changes Q");
+
+        // FIR modes draw the analogue response.
+        setParameter (processor, params::phaseMode, (float) PhaseMode::linearPhase);
+        const auto proto = dsp::makeEqPrototype (dsp::FilterType::bell, (double) processor.getBandSettings (2).q, 6.0);
+        check (curve->showsAnalogResponse()
+                   && std::abs (curve->responseDecibelsAt (18000.0, false)
+                                - juce::Decibels::gainToDecibels (std::abs (dsp::analogResponseAt (proto, 1000.0, 18000.0)))) < 1.0e-6,
+               "in Linear Phase the curve shows the analogue response the FIR is built from");
+
+        processor.editorBeingDeleted (editor.get());
+        editor.reset();
+
+        // Mono: width control disabled.
+        DooblrQAudioProcessor monoProcessor;
+        prepare (monoProcessor, juce::AudioChannelSet::mono(), 48000.0, 512);
+        std::unique_ptr<juce::AudioProcessorEditor> monoEditor (monoProcessor.createEditorAndMakeActive());
+        auto* widthKnob = findById (*monoEditor, params::band::width);
+        check (widthKnob != nullptr && ! widthKnob->isEnabled(), "width is greyed out (disabled) on a mono layout");
+        monoProcessor.editorBeingDeleted (monoEditor.get());
+        monoEditor.reset();
+    }
+
     struct TestCase
     {
         const char* name;
@@ -1512,6 +2051,14 @@ int main()
         { "tilt band type",                         testTilt },
         { "pre-Tilt saved state restores",          testLegacyStateRestores },
         { "editor analyzer, freeze and version",    testEditorAnalyzerAndVersion },
+        { "phase modes: reported latency",          testPhaseModeLatency },
+        { "phase modes: frequency response",        testPhaseModeResponse },
+        { "linear phase impulse response",          testLinearPhaseImpulse },
+        { "long modes: neutral identity, bypass",   testLongModesNeutralAndBypass },
+        { "mode switching and dynamics per mode",   testModeSwitchingAndDynamics },
+        { "per-band stereo width",                  testWidth },
+        { "editor bandwidth handles",               testWidthHandles },
+        { "CPU per phase mode",                     testCpuUsage },
     };
 
     int failedTests = 0;

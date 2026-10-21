@@ -29,10 +29,12 @@ DooblrQAudioProcessor::DooblrQAudioProcessor()
         p.threshold       = pointer (params::bandId (b, params::band::threshold));
         p.attack          = pointer (params::bandId (b, params::band::attack));
         p.release         = pointer (params::bandId (b, params::band::release));
+        p.width           = pointer (params::bandId (b, params::band::width));
     }
 
     outputGainDb = pointer (params::outputGain);
     stereoLink   = pointer (params::stereoLink);
+    phaseMode    = pointer (params::phaseMode);
 }
 
 juce::AudioProcessor::BusesProperties DooblrQAudioProcessor::createBusesProperties()
@@ -59,6 +61,7 @@ dsp::BandSettings DooblrQAudioProcessor::getBandSettings (int bandIndex) const n
     s.thresholdDb     = load (p.threshold);
     s.attackMs        = load (p.attack);
     s.releaseMs       = load (p.release);
+    s.widthPercent    = load (p.width);
     return s;
 }
 
@@ -109,6 +112,187 @@ void DooblrQAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
 
     for (auto& band : bands)
         band.reset();
+
+    // Natural / Linear phase resources, sized for the longest mode at this rate.
+    firEngine.prepare (sampleRate);
+    detectionScratch.setSize (2, firChunkSize);
+    dryScratch.setSize (2, firChunkSize);
+    const auto maxLatency = latencyFor (params::PhaseMode::linearPhase, sampleRate);
+    for (auto& ring : dryRing)
+        ring.assign ((size_t) maxLatency + 1, 0.0f);
+    dryRingPosition = 0;
+
+    applyPhaseMode (juce::roundToInt (phaseMode->load()), false);
+}
+
+int DooblrQAudioProcessor::latencyFor (params::PhaseMode mode, double sampleRate) noexcept
+{
+    using Engine = dsp::FirEqEngine;
+
+    switch (mode)
+    {
+        case params::PhaseMode::naturalPhase: return Engine::latencySamples (Engine::Mode::natural, sampleRate);
+        case params::PhaseMode::linearPhase:  return Engine::latencySamples (Engine::Mode::linear, sampleRate);
+        case params::PhaseMode::zeroLatency:  break;
+    }
+
+    return 0;
+}
+
+void DooblrQAudioProcessor::applyPhaseMode (int mode, bool fadeIn) noexcept
+{
+    mode = juce::jlimit (0, 2, mode);
+    activePhaseMode.store (mode, std::memory_order_relaxed);
+    const auto phase = (params::PhaseMode) mode;
+    const auto rate = getAnalysisSampleRate();
+
+    if (phase != params::PhaseMode::zeroLatency)
+    {
+        firEngine.setMode (phase == params::PhaseMode::linearPhase ? dsp::FirEqEngine::Mode::linear
+                                                                   : dsp::FirEqEngine::Mode::natural);
+        updateKernel (true);
+    }
+
+    for (auto& ring : dryRing)
+        std::fill (ring.begin(), ring.end(), 0.0f);
+    dryRingPosition = 0;
+
+    // Hosts are told about the new latency; JUCE forwards this to the host asynchronously.
+    const auto latency = latencyFor (phase, rate);
+    if (latency != getLatencySamples())
+        setLatencySamples (latency);
+
+    switchFadeRemaining = fadeIn ? switchFadeLength : 0;
+}
+
+void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
+{
+    std::array<dsp::KernelBand, params::numBands> target {};
+
+    for (int b = 0; b < params::numBands; ++b)
+    {
+        const auto s = getBandSettings (b);
+        auto& k = target[(size_t) b];
+        k.enabled = s.enabled;
+        k.type = s.type;
+        k.frequency = (double) s.frequency;
+        k.q = (double) s.q;
+        k.width = (double) s.widthPercent * 0.01;
+
+        // Dynamics: the band's detector runs on a copy of the input (see processFirBlock).
+        // With stereo link off, the louder channel's gain is used for both.
+        auto gain = (double) s.gainDb;
+        if (s.dynamicsEnabled && dsp::supportsDynamics (s.type))
+            gain += (double) bands[(size_t) b].getDynamicGainDb();
+        k.gainDb = juce::jlimit (-(double) dsp::DynamicEQBand::maxTotalGainDb, (double) dsp::DynamicEQBand::maxTotalGainDb, gain);
+    }
+
+    const auto same = [] (const dsp::KernelBand& a, const dsp::KernelBand& b)
+    {
+        if (a.enabled != b.enabled)
+            return false;
+        if (! a.enabled)
+            return true;
+        return a.type == b.type && std::abs (a.gainDb - b.gainDb) < 0.01 && std::abs (a.width - b.width) < 1.0e-4
+               && std::abs (std::log (a.frequency / b.frequency)) < 1.0e-5 && std::abs (std::log (a.q / b.q)) < 1.0e-5;
+    };
+
+    auto changed = false;
+    for (size_t b = 0; b < target.size(); ++b)
+        changed = changed || ! same (target[b], appliedKernel[b]);
+
+    if (! immediate && (! changed || samplesSinceKernel < kernelUpdateInterval * dsp::FirEqEngine::rateFactor (getAnalysisSampleRate())))
+        return;
+
+    firEngine.setTarget (target, immediate);
+    appliedKernel = target;
+    samplesSinceKernel = 0;
+}
+
+void DooblrQAudioProcessor::processFirBlock (float* const* channels, int numChannels, int numSamples,
+                                             bool linked, bool outputDry) noexcept
+{
+    const auto latency = getLatencySamples();
+    const auto ringSize = (int) dryRing[0].size();
+
+    for (int start = 0; start < numSamples; start += firChunkSize)
+    {
+        const auto length = juce::jmin (firChunkSize, numSamples - start);
+        float* chunk[2] { channels[0] + start, numChannels > 1 ? channels[1] + start : nullptr };
+
+        // 1. Dynamics: run the band detectors (the zero-latency filters) on a copy of the
+        //    input, so each band's dynamic gain is measured exactly as in Zero Latency.
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            detectionScratch.copyFrom (ch, 0, chunk[ch], length);
+            dryScratch.copyFrom (ch, 0, chunk[ch], length);
+        }
+
+        auto* const* detection = detectionScratch.getArrayOfWritePointers();
+        for (int sub = 0; sub < length; sub += coefficientUpdateInterval)
+            for (auto& band : bands)
+                band.process (detection, numChannels, sub, juce::jmin (coefficientUpdateInterval, length - sub), linked);
+
+        // 2. Rebuild the kernel if the target moved (rate-limited, crossfaded).
+        samplesSinceKernel += length;
+        updateKernel (false);
+
+        // 3. Dry path delayed by the latency (used when bypassed, kept aligned always).
+        for (int ch = 0; ch < numChannels; ++ch)
+        {
+            auto* ring = dryRing[(size_t) ch].data();
+            auto* dry = dryScratch.getWritePointer (ch);
+            auto position = dryRingPosition;
+
+            for (int i = 0; i < length; ++i)
+            {
+                ring[position] = dry[i];
+                dry[i] = ring[(position - latency + ringSize) % ringSize];
+                position = (position + 1) % ringSize;
+            }
+        }
+
+        dryRingPosition = (dryRingPosition + length) % ringSize;
+
+        // 4. FIR convolution, stereo as mid/side.
+        if (numChannels == 2)
+        {
+            for (int i = 0; i < length; ++i)
+            {
+                const auto l = chunk[0][i], r = chunk[1][i];
+                chunk[0][i] = 0.5f * (l + r);
+                chunk[1][i] = 0.5f * (l - r);
+            }
+        }
+
+        firEngine.process (chunk, numChannels, length);
+
+        if (numChannels == 2)
+        {
+            for (int i = 0; i < length; ++i)
+            {
+                const auto m = chunk[0][i], s = chunk[1][i];
+                chunk[0][i] = m + s;
+                chunk[1][i] = m - s;
+            }
+        }
+
+        if (outputDry)
+            for (int ch = 0; ch < numChannels; ++ch)
+                juce::FloatVectorOperations::copy (chunk[ch], dryScratch.getReadPointer (ch), length);
+    }
+}
+
+void DooblrQAudioProcessor::applySwitchFade (float* const* channels, int numChannels, int numSamples) noexcept
+{
+    // After a phase-mode switch the output jumps by the latency difference; fade it in.
+    for (int i = 0; i < numSamples && switchFadeRemaining > 0; ++i, --switchFadeRemaining)
+    {
+        const auto gain = 1.0f - (float) switchFadeRemaining / (float) switchFadeLength;
+
+        for (int ch = 0; ch < numChannels; ++ch)
+            channels[ch][i] *= gain;
+    }
 }
 
 void DooblrQAudioProcessor::releaseResources()
@@ -119,6 +303,11 @@ void DooblrQAudioProcessor::reset()
 {
     for (auto& band : bands)
         band.reset();
+
+    firEngine.reset();
+
+    for (auto& ring : dryRing)
+        std::fill (ring.begin(), ring.end(), 0.0f);
 }
 
 bool DooblrQAudioProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -173,13 +362,26 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     const auto linked = stereoLink->load (std::memory_order_relaxed) >= 0.5f;
     auto* const* channels = buffer.getArrayOfWritePointers();
 
-    for (int start = 0; start < numSamples; start += coefficientUpdateInterval)
-    {
-        const auto length = juce::jmin (coefficientUpdateInterval, numSamples - start);
+    if (const auto requested = juce::roundToInt (phaseMode->load (std::memory_order_relaxed));
+        requested != activePhaseMode.load (std::memory_order_relaxed))
+        applyPhaseMode (requested, true);
 
-        for (auto& band : bands)
-            band.process (channels, numChannels, start, length, linked);
+    if (activePhaseMode.load (std::memory_order_relaxed) == (int) params::PhaseMode::zeroLatency)
+    {
+        for (int start = 0; start < numSamples; start += coefficientUpdateInterval)
+        {
+            const auto length = juce::jmin (coefficientUpdateInterval, numSamples - start);
+
+            for (auto& band : bands)
+                band.process (channels, numChannels, start, length, linked);
+        }
     }
+    else
+    {
+        processFirBlock (channels, numChannels, numSamples, linked, false);
+    }
+
+    applySwitchFade (channels, numChannels, numSamples);
 
     if (outputGain.isSmoothing())
     {
@@ -203,13 +405,29 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
 
 void DooblrQAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
-    // Zero latency, so bypass is an exact pass-through of the input.
     juce::ignoreUnused (midiMessages);
+    juce::ScopedNoDenormals noDenormals;
     clearOutputOnlyChannels (buffer);
 
-    // Keep the analyzer moving while bypassed (input and output are identical here).
     const auto numChannels = juce::jmin (getTotalNumInputChannels(), buffer.getNumChannels(),
                                          dsp::DynamicEQBand::maxChannels);
+
+    if (const auto requested = juce::roundToInt (phaseMode->load (std::memory_order_relaxed));
+        requested != activePhaseMode.load (std::memory_order_relaxed))
+        applyPhaseMode (requested, false);
+
+    // Zero Latency: bypass is an exact pass-through of the input. Natural/Linear phase: the
+    // input is delayed by the reported latency, so bypass stays time-aligned, and the EQ keeps
+    // running underneath so un-bypassing does not start from stale state.
+    if (activePhaseMode.load (std::memory_order_relaxed) != (int) params::PhaseMode::zeroLatency
+        && numChannels > 0 && buffer.getNumSamples() > 0)
+    {
+        updateBandSettings (false);
+        processFirBlock (buffer.getArrayOfWritePointers(), numChannels, buffer.getNumSamples(),
+                         stereoLink->load (std::memory_order_relaxed) >= 0.5f, true);
+    }
+
+    // Keep the analyzer moving while bypassed.
 
     if (analyzerRunning.load (std::memory_order_relaxed) && numChannels > 0 && buffer.getNumSamples() > 0)
         analyzerFifo.push (buffer.getArrayOfReadPointers(), numChannels, buffer.getNumSamples());
@@ -271,6 +489,23 @@ void DooblrQAudioProcessor::setStateInformation (const void* data, int sizeInByt
         return;
 
     auto state = juce::ValueTree::fromXml (*xml);
+
+    // Parameters missing from the saved state (added in a later version, e.g. per-band width
+    // and phase mode in 0.4.0) are reset to their defaults rather than keeping whatever
+    // this instance had before, so an old session sounds the way it was saved.
+    for (auto* parameter : getParameters())
+    {
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
+        {
+            if (! state.getChildWithProperty ("id", ranged->paramID).isValid())
+            {
+                juce::ValueTree child ("PARAM");
+                child.setProperty ("id", ranged->paramID, nullptr);
+                child.setProperty ("value", ranged->convertFrom0to1 (ranged->getDefaultValue()), nullptr);
+                state.appendChild (child, nullptr);
+            }
+        }
+    }
 
     // Newer, unknown state versions are still loaded: parameters are matched by ID,
     // and IDs this version does not know are ignored by the value tree state.

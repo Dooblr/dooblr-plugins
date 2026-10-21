@@ -45,7 +45,14 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     stereoLinkButton.setTooltip ("Detect dynamics from both channels together");
     addAndMakeVisible (stereoLinkButton);
 
+    phaseModeBox.setComponentID (params::phaseMode);
+    phaseModeBox.addItemList (params::phaseModeNames(), 1);
+    phaseModeBox.setTooltip ("Zero Latency: minimum-phase filters, no delay. Natural Phase: analogue-matched magnitude "
+                             "and phase, ~21 ms latency. Linear Phase: no phase shift, ~91 ms latency (at 48 kHz).");
+    addAndMakeVisible (phaseModeBox);
+
     auto& state = audioProcessor.getParameterState();
+    phaseModeAttachment = std::make_unique<ComboBoxAttachment> (state, params::phaseMode, phaseModeBox);
     outputAttachment = std::make_unique<SliderAttachment> (state, params::outputGain, outputSlider);
     stereoLinkAttachment = std::make_unique<ButtonAttachment> (state, params::stereoLink, stereoLinkButton);
 
@@ -77,6 +84,9 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     setUpKnob (frequencyKnob, "Frequency", params::band::frequency);
     setUpKnob (gainKnob, "Gain", params::band::gain);
     setUpKnob (qKnob, "Q", params::band::q);
+    setUpKnob (widthKnob, "Width", params::band::width);
+    widthKnob.slider.setDoubleClickReturnValue (true, 100.0);
+    widthKnob.slider.setTooltip ("Stereo width inside this band's region (100 % = unchanged)");
     setUpKnob (rangeKnob, "Range", params::band::range);
     setUpKnob (thresholdKnob, "Threshold", params::band::threshold);
     setUpKnob (attackKnob, "Attack", params::band::attack);
@@ -237,6 +247,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     frequencyAttachment.reset();
     gainAttachment.reset();
     qAttachment.reset();
+    widthAttachment.reset();
     rangeAttachment.reset();
     thresholdAttachment.reset();
     attackAttachment.reset();
@@ -250,6 +261,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     frequencyAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::frequency), frequencyKnob.slider);
     gainAttachment      = std::make_unique<SliderAttachment>   (state, id (params::band::gain), gainKnob.slider);
     qAttachment         = std::make_unique<SliderAttachment>   (state, id (params::band::q), qKnob.slider);
+    widthAttachment     = std::make_unique<SliderAttachment>   (state, id (params::band::width), widthKnob.slider);
     dynamicsAttachment  = std::make_unique<ButtonAttachment>   (state, id (params::band::dynamicsEnabled), dynamicsButton);
     rangeAttachment     = std::make_unique<SliderAttachment>   (state, id (params::band::range), rangeKnob.slider);
     thresholdAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::threshold), thresholdKnob.slider);
@@ -260,7 +272,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     responseCurve.setSelectedBand (selectedBand);
 
     const auto colour = dooblrq::ui::bandColour (selectedBand);
-    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob })
+    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob, &widthKnob })
         knob->slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
 
     updateBandIndicators();
@@ -285,6 +297,13 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
     const auto dynamicsUsed = settings.dynamicsEnabled && dooblrq::dsp::supportsDynamics (settings.type);
 
     gainKnob.slider.setAlpha (gainUsed ? 1.0f : 0.4f);
+
+    // Width needs two channels; on a mono instance it is disabled outright.
+    const auto stereo = audioProcessor.getTotalNumInputChannels() >= 2;
+    widthKnob.slider.setEnabled (stereo);
+    widthKnob.caption.setEnabled (stereo);
+    widthKnob.slider.setAlpha (stereo && dooblrq::dsp::supportsWidth (settings.type) ? 1.0f : 0.4f);
+    widthKnob.caption.setAlpha (stereo ? 1.0f : 0.4f);
     dynamicsButton.setAlpha (dooblrq::dsp::supportsDynamics (settings.type) ? 1.0f : 0.4f);
 
     for (auto* knob : { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob })
@@ -334,10 +353,12 @@ void DooblrQAudioProcessorEditor::resized()
 
         versionLabel.setBounds (header.removeFromRight (60));
         header.removeFromRight (16);
-        outputSlider.setBounds (header.removeFromRight (230).withSizeKeepingCentre (230, 24));
+        outputSlider.setBounds (header.removeFromRight (200).withSizeKeepingCentre (200, 24));
         outputCaption.setBounds (header.removeFromRight (56));
-        header.removeFromRight (20);
-        stereoLinkButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 24));
+        header.removeFromRight (16);
+        stereoLinkButton.setBounds (header.removeFromRight (112).withSizeKeepingCentre (112, 24));
+        header.removeFromRight (8);
+        phaseModeBox.setBounds (header.removeFromRight (140).withSizeKeepingCentre (140, 26));
     }
 
     toolbarArea = bounds.removeFromTop (38);
@@ -368,9 +389,9 @@ void DooblrQAudioProcessorEditor::resized()
 
     auto controls = controlsArea.reduced (20, 12);
     const auto switchColumnWidth = 120;
-    const auto knobWidth = (controls.getWidth() - 2 * switchColumnWidth - 24) / 7;
+    const auto knobWidth = (controls.getWidth() - 2 * switchColumnWidth - 24) / 8;
 
-    eqSectionArea = controls.removeFromLeft (switchColumnWidth + 3 * knobWidth);
+    eqSectionArea = controls.removeFromLeft (switchColumnWidth + 4 * knobWidth);
     controls.removeFromLeft (24);
     dynamicsSectionArea = controls;
 
@@ -397,6 +418,6 @@ void DooblrQAudioProcessorEditor::resized()
         }
     };
 
-    layoutSection (eqSectionArea, enabledButton, &typeBox, { &frequencyKnob, &gainKnob, &qKnob });
+    layoutSection (eqSectionArea, enabledButton, &typeBox, { &frequencyKnob, &gainKnob, &qKnob, &widthKnob });
     layoutSection (dynamicsSectionArea, dynamicsButton, nullptr, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
 }

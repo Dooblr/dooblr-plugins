@@ -44,6 +44,7 @@ namespace dooblrq::dsp
         rangeDb.reset (sampleRate, smoothingSeconds);
         thresholdDb.reset (sampleRate, smoothingSeconds);
         wet.reset (sampleRate, enableFadeSeconds);
+        width.reset (sampleRate, smoothingSeconds);
 
         setSettings (settings, true);
         reset();
@@ -58,6 +59,7 @@ namespace dooblrq::dsp
         rangeDb.setCurrentAndTargetValue (rangeDb.getTargetValue());
         thresholdDb.setCurrentAndTargetValue (thresholdDb.getTargetValue());
         wet.setCurrentAndTargetValue (wet.getTargetValue());
+        width.setCurrentAndTargetValue (width.getTargetValue());
     }
 
     void DynamicEQBand::resetFilterState() noexcept
@@ -66,6 +68,8 @@ namespace dooblrq::dsp
         for (auto& state : detectorState) state.reset();
         envelope.fill (0.0f);
         dynamicGainDb.fill (0.0f);
+        widthState.reset();
+        widthActive = false;
         dynamicGainForDisplay.store (0.0f, std::memory_order_relaxed);
     }
 
@@ -83,6 +87,7 @@ namespace dooblrq::dsp
             rangeDb.setCurrentAndTargetValue (settings.rangeDb);
             thresholdDb.setCurrentAndTargetValue (settings.thresholdDb);
             wet.setCurrentAndTargetValue (targetWet);
+            width.setCurrentAndTargetValue (settings.widthPercent * 0.01f);
         }
         else
         {
@@ -92,6 +97,7 @@ namespace dooblrq::dsp
             rangeDb.setTargetValue (settings.rangeDb);
             thresholdDb.setTargetValue (settings.thresholdDb);
             wet.setTargetValue (targetWet);
+            width.setTargetValue (settings.widthPercent * 0.01f);
         }
 
         updateBallistics();
@@ -116,6 +122,8 @@ namespace dooblrq::dsp
         const auto currentGainDb    = gainDb.skip (numSamples);
         const auto currentRangeDb   = rangeDb.skip (numSamples);
         const auto currentThreshold = thresholdDb.skip (numSamples);
+        const auto widthSmoothing   = width.isSmoothing();
+        const auto currentWidth     = width.skip (numSamples);
 
         const auto fading = wet.isSmoothing();
 
@@ -158,6 +166,22 @@ namespace dooblrq::dsp
                                                            (double) totalGain, sampleRate);
         }
 
+        // Stereo width: mid/side inside the band's region. Skipped entirely at exactly 100%,
+        // so a neutral width leaves the signal path bit-identical.
+        const auto useWidth = numChannels == 2 && supportsWidth (type)
+                              && (widthSmoothing || ! juce::exactlyEqual (currentWidth, 1.0f));
+
+        if (! useWidth && widthActive)
+        {
+            widthState.reset();
+            widthActive = false;
+        }
+
+        widthActive = useWidth;
+        const auto region = useWidth ? makeWidthRegionCoefficients (type, currentFrequency, currentQ, sampleRate)
+                                     : SvfCoefficients {};
+        const auto widthAmount = currentWidth - 1.0f;
+
         const auto detector = dynamic ? makeDetectorCoefficients (type, currentFrequency, currentQ, sampleRate)
                                       : SvfCoefficients {};
 
@@ -190,6 +214,17 @@ namespace dooblrq::dsp
             }
 
             const auto mix = fading ? wet.getNextValue() : 1.0f;
+
+            if (useWidth)
+            {
+                auto& left = channels[0][n];
+                auto& right = channels[1][n];
+                const auto mid = 0.5f * (left + right);
+                const auto side = 0.5f * (left - right);
+                const auto newSide = side + mix * widthAmount * processSvf (side, widthState, region);
+                left = mid + newSide;
+                right = mid - newSide;
+            }
 
             for (int ch = 0; ch < numChannels; ++ch)
             {

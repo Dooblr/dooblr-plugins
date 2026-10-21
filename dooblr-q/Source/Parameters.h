@@ -25,10 +25,16 @@ namespace dooblrq::params
         inline constexpr const char* threshold       = "dyn_threshold";
         inline constexpr const char* attack          = "dyn_attack";
         inline constexpr const char* release         = "dyn_release";
+        inline constexpr const char* width           = "width";  // added in 0.4.0
     }
 
     inline constexpr const char* outputGain = "output_gain";
     inline constexpr const char* stereoLink = "stereo_link";
+    inline constexpr const char* phaseMode  = "phase_mode"; // added in 0.4.0
+
+    /** Processing modes (choice index of phase_mode). */
+    enum class PhaseMode { zeroLatency = 0, naturalPhase, linearPhase };
+    juce::StringArray phaseModeNames();
 
     inline constexpr float minFrequency = 20.0f,   maxFrequency = 20000.0f;
     inline constexpr float minGainDb    = -24.0f,  maxGainDb    = 24.0f;
@@ -37,6 +43,7 @@ namespace dooblrq::params
     inline constexpr float minThresholdDb = -60.0f, maxThresholdDb = 0.0f;
     inline constexpr float minAttackMs  = 0.1f,    maxAttackMs  = 200.0f;
     inline constexpr float minReleaseMs = 5.0f,    maxReleaseMs = 2000.0f;
+    inline constexpr float minWidthPercent = 0.0f, maxWidthPercent = 200.0f;
 
     /** Parameter ID for a band (0-based index), e.g. bandId (0, band::gain) == "b1_gain". */
     juce::String bandId (int bandIndex, const char* suffix);

@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <utility>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -42,6 +43,9 @@ namespace dooblrq::ui
         void mouseDrag (const juce::MouseEvent& event) override;
         void mouseUp (const juce::MouseEvent& event) override;
         void mouseDoubleClick (const juce::MouseEvent& event) override;
+        void mouseMove (const juce::MouseEvent& event) override;
+        void mouseExit (const juce::MouseEvent& event) override;
+        void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
 
         static constexpr float displayRangeDb = 24.0f;
 
@@ -64,7 +68,21 @@ namespace dooblrq::ui
         /** Level (dB) of a band's own static response at its frequency, i.e. the handle level:
             the gain for a bell, half the gain for a shelf (its midpoint), the corner level for
             a cut, and 0 dB for a notch (whose centre is -inf). */
-        static double handleDecibels (const dsp::BandSettings& settings, double sampleRate);
+        static double handleDecibels (const dsp::BandSettings& settings, double sampleRate, bool analog = false);
+
+        /** Bandwidth in octaves of a Q (the usual bell definition) and back. */
+        static double qToOctaves (double q);
+        static double octavesToQ (double octaves);
+
+        /** The selected band's bandwidth handles: on the curve at centre / 2^(BW/2) and
+            centre * 2^(BW/2). Dragging one sideways sets Q; the other mirrors it in
+            log-frequency so the centre stays put. Shown for every type (for shelves, cuts
+            and tilt the pair marks the transition width that Q controls). */
+        std::pair<juce::Point<float>, juce::Point<float>> widthHandlePositions (int bandIndex) const;
+        bool widthHandlesVisible() const;
+
+        /** True when the display draws the analogue (Natural/Linear phase) response. */
+        bool showsAnalogResponse() const;
 
         /** Combined response (dB) of all enabled bands at a frequency, as drawn. */
         double responseDecibelsAt (double frequency, bool includeDynamics) const;
@@ -86,8 +104,11 @@ namespace dooblrq::ui
         struct ResponseModel
         {
             std::array<dsp::SvfCoefficients, params::numBands> coefficients {};
+            std::array<dsp::AnalogPrototype, params::numBands> prototypes {};
+            std::array<double, params::numBands> frequencies {};
             std::array<bool, params::numBands> enabled {};
             double sampleRate = 48000.0;
+            bool analog = false;
 
             double decibelsAt (double frequency) const;
         };
@@ -97,6 +118,8 @@ namespace dooblrq::ui
         void drawSpectrum (juce::Graphics& g);
 
         int bandAt (juce::Point<float> position) const;
+        int widthHandleAt (juce::Point<float> position) const; // -1 lower, +1 upper, 0 none
+        void updateCursor (juce::Point<float> position);
         bool anyDynamicsActive() const;
 
         void drawGrid (juce::Graphics& g) const;
@@ -111,6 +134,9 @@ namespace dooblrq::ui
         bool dragEnabledBand = false;
         juce::Point<float> dragOffset;
         float dragStartGainDb = 0.0f, dragStartY = 0.0f; // for the relative tilt-amount drag
+        int widthDragSide = 0;          // bandwidth handle being dragged (-1 lower, +1 upper)
+        bool qDrag = false;             // alt/option-drag on a band handle: vertical = Q
+        float dragStartQ = 1.0f;
 
         std::atomic<bool> repaintPending { true };
 

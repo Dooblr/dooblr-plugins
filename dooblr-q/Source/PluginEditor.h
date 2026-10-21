@@ -57,6 +57,7 @@ private:
     juce::Label titleLabel, subtitleLabel, versionLabel, outputCaption;
     juce::Slider outputSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
     juce::ToggleButton stereoLinkButton { "Stereo link" };
+    juce::ComboBox phaseModeBox;
 
     dooblrq::ui::ResponseCurveComponent responseCurve;
 
@@ -70,7 +71,7 @@ private:
 
     juce::ToggleButton enabledButton { "Band on" };
     juce::ComboBox typeBox;
-    Knob frequencyKnob, gainKnob, qKnob;
+    Knob frequencyKnob, gainKnob, qKnob, widthKnob;
 
     juce::ToggleButton dynamicsButton { "Dynamic" };
     Knob rangeKnob, thresholdKnob, attackKnob, releaseKnob;
@@ -82,10 +83,11 @@ private:
     // Attachments are declared last so they are destroyed before the controls they bind.
     std::unique_ptr<SliderAttachment> outputAttachment;
     std::unique_ptr<ButtonAttachment> stereoLinkAttachment;
+    std::unique_ptr<ComboBoxAttachment> phaseModeAttachment;
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, dynamicsAttachment;
     std::unique_ptr<ComboBoxAttachment> typeAttachment;
-    std::unique_ptr<SliderAttachment> frequencyAttachment, gainAttachment, qAttachment,
+    std::unique_ptr<SliderAttachment> frequencyAttachment, gainAttachment, qAttachment, widthAttachment,
                                       rangeAttachment, thresholdAttachment, attackAttachment, releaseAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrQAudioProcessorEditor)

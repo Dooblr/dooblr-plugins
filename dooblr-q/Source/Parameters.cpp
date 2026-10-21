@@ -33,6 +33,11 @@ namespace dooblrq::params
             return ms < 10.0f ? juce::String (ms, 1) + " ms" : juce::String (juce::roundToInt (ms)) + " ms";
         }
 
+        juce::String formatPercent (float value, int)
+        {
+            return juce::String (juce::roundToInt (value)) + " %";
+        }
+
         juce::String formatQ (float q, int)
         {
             return juce::String (q, 2);
@@ -50,6 +55,11 @@ namespace dooblrq::params
     juce::String bandId (int bandIndex, const char* suffix)
     {
         return "b" + juce::String (bandIndex + 1) + "_" + suffix;
+    }
+
+    juce::StringArray phaseModeNames()
+    {
+        return { "Zero Latency", "Natural Phase", "Linear Phase" };
     }
 
     juce::StringArray filterTypeNames()
@@ -146,6 +156,24 @@ namespace dooblrq::params
 
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { stereoLink, parameterVersionHint }, "Stereo Link", true));
+
+        // Added in 0.4.0. Appended after every older parameter (and given a newer version
+        // hint) so existing parameter order is unchanged; sessions saved before they existed
+        // load them at their neutral defaults (100 % width, Zero Latency).
+        constexpr int addedInV040 = 2;
+        auto widthGroup = std::make_unique<juce::AudioProcessorParameterGroup> ("width", "Stereo Width", " | ");
+
+        for (int bandIndex = 0; bandIndex < numBands; ++bandIndex)
+            widthGroup->addChild (std::make_unique<juce::AudioParameterFloat> (
+                juce::ParameterID { bandId (bandIndex, band::width), addedInV040 },
+                "Band " + juce::String (bandIndex + 1) + " Width",
+                juce::NormalisableRange<float> (minWidthPercent, maxWidthPercent), 100.0f,
+                withFormatter (formatPercent)));
+
+        layout.add (std::move (widthGroup));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { phaseMode, addedInV040 }, "Phase Mode", phaseModeNames(), 0));
 
         return layout;
     }

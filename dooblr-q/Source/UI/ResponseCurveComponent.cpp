@@ -212,10 +212,115 @@ namespace dooblrq::ui
         return (double) juce::jmap (y, area.getY(), area.getBottom(), displayRangeDb, -displayRangeDb);
     }
 
-    double ResponseCurveComponent::handleDecibels (const dsp::BandSettings& s, double sampleRate)
+    double ResponseCurveComponent::qToOctaves (double q)
+    {
+        return 2.0 / std::log (2.0) * std::asinh (1.0 / (2.0 * q));
+    }
+
+    double ResponseCurveComponent::octavesToQ (double octaves)
+    {
+        return 1.0 / (2.0 * std::sinh (std::log (2.0) * octaves * 0.5));
+    }
+
+    bool ResponseCurveComponent::showsAnalogResponse() const
+    {
+        const auto* mode = processor.getParameterState().getRawParameterValue (params::phaseMode);
+        return mode != nullptr && juce::roundToInt (mode->load()) != (int) params::PhaseMode::zeroLatency;
+    }
+
+    bool ResponseCurveComponent::widthHandlesVisible() const
+    {
+        return selectedBand >= 0 && processor.getBandSettings (selectedBand).enabled;
+    }
+
+    std::pair<juce::Point<float>, juce::Point<float>> ResponseCurveComponent::widthHandlePositions (int bandIndex) const
+    {
+        const auto s = processor.getBandSettings (bandIndex);
+        const auto factor = std::pow (2.0, 0.5 * qToOctaves ((double) s.q));
+        const auto model = makeResponseModel (false);
+        const auto at = [&] (double frequency)
+        {
+            const auto f = juce::jlimit (minDisplayFrequency, maxDisplayFrequency, frequency);
+            const auto db = juce::jlimit ((double) -displayRangeDb, (double) displayRangeDb, model.decibelsAt (f));
+            return juce::Point<float> (frequencyToX (f), decibelsToY (db));
+        };
+
+        return { at ((double) s.frequency / factor), at ((double) s.frequency * factor) };
+    }
+
+    int ResponseCurveComponent::widthHandleAt (juce::Point<float> position) const
+    {
+        if (! widthHandlesVisible())
+            return 0;
+
+        const auto [lower, upper] = widthHandlePositions (selectedBand);
+        const auto radius = handleRadius * 1.1f;
+
+        if (upper.getDistanceFrom (position) < radius)
+            return 1;
+
+        if (lower.getDistanceFrom (position) < radius)
+            return -1;
+
+        return 0;
+    }
+
+    void ResponseCurveComponent::updateCursor (juce::Point<float> position)
+    {
+        if (widthHandleAt (position) != 0)
+            setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
+        else if (bandAt (position) >= 0)
+            setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        else
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+    }
+
+    void ResponseCurveComponent::mouseMove (const juce::MouseEvent& event)
+    {
+        updateCursor (event.position);
+    }
+
+    void ResponseCurveComponent::mouseExit (const juce::MouseEvent&)
+    {
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+    }
+
+    void ResponseCurveComponent::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
+    {
+        // Scroll over a band handle (or its bandwidth handles) to change its Q.
+        auto band = bandAt (event.position);
+        if (band < 0 && widthHandleAt (event.position) != 0)
+            band = selectedBand;
+
+        if (band < 0)
+        {
+            Component::mouseWheelMove (event, wheel);
+            return;
+        }
+
+        const auto delta = (double) (wheel.isReversed ? -wheel.deltaY : wheel.deltaY);
+        const auto q = juce::jlimit ((double) params::minQ, (double) params::maxQ,
+                                     (double) processor.getBandSettings (band).q * std::pow (2.0, delta * 2.0));
+
+        if (auto* parameter = bandParameter (band, params::band::q))
+        {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 ((float) q));
+            parameter->endChangeGesture();
+        }
+
+        repaint();
+    }
+
+    double ResponseCurveComponent::handleDecibels (const dsp::BandSettings& s, double sampleRate, bool analog)
     {
         if (s.type == dsp::FilterType::notch)
             return 0.0;
+
+        if (analog)
+            return juce::Decibels::gainToDecibels (
+                std::abs (dsp::analogResponseAt (dsp::makeEqPrototype (s.type, (double) s.q, (double) s.gainDb),
+                                                 (double) s.frequency, (double) s.frequency)), -100.0);
 
         const auto c = dsp::makeEqCoefficients (s.type, (double) s.frequency, (double) s.q, (double) s.gainDb, sampleRate);
         return juce::Decibels::gainToDecibels (dsp::magnitudeAt (c, (double) s.frequency, sampleRate), -100.0);
@@ -224,7 +329,7 @@ namespace dooblrq::ui
     juce::Point<float> ResponseCurveComponent::handlePosition (int bandIndex) const
     {
         const auto settings = processor.getBandSettings (bandIndex);
-        const auto db = handleDecibels (settings, processor.getAnalysisSampleRate());
+        const auto db = handleDecibels (settings, processor.getAnalysisSampleRate(), showsAnalogResponse());
         return { frequencyToX ((double) settings.frequency),
                  decibelsToY (juce::jlimit ((double) -displayRangeDb, (double) displayRangeDb, db)) };
     }
@@ -252,6 +357,7 @@ namespace dooblrq::ui
     {
         ResponseModel model;
         model.sampleRate = processor.getAnalysisSampleRate();
+        model.analog = showsAnalogResponse();
 
         for (int b = 0; b < params::numBands; ++b)
         {
@@ -271,6 +377,8 @@ namespace dooblrq::ui
 
             model.coefficients[(size_t) b] = dsp::makeEqCoefficients (s.type, (double) s.frequency, (double) s.q,
                                                                       gain, model.sampleRate);
+            model.prototypes[(size_t) b] = dsp::makeEqPrototype (s.type, (double) s.q, gain);
+            model.frequencies[(size_t) b] = (double) s.frequency;
         }
 
         return model;
@@ -282,7 +390,8 @@ namespace dooblrq::ui
 
         for (size_t b = 0; b < coefficients.size(); ++b)
             if (enabled[b])
-                magnitude *= dsp::magnitudeAt (coefficients[b], frequency, sampleRate);
+                magnitude *= analog ? std::abs (dsp::analogResponseAt (prototypes[b], frequencies[b], frequency))
+                                    : dsp::magnitudeAt (coefficients[b], frequency, sampleRate);
 
         return juce::Decibels::gainToDecibels (magnitude, -100.0);
     }
@@ -421,6 +530,15 @@ namespace dooblrq::ui
                 g.drawEllipse (circle.expanded (3.0f), 1.2f);
             }
 
+            // Stereo width other than 100 % is shown under the handle.
+            if (dsp::supportsWidth (s.type) && ! juce::exactlyEqual (s.widthPercent, 100.0f))
+            {
+                g.setColour ((s.enabled ? colour : Palette::textMuted).withAlpha (0.85f));
+                g.setFont (juce::FontOptions (10.5f));
+                g.drawText ("W " + juce::String (juce::roundToInt (s.widthPercent)) + "%",
+                            circle.translated (0.0f, 20.0f).withSizeKeepingCentre (60.0f, 13.0f), juce::Justification::centred);
+            }
+
             // A tilt's handle sits on its 0 dB pivot, so show the amount next to it.
             if (s.type == dsp::FilterType::tilt)
             {
@@ -429,6 +547,39 @@ namespace dooblrq::ui
                 g.setFont (juce::FontOptions (11.0f));
                 g.drawText (text, circle.translated (0.0f, -20.0f).withSizeKeepingCentre (90.0f, 14.0f),
                             juce::Justification::centred);
+            }
+        }
+
+        // Bandwidth handles of the selected band, and a readout while they are dragged.
+        if (widthHandlesVisible())
+        {
+            const auto [lower, upper] = widthHandlePositions (selectedBand);
+            const auto colour = bandColour (selectedBand);
+            const auto s = processor.getBandSettings (selectedBand);
+
+            g.setColour (colour.withAlpha (0.35f));
+            const float dashes[] { 2.0f, 3.0f };
+            g.drawDashedLine ({ lower, upper }, dashes, 2, 1.0f);
+
+            for (const auto& p : { lower, upper })
+            {
+                const auto pill = juce::Rectangle<float> (7.0f, 16.0f).withCentre (p);
+                g.setColour (colour.withAlpha (0.9f));
+                g.fillRoundedRectangle (pill, 3.0f);
+                g.setColour (Palette::background);
+                g.drawRoundedRectangle (pill, 3.0f, 1.0f);
+            }
+
+            if (widthDragSide != 0 || qDrag)
+            {
+                const auto anchor = widthDragSide < 0 ? lower : (widthDragSide > 0 ? upper : handlePosition (selectedBand));
+                const auto text = juce::String (qToOctaves ((double) s.q), 2) + " oct  Q " + juce::String (s.q, 2);
+                const auto box = juce::Rectangle<float> (110.0f, 18.0f).withCentre (anchor.translated (0.0f, -22.0f));
+                g.setColour (Palette::panelRaised.withAlpha (0.92f));
+                g.fillRoundedRectangle (box, 4.0f);
+                g.setColour (Palette::textPrimary);
+                g.setFont (juce::FontOptions (11.5f));
+                g.drawText (text, box, juce::Justification::centred);
             }
         }
 
@@ -450,8 +601,38 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::mouseDown (const juce::MouseEvent& event)
     {
+        widthDragSide = widthHandleAt (event.position);
+        qDrag = false;
+
+        if (widthDragSide != 0)
+        {
+            draggingBand = selectedBand;
+            const auto [lower, upper] = widthHandlePositions (selectedBand);
+            dragOffset = (widthDragSide > 0 ? upper : lower) - event.position;
+
+            if (auto* parameter = bandParameter (draggingBand, params::band::q))
+                parameter->beginChangeGesture();
+
+            return;
+        }
+
         draggingBand = bandAt (event.position);
         dragEnabledBand = false;
+
+        if (draggingBand >= 0 && event.mods.isAltDown())
+        {
+            qDrag = true;
+            dragStartQ = processor.getBandSettings (draggingBand).q;
+            dragStartY = event.position.y;
+
+            if (onBandSelected != nullptr)
+                onBandSelected (draggingBand);
+
+            if (auto* parameter = bandParameter (draggingBand, params::band::q))
+                parameter->beginChangeGesture();
+
+            return;
+        }
 
         if (draggingBand < 0)
             return;
@@ -472,6 +653,28 @@ namespace dooblrq::ui
     {
         if (draggingBand < 0 || ! event.mouseWasDraggedSinceMouseDown())
             return;
+
+        if (widthDragSide != 0)
+        {
+            // Distance from the centre in octaves is half the bandwidth; the other handle mirrors.
+            const auto centre = (double) processor.getBandSettings (draggingBand).frequency;
+            const auto frequency = xToFrequency ((event.position + dragOffset).x);
+            const auto halfOctaves = std::max (1.0e-3, widthDragSide * std::log2 (frequency / centre));
+            const auto q = juce::jlimit ((double) params::minQ, (double) params::maxQ, octavesToQ (2.0 * halfOctaves));
+            setBandParameter (draggingBand, params::band::q, (float) q);
+            repaint();
+            return;
+        }
+
+        if (qDrag)
+        {
+            // Option/alt-drag: up = narrower (higher Q), 48 px per octave of Q.
+            const auto q = juce::jlimit ((double) params::minQ, (double) params::maxQ,
+                                         (double) dragStartQ * std::pow (2.0, (double) (dragStartY - event.position.y) / 48.0));
+            setBandParameter (draggingBand, params::band::q, (float) q);
+            repaint();
+            return;
+        }
 
         // Moving a disabled band's handle switches it on, so the curve follows the handle.
         if (! dragEnabledBand && ! processor.getBandSettings (draggingBand).enabled)
@@ -513,10 +716,23 @@ namespace dooblrq::ui
         repaint();
     }
 
-    void ResponseCurveComponent::mouseUp (const juce::MouseEvent&)
+    void ResponseCurveComponent::mouseUp (const juce::MouseEvent& event)
     {
         if (draggingBand < 0)
             return;
+
+        if (widthDragSide != 0 || qDrag)
+        {
+            if (auto* parameter = bandParameter (draggingBand, params::band::q))
+                parameter->endChangeGesture();
+
+            widthDragSide = 0;
+            qDrag = false;
+            draggingBand = -1;
+            updateCursor (event.position);
+            repaint();
+            return;
+        }
 
         for (const auto* suffix : { params::band::frequency, params::band::gain })
             if (auto* parameter = bandParameter (draggingBand, suffix))
