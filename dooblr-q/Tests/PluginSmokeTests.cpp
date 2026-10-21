@@ -187,12 +187,11 @@ namespace
         check (processor->getTotalNumInputChannels() == 2, "default input is stereo");
         check (processor->getTotalNumOutputChannels() == 2, "default output is stereo");
         check (processor->hasEditor(), "has an editor");
-        check (processor->getParameters().size() == params::numBands * 11 + 3,
-               "exposes 11 parameters per band plus output gain, stereo link and phase mode");
+        check (processor->getParameters().size() == params::numBands * 10 + 3,
+               "exposes 10 parameters per band plus output gain, stereo link and phase mode");
         check (processor->getParameters()[params::numBands * 10]->getName (64) == "Output Gain"
-                   && processor->getParameters()[params::numBands * 10 + 2]->getName (64) == "Band 1 Width"
                    && processor->getParameters().getLast()->getName (64) == "Phase Mode",
-               "parameters added in 0.4.0 come after all older ones (old indices unchanged)");
+               "phase mode (added in 0.4.0) comes after all older parameters (old indices unchanged)");
 
         std::unique_ptr<juce::AudioProcessor> fromFactory (createPluginFilter());
         check (fromFactory != nullptr && fromFactory->getName() == "dooblr-q",
@@ -1295,12 +1294,10 @@ namespace
         juce::MemoryBlock block;
         juce::AudioProcessor::copyXmlToBinary (*xml, block);
         DooblrQAudioProcessor processor;
-        setBand (processor, 0, params::band::width, 50.0f);           // settings the old session did not have
         setParameter (processor, params::phaseMode, (float) params::PhaseMode::linearPhase);
         processor.setStateInformation (block.getData(), (int) block.getSize());
-        check (juce::exactlyEqual (processor.getBandSettings (0).widthPercent, 100.0f)
-                   && juce::roundToInt (getParameter (processor, params::phaseMode)) == 0,
-               "parameters missing from an old session load at their neutral defaults (width 100 %, Zero Latency)");
+        check (juce::roundToInt (getParameter (processor, params::phaseMode)) == 0,
+               "parameters missing from an old session load at their defaults (Zero Latency)");
 
         using T = dsp::FilterType;
         const T expected[] { T::lowCut, T::lowShelf, T::notch, T::highCut, T::bell, T::highShelf };
@@ -1327,6 +1324,31 @@ namespace
         DooblrQAudioProcessor restored;
         restored.setStateInformation (state.getData(), (int) state.getSize());
         check (restored.getBandSettings (3).type == dsp::FilterType::tilt, "a Tilt band survives save/restore");
+
+        // A v0.4.0 session: it had per-band stereo width (bN_width), which no longer exists.
+        auto v040 = restored.getParameterState().copyState();
+        v040.setProperty ("stateVersion", 1, nullptr);
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            juce::ValueTree width ("PARAM");
+            width.setProperty ("id", params::bandId (b, "width"), nullptr);
+            width.setProperty ("value", 40.0 + 20.0 * b, nullptr);
+            v040.appendChild (width, nullptr);
+        }
+        v040.getChildWithProperty ("id", params::phaseMode).setProperty ("value", 2.0, nullptr);
+        v040.getChildWithProperty ("id", params::bandId (1, params::band::q)).setProperty ("value", 2.5, nullptr);
+
+        juce::MemoryBlock v040Block;
+        juce::AudioProcessor::copyXmlToBinary (*v040.createXml(), v040Block);
+        DooblrQAudioProcessor fromV040;
+        fromV040.setStateInformation (v040Block.getData(), (int) v040Block.getSize());
+        juce::MemoryBlock resaved;
+        fromV040.getStateInformation (resaved);
+        const auto resavedXml = juce::AudioProcessor::getXmlFromBinary (resaved.getData(), (int) resaved.getSize());
+        check (fromV040.getBandSettings (3).type == dsp::FilterType::tilt && std::abs (fromV040.getBandSettings (1).q - 2.5f) < 1.0e-4f
+                   && juce::roundToInt (getParameter (fromV040, params::phaseMode)) == 2,
+               "a v0.4.0 state with bN_width parameters loads (other values restored)");
+        check (resavedXml != nullptr && ! resavedXml->toString().contains ("_width"), "the obsolete width parameters are dropped, not re-saved");
     }
 
     //==============================================================================
@@ -1470,6 +1492,8 @@ namespace
         playThroughEditor (processor, *curve, makeMusicLike (48000 * 2, sampleRate, 2, 0.9f));
         check (analyzer.getFrozenAverageDb() == frozenCopy, "the frozen overlay does not change while live audio plays");
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-frozen");
+        dooblrEditor->selectBand (2); // shows its bandwidth handles over the spectrum and frozen overlay
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-overview");
 
         clickToggle (*freeze);
         check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0, "un-freezing hides the overlay and restarts averaging");
@@ -1508,21 +1532,6 @@ namespace
     }
 
     constexpr PhaseMode allPhaseModes[] { PhaseMode::zeroLatency, PhaseMode::naturalPhase, PhaseMode::linearPhase };
-
-    /** Amplitude of a sinusoid at an integer frequency over exactly `length` samples (DFT bin). */
-    double toneAmplitude (const float* data, int length, double frequency, double sampleRate)
-    {
-        double re = 0.0, im = 0.0;
-
-        for (int i = 0; i < length; ++i)
-        {
-            const auto phase = 2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate;
-            re += (double) data[i] * std::cos (phase);
-            im -= (double) data[i] * std::sin (phase);
-        }
-
-        return 2.0 * std::sqrt (re * re + im * im) / length;
-    }
 
     void testPhaseModeLatency()
     {
@@ -1676,7 +1685,7 @@ namespace
         check (asymmetry < 1.0e-5f, "the impulse response is symmetric about the latency (linear phase)");
         check (energyOutside < 1.0e-6f, "nothing outside the kernel span");
 
-        const auto& kernel = processor.getFirEngine().getKernel (0);
+        const auto& kernel = processor.getFirEngine().getKernel();
         auto kernelSymmetric = true;
         for (int k = 1; k < half; ++k)
             kernelSymmetric = kernelSymmetric && std::abs (kernel[(size_t) (half + k)] - kernel[(size_t) (half - k)]) < 1.0e-6f;
@@ -1764,7 +1773,6 @@ namespace
         {
             DooblrQAudioProcessor processor;
             configureBusyEq (processor);
-            setBand (processor, 2, params::band::width, 160.0f);
             prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
             juce::AudioBuffer<float> buffer (2, 512);
             juce::MidiBuffer midi;
@@ -1808,7 +1816,7 @@ namespace
     {
         constexpr double sampleRate = 48000.0;
         constexpr int seconds = 10;
-        std::string line = "CPU, 10 s stereo @ 48 kHz, 512-sample blocks, 6 bands on (one dynamic, one width):";
+        std::string line = "CPU, 10 s stereo @ 48 kHz, 512-sample blocks, 6 bands on (one dynamic):";
 
         for (const auto mode : allPhaseModes)
         {
@@ -1817,7 +1825,6 @@ namespace
             configureBusyEq (processor);
             for (int b = 0; b < params::numBands; ++b)
                 setBand (processor, b, params::band::enabled, 1.0f);
-            setBand (processor, 2, params::band::width, 150.0f);
             prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
 
             juce::AudioBuffer<float> buffer (2, 512);
@@ -1842,94 +1849,53 @@ namespace
     }
 
     //==============================================================================
-    // Per-band stereo width
-    void testWidth()
+    // Width = bandwidth in octaves (the Q parameter shown in octaves)
+    void testBandwidth()
     {
         constexpr double sampleRate = 48000.0;
-        const auto length = 96000;
-        const auto pi2 = 2.0 * juce::MathConstants<double>::pi;
+        const auto oct1 = params::qToOctaves (1.414), oct2 = params::qToOctaves (0.667);
+        note ("Q 1.414 -> " + format (oct1, 4) + " oct, Q 0.667 -> " + format (oct2, 4) + " oct, 1 oct -> Q "
+              + format (params::octavesToQ (1.0), 4) + ", 2 oct -> Q " + format (params::octavesToQ (2.0), 4));
+        check (std::abs (oct1 - 1.0) < 0.001 && std::abs (oct2 - 2.0) < 0.002, "Q 1.414 = 1 octave and Q 0.667 = 2 octaves");
 
-        // Mid: 1 kHz; side: 100 Hz, 1 kHz, 10 kHz (all integer Hz, measured over exactly 1 s).
-        juce::AudioBuffer<float> input (2, length);
-        for (int i = 0; i < length; ++i)
-        {
-            const auto t = i / sampleRate;
-            const auto mid = 0.2 * std::sin (pi2 * 1000.0 * t);
-            const auto side = 0.1 * std::sin (pi2 * 100.0 * t) + 0.1 * std::sin (pi2 * 1000.0 * t + 0.3)
-                              + 0.1 * std::sin (pi2 * 10000.0 * t);
-            input.setSample (0, i, (float) (mid + side));
-            input.setSample (1, i, (float) (mid - side));
-        }
+        auto roundTrip = true;
+        for (const auto q : { 0.1, 0.3, 0.707, 1.0, 2.5, 9.0, 18.0 })
+            roundTrip = roundTrip && std::abs (params::octavesToQ (params::qToOctaves (q)) - q) < 1.0e-9 * q;
+        check (roundTrip, "octaves -> Q -> octaves round-trips across the Q range");
 
-        struct Levels { double side100, side1k, side10k, mid1k; };
-        const auto run = [&] (PhaseMode mode, float width, juce::AudioBuffer<float>* keep)
-        {
-            DooblrQAudioProcessor processor;
-            setParameter (processor, params::phaseMode, (float) mode);
-            setBand (processor, 3, params::band::enabled, 1.0f);
-            setBand (processor, 3, params::band::type, (float) dsp::FilterType::bell);
-            setBand (processor, 3, params::band::frequency, 1000.0f);
-            setBand (processor, 3, params::band::q, 2.0f);
-            setBand (processor, 3, params::band::width, width);
-            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
-            juce::AudioBuffer<float> buffer (input);
-            processInBlocks (processor, buffer, { 512 });
-
-            std::vector<float> side ((size_t) 48000), mid ((size_t) 48000);
-            for (int i = 0; i < 48000; ++i)
-            {
-                const auto l = buffer.getSample (0, 48000 + i), r = buffer.getSample (1, 48000 + i);
-                side[(size_t) i] = 0.5f * (l - r);
-                mid[(size_t) i] = 0.5f * (l + r);
-            }
-
-            if (keep != nullptr)
-                *keep = buffer;
-
-            return Levels { toneAmplitude (side.data(), 48000, 100.0, sampleRate), toneAmplitude (side.data(), 48000, 1000.0, sampleRate),
-                            toneAmplitude (side.data(), 48000, 10000.0, sampleRate), toneAmplitude (mid.data(), 48000, 1000.0, sampleRate) };
-        };
-
-        const auto db = [] (double amplitude) { return juce::Decibels::gainToDecibels (amplitude / 0.1, -200.0); };
-
+        // A bell is at half its dB gain at centre / 2^(BW/2) and centre * 2^(BW/2): for a -6 dB
+        // bell those are its -3 dB points, so the measured -3 dB bandwidth equals the Width.
         for (const auto mode : { PhaseMode::zeroLatency, PhaseMode::linearPhase })
         {
-            const auto narrow = run (mode, 0.0f, nullptr);
-            const auto wide = run (mode, 200.0f, nullptr);
-            const auto same = run (mode, 100.0f, nullptr);
-            note (std::string (phaseName (mode)) + " width on a 1 kHz bell (Q 2), side levels re input: 0% -> 100 Hz "
-                  + format (db (narrow.side100)) + ", 1 kHz " + format (db (narrow.side1k)) + ", 10 kHz " + format (db (narrow.side10k))
-                  + " dB; 200% -> 1 kHz " + format (db (wide.side1k)) + " dB (100 Hz " + format (db (wide.side100)) + ", 10 kHz "
-                  + format (db (wide.side10k)) + "); mid 1 kHz at 0% " + format (juce::Decibels::gainToDecibels (narrow.mid1k / 0.2)) + " dB");
-            // The FIR kernel (5.9 Hz bins, Hann window) cannot reproduce an infinitely deep null.
-            const auto nullLimit = mode == PhaseMode::zeroLatency ? -40.0 : -30.0;
-            check (db (narrow.side1k) < nullLimit, std::string (phaseName (mode)) + ": width 0% makes the side signal at the band centre ~silent");
-            check (std::abs (db (narrow.side100)) < 0.5 && std::abs (db (narrow.side10k)) < 0.5,
-                   std::string (phaseName (mode)) + ": width 0% keeps side content outside the band");
-            check (std::abs (db (wide.side1k) - 6.02) < 0.1, std::string (phaseName (mode)) + ": width 200% doubles the side signal at the centre");
-            check (std::abs (juce::Decibels::gainToDecibels (narrow.mid1k / 0.2)) < 0.05 && std::abs (juce::Decibels::gainToDecibels (wide.mid1k / 0.2)) < 0.05,
-                   std::string (phaseName (mode)) + ": width leaves the mid signal alone");
-            check (std::abs (db (same.side1k)) < 0.02, std::string (phaseName (mode)) + ": width 100% leaves the side signal unchanged");
+            double previousAt1500 = 0.0;
+
+            for (const auto octaves : { 1.0, 2.0, 3.0 })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                setBand (processor, 3, params::band::enabled, 1.0f);
+                setBand (processor, 3, params::band::type, (float) dsp::FilterType::bell);
+                setBand (processor, 3, params::band::frequency, 1000.0f);
+                setBand (processor, 3, params::band::gain, -6.0f);
+                setBand (processor, 3, params::band::q, (float) params::octavesToQ (octaves));
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+                const auto edge = std::pow (2.0, octaves / 2.0);
+                const auto lower = measureSineGainDb (processor, 1000.0 / edge, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto upper = measureSineGainDb (processor, 1000.0 * edge, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto at1500 = measureSineGainDb (processor, 1500.0, 0.25f, sampleRate, 1.0);
+
+                note (std::string (phaseName (mode)) + ", -6 dB bell, Width " + format (octaves, 1) + " oct (Q "
+                      + format (params::octavesToQ (octaves), 3) + "): " + format (1000.0 / edge, 1) + " Hz " + format (lower, 3) + " dB, "
+                      + format (1000.0 * edge, 1) + " Hz " + format (upper, 3) + " dB; at 1.5 kHz " + format (at1500, 2) + " dB");
+                check (std::abs (lower + 3.0) < 0.1 && std::abs (upper + 3.0) < 0.1,
+                       std::string (phaseName (mode)) + ": the -3 dB points sit at the Width edges (" + format (octaves, 0) + " oct)");
+                check (at1500 < previousAt1500 - 0.3, std::string (phaseName (mode)) + ": a wider Width cuts more at 1.5 kHz");
+                previousAt1500 = at1500;
+            }
         }
-
-        // 100 % width is bit-exact (zero latency); mono ignores width entirely.
-        juce::AudioBuffer<float> neutral, untouched;
-        run (PhaseMode::zeroLatency, 100.0f, &neutral);
-        check (bitIdentical (neutral, input, 2), "width 100% on a 0 dB band is bit-identical to the input");
-
-        const auto mono = [&] (float width)
-        {
-            DooblrQAudioProcessor processor;
-            setBand (processor, 3, params::band::enabled, 1.0f);
-            setBand (processor, 3, params::band::gain, 4.0f);
-            setBand (processor, 3, params::band::width, width);
-            prepare (processor, juce::AudioChannelSet::mono(), sampleRate, 512);
-            juce::AudioBuffer<float> buffer (1, 48000);
-            buffer.copyFrom (0, 0, input, 0, 0, 48000);
-            processInBlocks (processor, buffer, { 512 });
-            return buffer;
-        };
-        check (bitIdentical (mono (0.0f), mono (100.0f), 1), "on a mono layout width has no effect");
     }
 
     //==============================================================================
@@ -1942,7 +1908,6 @@ namespace
         setBand (processor, 2, params::band::frequency, 1000.0f);
         setBand (processor, 2, params::band::gain, 6.0f);
         setBand (processor, 2, params::band::q, 1.0f);
-        setBand (processor, 2, params::band::width, 160.0f);
         prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
 
         std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
@@ -1953,8 +1918,8 @@ namespace
         if (dooblrEditor == nullptr || curve == nullptr)
             return;
 
-        check (findById (*editor, params::phaseMode) != nullptr && findById (*editor, params::band::width) != nullptr,
-               "phase mode selector and width knob exist");
+        auto* widthKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::q));
+        check (findById (*editor, params::phaseMode) != nullptr && widthKnob != nullptr, "phase mode selector and Width knob exist");
 
         dooblrEditor->selectBand (2);
         check (curve->widthHandlesVisible(), "the selected, enabled band shows bandwidth handles");
@@ -2000,6 +1965,21 @@ namespace
         curve->mouseWheelMove (makeMouseEvent (*curve, curve->handlePosition (2), curve->handlePosition (2), 0, false), wheel);
         check (processor.getBandSettings (2).q > qBeforeWheel * 1.3f, "scrolling over a handle changes Q");
 
+        // The Width knob shows octaves and writes Q.
+        if (widthKnob != nullptr)
+        {
+            dooblrEditor->selectBand (2);
+            note ("Width knob reads \"" + widthKnob->getTextFromValue (widthKnob->getValue()).toStdString() + "\" for Q "
+                  + format (processor.getBandSettings (2).q, 3));
+            check (std::abs (widthKnob->getValue() - params::qToOctaves (processor.getBandSettings (2).q)) < 1.0e-4,
+                   "the Width knob shows the band's Q as octaves");
+            widthKnob->setValue (1.0, juce::sendNotificationSync);
+            check (std::abs (processor.getBandSettings (2).q - 1.4142f) < 0.002f, "setting Width to 1.00 oct sets Q 1.414");
+            check (widthKnob->getTextFromValue (1.0) == "1.00 oct (Q 1.41)", "the Width readout is like '1.00 oct (Q 1.41)'");
+            widthKnob->setValue (2.0, juce::sendNotificationSync);
+            check (std::abs (processor.getBandSettings (2).q - 0.6667f) < 0.002f, "setting Width to 2.00 oct sets Q 0.667");
+        }
+
         // FIR modes draw the analogue response.
         setParameter (processor, params::phaseMode, (float) PhaseMode::linearPhase);
         const auto proto = dsp::makeEqPrototype (dsp::FilterType::bell, (double) processor.getBandSettings (2).q, 6.0);
@@ -2011,14 +1991,6 @@ namespace
         processor.editorBeingDeleted (editor.get());
         editor.reset();
 
-        // Mono: width control disabled.
-        DooblrQAudioProcessor monoProcessor;
-        prepare (monoProcessor, juce::AudioChannelSet::mono(), 48000.0, 512);
-        std::unique_ptr<juce::AudioProcessorEditor> monoEditor (monoProcessor.createEditorAndMakeActive());
-        auto* widthKnob = findById (*monoEditor, params::band::width);
-        check (widthKnob != nullptr && ! widthKnob->isEnabled(), "width is greyed out (disabled) on a mono layout");
-        monoProcessor.editorBeingDeleted (monoEditor.get());
-        monoEditor.reset();
     }
 
     struct TestCase
@@ -2056,7 +2028,7 @@ int main()
         { "linear phase impulse response",          testLinearPhaseImpulse },
         { "long modes: neutral identity, bypass",   testLongModesNeutralAndBypass },
         { "mode switching and dynamics per mode",   testModeSwitchingAndDynamics },
-        { "per-band stereo width",                  testWidth },
+        { "Width (bandwidth in octaves)",           testBandwidth },
         { "editor bandwidth handles",               testWidthHandles },
         { "CPU per phase mode",                     testCpuUsage },
     };

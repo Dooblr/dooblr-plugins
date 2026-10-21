@@ -25,7 +25,6 @@ namespace dooblrq::params
         inline constexpr const char* threshold       = "dyn_threshold";
         inline constexpr const char* attack          = "dyn_attack";
         inline constexpr const char* release         = "dyn_release";
-        inline constexpr const char* width           = "width";  // added in 0.4.0
     }
 
     inline constexpr const char* outputGain = "output_gain";
@@ -36,6 +35,11 @@ namespace dooblrq::params
     enum class PhaseMode { zeroLatency = 0, naturalPhase, linearPhase };
     juce::StringArray phaseModeNames();
 
+    /** A band's Q shown as a bandwidth in octaves ("Width" in the editor):
+        BW = 2 / ln 2 * asinh (1 / (2 Q)), and back. Q 1.414 = 1 octave, Q 0.667 = 2 octaves. */
+    inline double qToOctaves (double q)       { return 2.0 / std::log (2.0) * std::asinh (1.0 / (2.0 * q)); }
+    inline double octavesToQ (double octaves) { return 1.0 / (2.0 * std::sinh (std::log (2.0) * octaves * 0.5)); }
+
     inline constexpr float minFrequency = 20.0f,   maxFrequency = 20000.0f;
     inline constexpr float minGainDb    = -24.0f,  maxGainDb    = 24.0f;
     inline constexpr float minQ         = 0.1f,    maxQ         = 18.0f;
@@ -43,7 +47,6 @@ namespace dooblrq::params
     inline constexpr float minThresholdDb = -60.0f, maxThresholdDb = 0.0f;
     inline constexpr float minAttackMs  = 0.1f,    maxAttackMs  = 200.0f;
     inline constexpr float minReleaseMs = 5.0f,    maxReleaseMs = 2000.0f;
-    inline constexpr float minWidthPercent = 0.0f, maxWidthPercent = 200.0f;
 
     /** Parameter ID for a band (0-based index), e.g. bandId (0, band::gain) == "b1_gain". */
     juce::String bandId (int bandIndex, const char* suffix);

@@ -70,7 +70,7 @@ namespace dooblrq::ui
             a cut, and 0 dB for a notch (whose centre is -inf). */
         static double handleDecibels (const dsp::BandSettings& settings, double sampleRate, bool analog = false);
 
-        /** Bandwidth in octaves of a Q (the usual bell definition) and back. */
+        /** Bandwidth in octaves of a Q (shown as "Width") and back; see params::qToOctaves. */
         static double qToOctaves (double q);
         static double octavesToQ (double octaves);
 

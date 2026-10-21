@@ -22,7 +22,6 @@ namespace dooblrq::dsp
         float thresholdDb = -24.0f;
         float attackMs = 10.0f;
         float releaseMs = 120.0f;
-        float widthPercent = 100.0f; // stereo width of the band's region (100 = unchanged)
     };
 
     /**
@@ -78,14 +77,12 @@ namespace dooblrq::dsp
         BandSettings settings;
 
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> frequency { 1000.0f }, q { 1.0f };
-        juce::SmoothedValue<float> gainDb, rangeDb, thresholdDb, wet, width { 1.0f };
+        juce::SmoothedValue<float> gainDb, rangeDb, thresholdDb, wet;
 
         float attackCoefficient = 0.0f, releaseCoefficient = 0.0f;
 
         std::array<SvfState, maxChannels> filterState {}, detectorState {};
         std::array<float, maxChannels> envelope {}, dynamicGainDb {};
-        SvfState widthState {};
-        bool widthActive = false;
 
         bool active = false;
         std::atomic<float> dynamicGainForDisplay { 0.0f };

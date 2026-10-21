@@ -71,7 +71,7 @@ private:
 
     juce::ToggleButton enabledButton { "Band on" };
     juce::ComboBox typeBox;
-    Knob frequencyKnob, gainKnob, qKnob, widthKnob;
+    Knob frequencyKnob, gainKnob, qKnob; // qKnob is shown as "Width" in octaves
 
     juce::ToggleButton dynamicsButton { "Dynamic" };
     Knob rangeKnob, thresholdKnob, attackKnob, releaseKnob;
@@ -87,7 +87,8 @@ private:
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, dynamicsAttachment;
     std::unique_ptr<ComboBoxAttachment> typeAttachment;
-    std::unique_ptr<SliderAttachment> frequencyAttachment, gainAttachment, qAttachment, widthAttachment,
+    std::unique_ptr<juce::ParameterAttachment> qAttachment; // Width knob (octaves) <-> Q parameter
+    std::unique_ptr<SliderAttachment> frequencyAttachment, gainAttachment,
                                       rangeAttachment, thresholdAttachment, attackAttachment, releaseAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrQAudioProcessorEditor)

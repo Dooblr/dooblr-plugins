@@ -94,13 +94,6 @@ namespace dooblrq::dsp
         return finalise (w, k, 0.0, k, 0.0);
     }
 
-    SvfCoefficients makeWidthRegionCoefficients (FilterType type, double frequency, double q,
-                                                 double sampleRate) noexcept
-    {
-        const auto p = makeWidthRegionPrototype (type, q);
-        return finalise (prewarp (frequency, sampleRate) * p.scale, p.k, p.m0, p.m1, p.m2);
-    }
-
     AnalogPrototype makeEqPrototype (FilterType type, double q, double gainDb) noexcept
     {
         // Mirrors makeEqCoefficients: same k and output mix, with the frequency scale that
@@ -124,28 +117,6 @@ namespace dooblrq::dsp
         }
 
         return {};
-    }
-
-    AnalogPrototype makeWidthRegionPrototype (FilterType type, double q) noexcept
-    {
-        constexpr auto butterworthK = 1.4142135623730951;
-
-        switch (type)
-        {
-            case FilterType::lowShelf:
-                return { 1.0, butterworthK, 0.0, 0.0, 1.0 };
-            case FilterType::highShelf:
-            case FilterType::tilt:
-                return { 1.0, butterworthK, 1.0, -butterworthK, -1.0 };
-            case FilterType::bell:
-            case FilterType::lowCut:
-            case FilterType::highCut:
-            case FilterType::notch:
-                break;
-        }
-
-        const auto k = 1.0 / std::max (q, 0.025);
-        return { 1.0, k, 0.0, k, 0.0 };
     }
 
     std::complex<double> analogResponseAt (const AnalogPrototype& p, double bandFrequency, double frequency) noexcept

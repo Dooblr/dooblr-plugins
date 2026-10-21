@@ -83,10 +83,35 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
 
     setUpKnob (frequencyKnob, "Frequency", params::band::frequency);
     setUpKnob (gainKnob, "Gain", params::band::gain);
-    setUpKnob (qKnob, "Q", params::band::q);
-    setUpKnob (widthKnob, "Width", params::band::width);
-    widthKnob.slider.setDoubleClickReturnValue (true, 100.0);
-    widthKnob.slider.setTooltip ("Stereo width inside this band's region (100 % = unchanged)");
+    // "Width": the band's Q shown and edited as a bandwidth in octaves. The knob works in
+    // octaves (clockwise = wider) and writes the existing Q parameter, so sessions are unchanged.
+    setUpKnob (qKnob, "Width", params::band::q);
+    qKnob.slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 118, 18);
+    {
+        juce::NormalisableRange<double> octaves (params::qToOctaves (params::maxQ), params::qToOctaves (params::minQ));
+        octaves.setSkewForCentre (1.0);
+        qKnob.slider.setNormalisableRange (octaves);
+    }
+    qKnob.slider.textFromValueFunction = [] (double octaves)
+    {
+        return juce::String (octaves, 2) + " oct (Q " + juce::String (params::octavesToQ (octaves), 2) + ")";
+    };
+    qKnob.slider.valueFromTextFunction = [] (const juce::String& text) { return text.getDoubleValue(); };
+    qKnob.slider.setTooltip ("Bandwidth in octaves (sets the band's Q)");
+    qKnob.slider.onDragStart = [this] { if (qAttachment != nullptr) qAttachment->beginGesture(); };
+    qKnob.slider.onDragEnd   = [this] { if (qAttachment != nullptr) qAttachment->endGesture(); };
+    qKnob.slider.onValueChange = [this]
+    {
+        if (qAttachment == nullptr)
+            return;
+
+        const auto q = (float) params::octavesToQ (qKnob.slider.getValue());
+
+        if (qKnob.slider.isMouseButtonDown())
+            qAttachment->setValueAsPartOfGesture (q);
+        else
+            qAttachment->setValueAsCompleteGesture (q);
+    };
     setUpKnob (rangeKnob, "Range", params::band::range);
     setUpKnob (thresholdKnob, "Threshold", params::band::threshold);
     setUpKnob (attackKnob, "Attack", params::band::attack);
@@ -247,7 +272,6 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     frequencyAttachment.reset();
     gainAttachment.reset();
     qAttachment.reset();
-    widthAttachment.reset();
     rangeAttachment.reset();
     thresholdAttachment.reset();
     attackAttachment.reset();
@@ -260,8 +284,10 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     typeAttachment      = std::make_unique<ComboBoxAttachment> (state, id (params::band::type), typeBox);
     frequencyAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::frequency), frequencyKnob.slider);
     gainAttachment      = std::make_unique<SliderAttachment>   (state, id (params::band::gain), gainKnob.slider);
-    qAttachment         = std::make_unique<SliderAttachment>   (state, id (params::band::q), qKnob.slider);
-    widthAttachment     = std::make_unique<SliderAttachment>   (state, id (params::band::width), widthKnob.slider);
+    qAttachment = std::make_unique<juce::ParameterAttachment> (
+        *state.getParameter (id (params::band::q)),
+        [this] (float q) { qKnob.slider.setValue (params::qToOctaves ((double) q), juce::dontSendNotification); });
+    qAttachment->sendInitialUpdate();
     dynamicsAttachment  = std::make_unique<ButtonAttachment>   (state, id (params::band::dynamicsEnabled), dynamicsButton);
     rangeAttachment     = std::make_unique<SliderAttachment>   (state, id (params::band::range), rangeKnob.slider);
     thresholdAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::threshold), thresholdKnob.slider);
@@ -272,7 +298,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     responseCurve.setSelectedBand (selectedBand);
 
     const auto colour = dooblrq::ui::bandColour (selectedBand);
-    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob, &widthKnob })
+    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob })
         knob->slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
 
     updateBandIndicators();
@@ -297,13 +323,6 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
     const auto dynamicsUsed = settings.dynamicsEnabled && dooblrq::dsp::supportsDynamics (settings.type);
 
     gainKnob.slider.setAlpha (gainUsed ? 1.0f : 0.4f);
-
-    // Width needs two channels; on a mono instance it is disabled outright.
-    const auto stereo = audioProcessor.getTotalNumInputChannels() >= 2;
-    widthKnob.slider.setEnabled (stereo);
-    widthKnob.caption.setEnabled (stereo);
-    widthKnob.slider.setAlpha (stereo && dooblrq::dsp::supportsWidth (settings.type) ? 1.0f : 0.4f);
-    widthKnob.caption.setAlpha (stereo ? 1.0f : 0.4f);
     dynamicsButton.setAlpha (dooblrq::dsp::supportsDynamics (settings.type) ? 1.0f : 0.4f);
 
     for (auto* knob : { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob })
@@ -389,9 +408,9 @@ void DooblrQAudioProcessorEditor::resized()
 
     auto controls = controlsArea.reduced (20, 12);
     const auto switchColumnWidth = 120;
-    const auto knobWidth = (controls.getWidth() - 2 * switchColumnWidth - 24) / 8;
+    const auto knobWidth = (controls.getWidth() - 2 * switchColumnWidth - 24) / 7;
 
-    eqSectionArea = controls.removeFromLeft (switchColumnWidth + 4 * knobWidth);
+    eqSectionArea = controls.removeFromLeft (switchColumnWidth + 3 * knobWidth);
     controls.removeFromLeft (24);
     dynamicsSectionArea = controls;
 
@@ -418,6 +437,6 @@ void DooblrQAudioProcessorEditor::resized()
         }
     };
 
-    layoutSection (eqSectionArea, enabledButton, &typeBox, { &frequencyKnob, &gainKnob, &qKnob, &widthKnob });
+    layoutSection (eqSectionArea, enabledButton, &typeBox, { &frequencyKnob, &gainKnob, &qKnob });
     layoutSection (dynamicsSectionArea, dynamicsButton, nullptr, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
 }

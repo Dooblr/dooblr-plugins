@@ -130,7 +130,6 @@ private:
         std::atomic<float>* threshold = nullptr;
         std::atomic<float>* attack = nullptr;
         std::atomic<float>* release = nullptr;
-        std::atomic<float>* width = nullptr;
     };
 
     juce::AudioProcessorValueTreeState parameters;

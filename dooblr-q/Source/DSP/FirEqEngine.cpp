@@ -52,13 +52,13 @@ namespace dooblrq::dsp
         accumulator.assign ((size_t) numBins, {});
         fftScratch.assign ((size_t) fftSize * 2, 0.0f);
         crossfadeScratch.assign ((size_t) partitionSize, 0.0f);
+        kernelTime.assign ((size_t) longest, 0.0f);
+        current.assign ((size_t) (maxPartitions * numBins), {});
+        next.assign ((size_t) (maxPartitions * numBins), {});
 
         for (int ch = 0; ch < maxChannels; ++ch)
         {
             const auto c = (size_t) ch;
-            kernelTime[c].assign ((size_t) longest, 0.0f);
-            current[c].assign ((size_t) (maxPartitions * numBins), {});
-            next[c].assign ((size_t) (maxPartitions * numBins), {});
             history[c].assign ((size_t) (maxPartitions * numBins), {});
             inputWindow[c].assign ((size_t) fftSize, 0.0f);
             inputBlock[c].assign ((size_t) partitionSize, 0.0f);
@@ -73,11 +73,8 @@ namespace dooblrq::dsp
         mode = newMode;
         numPartitions = std::min (maxPartitions, kernelLength (mode, sampleRate) / partitionSize);
 
-        for (int ch = 0; ch < maxChannels; ++ch)
-        {
-            std::fill (current[(size_t) ch].begin(), current[(size_t) ch].end(), Complex {});
-            std::fill (kernelTime[(size_t) ch].begin(), kernelTime[(size_t) ch].end(), 0.0f);
-        }
+        std::fill (current.begin(), current.end(), Complex {});
+        std::fill (kernelTime.begin(), kernelTime.end(), 0.0f);
 
         reset();
     }
@@ -103,15 +100,12 @@ namespace dooblrq::dsp
         }
     }
 
-    void FirEqEngine::designKernel (int channel, const std::array<KernelBand, 6>& bands) noexcept
+    void FirEqEngine::designKernel (const std::array<KernelBand, 6>& bands) noexcept
     {
         const auto n = kernelLength (mode, sampleRate);
         const auto delay = kernelDelay (mode, sampleRate);
         auto& fft = mode == Mode::linear ? *linearFft : *naturalFft;
-        const auto side = channel == 1;
-
-        std::array<AnalogPrototype, 6> eq {}, region {};
-        std::array<bool, 6> useRegion {};
+        std::array<AnalogPrototype, 6> eq {};
 
         for (size_t b = 0; b < bands.size(); ++b)
         {
@@ -121,10 +115,6 @@ namespace dooblrq::dsp
                 continue;
 
             eq[b] = makeEqPrototype (band.type, band.q, band.gainDb);
-            useRegion[b] = side && supportsWidth (band.type) && std::abs (band.width - 1.0) > 1.0e-6;
-
-            if (useRegion[b])
-                region[b] = makeWidthRegionPrototype (band.type, band.q);
         }
 
         std::fill (designBuffer.begin(), designBuffer.begin() + 2 * n, 0.0f);
@@ -140,9 +130,6 @@ namespace dooblrq::dsp
                     continue;
 
                 h *= analogResponseAt (eq[b], bands[b].frequency, frequency);
-
-                if (useRegion[b])
-                    h *= 1.0 + (bands[b].width - 1.0) * analogResponseAt (region[b], bands[b].frequency, frequency);
             }
 
             if (mode == Mode::linear)
@@ -158,7 +145,7 @@ namespace dooblrq::dsp
 
         // Rotate the (circular) impulse response so time zero sits at the delay, then window.
         const auto fadeOut = n / 4;
-        auto& kernel = kernelTime[(size_t) channel];
+        auto& kernel = kernelTime;
 
         for (int i = 0; i < n; ++i)
         {
@@ -175,9 +162,9 @@ namespace dooblrq::dsp
         }
     }
 
-    void FirEqEngine::partitionKernel (int channel, std::vector<Complex>& destination) noexcept
+    void FirEqEngine::partitionKernel (std::vector<Complex>& destination) noexcept
     {
-        const auto& kernel = kernelTime[(size_t) channel];
+        const auto& kernel = kernelTime;
 
         for (int p = 0; p < numPartitions; ++p)
         {
@@ -193,20 +180,8 @@ namespace dooblrq::dsp
 
     void FirEqEngine::setTarget (const std::array<KernelBand, 6>& bands, bool immediate) noexcept
     {
-        auto sideDiffers = false;
-        for (const auto& band : bands)
-            sideDiffers = sideDiffers || (band.enabled && supportsWidth (band.type) && std::abs (band.width - 1.0) > 1.0e-6);
-
-        designKernel (0, bands);
-
-        if (sideDiffers)
-            designKernel (1, bands);
-        else
-            kernelTime[1] = kernelTime[0]; // same size: copies without allocating
-
-        auto& destination = immediate ? current : next;
-        partitionKernel (0, destination[0]);
-        partitionKernel (1, destination[1]);
+        designKernel (bands);
+        partitionKernel (immediate ? current : next);
         pendingCrossfade = ! immediate;
     }
 
@@ -276,11 +251,11 @@ namespace dooblrq::dsp
             for (int j = 0; j < numBins; ++j)
                 slot[j] = { fftScratch[(size_t) (2 * j)], fftScratch[(size_t) (2 * j + 1)] };
 
-            accumulate (current[c], ch, outputBlock[c]);
+            accumulate (current, ch, outputBlock[c]);
 
             if (pendingCrossfade)
             {
-                accumulate (next[c], ch, crossfadeScratch);
+                accumulate (next, ch, crossfadeScratch);
 
                 for (int i = 0; i < partitionSize; ++i)
                 {

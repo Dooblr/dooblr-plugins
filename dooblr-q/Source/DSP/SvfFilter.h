@@ -37,13 +37,6 @@ namespace dooblrq::dsp
         return supportsDynamics (type);
     }
 
-    /** Stereo width applies to the band's own region for types that shape a region
-        (bell: around the centre, shelves: the shelved side, tilt: above the pivot).
-        Cuts and notches remove content rather than shape it, so width does not apply. */
-    constexpr bool supportsWidth (FilterType type) noexcept
-    {
-        return supportsDynamics (type);
-    }
 
     struct SvfCoefficients
     {
@@ -72,12 +65,6 @@ namespace dooblrq::dsp
     SvfCoefficients makeDetectorCoefficients (FilterType type, double frequency, double q,
                                               double sampleRate) noexcept;
 
-    /** Side-signal region filter for stereo width: unity-peak band-pass (bell, Q of the
-        band), Butterworth low-pass (low shelf) or high-pass (high shelf, tilt) at the band
-        frequency. Width w turns the side signal S into S + (w - 1) * region(S). */
-    SvfCoefficients makeWidthRegionCoefficients (FilterType type, double frequency, double q,
-                                                 double sampleRate) noexcept;
-
     /** Analogue prototype of a band: H(s) = m0 + (m1 s + m2) / (s^2 + k s + 1) with
         s = j f / (frequency * scale). */
     struct AnalogPrototype
@@ -86,7 +73,6 @@ namespace dooblrq::dsp
     };
 
     AnalogPrototype makeEqPrototype (FilterType type, double q, double gainDb) noexcept;
-    AnalogPrototype makeWidthRegionPrototype (FilterType type, double q) noexcept;
 
     /** Response of the analogue prototype (no bilinear warping, so no cramping near
         Nyquist). This is the target of the Natural and Linear phase modes. */

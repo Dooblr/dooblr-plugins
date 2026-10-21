@@ -212,15 +212,8 @@ namespace dooblrq::ui
         return (double) juce::jmap (y, area.getY(), area.getBottom(), displayRangeDb, -displayRangeDb);
     }
 
-    double ResponseCurveComponent::qToOctaves (double q)
-    {
-        return 2.0 / std::log (2.0) * std::asinh (1.0 / (2.0 * q));
-    }
-
-    double ResponseCurveComponent::octavesToQ (double octaves)
-    {
-        return 1.0 / (2.0 * std::sinh (std::log (2.0) * octaves * 0.5));
-    }
+    double ResponseCurveComponent::qToOctaves (double q)       { return params::qToOctaves (q); }
+    double ResponseCurveComponent::octavesToQ (double octaves) { return params::octavesToQ (octaves); }
 
     bool ResponseCurveComponent::showsAnalogResponse() const
     {
@@ -530,15 +523,6 @@ namespace dooblrq::ui
                 g.drawEllipse (circle.expanded (3.0f), 1.2f);
             }
 
-            // Stereo width other than 100 % is shown under the handle.
-            if (dsp::supportsWidth (s.type) && ! juce::exactlyEqual (s.widthPercent, 100.0f))
-            {
-                g.setColour ((s.enabled ? colour : Palette::textMuted).withAlpha (0.85f));
-                g.setFont (juce::FontOptions (10.5f));
-                g.drawText ("W " + juce::String (juce::roundToInt (s.widthPercent)) + "%",
-                            circle.translated (0.0f, 20.0f).withSizeKeepingCentre (60.0f, 13.0f), juce::Justification::centred);
-            }
-
             // A tilt's handle sits on its 0 dB pivot, so show the amount next to it.
             if (s.type == dsp::FilterType::tilt)
             {
@@ -573,8 +557,8 @@ namespace dooblrq::ui
             if (widthDragSide != 0 || qDrag)
             {
                 const auto anchor = widthDragSide < 0 ? lower : (widthDragSide > 0 ? upper : handlePosition (selectedBand));
-                const auto text = juce::String (qToOctaves ((double) s.q), 2) + " oct  Q " + juce::String (s.q, 2);
-                const auto box = juce::Rectangle<float> (110.0f, 18.0f).withCentre (anchor.translated (0.0f, -22.0f));
+                const auto text = "Width " + juce::String (qToOctaves ((double) s.q), 2) + " oct (Q " + juce::String (s.q, 2) + ")";
+                const auto box = juce::Rectangle<float> (150.0f, 18.0f).withCentre (anchor.translated (0.0f, -22.0f));
                 g.setColour (Palette::panelRaised.withAlpha (0.92f));
                 g.fillRoundedRectangle (box, 4.0f);
                 g.setColour (Palette::textPrimary);

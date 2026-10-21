@@ -29,7 +29,6 @@ DooblrQAudioProcessor::DooblrQAudioProcessor()
         p.threshold       = pointer (params::bandId (b, params::band::threshold));
         p.attack          = pointer (params::bandId (b, params::band::attack));
         p.release         = pointer (params::bandId (b, params::band::release));
-        p.width           = pointer (params::bandId (b, params::band::width));
     }
 
     outputGainDb = pointer (params::outputGain);
@@ -61,7 +60,6 @@ dsp::BandSettings DooblrQAudioProcessor::getBandSettings (int bandIndex) const n
     s.thresholdDb     = load (p.threshold);
     s.attackMs        = load (p.attack);
     s.releaseMs       = load (p.release);
-    s.widthPercent    = load (p.width);
     return s;
 }
 
@@ -177,7 +175,6 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
         k.type = s.type;
         k.frequency = (double) s.frequency;
         k.q = (double) s.q;
-        k.width = (double) s.widthPercent * 0.01;
 
         // Dynamics: the band's detector runs on a copy of the input (see processFirBlock).
         // With stereo link off, the louder channel's gain is used for both.
@@ -193,7 +190,7 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
             return false;
         if (! a.enabled)
             return true;
-        return a.type == b.type && std::abs (a.gainDb - b.gainDb) < 0.01 && std::abs (a.width - b.width) < 1.0e-4
+        return a.type == b.type && std::abs (a.gainDb - b.gainDb) < 0.01
                && std::abs (std::log (a.frequency / b.frequency)) < 1.0e-5 && std::abs (std::log (a.q / b.q)) < 1.0e-5;
     };
 
@@ -254,28 +251,8 @@ void DooblrQAudioProcessor::processFirBlock (float* const* channels, int numChan
 
         dryRingPosition = (dryRingPosition + length) % ringSize;
 
-        // 4. FIR convolution, stereo as mid/side.
-        if (numChannels == 2)
-        {
-            for (int i = 0; i < length; ++i)
-            {
-                const auto l = chunk[0][i], r = chunk[1][i];
-                chunk[0][i] = 0.5f * (l + r);
-                chunk[1][i] = 0.5f * (l - r);
-            }
-        }
-
+        // 4. FIR convolution, per channel with the shared kernel.
         firEngine.process (chunk, numChannels, length);
-
-        if (numChannels == 2)
-        {
-            for (int i = 0; i < length; ++i)
-            {
-                const auto m = chunk[0][i], s = chunk[1][i];
-                chunk[0][i] = m + s;
-                chunk[1][i] = m - s;
-            }
-        }
 
         if (outputDry)
             for (int ch = 0; ch < numChannels; ++ch)
@@ -490,9 +467,19 @@ void DooblrQAudioProcessor::setStateInformation (const void* data, int sizeInByt
 
     auto state = juce::ValueTree::fromXml (*xml);
 
-    // Parameters missing from the saved state (added in a later version, e.g. per-band width
-    // and phase mode in 0.4.0) are reset to their defaults rather than keeping whatever
-    // this instance had before, so an old session sounds the way it was saved.
+    // Saved parameters this version does not have (e.g. the per-band stereo bN_width that
+    // only existed in 0.4.0) are dropped, so they are neither applied nor saved again.
+    for (int i = state.getNumChildren(); --i >= 0;)
+    {
+        const auto child = state.getChild (i);
+
+        if (child.hasType ("PARAM") && parameters.getParameter (child.getProperty ("id").toString()) == nullptr)
+            state.removeChild (i, nullptr);
+    }
+
+    // Parameters missing from the saved state (added in a later version, e.g. phase mode in
+    // 0.4.0) are reset to their defaults rather than keeping whatever this instance had
+    // before, so an old session sounds the way it was saved.
     for (auto* parameter : getParameters())
     {
         if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
