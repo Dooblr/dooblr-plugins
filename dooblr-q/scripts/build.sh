@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 #
-# Configure and build the dooblr-q VST3, optionally run the smoke tests, copy the
-# built bundle into the project root, and print the location of the plug-in.
+# Configure and build the dooblr-q VST3, run the smoke tests, and install the
+# built bundle into the VST3 plug-in folder (after the tests pass).
 #
 # Environment variables:
 #   BUILD_DIR        build directory (default: <repo>/build)
 #   CONFIG           CMake configuration (default: Release)
 #   RUN_TESTS        1 to build and run the smoke tests, 0 to skip (default: 1)
-#   COPY_TO_PROJECT  1 to copy the bundle to <repo>/dooblr-q.vst3, 0 to skip (default: 1)
+#   INSTALL_VST3     1 to install the bundle into the VST3 folder after a successful build
+#                    and test run, 0 to skip (default: 1)
+#   INSTALL_VST3_DIR VST3 folder to install into. Default: /Library/Audio/Plug-Ins/VST3 if
+#                    dooblr-q.vst3 is already installed there, otherwise
+#                    ~/Library/Audio/Plug-Ins/VST3. Never uses sudo.
+#   COPY_TO_PROJECT  1 to also copy the bundle to <repo>/dooblr-q.vst3 (default: 0)
 #   JOBS             parallel build jobs (default: number of CPUs)
 #   CMAKE_GENERATOR  honoured by CMake itself; defaults to Ninja when available,
 #                    otherwise CMake's platform default (Unix Makefiles on macOS/Linux).
@@ -18,7 +23,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD_DIR="${BUILD_DIR:-"$ROOT_DIR/build"}"
 CONFIG="${CONFIG:-Release}"
 RUN_TESTS="${RUN_TESTS:-1}"
-COPY_TO_PROJECT="${COPY_TO_PROJECT:-1}"
+INSTALL_VST3="${INSTALL_VST3:-1}"
+COPY_TO_PROJECT="${COPY_TO_PROJECT:-0}"
 BUNDLE_NAME="dooblr-q.vst3"
 
 if [[ -z "${JOBS:-}" ]]; then
@@ -74,11 +80,24 @@ echo
 echo "VST3 built successfully:"
 echo "  $artefact"
 
-if [[ "$COPY_TO_PROJECT" == "1" ]]; then
-    destination="$ROOT_DIR/$BUNDLE_NAME"
-    echo "==> Copying to $destination"
+# Replaces <dir>/dooblr-q.vst3 with the freshly built bundle and verifies it.
+# Only that one bundle is touched; nothing else in <dir> is modified.
+deliver_bundle() {
+    local dir="$1"
+    local destination="$dir/$BUNDLE_NAME"
 
-    # Replace only our own previous copy (a directory with this exact bundle name).
+    if [[ ! -d "$dir" ]]; then
+        mkdir -p "$dir"
+    fi
+
+    if [[ ! -w "$dir" ]]; then
+        echo "error: $dir is not writable without elevated permissions; not installing." >&2
+        echo "       Choose another folder with INSTALL_VST3_DIR=... or install manually." >&2
+        exit 1
+    fi
+
+    echo "==> Installing to $destination"
+
     if [[ -e "$destination" ]]; then
         rm -rf -- "$destination"
     fi
@@ -89,11 +108,45 @@ if [[ "$COPY_TO_PROJECT" == "1" ]]; then
         cp -R "$artefact" "$destination"
     fi
 
-    if command -v codesign >/dev/null 2>&1; then
-        codesign --verify --deep --strict "$destination"
-        echo "  signature verified (codesign --verify --deep --strict)"
+    if ! diff -r -q "$artefact" "$destination" >/dev/null; then
+        echo "error: $destination differs from the build output after copying" >&2
+        exit 1
     fi
 
-    echo "Copied VST3:"
+    if command -v codesign >/dev/null 2>&1; then
+        codesign --verify --deep --strict "$destination"
+        echo "  identical to build output; signature verified (codesign --verify --deep --strict)"
+    else
+        echo "  identical to build output"
+    fi
+
     echo "  $destination"
+}
+
+if [[ "$INSTALL_VST3" == "1" ]]; then
+    system_vst3_dir="/Library/Audio/Plug-Ins/VST3"
+    user_vst3_dir="$HOME/Library/Audio/Plug-Ins/VST3"
+
+    if [[ -z "${INSTALL_VST3_DIR:-}" ]]; then
+        # Update an existing system-wide install in place rather than creating a
+        # second copy that hosts would scan as a duplicate.
+        if [[ -d "$system_vst3_dir/$BUNDLE_NAME" ]]; then
+            INSTALL_VST3_DIR="$system_vst3_dir"
+        else
+            INSTALL_VST3_DIR="$user_vst3_dir"
+        fi
+    fi
+
+    for other in "$system_vst3_dir" "$user_vst3_dir"; do
+        if [[ "$other" != "$INSTALL_VST3_DIR" && -d "$other/$BUNDLE_NAME" ]]; then
+            echo "warning: another copy exists at $other/$BUNDLE_NAME; hosts may see both." >&2
+        fi
+    done
+
+    deliver_bundle "$INSTALL_VST3_DIR"
+    echo "Rescan plug-ins in your DAW (or restart it) to load the new build."
+fi
+
+if [[ "$COPY_TO_PROJECT" == "1" ]]; then
+    deliver_bundle "$ROOT_DIR"
 fi

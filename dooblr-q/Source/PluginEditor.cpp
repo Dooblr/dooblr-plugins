@@ -48,6 +48,7 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     outputAttachment = std::make_unique<SliderAttachment> (state, params::outputGain, outputSlider);
     stereoLinkAttachment = std::make_unique<ButtonAttachment> (state, params::stereoLink, stereoLinkButton);
 
+    responseCurve.setComponentID ("responseCurve");
     responseCurve.onBandSelected = [this] (int bandIndex) { selectBand (bandIndex); };
     addAndMakeVisible (responseCurve);
 

@@ -12,6 +12,7 @@
 #include <limits>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace params = dooblrq::params;
@@ -653,6 +654,192 @@ namespace
         }
     }
 
+    //==============================================================================
+    juce::MouseEvent makeMouseEvent (juce::Component& component, juce::Point<float> position,
+                                     juce::Point<float> downPosition, int clicks, bool dragged)
+    {
+        using Source = juce::MouseInputSource;
+        const auto now = juce::Time::getCurrentTime();
+        return { juce::Desktop::getInstance().getMainMouseSource(), position,
+                 juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier),
+                 Source::defaultPressure, Source::defaultOrientation, Source::defaultRotation,
+                 Source::defaultTiltX, Source::defaultTiltY,
+                 &component, &component, now, downPosition, now, clicks, dragged };
+    }
+
+    /** Simulates a mouse drag through the component's own mouse handlers. */
+    void simulateDrag (juce::Component& component, juce::Point<float> from, juce::Point<float> to)
+    {
+        component.mouseDown (makeMouseEvent (component, from, from, 1, false));
+
+        constexpr int steps = 12;
+        for (int i = 1; i <= steps; ++i)
+            component.mouseDrag (makeMouseEvent (component, from + (to - from) * ((float) i / (float) steps), from, 1, true));
+
+        component.mouseUp (makeMouseEvent (component, to, from, 1, true));
+    }
+
+    void simulateDoubleClick (juce::Component& component, juce::Point<float> position)
+    {
+        component.mouseDoubleClick (makeMouseEvent (component, position, position, 2, false));
+    }
+
+    /** Mean y of the pixels in a column that match the curve colour, or -1 if none. */
+    float findCurveY (const juce::Image& image, int x, juce::Colour curveColour)
+    {
+        const juce::Image::BitmapData pixels (image, juce::Image::BitmapData::readOnly);
+        float sumY = 0.0f, sumWeight = 0.0f;
+
+        for (int y = 0; y < image.getHeight(); ++y)
+        {
+            const auto p = pixels.getPixelColour (x, y);
+            const auto distance = std::abs (p.getRed() - curveColour.getRed())
+                                + std::abs (p.getGreen() - curveColour.getGreen())
+                                + std::abs (p.getBlue() - curveColour.getBlue());
+
+            if (distance < 90)
+            {
+                const auto weight = (float) (90 - distance);
+                sumY += weight * ((float) y + 0.5f);
+                sumWeight += weight;
+            }
+        }
+
+        return sumWeight > 0.0f ? sumY / sumWeight : -1.0f;
+    }
+
+    void saveSnapshot (const juce::Image& image, const juce::String& suffix)
+    {
+        const auto base = juce::SystemStats::getEnvironmentVariable ("DOOBLRQ_EDITOR_SNAPSHOT", {});
+
+        if (base.isEmpty())
+            return;
+
+        const juce::File baseFile (base);
+        auto file = baseFile.getSiblingFile (baseFile.getFileNameWithoutExtension() + suffix + ".png");
+        file.deleteFile();
+        juce::FileOutputStream stream (file);
+        juce::PNGImageFormat png;
+        const auto written = stream.openedOk() && png.writeImageToStream (image, stream);
+        check (written, "snapshot written");
+
+        if (written)
+            note ("snapshot: " + file.getFullPathName().toStdString());
+    }
+
+    void testCurveFollowsHandles()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        constexpr double sampleRate = 48000.0;
+
+        DooblrQAudioProcessor processor;
+        prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        editor->setSize (1300, 760);
+        auto* curve = dynamic_cast<Curve*> (editor->findChildWithID ("responseCurve"));
+        check (curve != nullptr, "response curve component exists");
+
+        if (curve == nullptr)
+            return;
+
+        constexpr int bell = 4;   // band 5: Bell, 4 kHz by default
+        constexpr int shelf = 1;  // band 2: Low Shelf, 120 Hz by default
+        const auto bandSettings = [&] (int b) { return processor.getBandSettings (b); };
+
+        check (! bandSettings (bell).enabled && ! bandSettings (shelf).enabled, "bands start disabled");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-drag-before");
+
+        // Drag the disabled bell up to +9 dB at 5 kHz.
+        const auto bellTarget = juce::Point<float> (curve->frequencyToX (5000.0), curve->decibelsToY (9.0));
+        simulateDrag (*curve, curve->handlePosition (bell), bellTarget);
+
+        check (bandSettings (bell).enabled, "dragging a disabled bell handle enables the band");
+        check (std::abs (bandSettings (bell).gainDb - 9.0f) < 0.1f, "bell gain follows the drag (+9 dB)");
+        check (std::abs (bandSettings (bell).frequency - 5000.0f) < 25.0f, "bell frequency follows the drag (5 kHz)");
+        check (curve->handlePosition (bell).getDistanceFrom (bellTarget) < 0.5f, "bell handle ends at the drop point");
+
+        // Drag the disabled low shelf down so its handle (the shelf midpoint) sits at -6 dB at 150 Hz.
+        const auto shelfTarget = juce::Point<float> (curve->frequencyToX (150.0), curve->decibelsToY (-6.0));
+        simulateDrag (*curve, curve->handlePosition (shelf), shelfTarget);
+
+        check (bandSettings (shelf).enabled, "dragging a disabled shelf handle enables the band");
+        check (std::abs (bandSettings (shelf).gainDb + 12.0f) < 0.15f, "shelf gain is twice the handle level (-12 dB)");
+        check (curve->handlePosition (shelf).getDistanceFrom (shelfTarget) < 0.5f, "shelf handle ends at the drop point");
+
+        // The drawn (combined) curve passes through each handle.
+        const auto bellCurveDb  = curve->responseDecibelsAt (bandSettings (bell).frequency, false);
+        const auto shelfCurveDb = curve->responseDecibelsAt (bandSettings (shelf).frequency, false);
+        note ("curve at bell handle: " + format (bellCurveDb) + " dB (handle +9.00 dB), curve at shelf handle: " + format (shelfCurveDb) + " dB (handle -6.00 dB)");
+        check (std::abs (bellCurveDb - 9.0) < 0.1, "curve level at the bell handle equals the handle level");
+        check (std::abs (shelfCurveDb + 6.0) < 0.1, "curve level at the shelf handle equals the handle level");
+
+        // Pixels: render and locate the curve just either side of each handle (the handle
+        // itself covers the line). For the symmetric bell and the shelf midpoint, the mean
+        // of the two sides is the line's height at the handle.
+        const auto image = curve->createComponentSnapshot (curve->getLocalBounds());
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-drag-after");
+
+        for (const auto band : { bell, shelf })
+        {
+            const auto handle = curve->handlePosition (band);
+            const auto x = juce::roundToInt (handle.x);
+            const auto left  = findCurveY (image, x - 12, dooblrq::ui::Palette::accent);
+            const auto right = findCurveY (image, x + 12, dooblrq::ui::Palette::accent);
+            const auto lineY = 0.5f * (left + right);
+            const auto expectedY = [curve] (int column)
+            {
+                return curve->decibelsToY (curve->responseDecibelsAt (curve->xToFrequency ((float) column + 0.5f), false));
+            };
+            const auto expectedLeft = expectedY (x - 12), expectedRight = expectedY (x + 12);
+
+            note ("band " + std::to_string (band + 1) + ": handle y " + format (handle.y, 1) + " px, drawn line y "
+                  + format (lineY, 1) + " px (left " + format (left, 1) + " vs computed " + format (expectedLeft, 1)
+                  + ", right " + format (right, 1) + " vs computed " + format (expectedRight, 1) + ")");
+            check (left >= 0.0f && right >= 0.0f, "curve pixels found beside band " + std::to_string (band + 1));
+            check (std::abs (left - expectedLeft) <= 1.5f && std::abs (right - expectedRight) <= 1.5f,
+                   "drawn pixels match the computed curve beside band " + std::to_string (band + 1) + " (within 1.5 px)");
+            check (std::abs (lineY - handle.y) <= 2.0f,
+                   "drawn curve passes through band " + std::to_string (band + 1) + "'s handle (within 2 px)");
+        }
+
+        // Cut and notch handles sit on the line at their corner/centre convention.
+        dsp::BandSettings cut;
+        cut.type = dsp::FilterType::lowCut;
+        cut.frequency = 100.0f;
+        cut.q = 0.707f;
+        check (std::abs (Curve::handleDecibels (cut, sampleRate) + 3.01) < 0.05, "low-cut handle sits at its -3 dB corner");
+
+        // The dynamic curve follows too: loud in-band audio pulls the live curve down.
+        setBand (processor, bell, params::band::dynamicsEnabled, 1.0f);
+        setBand (processor, bell, params::band::range, -12.0f);
+        setBand (processor, bell, params::band::threshold, -40.0f);
+        measureSineGainDb (processor, 5000.0, 0.5f, sampleRate, 0.3);
+        const auto dynamicGain = processor.getBandDynamicGainDb (bell);
+        const auto liveDb = curve->responseDecibelsAt (bandSettings (bell).frequency, true);
+        note ("dynamic: live gain " + format (dynamicGain) + " dB, live curve at bell " + format (liveDb) + " dB");
+        check (dynamicGain < -6.0f, "dynamic gain responds to the loud tone");
+        check (std::abs (liveDb - (9.0 + (double) dynamicGain)) < 0.15, "live curve = static gain + dynamic gain at the handle");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-drag-dynamic");
+
+        // Double-click toggles a band.
+        simulateDoubleClick (*curve, curve->handlePosition (bell));
+        check (! bandSettings (bell).enabled, "double-click turns the band off");
+        check (std::abs (curve->responseDecibelsAt (5000.0, false)) < 0.2, "a disabled band no longer bends the curve");
+        simulateDoubleClick (*curve, curve->handlePosition (bell));
+        check (bandSettings (bell).enabled, "double-click turns it back on");
+
+        // Changes from a non-message thread (host automation) flag a redraw.
+        curve->createComponentSnapshot (curve->getLocalBounds());
+        check (! curve->isRepaintPending(), "no redraw pending after painting");
+        std::thread automation ([&] { setBand (processor, bell, params::band::gain, 3.0f); });
+        automation.join();
+        check (curve->isRepaintPending(), "automation from another thread schedules a redraw");
+
+        processor.editorBeingDeleted (editor.get());
+        editor.reset();
+    }
+
     struct TestCase
     {
         const char* name;
@@ -677,6 +864,7 @@ int main()
         { "extra buffer channels / output-only",     testExtraBufferChannels },
         { "state save/restore",                      testStateRoundTrip },
         { "editor controls, paint, open/close",      testEditor },
+        { "curve follows dragged band handles",      testCurveFollowsHandles },
     };
 
     int failedTests = 0;

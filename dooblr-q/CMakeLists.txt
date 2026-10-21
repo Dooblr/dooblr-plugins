@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-q VERSION 0.2.0 LANGUAGES C CXX)
+project(dooblr-q VERSION 0.2.1 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -83,6 +83,17 @@ target_link_libraries(DooblrQ
 # can report it without hard-coding JUCE's output layout.
 if(TARGET DooblrQ_VST3)
     get_target_property(dooblrq_vst3_artefact DooblrQ_VST3 JUCE_PLUGIN_ARTEFACT_FILE)
+
+    # JUCE ad-hoc signs the bundle and only afterwards regenerates moduleinfo.json, which
+    # leaves a stale signature whenever that file changes (e.g. a version bump). Re-sign
+    # last so the bundle always passes `codesign --verify --deep --strict`.
+    if(APPLE AND dooblrq_vst3_artefact)
+        add_custom_command(TARGET DooblrQ_VST3 POST_BUILD
+            COMMAND codesign --force --sign - "${dooblrq_vst3_artefact}"
+            COMMAND codesign --verify --deep --strict "${dooblrq_vst3_artefact}"
+            VERBATIM)
+    endif()
+
     if(dooblrq_vst3_artefact)
         file(GENERATE
             OUTPUT  "${CMAKE_BINARY_DIR}/artefact-paths/DooblrQ_VST3-$<CONFIG>.txt"
