@@ -1,16 +1,22 @@
 #pragma once
 
+#include <array>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
-class OctaEQAudioProcessor final : public juce::AudioProcessor
+#include "DSP/DynamicEQBand.h"
+#include "Parameters.h"
+
+class DooblrQAudioProcessor final : public juce::AudioProcessor
 {
 public:
-    OctaEQAudioProcessor();
-    ~OctaEQAudioProcessor() override = default;
+    DooblrQAudioProcessor();
+    ~DooblrQAudioProcessor() override = default;
 
     //==============================================================================
     void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
     void releaseResources() override;
+    void reset() override;
 
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
 
@@ -42,22 +48,53 @@ public:
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    /** Identifiers of the serialised state, shared with the tests. */
-    static inline const juce::Identifier stateType { "OctaEQState" };
+    static inline const juce::Identifier stateType { "DooblrQState" };
     static inline const juce::Identifier stateVersionProperty { "stateVersion" };
-    static constexpr int currentStateVersion = 1;
 
-    /** Version found in the most recently restored state, or 0 if none has been restored. */
-    int getLastRestoredStateVersion() const noexcept { return lastRestoredStateVersion; }
+    //==============================================================================
+    juce::AudioProcessorValueTreeState& getParameterState() noexcept { return parameters; }
+
+    /** Live dynamic gain offset of a band in dB, for display. Lock-free. */
+    float getBandDynamicGainDb (int bandIndex) const noexcept;
+
+    /** Reads the current parameter values of a band (any thread). */
+    dooblrq::dsp::BandSettings getBandSettings (int bandIndex) const noexcept;
+
+    /** Sample rate for response analysis: the prepared rate, or 48 kHz before preparation. */
+    double getAnalysisSampleRate() const noexcept;
+
+    /** Coefficients are recomputed every this many samples. */
+    static constexpr int coefficientUpdateInterval = 16;
 
 private:
     static BusesProperties createBusesProperties();
+    void clearOutputOnlyChannels (juce::AudioBuffer<float>& buffer) const noexcept;
+    void updateBandSettings (bool snap) noexcept;
 
-    /** Pass-through: input samples are left untouched in place; any output channel
-        that has no matching input channel is silenced. Real-time safe. */
-    void passThrough (juce::AudioBuffer<float>& buffer) const noexcept;
+    struct BandParameterPointers
+    {
+        std::atomic<float>* enabled = nullptr;
+        std::atomic<float>* type = nullptr;
+        std::atomic<float>* frequency = nullptr;
+        std::atomic<float>* gain = nullptr;
+        std::atomic<float>* q = nullptr;
+        std::atomic<float>* dynamicsEnabled = nullptr;
+        std::atomic<float>* range = nullptr;
+        std::atomic<float>* threshold = nullptr;
+        std::atomic<float>* attack = nullptr;
+        std::atomic<float>* release = nullptr;
+    };
 
-    int lastRestoredStateVersion = 0;
+    juce::AudioProcessorValueTreeState parameters;
 
-    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (OctaEQAudioProcessor)
+    std::array<BandParameterPointers, dooblrq::params::numBands> bandParameters;
+    std::atomic<float>* outputGainDb = nullptr;
+    std::atomic<float>* stereoLink = nullptr;
+
+    std::array<dooblrq::dsp::DynamicEQBand, dooblrq::params::numBands> bands;
+    juce::SmoothedValue<float> outputGain { 1.0f };
+
+    std::atomic<double> preparedSampleRate { 0.0 };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrQAudioProcessor)
 };

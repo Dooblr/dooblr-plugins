@@ -1,0 +1,90 @@
+#pragma once
+
+#include <array>
+#include <atomic>
+
+#include <juce_audio_basics/juce_audio_basics.h>
+
+#include "SvfFilter.h"
+
+namespace dooblrq::dsp
+{
+    /** Plain values for one band, read from the parameters once per block. */
+    struct BandSettings
+    {
+        bool enabled = false;
+        FilterType type = FilterType::bell;
+        float frequency = 1000.0f;
+        float gainDb = 0.0f;
+        float q = 1.0f;
+        bool dynamicsEnabled = false;
+        float rangeDb = 0.0f;
+        float thresholdDb = -24.0f;
+        float attackMs = 10.0f;
+        float releaseMs = 120.0f;
+    };
+
+    /**
+        One EQ band with an optional dynamic gain section.
+
+        Signal path per channel: the band's input feeds a side-chain detector filter
+        (tuned to the band's frequency region) and a peak envelope follower with
+        attack/release ballistics. The detected level drives the band's gain:
+
+            effective gain = static gain + dynamic gain (clamped to +/- maxTotalGainDb)
+            dynamic gain   = sign(range) * min(|range|, slope * over-threshold)
+
+        where over-threshold uses a soft knee. The EQ filter itself is a TPT SVF whose
+        coefficients are recomputed for every sub-block passed to process().
+
+        Real-time safe: no allocation, locks or system calls after prepare().
+    */
+    class DynamicEQBand
+    {
+    public:
+        static constexpr int maxChannels = 2;
+
+        /** dB of gain change per dB above threshold (a 2:1 ratio-style law). */
+        static constexpr float dynamicSlope = 0.5f;
+        static constexpr float kneeWidthDb = 6.0f;
+        static constexpr float maxTotalGainDb = 30.0f;
+
+        /** Maps a detector level to the dynamic gain offset in dB. */
+        static float computeDynamicGainDb (float levelDb, float thresholdDb, float rangeDb) noexcept;
+
+        void prepare (double newSampleRate) noexcept;
+        void reset() noexcept;
+
+        /** Sets new targets; values are smoothed. If snap is true, jumps straight to them. */
+        void setSettings (const BandSettings& newSettings, bool snap = false) noexcept;
+
+        /** Processes [startSample, startSample + numSamples) in place. Coefficients are
+            computed once per call, so callers pass short sub-blocks (e.g. 16 samples). */
+        void process (float* const* channels, int numChannels, int startSample, int numSamples,
+                      bool stereoLinked) noexcept;
+
+        /** Current dynamic gain offset (dB), safe to read from any thread. */
+        float getDynamicGainDb() const noexcept { return dynamicGainForDisplay.load (std::memory_order_relaxed); }
+
+        /** True while the band is producing output (enabled or fading out). */
+        bool isActive() const noexcept { return active; }
+
+    private:
+        void updateBallistics() noexcept;
+        void resetFilterState() noexcept;
+
+        double sampleRate = 44100.0;
+        BandSettings settings;
+
+        juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> frequency { 1000.0f }, q { 1.0f };
+        juce::SmoothedValue<float> gainDb, rangeDb, thresholdDb, wet;
+
+        float attackCoefficient = 0.0f, releaseCoefficient = 0.0f;
+
+        std::array<SvfState, maxChannels> filterState {}, detectorState {};
+        std::array<float, maxChannels> envelope {}, dynamicGainDb {};
+
+        bool active = false;
+        std::atomic<float> dynamicGainForDisplay { 0.0f };
+    };
+}
