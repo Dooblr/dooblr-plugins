@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-q VERSION 0.2.1 LANGUAGES C CXX)
+project(dooblr-q VERSION 0.3.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -57,6 +57,7 @@ juce_add_plugin(DooblrQ
 target_sources(DooblrQ
     PRIVATE
         Source/DSP/SvfFilter.cpp
+        Source/Analysis/SpectrumAnalyzer.cpp
         Source/DSP/DynamicEQBand.cpp
         Source/Parameters.cpp
         Source/PluginProcessor.cpp
@@ -73,6 +74,7 @@ target_compile_definitions(DooblrQ
 target_link_libraries(DooblrQ
     PRIVATE
         juce::juce_audio_processors
+        juce::juce_dsp
         juce::juce_gui_basics
     PUBLIC
         juce::juce_recommended_config_flags

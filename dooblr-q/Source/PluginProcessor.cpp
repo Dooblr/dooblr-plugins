@@ -80,6 +80,14 @@ float DooblrQAudioProcessor::getBandDynamicGainDb (int bandIndex) const noexcept
     return bands[(size_t) bandIndex].getDynamicGainDb();
 }
 
+void DooblrQAudioProcessor::setAnalyzerRunning (bool shouldRun) noexcept
+{
+    if (shouldRun && ! analyzerRunning.load())
+        analyzerFifo.discardAll(); // drop audio left over from an earlier session
+
+    analyzerRunning.store (shouldRun, std::memory_order_relaxed);
+}
+
 double DooblrQAudioProcessor::getAnalysisSampleRate() const noexcept
 {
     const auto rate = preparedSampleRate.load();
@@ -153,6 +161,13 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     if (numChannels <= 0)
         return;
 
+    // Analyzer feed: a lock-free, allocation-free copy into the FIFO, only while an editor shows it.
+    const auto analyse = analyzerRunning.load (std::memory_order_relaxed);
+    const auto analysePre = analyse && getAnalyzerSource() == AnalyzerSource::preEq;
+
+    if (analysePre)
+        analyzerFifo.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
+
     updateBandSettings (false);
 
     const auto linked = stereoLink->load (std::memory_order_relaxed) >= 0.5f;
@@ -181,6 +196,9 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         for (int ch = 0; ch < numChannels; ++ch)
             juce::FloatVectorOperations::multiply (channels[ch], outputGain.getTargetValue(), numSamples);
     }
+
+    if (analyse && ! analysePre)
+        analyzerFifo.push (buffer.getArrayOfReadPointers(), numChannels, numSamples);
 }
 
 void DooblrQAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
@@ -188,6 +206,13 @@ void DooblrQAudioProcessor::processBlockBypassed (juce::AudioBuffer<float>& buff
     // Zero latency, so bypass is an exact pass-through of the input.
     juce::ignoreUnused (midiMessages);
     clearOutputOnlyChannels (buffer);
+
+    // Keep the analyzer moving while bypassed (input and output are identical here).
+    const auto numChannels = juce::jmin (getTotalNumInputChannels(), buffer.getNumChannels(),
+                                         dsp::DynamicEQBand::maxChannels);
+
+    if (analyzerRunning.load (std::memory_order_relaxed) && numChannels > 0 && buffer.getNumSamples() > 0)
+        analyzerFifo.push (buffer.getArrayOfReadPointers(), numChannels, buffer.getNumSamples());
 }
 
 //==============================================================================

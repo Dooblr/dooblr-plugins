@@ -25,10 +25,13 @@ public:
     void selectBand (int bandIndex);
     int getSelectedBand() const noexcept { return selectedBand; }
 
-    static constexpr int defaultWidth  = 960;
-    static constexpr int defaultHeight = 600;
-    static constexpr int minimumWidth  = 820;
-    static constexpr int minimumHeight = 540;
+    /** Refreshes the Freeze button and the "Averaging / Frozen: N s" readout (timer; public for tests). */
+    void updateAnalyzerControls();
+
+    static constexpr int defaultWidth  = 980;
+    static constexpr int defaultHeight = 640;
+    static constexpr int minimumWidth  = 860;
+    static constexpr int minimumHeight = 580;
     static constexpr int maximumWidth  = 2400;
     static constexpr int maximumHeight = 1400;
 
@@ -46,6 +49,7 @@ private:
     void timerCallback() override;
     void setUpKnob (Knob& knob, const juce::String& caption, const char* parameterSuffix);
     void updateBandIndicators();
+    void setUpAnalyzerControls();
 
     DooblrQAudioProcessor& audioProcessor;
     dooblrq::ui::DooblrLookAndFeel lookAndFeel;
@@ -56,6 +60,12 @@ private:
 
     dooblrq::ui::ResponseCurveComponent responseCurve;
 
+    // Analyzer toolbar (UI state kept in the processor, not saved with the plug-in state).
+    juce::ToggleButton spectrumButton { "Spectrum" }, peakButton { "Peak" };
+    juce::ComboBox sourceBox, tiltBox;
+    juce::TextButton freezeButton { "Freeze" }, clearButton { "Clear" };
+    juce::Label analyzerReadout;
+
     std::array<juce::TextButton, dooblrq::params::numBands> bandButtons;
 
     juce::ToggleButton enabledButton { "Band on" };
@@ -65,6 +75,7 @@ private:
     juce::ToggleButton dynamicsButton { "Dynamic" };
     Knob rangeKnob, thresholdKnob, attackKnob, releaseKnob;
 
+    juce::Rectangle<int> toolbarArea;
     juce::Rectangle<int> headerArea, controlsArea, eqSectionArea, dynamicsSectionArea;
     int selectedBand = 0;
 

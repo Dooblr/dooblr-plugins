@@ -19,15 +19,17 @@ namespace dooblrq::dsp
         highShelf,
         lowCut,
         highCut,
-        notch
+        notch,
+        tilt   // appended last: saved sessions store the type index, so the order is fixed
     };
 
-    inline constexpr int numFilterTypes = 6;
+    inline constexpr int numFilterTypes = 7;
 
     /** Dynamics are meaningful only for types that have a gain. */
     constexpr bool supportsDynamics (FilterType type) noexcept
     {
-        return type == FilterType::bell || type == FilterType::lowShelf || type == FilterType::highShelf;
+        return type == FilterType::bell || type == FilterType::lowShelf || type == FilterType::highShelf
+            || type == FilterType::tilt;
     }
 
     constexpr bool hasGain (FilterType type) noexcept
@@ -57,7 +59,8 @@ namespace dooblrq::dsp
                                         double gainDb, double sampleRate) noexcept;
 
     /** Unity-peak side-chain detector coefficients for a band: band-pass around bells
-        and notches, low-pass under a low shelf, high-pass above a high shelf. */
+        and notches, low-pass under a low shelf, high-pass above a high shelf, and
+        broadband (unfiltered) for a tilt, so a dynamic tilt follows the overall level. */
     SvfCoefficients makeDetectorCoefficients (FilterType type, double frequency, double q,
                                               double sampleRate) noexcept;
 

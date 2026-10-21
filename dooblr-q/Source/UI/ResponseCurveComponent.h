@@ -1,11 +1,14 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <functional>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "../DSP/DynamicEQBand.h"
+#include "../Parameters.h"
 
 class DooblrQAudioProcessor;
 
@@ -42,6 +45,10 @@ namespace dooblrq::ui
 
         static constexpr float displayRangeDb = 24.0f;
 
+        /** Analyzer level range mapped onto the plot height (top, bottom), in dBFS after tilt. */
+        static constexpr float spectrumTopDb = 0.0f;
+        static constexpr float spectrumBottomDb = -90.0f;
+
         //==============================================================================
         // Geometry and response queries (also used by the tests).
 
@@ -62,6 +69,12 @@ namespace dooblrq::ui
         /** Combined response (dB) of all enabled bands at a frequency, as drawn. */
         double responseDecibelsAt (double frequency, bool includeDynamics) const;
 
+        /** Pulls new audio from the processor's analyzer FIFO into the analyzer (called by the
+            timer; public so tests can drive it). Returns the number of new FFT frames. */
+        int updateAnalyzer();
+
+        float spectrumDbToY (double decibels) const;
+
         /** True if the curve needs redrawing (a parameter changed since the last paint). */
         bool isRepaintPending() const noexcept { return repaintPending.load(); }
 
@@ -69,6 +82,19 @@ namespace dooblrq::ui
         void timerCallback() override;
         void parameterValueChanged (int parameterIndex, float newValue) override;
         void parameterGestureChanged (int, bool) override {}
+
+        struct ResponseModel
+        {
+            std::array<dsp::SvfCoefficients, params::numBands> coefficients {};
+            std::array<bool, params::numBands> enabled {};
+            double sampleRate = 48000.0;
+
+            double decibelsAt (double frequency) const;
+        };
+
+        ResponseModel makeResponseModel (bool includeDynamics) const;
+        juce::Path makeSpectrumPath (const std::vector<float>& binDb, bool closed) const;
+        void drawSpectrum (juce::Graphics& g);
 
         int bandAt (juce::Point<float> position) const;
         bool anyDynamicsActive() const;
@@ -84,6 +110,7 @@ namespace dooblrq::ui
         int draggingBand = -1;
         bool dragEnabledBand = false;
         juce::Point<float> dragOffset;
+        float dragStartGainDb = 0.0f, dragStartY = 0.0f; // for the relative tilt-amount drag
 
         std::atomic<bool> repaintPending { true };
 

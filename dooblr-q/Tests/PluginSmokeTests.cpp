@@ -4,6 +4,7 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <functional>
@@ -840,6 +841,647 @@ namespace
         editor.reset();
     }
 
+    //==============================================================================
+    // Spectrum analyzer
+    using Analyzer = dooblrq::analysis::SpectrumAnalyzer;
+    using AnalyzerFifo = dooblrq::analysis::AnalyzerFifo;
+
+    std::vector<float> makeSine (double frequency, float amplitude, double sampleRate, int numSamples)
+    {
+        std::vector<float> samples ((size_t) numSamples);
+
+        for (int i = 0; i < numSamples; ++i)
+            samples[(size_t) i] = amplitude * (float) std::sin (2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate);
+
+        return samples;
+    }
+
+    int peakBin (const std::vector<float>& binDb)
+    {
+        return (int) std::distance (binDb.begin(), std::max_element (binDb.begin() + 1, binDb.end()));
+    }
+
+    float meanDb (const std::vector<float>& binDb, double sampleRate, double low, double high)
+    {
+        double sum = 0.0;
+        int count = 0;
+
+        for (int bin = 1; bin < (int) binDb.size(); ++bin)
+        {
+            const auto f = bin * sampleRate / Analyzer::fftSize;
+
+            if (f >= low && f <= high)
+            {
+                sum += (double) binDb[(size_t) bin];
+                ++count;
+            }
+        }
+
+        return count > 0 ? (float) (sum / count) : Analyzer::floorDb;
+    }
+
+    bool allFiniteValues (const std::vector<float>& values)
+    {
+        return std::all_of (values.begin(), values.end(), [] (float v) { return std::isfinite (v); });
+    }
+
+    void testSpectrumAnalyzerCore()
+    {
+        constexpr double sampleRate = 48000.0;
+        const auto binWidth = sampleRate / Analyzer::fftSize;
+
+        // Calibration: a sine of peak amplitude A reads 20 log10 A at its bin.
+        {
+            Analyzer analyzer;
+            analyzer.setSampleRate (sampleRate);
+            const auto onBin = 85.0 * binWidth; // 996.09 Hz, exactly on bin 85
+            const auto sine = makeSine (onBin, 0.5f, sampleRate, 48000);
+            const auto frames = analyzer.pushSamples (sine.data(), (int) sine.size());
+            const auto& latest = analyzer.getLatestFrameDb();
+            note ("on-bin sine " + format (onBin) + " Hz, A = 0.5 (-6.02 dBFS): bin " + std::to_string (peakBin (latest))
+                  + " reads " + format (latest[85], 3) + " dBFS; " + std::to_string (frames) + " frames from 1 s");
+            check (frames == (48000 - Analyzer::fftSize) / Analyzer::hopSize + 1, "75% overlap: one frame per 1024 samples after the first 4096");
+            check (peakBin (latest) == 85, "on-bin sine peaks in bin 85");
+            check (std::abs (latest[85] + 6.0206f) < 0.05f, "on-bin sine reads -6.02 dBFS (within 0.05 dB)");
+
+            Analyzer kHz;
+            kHz.setSampleRate (sampleRate);
+            const auto tone = makeSine (1000.0, 1.0f, sampleRate, 48000);
+            kHz.pushSamples (tone.data(), (int) tone.size());
+            const auto& db = kHz.getLatestFrameDb();
+            const auto bin = peakBin (db);
+            note ("1 kHz full-scale sine: peak bin " + std::to_string (bin) + " (" + format (bin * binWidth) + " Hz), "
+                  + format (db[(size_t) bin], 3) + " dBFS; display level at 1 kHz "
+                  + format (Analyzer::levelAt (db, 1000.0, sampleRate, 1.0 / 12.0), 3) + " dBFS");
+            check (bin == 85, "1 kHz lands in bin 85 (nearest to 1000 / 11.72 = 85.3)");
+            check (db[(size_t) bin] <= 0.05f && db[(size_t) bin] > -1.5f, "1 kHz full-scale reads 0 dBFS minus Hann scalloping (< 1.42 dB)");
+            check (Analyzer::levelAt (db, 1000.0, sampleRate, 1.0 / 12.0) > -1.5f, "display level at 1 kHz shows the peak");
+            check (meanDb (db, sampleRate, 3000.0, 20000.0) < -90.0f, "sidelobes far from the tone stay below -90 dBFS");
+        }
+
+        // Ballistics: instant attack, 36 dB/s release.
+        {
+            Analyzer analyzer;
+            analyzer.setSampleRate (sampleRate);
+            const auto tone = makeSine (85.0 * binWidth, 0.5f, sampleRate, 48000);
+            analyzer.pushSamples (tone.data(), (int) tone.size());
+            const std::vector<float> silence (24000, 0.0f);
+            analyzer.pushSamples (silence.data(), (int) silence.size());
+            const auto live = analyzer.getLiveDb()[85];
+            note ("live level 0.5 s after the tone stops: " + format (live, 1) + " dBFS (latest frame "
+                  + format (analyzer.getLatestFrameDb()[85], 1) + ")");
+            check (live < -15.0f && live > -35.0f, "live display decays at the release rate after the tone stops");
+        }
+
+        // White noise is flat; silence reads the floor with no NaN/Inf.
+        {
+            Analyzer analyzer;
+            analyzer.setSampleRate (sampleRate);
+            std::vector<float> noise (48000 * 10);
+            juce::Random random (42);
+            for (auto& v : noise)
+                v = random.nextFloat() * 2.0f - 1.0f;
+            analyzer.pushSamples (noise.data(), (int) noise.size());
+            const auto& average = analyzer.getAverageDb();
+            const auto low = meanDb (average, sampleRate, 100.0, 1000.0);
+            const auto mid = meanDb (average, sampleRate, 1000.0, 5000.0);
+            const auto high = meanDb (average, sampleRate, 5000.0, 20000.0);
+            note ("white noise average: 100-1k " + format (low) + ", 1k-5k " + format (mid) + ", 5k-20k " + format (high) + " dBFS/bin");
+            check (std::abs (low - high) < 1.0f && std::abs (mid - high) < 1.0f, "white noise reads flat (within 1 dB)");
+            check (allFiniteValues (average) && allFiniteValues (analyzer.getLiveDb()), "noise levels are finite");
+
+            Analyzer quiet;
+            quiet.setSampleRate (sampleRate);
+            const std::vector<float> silence (48000, 0.0f);
+            quiet.pushSamples (silence.data(), (int) silence.size());
+            const auto atFloor = [] (const std::vector<float>& v)
+            {
+                return std::all_of (v.begin(), v.end(), [] (float x) { return juce::exactlyEqual (x, Analyzer::floorDb); });
+            };
+            check (atFloor (quiet.getLatestFrameDb()) && atFloor (quiet.getLiveDb()) && atFloor (quiet.getAverageDb())
+                       && atFloor (quiet.getPeakDb()),
+                   "silence reads exactly the floor (-120 dBFS) everywhere, no NaN/Inf");
+        }
+
+        // FIFO: never blocks, bounded, drops (and counts) the overflow; variable blocks lose nothing.
+        {
+            AnalyzerFifo fifo;
+            std::vector<float> left (8192, 0.25f), right (8192, 0.75f);
+            const float* channels[] { left.data(), right.data() };
+            juce::Random random (7);
+            juce::int64 pushed = 0;
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+
+            while (pushed < 200000)
+            {
+                const auto n = 1 + random.nextInt (8192);
+                fifo.push (channels, 2, n);
+                pushed += n;
+            }
+
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+            note ("pushed " + std::to_string (pushed) + " samples with no consumer in " + format (elapsed, 2) + " ms: "
+                  + std::to_string (fifo.getNumReady()) + " buffered, " + std::to_string (fifo.getDroppedSamples()) + " dropped");
+            check (fifo.getNumReady() == AnalyzerFifo::capacity - 1 || fifo.getNumReady() == AnalyzerFifo::capacity,
+                   "a full FIFO stays bounded at its capacity");
+            check (fifo.getDroppedSamples() == pushed - fifo.getNumReady(), "overflow is dropped and counted exactly");
+
+            std::vector<float> out (64);
+            check (fifo.pop (out.data(), 64) == 64 && juce::exactlyEqual (out[0], 0.5f), "FIFO stores the mono average of the channels");
+
+            Analyzer analyzer;
+            analyzer.setSampleRate (sampleRate);
+            AnalyzerFifo streaming;
+            juce::int64 total = 0;
+            int frames = 0;
+            const auto sine = makeSine (1000.0, 0.5f, sampleRate, 8192);
+
+            for (int block = 0; block < 400; ++block)
+            {
+                const auto n = random.nextInt (4097); // 0..4096, including empty blocks
+                const float* mono[] { sine.data() };
+                streaming.push (mono, 1, n);
+                total += n;
+
+                if (block % 3 == 0)
+                    frames += analyzer.pull (streaming);
+            }
+
+            frames += analyzer.pull (streaming);
+            const auto expected = total >= Analyzer::fftSize ? (int) ((total - Analyzer::fftSize) / Analyzer::hopSize + 1) : 0;
+            note ("variable blocks: " + std::to_string (total) + " samples, " + std::to_string (frames) + " frames, "
+                  + std::to_string (streaming.getDroppedSamples()) + " dropped");
+            check (streaming.getDroppedSamples() == 0 && frames == expected, "variable block sizes with a regular consumer lose nothing");
+        }
+
+        // Accumulation, freeze, unfreeze and clear.
+        {
+            Analyzer analyzer;
+            analyzer.setSampleRate (sampleRate);
+            const auto lowTone = makeSine (300.0, 0.5f, sampleRate, 96000);
+            const auto highTone = makeSine (5000.0, 0.5f, sampleRate, 96000);
+            analyzer.pushSamples (lowTone.data(), (int) lowTone.size());
+            analyzer.pushSamples (highTone.data(), (int) highTone.size());
+
+            const auto average = analyzer.getAverageDb();
+            const auto lowLevel  = Analyzer::levelAt (average, 300.0, sampleRate, 1.0 / 12.0);
+            const auto highLevel = Analyzer::levelAt (average, 5000.0, sampleRate, 1.0 / 12.0);
+            const auto between   = Analyzer::levelAt (average, 1500.0, sampleRate, 1.0 / 12.0);
+            const auto liveLow   = Analyzer::levelAt (analyzer.getLatestFrameDb(), 300.0, sampleRate, 1.0 / 12.0);
+            note ("two tones in sequence (2 s each): average at 300 Hz " + format (lowLevel) + ", 5 kHz " + format (highLevel)
+                  + ", 1.5 kHz " + format (between) + " dBFS; latest frame at 300 Hz " + format (liveLow) + " dBFS; "
+                  + format (analyzer.getAccumulatedSeconds()) + " s accumulated");
+            check (lowLevel > -14.0f && highLevel > -14.0f, "the long-term average contains both tones");
+            check (between < -60.0f, "the average stays low between the tones");
+            check (liveLow < -60.0f, "the latest frame only shows the current tone");
+            check (std::abs (analyzer.getAccumulatedSeconds() - (double) analyzer.getAccumulatedFrames() * Analyzer::hopSize / sampleRate) < 1.0e-9
+                       && analyzer.getAccumulatedSeconds() > 3.5,
+                   "accumulated time counts the frames (hop 1024)");
+
+            analyzer.freeze();
+            const auto frozen = analyzer.getFrozenAverageDb();
+            const auto frozenPeak = analyzer.getFrozenPeakDb();
+            const auto frozenSeconds = analyzer.getFrozenSeconds();
+            check (analyzer.isFrozen() && frozen == average, "freeze captures the current average");
+
+            const auto other = makeSine (9000.0, 0.9f, sampleRate, 48000);
+            analyzer.pushSamples (other.data(), (int) other.size());
+            check (analyzer.getFrozenAverageDb() == frozen && analyzer.getFrozenPeakDb() == frozenPeak
+                       && juce::exactlyEqual (analyzer.getFrozenSeconds(), frozenSeconds),
+                   "the frozen capture is unaffected by later input");
+            check (Analyzer::levelAt (analyzer.getLiveDb(), 9000.0, sampleRate, 1.0 / 12.0) > -3.0f,
+                   "the live spectrum keeps moving while frozen");
+
+            analyzer.unfreeze();
+            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0, "unfreeze hides the capture and restarts accumulation");
+
+            analyzer.pushSamples (other.data(), (int) other.size());
+            analyzer.freeze();
+            analyzer.clear();
+            const auto floorOnly = [] (const std::vector<float>& v)
+            {
+                return std::all_of (v.begin(), v.end(), [] (float x) { return juce::exactlyEqual (x, Analyzer::floorDb); });
+            };
+            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getFrozenAverageDb())
+                       && floorOnly (analyzer.getAverageDb()) && floorOnly (analyzer.getPeakDb()),
+                   "clear resets the accumulation and the frozen capture");
+
+            analyzer.pushSamples (other.data(), (int) other.size());
+            analyzer.setSampleRate (44100.0);
+            check (analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getLiveDb()), "a sample-rate change resets the analysis");
+        }
+    }
+
+    void configureBusyEq (DooblrQAudioProcessor& processor)
+    {
+        configureDynamicBand (processor, -9.0f);
+        setBand (processor, 0, params::band::enabled, 1.0f);
+        setBand (processor, 5, params::band::enabled, 1.0f);
+        setBand (processor, 5, params::band::gain, 4.0f);
+        setParameter (processor, params::outputGain, -2.0f);
+    }
+
+    void testAnalyzerIsTransparent()
+    {
+        constexpr double sampleRate = 48000.0;
+        const std::vector<int> blocks { 512, 17, 1024, 3, 4096, 160, 0, 777 };
+
+        juce::AudioBuffer<float> input (2, 48000 * 3);
+        fillWithNoise (input, 99, 0.6f);
+
+        const auto render = [&] (bool analyzerOn, DooblrQAudioProcessor::AnalyzerSource source, juce::int64& fed)
+        {
+            DooblrQAudioProcessor processor;
+            configureBusyEq (processor);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 4096);
+            processor.setAnalyzerSource (source);
+            processor.setAnalyzerRunning (analyzerOn);
+
+            juce::AudioBuffer<float> buffer (input);
+            processInBlocks (processor, buffer, blocks);
+            fed = processor.getAnalyzerFifo().getNumReady() + processor.getAnalyzerFifo().getDroppedSamples();
+            return buffer;
+        };
+
+        juce::int64 fedOff = 0, fedPost = 0, fedPre = 0;
+        const auto off  = render (false, DooblrQAudioProcessor::AnalyzerSource::postEq, fedOff);
+        const auto post = render (true, DooblrQAudioProcessor::AnalyzerSource::postEq, fedPost);
+        const auto pre  = render (true, DooblrQAudioProcessor::AnalyzerSource::preEq, fedPre);
+
+        note ("samples fed to the analyzer FIFO: off " + std::to_string (fedOff) + ", post " + std::to_string (fedPost)
+              + ", pre " + std::to_string (fedPre));
+        check (fedOff == 0, "nothing is pushed while no editor shows the analyzer");
+        check (fedPost == input.getNumSamples() && fedPre == input.getNumSamples(), "every processed sample reaches the FIFO while running");
+        check (bitIdentical (off, post, 2), "processBlock output is bit-identical with the post-EQ analyzer on vs off");
+        check (bitIdentical (off, pre, 2), "processBlock output is bit-identical with the pre-EQ analyzer on vs off");
+
+        // Pre vs post: output gain shows up only in the post-EQ analysis.
+        const auto analyse = [&] (DooblrQAudioProcessor::AnalyzerSource source)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::outputGain, -12.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            processor.setAnalyzerSource (source);
+            processor.setAnalyzerRunning (true);
+            Analyzer analyzer;
+            analyzer.setSampleRate (sampleRate);
+            juce::AudioBuffer<float> buffer (input);
+
+            for (int start = 0; start < buffer.getNumSamples(); start += 8192)
+            {
+                juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, start, std::min (8192, buffer.getNumSamples() - start));
+                processInBlocks (processor, view, { 512 });
+                analyzer.pull (processor.getAnalyzerFifo());
+            }
+
+            return meanDb (analyzer.getAverageDb(), sampleRate, 200.0, 10000.0);
+        };
+
+        const auto preLevel = analyse (DooblrQAudioProcessor::AnalyzerSource::preEq);
+        const auto postLevel = analyse (DooblrQAudioProcessor::AnalyzerSource::postEq);
+        note ("noise through -12 dB output gain: pre " + format (preLevel) + ", post " + format (postLevel) + " dBFS/bin");
+        check (std::abs ((preLevel - postLevel) - 12.0f) < 0.2f, "post-EQ analysis includes the output gain, pre-EQ does not");
+    }
+
+    //==============================================================================
+    // Tilt band
+    void testTilt()
+    {
+        constexpr double sampleRate = 48000.0;
+        const auto tiltDb = [] (double frequency, double gain, double q)
+        {
+            const auto c = dsp::makeEqCoefficients (dsp::FilterType::tilt, 1000.0, q, gain, sampleRate);
+            return juce::Decibels::gainToDecibels (dsp::magnitudeAt (c, frequency, sampleRate), -200.0);
+        };
+
+        check (params::filterTypeNames().size() == dsp::numFilterTypes && params::filterTypeNames()[6] == "Tilt"
+                   && (int) dsp::FilterType::tilt == 6,
+               "Tilt is appended as type index 6");
+
+        note ("display math, +6 dB tilt at 1 kHz, Q 0.707: 20 Hz " + format (tiltDb (20.0, 6.0, 0.707), 3) + ", 1 kHz "
+              + format (tiltDb (1000.0, 6.0, 0.707), 3) + ", 20 kHz " + format (tiltDb (20000.0, 6.0, 0.707), 3) + " dB");
+        check (std::abs (tiltDb (20.0, 6.0, 0.707) + 3.0) < 0.05, "+6 dB tilt: -3 dB at 20 Hz (display math)");
+        check (std::abs (tiltDb (1000.0, 6.0, 0.707)) < 0.001, "+6 dB tilt: 0 dB at the pivot (display math)");
+        check (std::abs (tiltDb (20000.0, 6.0, 0.707) - 3.0) < 0.05, "+6 dB tilt: +3 dB at 20 kHz (display math)");
+
+        auto mirrored = true;
+        for (const auto f : { 30.0, 200.0, 700.0, 1000.0, 1500.0, 5000.0, 16000.0 })
+            mirrored = mirrored && std::abs (tiltDb (f, 6.0, 0.707) + tiltDb (f, -6.0, 0.707)) < 0.001;
+        check (mirrored, "negative tilt mirrors positive tilt exactly (display math)");
+
+        note ("Q shapes the transition: +6 dB tilt at 2 kHz is " + format (tiltDb (2000.0, 6.0, 0.3), 2) + " dB at Q 0.3, "
+              + format (tiltDb (2000.0, 6.0, 0.707), 2) + " dB at Q 0.707, " + format (tiltDb (2000.0, 6.0, 2.0), 2) + " dB at Q 2");
+        check (tiltDb (2000.0, 6.0, 0.3) < tiltDb (2000.0, 6.0, 0.707) - 0.3, "lower Q gives a gentler transition");
+
+        // Audio matches the display math.
+        for (const auto gain : { 6.0f, -6.0f })
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::type, (float) dsp::FilterType::tilt);
+            setBand (processor, 2, params::band::frequency, 1000.0f);
+            setBand (processor, 2, params::band::gain, gain);
+            setBand (processor, 2, params::band::q, 0.707f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            std::string line = "audio, " + format (gain, 0) + " dB tilt at 1 kHz:";
+            auto matches = true, shape = true;
+
+            for (const auto f : { 30.0, 1000.0, 15000.0 })
+            {
+                processor.reset();
+                const auto measured = measureSineGainDb (processor, f, 0.25f, sampleRate, 1.0);
+                const auto expected = tiltDb (f, gain, 0.707);
+                const auto ideal = f < 500.0 ? -gain / 2.0 : (f > 2000.0 ? gain / 2.0 : 0.0);
+                line += " " + format (f, 0) + " Hz " + format (measured, 3) + " dB (display " + format (expected, 3) + ")";
+                matches = matches && std::abs (measured - expected) < 0.05;
+                shape = shape && std::abs (measured - ideal) < 0.2;
+            }
+
+            note (line);
+            check (matches, "measured tilt matches the display math within 0.05 dB (" + format (gain, 0) + " dB)");
+            check (shape, "measured tilt is -gain/2 low, 0 at the pivot, +gain/2 high (" + format (gain, 0) + " dB)");
+        }
+
+        // Dynamic tilt: broadband detector, so loud material changes the tilt.
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::type, (float) dsp::FilterType::tilt);
+            setBand (processor, 2, params::band::frequency, 1000.0f);
+            setBand (processor, 2, params::band::gain, 0.0f);
+            setBand (processor, 2, params::band::dynamicsEnabled, 1.0f);
+            setBand (processor, 2, params::band::range, -8.0f);
+            setBand (processor, 2, params::band::threshold, -30.0f);
+            setBand (processor, 2, params::band::attack, 2.0f);
+            setBand (processor, 2, params::band::release, 50.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            const auto quiet = measureSineGainDb (processor, 8000.0, 0.003f, sampleRate, 0.5);
+            const auto quietGain = processor.getBandDynamicGainDb (2);
+            const auto loudHigh = measureSineGainDb (processor, 8000.0, 0.5f, sampleRate, 0.5);
+            const auto loudGain = processor.getBandDynamicGainDb (2);
+            const auto loudLow = measureSineGainDb (processor, 60.0, 0.5f, sampleRate, 0.5);
+            note ("dynamic tilt (range -8 dB, threshold -30 dB): quiet 8 kHz " + format (quiet) + " dB (dyn " + format (quietGain)
+                  + "), loud 8 kHz " + format (loudHigh) + " dB (dyn " + format (loudGain) + "), loud 60 Hz " + format (loudLow) + " dB");
+            check (std::abs (quiet) < 0.1, "quiet material leaves a dynamic tilt flat");
+            check (loudGain < -7.0f && loudHigh < -3.5 && loudLow > 3.5, "loud material tilts the band darker (highs down, lows up)");
+            check (std::abs (loudHigh - (double) loudGain / 2.0) < 0.3, "dynamic tilt moves the high end by half the dynamic gain");
+        }
+
+        // Display: the curve passes through the handle at the 0 dB pivot; vertical drag sets the amount.
+        {
+            using Curve = dooblrq::ui::ResponseCurveComponent;
+            DooblrQAudioProcessor processor;
+            setBand (processor, 2, params::band::type, (float) dsp::FilterType::tilt);
+            setBand (processor, 2, params::band::frequency, 1000.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1300, 760);
+            auto* curve = dynamic_cast<Curve*> (editor->findChildWithID ("responseCurve"));
+            check (curve != nullptr, "response curve exists");
+
+            if (curve != nullptr)
+            {
+                const auto start = curve->handlePosition (2);
+                const auto threeDbUp = curve->decibelsToY (3.0) - curve->decibelsToY (0.0);
+                simulateDrag (*curve, start, start + juce::Point<float> (0.0f, threeDbUp));
+                const auto s = processor.getBandSettings (2);
+                note ("tilt handle dragged up by 3 dB on the scale: enabled " + std::string (s.enabled ? "yes" : "no") + ", tilt "
+                      + format (s.gainDb) + " dB, pivot " + format (s.frequency, 1) + " Hz");
+                check (s.enabled && std::abs (s.gainDb - 6.0f) < 0.1f, "dragging a tilt handle up 3 dB sets +6 dB of tilt");
+                check (std::abs (s.frequency - 1000.0f) < 15.0f, "a vertical drag keeps the pivot");
+                check (std::abs (curve->handlePosition (2).y - curve->decibelsToY (0.0)) < 0.5f,
+                       "the tilt handle sits on the 0 dB pivot of the curve");
+
+                auto curveMatches = true;
+                for (const auto f : { 40.0, 1000.0, 12000.0 })
+                    curveMatches = curveMatches
+                                   && std::abs (curve->responseDecibelsAt (f, false) - tiltDb (f, (double) s.gainDb, (double) s.q)) < 0.01;
+                check (curveMatches, "the drawn tilt curve uses the same math as the audio");
+                saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-tilt");
+            }
+
+            processor.editorBeingDeleted (editor.get());
+            editor.reset();
+        }
+    }
+
+    void testLegacyStateRestores()
+    {
+        // A session saved before Tilt existed (stateVersion 1, six types, indices 0-5).
+        // The value tree stores choice parameters as their index, so indices must not move.
+        const char* legacy = R"(<?xml version="1.0" encoding="UTF-8"?>
+<DooblrQState stateVersion="1">
+  <PARAM id="b1_enabled" value="1.0"/><PARAM id="b1_type" value="3.0"/><PARAM id="b1_freq" value="45.0"/>
+  <PARAM id="b2_enabled" value="1.0"/><PARAM id="b2_type" value="1.0"/><PARAM id="b2_gain" value="2.5"/>
+  <PARAM id="b3_enabled" value="1.0"/><PARAM id="b3_type" value="5.0"/><PARAM id="b3_freq" value="2345.0"/><PARAM id="b3_q" value="4.5"/>
+  <PARAM id="b4_enabled" value="0.0"/><PARAM id="b4_type" value="4.0"/>
+  <PARAM id="b5_enabled" value="1.0"/><PARAM id="b5_type" value="0.0"/><PARAM id="b5_gain" value="-7.5"/>
+  <PARAM id="b6_enabled" value="1.0"/><PARAM id="b6_type" value="2.0"/><PARAM id="b6_gain" value="3.0"/>
+  <PARAM id="output_gain" value="-3.0"/><PARAM id="stereo_link" value="0.0"/>
+</DooblrQState>)";
+
+        const auto xml = juce::parseXML (juce::String (legacy));
+        check (xml != nullptr, "legacy state parses");
+
+        if (xml == nullptr)
+            return;
+
+        juce::MemoryBlock block;
+        juce::AudioProcessor::copyXmlToBinary (*xml, block);
+        DooblrQAudioProcessor processor;
+        processor.setStateInformation (block.getData(), (int) block.getSize());
+
+        using T = dsp::FilterType;
+        const T expected[] { T::lowCut, T::lowShelf, T::notch, T::highCut, T::bell, T::highShelf };
+        auto typesMatch = true;
+        std::string types;
+
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            const auto s = processor.getBandSettings (b);
+            typesMatch = typesMatch && s.type == expected[b];
+            types += (b > 0 ? ", " : "") + params::filterTypeNames()[(int) s.type].toStdString();
+        }
+
+        note ("legacy types restored as: " + types);
+        check (typesMatch, "every pre-Tilt band type restores to the same type");
+        check (std::abs (processor.getBandSettings (2).frequency - 2345.0f) < 0.01f && std::abs (processor.getBandSettings (4).gainDb + 7.5f) < 0.01f
+                   && ! processor.getBandSettings (3).enabled && std::abs (getParameter (processor, params::outputGain) + 3.0f) < 0.01f,
+               "other legacy values restore");
+
+        // And a Tilt band round-trips.
+        setBand (processor, 3, params::band::type, (float) dsp::FilterType::tilt);
+        juce::MemoryBlock state;
+        processor.getStateInformation (state);
+        DooblrQAudioProcessor restored;
+        restored.setStateInformation (state.getData(), (int) state.getSize());
+        check (restored.getBandSettings (3).type == dsp::FilterType::tilt, "a Tilt band survives save/restore");
+    }
+
+    //==============================================================================
+    // Editor: version label and analyzer controls
+    std::vector<float> makeMusicLike (int numSamples, double sampleRate, juce::int64 seed, float brightness)
+    {
+        std::vector<float> out ((size_t) numSamples, 0.0f);
+        juce::Random random (seed);
+        double b0 = 0, b1 = 0, b2 = 0, b3 = 0, b4 = 0, b5 = 0, b6 = 0;
+        const double twoPi = juce::MathConstants<double>::twoPi;
+        const double bass[] { 55.0, 73.42, 49.0, 65.41 };
+        const double chord[] { 220.0, 277.18, 329.63, 440.0 };
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto t = i / sampleRate;
+            const auto beat = std::fmod (t, 0.5);
+            const auto bar = (int) (t / 2.0) % 4;
+
+            // Pink noise (Paul Kellet) as a bed.
+            const auto white = random.nextDouble() * 2.0 - 1.0;
+            b0 = 0.99886 * b0 + white * 0.0555179; b1 = 0.99332 * b1 + white * 0.0750759;
+            b2 = 0.96900 * b2 + white * 0.1538520; b3 = 0.86650 * b3 + white * 0.3104856;
+            b4 = 0.55000 * b4 + white * 0.5329522; b5 = -0.7616 * b5 - white * 0.0168980;
+            const auto pink = (b0 + b1 + b2 + b3 + b4 + b5 + b6 + white * 0.5362) * 0.11;
+            b6 = white * 0.115926;
+
+            auto v = 0.05 * pink;
+            const auto kick = std::exp (-beat * 18.0);
+            v += 0.35 * kick * std::sin (twoPi * (45.0 + 60.0 * std::exp (-beat * 40.0)) * beat);
+
+            for (int h = 1; h <= 4; ++h)
+                v += 0.12 / h * std::sin (twoPi * bass[bar] * h * t);
+
+            for (const auto pitch : chord)
+                for (int h = 1; h <= 8; ++h)
+                    v += 0.03 / (h * h) * std::pow (brightness, h - 1) * std::sin (twoPi * pitch * h * t);
+
+            const auto hat = std::fmod (t + 0.25, 0.25);
+            v += 0.06 * brightness * std::exp (-hat * 60.0) * white;
+            out[(size_t) i] = (float) v;
+        }
+
+        return out;
+    }
+
+    /** Plays a mono signal through the processor (as stereo) in host-sized blocks while the
+        editor's timer would pull the analyzer; the timer is driven by hand here. */
+    void playThroughEditor (DooblrQAudioProcessor& processor, dooblrq::ui::ResponseCurveComponent& curve,
+                            const std::vector<float>& signal)
+    {
+        constexpr int chunk = 2048;
+
+        for (int start = 0; start < (int) signal.size(); start += chunk)
+        {
+            const auto n = std::min (chunk, (int) signal.size() - start);
+            juce::AudioBuffer<float> buffer (2, n);
+            buffer.copyFrom (0, 0, signal.data() + start, n);
+            buffer.copyFrom (1, 0, signal.data() + start, n);
+            processInBlocks (processor, buffer, { 512 });
+            curve.updateAnalyzer();
+        }
+    }
+
+    juce::Component* findById (juce::Component& parent, const juce::String& id)
+    {
+        if (parent.getComponentID() == id)
+            return &parent;
+
+        for (auto* child : parent.getChildren())
+            if (auto* found = findById (*child, id))
+                return found;
+
+        return nullptr;
+    }
+
+    void testEditorAnalyzerAndVersion()
+    {
+        constexpr double sampleRate = 48000.0;
+        DooblrQAudioProcessor processor;
+        setBand (processor, 0, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::gain, -4.0f);
+        setBand (processor, 4, params::band::enabled, 1.0f);
+        setBand (processor, 4, params::band::gain, 3.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* curve = dynamic_cast<dooblrq::ui::ResponseCurveComponent*> (findById (*editor, "responseCurve"));
+        auto* version = dynamic_cast<juce::Label*> (findById (*editor, "version"));
+        auto* freeze = dynamic_cast<juce::Button*> (findById (*editor, "freeze"));
+        auto* clear = dynamic_cast<juce::Button*> (findById (*editor, "clear"));
+        auto* spectrum = dynamic_cast<juce::Button*> (findById (*editor, "spectrum"));
+        auto* peak = dynamic_cast<juce::Button*> (findById (*editor, "analyzerPeak"));
+        auto* readout = dynamic_cast<juce::Label*> (findById (*editor, "analyzerReadout"));
+        check (curve && version && freeze && clear && spectrum && peak && readout, "analyzer toolbar controls exist");
+
+        if (! (curve && version && freeze && clear && spectrum && peak && readout))
+            return;
+
+        // The label comes from the build's version, which comes from project(VERSION) in CMake.
+        note ("version label: " + version->getText().toStdString() + ", JucePlugin_VersionString " JucePlugin_VersionString
+              ", CMake PROJECT_VERSION " DOOBLRQ_PROJECT_VERSION);
+        check (version->getText() == juce::String ("v") + JucePlugin_VersionString, "version label shows JucePlugin_VersionString");
+        check (juce::String (JucePlugin_VersionString) == DOOBLRQ_PROJECT_VERSION, "plugin version equals the CMake project version");
+
+        check (processor.isAnalyzerRunning(), "opening the editor starts the analyzer feed");
+
+        const auto clickToggle = [] (juce::Button& button)
+        {
+            button.setToggleState (! button.getToggleState(), juce::dontSendNotification);
+            button.onClick();
+        };
+
+        auto& analyzer = processor.getSpectrumAnalyzer();
+        analyzer.clear();
+
+        // Material A: darker mix; capture it.
+        playThroughEditor (processor, *curve, makeMusicLike (48000 * 6, sampleRate, 1, 0.35f));
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        dooblrEditor->updateAnalyzerControls(); // what the editor timer does
+        note ("after 6 s of material: readout \"" + readout->getText().toStdString() + "\", "
+              + std::to_string (analyzer.getAccumulatedFrames()) + " frames, "
+              + std::to_string (processor.getAnalyzerFifo().getDroppedSamples()) + " samples dropped");
+        check (analyzer.getAccumulatedFrames() > 250, "the editor pulls audio into the analyzer");
+        check (readout->getText() == "Averaging: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s" && analyzer.getAccumulatedSeconds() > 5.5,
+               "readout shows the averaging time");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-live");
+
+        clickToggle (*freeze);
+        dooblrEditor->updateAnalyzerControls();
+        const auto frozenText = readout->getText();
+        note ("after Freeze: readout \"" + frozenText.toStdString() + "\"");
+        check (analyzer.isFrozen() && frozenText.startsWith ("Frozen: ") && frozenText.endsWith (" s"), "Freeze captures and shows \"Frozen: N s\"");
+        check (std::abs (frozenText.fromFirstOccurrenceOf ("Frozen: ", false, false).getDoubleValue() - analyzer.getFrozenSeconds()) < 0.06,
+               "the readout shows the frozen duration");
+
+        // Material B: brighter mix; live moves, the overlay stays.
+        const auto frozenCopy = analyzer.getFrozenAverageDb();
+        clickToggle (*peak);
+        playThroughEditor (processor, *curve, makeMusicLike (48000 * 2, sampleRate, 2, 0.9f));
+        check (analyzer.getFrozenAverageDb() == frozenCopy, "the frozen overlay does not change while live audio plays");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-frozen");
+
+        clickToggle (*freeze);
+        check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0, "un-freezing hides the overlay and restarts averaging");
+        playThroughEditor (processor, *curve, makeMusicLike (48000, sampleRate, 3, 0.5f));
+        clickToggle (*freeze);
+        clear->onClick();
+        dooblrEditor->updateAnalyzerControls();
+        check (! analyzer.isFrozen() && ! freeze->getToggleState() && analyzer.getAccumulatedFrames() == 0
+                   && readout->getText() == "Averaging: 0.0 s",
+               "Clear resets the capture, the button and the readout");
+
+        clickToggle (*spectrum);
+        check (! processor.isAnalyzerRunning() && ! freeze->isEnabled(), "turning the spectrum off stops the feed and disables its controls");
+        clickToggle (*spectrum);
+        check (processor.isAnalyzerRunning(), "turning it back on restarts the feed");
+
+        processor.editorBeingDeleted (editor.get());
+        editor.reset();
+        check (! processor.isAnalyzerRunning(), "closing the editor stops the analyzer feed");
+    }
+
     struct TestCase
     {
         const char* name;
@@ -865,6 +1507,11 @@ int main()
         { "state save/restore",                      testStateRoundTrip },
         { "editor controls, paint, open/close",      testEditor },
         { "curve follows dragged band handles",      testCurveFollowsHandles },
+        { "spectrum analyzer core",                 testSpectrumAnalyzerCore },
+        { "analyzer does not change the audio",     testAnalyzerIsTransparent },
+        { "tilt band type",                         testTilt },
+        { "pre-Tilt saved state restores",          testLegacyStateRestores },
+        { "editor analyzer, freeze and version",    testEditorAnalyzerAndVersion },
     };
 
     int failedTests = 0;

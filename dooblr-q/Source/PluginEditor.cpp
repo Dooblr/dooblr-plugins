@@ -28,6 +28,7 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     styleLabel (titleLabel, JucePlugin_Name, 24.0f, Palette::textPrimary, juce::Justification::centredLeft, true);
     styleLabel (subtitleLabel, "Dynamic parametric EQ", 13.0f, Palette::textMuted, juce::Justification::centredLeft);
     styleLabel (versionLabel, "v" JucePlugin_VersionString, 12.0f, Palette::textMuted, juce::Justification::centredRight);
+    versionLabel.setComponentID ("version");
     styleLabel (outputCaption, "Output", 13.0f, Palette::textMuted, juce::Justification::centredRight);
 
     for (auto* label : { &titleLabel, &subtitleLabel, &versionLabel, &outputCaption })
@@ -85,6 +86,8 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     rangeKnob.slider.setDoubleClickReturnValue (true, 0.0);
     rangeKnob.slider.setColour (juce::Slider::rotarySliderFillColourId, Palette::dynamic);
 
+    setUpAnalyzerControls();
+
     selectBand (0);
 
     setResizable (true, true);
@@ -96,8 +99,120 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
 
 DooblrQAudioProcessorEditor::~DooblrQAudioProcessorEditor()
 {
+    // No editor, no analysis: the audio thread stops feeding the FIFO.
+    audioProcessor.setAnalyzerRunning (false);
     stopTimer();
     setLookAndFeel (nullptr);
+}
+
+void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
+{
+    auto& view = audioProcessor.getAnalyzerViewSettings();
+    auto& analyzer = audioProcessor.getSpectrumAnalyzer();
+
+    spectrumButton.setComponentID ("spectrum");
+    spectrumButton.setToggleState (view.visible, juce::dontSendNotification);
+    spectrumButton.onClick = [this, &view]
+    {
+        view.visible = spectrumButton.getToggleState();
+        audioProcessor.setAnalyzerRunning (view.visible);
+        updateAnalyzerControls();
+        responseCurve.repaint();
+    };
+
+    sourceBox.setComponentID ("analyzerSource");
+    sourceBox.addItem ("Post-EQ", 1);
+    sourceBox.addItem ("Pre-EQ", 2);
+    sourceBox.setSelectedId (audioProcessor.getAnalyzerSource() == DooblrQAudioProcessor::AnalyzerSource::preEq ? 2 : 1,
+                             juce::dontSendNotification);
+    sourceBox.setTooltip ("Analyze the signal before or after the EQ");
+    sourceBox.onChange = [this]
+    {
+        audioProcessor.setAnalyzerSource (sourceBox.getSelectedId() == 2 ? DooblrQAudioProcessor::AnalyzerSource::preEq
+                                                                         : DooblrQAudioProcessor::AnalyzerSource::postEq);
+    };
+
+    static constexpr float tilts[] { 0.0f, 3.0f, 4.5f };
+    tiltBox.setComponentID ("analyzerTilt");
+    tiltBox.addItem ("Tilt 0 dB/oct", 1);
+    tiltBox.addItem ("Tilt 3 dB/oct", 2);
+    tiltBox.addItem ("Tilt 4.5 dB/oct", 3);
+    for (int i = 0; i < (int) std::size (tilts); ++i)
+        if (juce::approximatelyEqual (tilts[i], view.tiltDbPerOctave))
+            tiltBox.setSelectedId (i + 1, juce::dontSendNotification);
+    tiltBox.setTooltip ("Display slope around 1 kHz, so typical music reads roughly flat");
+    tiltBox.onChange = [this, &view]
+    {
+        view.tiltDbPerOctave = tilts[(size_t) juce::jlimit (0, 2, tiltBox.getSelectedId() - 1)];
+        responseCurve.repaint();
+    };
+
+    peakButton.setComponentID ("analyzerPeak");
+    peakButton.setToggleState (view.showPeak, juce::dontSendNotification);
+    peakButton.setTooltip ("Show the peak-hold line since the last Clear (or of the frozen capture)");
+    peakButton.onClick = [this, &view]
+    {
+        view.showPeak = peakButton.getToggleState();
+        responseCurve.repaint();
+    };
+
+    freezeButton.setComponentID ("freeze");
+    freezeButton.setClickingTogglesState (true);
+    freezeButton.setToggleState (analyzer.isFrozen(), juce::dontSendNotification);
+    freezeButton.setColour (juce::TextButton::buttonOnColourId, dooblrq::ui::Palette::frozen.withAlpha (0.35f));
+    freezeButton.setTooltip ("Capture the spectrum averaged since the last Clear as an overlay");
+    freezeButton.onClick = [this, &analyzer]
+    {
+        if (freezeButton.getToggleState())
+            analyzer.freeze();
+        else
+            analyzer.unfreeze();
+
+        updateAnalyzerControls();
+        responseCurve.repaint();
+    };
+
+    clearButton.setComponentID ("clear");
+    clearButton.setTooltip ("Restart the averaging window and remove the frozen overlay");
+    clearButton.onClick = [this, &analyzer]
+    {
+        analyzer.clear();
+        updateAnalyzerControls();
+        responseCurve.repaint();
+    };
+
+    styleLabel (analyzerReadout, {}, 12.0f, Palette::textMuted, juce::Justification::centredRight);
+    analyzerReadout.setComponentID ("analyzerReadout");
+
+    for (auto* component : std::initializer_list<juce::Component*> { &spectrumButton, &sourceBox, &tiltBox, &peakButton,
+                                                                      &freezeButton, &clearButton, &analyzerReadout })
+        addAndMakeVisible (component);
+
+    audioProcessor.setAnalyzerRunning (view.visible);
+    updateAnalyzerControls();
+}
+
+void DooblrQAudioProcessorEditor::updateAnalyzerControls()
+{
+    const auto& view = audioProcessor.getAnalyzerViewSettings();
+    auto& analyzer = audioProcessor.getSpectrumAnalyzer();
+
+    freezeButton.setToggleState (analyzer.isFrozen(), juce::dontSendNotification);
+
+    for (auto* component : std::initializer_list<juce::Component*> { &sourceBox, &tiltBox, &peakButton,
+                                                                      &freezeButton, &clearButton })
+        component->setEnabled (view.visible);
+
+    juce::String text;
+
+    if (! view.visible)
+        text = "Analyzer off";
+    else if (analyzer.isFrozen())
+        text = "Frozen: " + juce::String (analyzer.getFrozenSeconds(), 1) + " s";
+    else
+        text = "Averaging: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s";
+
+    analyzerReadout.setText (text, juce::dontSendNotification);
 }
 
 void DooblrQAudioProcessorEditor::setUpKnob (Knob& knob, const juce::String& caption, const char* parameterSuffix)
@@ -179,6 +294,7 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
 void DooblrQAudioProcessorEditor::timerCallback()
 {
     updateBandIndicators();
+    updateAnalyzerControls();
 }
 
 //==============================================================================
@@ -224,8 +340,25 @@ void DooblrQAudioProcessorEditor::resized()
         stereoLinkButton.setBounds (header.removeFromRight (120).withSizeKeepingCentre (120, 24));
     }
 
-    controlsArea = bounds.removeFromBottom (180);
+    toolbarArea = bounds.removeFromTop (38);
+    {
+        auto toolbar = toolbarArea.reduced (16, 6);
+        spectrumButton.setBounds (toolbar.removeFromLeft (104));
+        toolbar.removeFromLeft (6);
+        sourceBox.setBounds (toolbar.removeFromLeft (100));
+        toolbar.removeFromLeft (8);
+        tiltBox.setBounds (toolbar.removeFromLeft (140));
 
+        clearButton.setBounds (toolbar.removeFromRight (64));
+        toolbar.removeFromRight (6);
+        freezeButton.setBounds (toolbar.removeFromRight (76));
+        toolbar.removeFromRight (10);
+        peakButton.setBounds (toolbar.removeFromRight (70));
+        toolbar.removeFromRight (6);
+        analyzerReadout.setBounds (toolbar.removeFromRight (150));
+    }
+
+    controlsArea = bounds.removeFromBottom (180);
     auto bandRow = bounds.removeFromBottom (40).reduced (16, 6);
     const auto buttonWidth = bandRow.getWidth() / params::numBands;
     for (auto& button : bandButtons)

@@ -54,7 +54,7 @@ namespace dooblrq::params
 
     juce::StringArray filterTypeNames()
     {
-        return { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch" };
+        return { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Tilt" };
     }
 
     BandDefaults bandDefaults (int bandIndex)

@@ -14,7 +14,9 @@ target_include_directories(DooblrQTests
 
 target_compile_definitions(DooblrQTests
     PRIVATE
-        $<TARGET_PROPERTY:DooblrQ,COMPILE_DEFINITIONS>)
+        $<TARGET_PROPERTY:DooblrQ,COMPILE_DEFINITIONS>
+        # Lets the tests check that the UI version label cannot drift from project(VERSION).
+        DOOBLRQ_PROJECT_VERSION="${PROJECT_VERSION}")
 
 target_link_libraries(DooblrQTests
     PRIVATE

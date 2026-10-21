@@ -15,6 +15,8 @@ namespace dooblrq::ui
         inline const juce::Colour textMuted   { 0xff8a919c };
         inline const juce::Colour accent      { 0xff5fb3a1 };
         inline const juce::Colour dynamic     { 0xffd9a35b };
+        inline const juce::Colour spectrum    { 0xff9fb4c8 };
+        inline const juce::Colour frozen      { 0xffe58fc0 };
     }
 
     /** Colour used to identify a band in the display and band selector. */

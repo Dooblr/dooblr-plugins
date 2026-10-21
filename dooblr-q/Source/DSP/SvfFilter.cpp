@@ -58,6 +58,11 @@ namespace dooblrq::dsp
                 return finalise (w, k, 0.0, 0.0, 1.0);
             case FilterType::notch:
                 return finalise (w, k, 1.0, -k, 0.0);
+            case FilterType::tilt:
+                // A high shelf of the full tilt amount scaled down by half of it (1/a): -gain/2
+                // at DC, +gain/2 at Nyquist and exactly 0 dB at the pivot (the shelf midpoint).
+                // Q shapes the transition like a shelf's (0.707 = steepest without overshoot).
+                return finalise (w * std::sqrt (a), k, a, k * (1.0 - a), (1.0 - a * a) / a);
         }
 
         return finalise (w, k, 1.0, 0.0, 0.0);
@@ -75,6 +80,8 @@ namespace dooblrq::dsp
                 return finalise (w, butterworthK, 0.0, 0.0, 1.0);
             case FilterType::highShelf:
                 return finalise (w, butterworthK, 1.0, -butterworthK, -1.0);
+            case FilterType::tilt:
+                return finalise (w, butterworthK, 1.0, 0.0, 0.0); // pass-through: broadband level
             case FilterType::bell:
             case FilterType::notch:
             case FilterType::lowCut:
