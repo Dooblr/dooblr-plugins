@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cmath>
 #include <complex>
 
@@ -38,6 +39,51 @@ namespace dooblrq::dsp
     }
 
 
+    /** Per-band slope (choice index of bN_slope, appended in 0.7.0). The value is the
+        number of cascaded second-order sections minus one, except Brickwall. */
+    enum class Slope
+    {
+        db12 = 0,
+        db24,
+        db36,
+        db48,
+        db60,
+        brickwall
+    };
+
+    inline constexpr int numSlopes = 6;
+
+    /** Brickwall = a 32nd-order Butterworth (16 sections): about 192 dB/oct asymptotically,
+        -3 dB at the corner and about -26 dB only 10 % past it. */
+    inline constexpr int brickwallSections = 16;
+    inline constexpr int maxSections = brickwallSections;
+
+    /** Slope changes the response of cuts, shelves and tilt (they become higher-order
+        Butterworth designs). A bell's and a notch's shape is set by Q/Width alone. */
+    constexpr bool slopeApplies (FilterType type) noexcept
+    {
+        return type != FilterType::bell && type != FilterType::notch;
+    }
+
+    constexpr int sectionsForSlope (Slope slope) noexcept
+    {
+        return slope == Slope::brickwall ? brickwallSections : (int) slope + 1;
+    }
+
+    constexpr int numSectionsFor (FilterType type, Slope slope) noexcept
+    {
+        return slopeApplies (type) ? sectionsForSlope (slope) : 1;
+    }
+
+    /** Asymptotic roll-off of a cut at this slope, dB per octave. */
+    constexpr int slopeDbPerOctave (Slope slope) noexcept
+    {
+        return 12 * sectionsForSlope (slope);
+    }
+
+    /** Q of section i (0-based, ascending Q) of an order-2n Butterworth filter. */
+    double butterworthSectionQ (int numSections, int index) noexcept;
+
     struct SvfCoefficients
     {
         // Prototype parameters, kept for analysing the response.
@@ -74,14 +120,55 @@ namespace dooblrq::dsp
 
     AnalogPrototype makeEqPrototype (FilterType type, double q, double gainDb) noexcept;
 
+    /**
+        A band as a cascade of second-order sections (1 for 12 dB/oct and for bells/notches).
+
+        Cuts: Butterworth sections (product of the section levels at the corner = 0.707, so
+        the corner is -3 dB at every order). The band's Q is applied as resonance to the
+        lowest-Q section (Q_section * Q / 0.707), so Q 0.707 is the plain Butterworth and
+        the level at the corner is always 20 log10 (Q) dB, as for the 12 dB/oct filter.
+        Shelves / tilt: Butterworth shelving of order 2n (zeros and poles on Butterworth
+        circles a gain-dependent ratio apart), so the transition gets steeper (up to 6 dB
+        per order per octave) while the midpoint stays at half the gain. Q again scales
+        the lowest-Q section. With one section every type equals makeEqPrototype exactly.
+    */
+    struct BandPrototype
+    {
+        std::array<AnalogPrototype, maxSections> sections {};
+        int numSections = 1;
+    };
+
+    BandPrototype makeBandPrototype (FilterType type, Slope slope, double q, double gainDb) noexcept;
+
+    struct BandCoefficients
+    {
+        std::array<SvfCoefficients, maxSections> sections {};
+        int numSections = 1;
+    };
+
+    /** Digital sections of a band (same prewarp and clamping as makeEqCoefficients). */
+    BandCoefficients makeBandCoefficients (FilterType type, Slope slope, double frequency, double q,
+                                           double gainDb, double sampleRate) noexcept;
+    void makeBandCoefficients (const BandPrototype& prototype, double frequency, double sampleRate,
+                               BandCoefficients& destination) noexcept;
+
     /** Response of the analogue prototype (no bilinear warping, so no cramping near
         Nyquist). This is the target of the Natural and Linear phase modes. */
     std::complex<double> analogResponseAt (const AnalogPrototype& p, double bandFrequency, double frequency) noexcept;
+
+    std::complex<double> analogResponseAt (const BandPrototype& p, double bandFrequency, double frequency) noexcept;
 
     /** Exact complex response of the digital filter at a frequency. */
     std::complex<double> responseAt (const SvfCoefficients& c, double frequency, double sampleRate) noexcept;
 
     inline double magnitudeAt (const SvfCoefficients& c, double frequency, double sampleRate) noexcept
+    {
+        return std::abs (responseAt (c, frequency, sampleRate));
+    }
+
+    std::complex<double> responseAt (const BandCoefficients& c, double frequency, double sampleRate) noexcept;
+
+    inline double magnitudeAt (const BandCoefficients& c, double frequency, double sampleRate) noexcept
     {
         return std::abs (responseAt (c, frequency, sampleRate));
     }

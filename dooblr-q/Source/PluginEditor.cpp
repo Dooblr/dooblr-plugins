@@ -151,6 +151,10 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     typeBox.addItemList (params::filterTypeNames(), 1);
     addAndMakeVisible (typeBox);
 
+    slopeBox.setComponentID (params::band::slope);
+    slopeBox.addItemList (params::slopeNames(), 1);
+    addAndMakeVisible (slopeBox);
+
     dynamicsButton.setComponentID (params::band::dynamicsEnabled);
     addAndMakeVisible (dynamicsButton);
 
@@ -397,6 +401,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     enabledAttachment.reset();
     dynamicsAttachment.reset();
     typeAttachment.reset();
+    slopeAttachment.reset();
     frequencyAttachment.reset();
     gainAttachment.reset();
     qAttachment.reset();
@@ -410,6 +415,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
 
     enabledAttachment   = std::make_unique<ButtonAttachment>   (state, id (params::band::enabled), enabledButton);
     typeAttachment      = std::make_unique<ComboBoxAttachment> (state, id (params::band::type), typeBox);
+    slopeAttachment     = std::make_unique<ComboBoxAttachment> (state, id (params::band::slope), slopeBox);
     frequencyAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::frequency), frequencyKnob.slider);
     gainAttachment      = std::make_unique<SliderAttachment>   (state, id (params::band::gain), gainKnob.slider);
     qAttachment = std::make_unique<juce::ParameterAttachment> (
@@ -455,6 +461,16 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
 
     for (auto* knob : { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob })
         knob->slider.setAlpha (dynamicsUsed ? 1.0f : 0.4f);
+
+    // Slope has no meaning for a bell or notch (their shape is Width), so rather than a
+    // control that does nothing it is disabled, with the reason as its tooltip.
+    const auto slopeUsed = dooblrq::dsp::slopeApplies (settings.type);
+    slopeBox.setEnabled (slopeUsed);
+    slopeBox.setTooltip (slopeUsed ? juce::String ("Filter slope: 12 to 60 dB/oct (2nd to 10th order Butterworth), or Brickwall "
+                                                   "(32nd order, about 192 dB/oct). The corner stays at -3 dB; Width/Q adds resonance.")
+                                   : juce::String ("Slope applies to Low/High Cut, Low/High Shelf and Tilt. A ")
+                                         + params::filterTypeNames()[(int) settings.type]
+                                         + "'s shape is set by Width alone.");
 }
 
 void DooblrQAudioProcessorEditor::timerCallback()
@@ -580,5 +596,6 @@ void DooblrQAudioProcessorEditor::resized()
     };
 
     layoutSection (eqSectionArea, enabledButton, &typeBox, { &frequencyKnob, &gainKnob, &qKnob });
+    slopeBox.setBounds (typeBox.getBounds().translated (0, 34));
     layoutSection (dynamicsSectionArea, dynamicsButton, nullptr, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
 }

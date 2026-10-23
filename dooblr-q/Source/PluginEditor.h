@@ -95,10 +95,13 @@ private:
 
     juce::ToggleButton enabledButton { "Band on" };
     juce::ComboBox typeBox;
+    juce::ComboBox slopeBox; // 12 ... 60 dB/oct, Brickwall; disabled for Bell and Notch
     Knob frequencyKnob, gainKnob, qKnob; // qKnob is shown as "Width" in octaves
 
     juce::ToggleButton dynamicsButton { "Dynamic" };
     Knob rangeKnob, thresholdKnob, attackKnob, releaseKnob;
+
+    juce::TooltipWindow tooltipWindow { this, 600 };
 
     juce::Rectangle<int> toolbarArea;
     juce::Rectangle<int> headerArea, controlsArea, eqSectionArea, dynamicsSectionArea;
@@ -111,7 +114,7 @@ private:
     std::array<std::unique_ptr<ButtonAttachment>, dooblrq::params::numBands> bandSwitchAttachments;
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, dynamicsAttachment;
-    std::unique_ptr<ComboBoxAttachment> typeAttachment;
+    std::unique_ptr<ComboBoxAttachment> typeAttachment, slopeAttachment;
     std::unique_ptr<juce::ParameterAttachment> qAttachment; // Width knob (octaves) <-> Q parameter
     std::unique_ptr<SliderAttachment> frequencyAttachment, gainAttachment,
                                       rangeAttachment, thresholdAttachment, attackAttachment, releaseAttachment;

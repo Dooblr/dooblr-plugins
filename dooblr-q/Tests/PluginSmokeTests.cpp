@@ -188,11 +188,20 @@ namespace
         check (processor->getTotalNumInputChannels() == 2, "default input is stereo");
         check (processor->getTotalNumOutputChannels() == 2, "default output is stereo");
         check (processor->hasEditor(), "has an editor");
-        check (processor->getParameters().size() == params::numBands * 10 + 3,
-               "exposes 10 parameters per band plus output gain, stereo link and phase mode");
+        check (processor->getParameters().size() == params::numBands * 11 + 3,
+               "exposes 11 parameters per band plus output gain, stereo link and phase mode");
         check (processor->getParameters()[params::numBands * 10]->getName (64) == "Output Gain"
-                   && processor->getParameters().getLast()->getName (64) == "Phase Mode",
+                   && processor->getParameters()[params::numBands * 10 + 2]->getName (64) == "Phase Mode",
                "phase mode (added in 0.4.0) comes after all older parameters (old indices unchanged)");
+        {
+            auto slopesLast = true;
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                auto* p = dynamic_cast<juce::AudioProcessorParameterWithID*> (processor->getParameters()[params::numBands * 10 + 3 + b]);
+                slopesLast = slopesLast && p != nullptr && p->paramID == params::bandId (b, params::band::slope);
+            }
+            check (slopesLast, "the six band slopes (added in 0.7.0) come after every older parameter");
+        }
 
         std::unique_ptr<juce::AudioProcessor> fromFactory (createPluginFilter());
         check (fromFactory != nullptr && fromFactory->getName() == "dooblr-q",
@@ -2220,6 +2229,386 @@ namespace
         }
     }
 
+    //==============================================================================
+    // Per-band slope (0.7.0): 12 ... 60 dB/oct and Brickwall
+    void testSlopes()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        using T = dsp::FilterType;
+        using S = dsp::Slope;
+        constexpr double sampleRate = 48000.0;
+        const auto db = [] (double magnitude) { return juce::Decibels::gainToDecibels (magnitude, -400.0); };
+        constexpr S allSlopes[] { S::db12, S::db24, S::db36, S::db48, S::db60, S::brickwall };
+
+        // 1. Design: 12 dB/oct is exactly the pre-0.7.0 filter, for every type.
+        auto identical = true;
+        for (int t = 0; t < dsp::numFilterTypes; ++t)
+        {
+            const auto a = dsp::makeEqCoefficients ((T) t, 1234.0, 1.3, 5.0, sampleRate);
+            const auto b = dsp::makeBandCoefficients ((T) t, S::db12, 1234.0, 1.3, 5.0, sampleRate);
+            const auto& c = b.sections[0];
+            identical = identical && b.numSections == 1 && juce::exactlyEqual (c.a1, a.a1) && juce::exactlyEqual (c.a2, a.a2)
+                        && juce::exactlyEqual (c.a3, a.a3) && juce::exactlyEqual (c.m0, a.m0) && juce::exactlyEqual (c.m1, a.m1)
+                        && juce::exactlyEqual (c.m2, a.m2);
+        }
+        check (identical, "12 dB/oct is bit-identical to the previous single-section filter (all types)");
+
+        // 2. Cuts: -3 dB at the corner and 6.02 dB/oct per order, digital and analogue.
+        for (const auto type : { T::lowCut, T::highCut })
+        {
+            std::string line = std::string (type == T::lowCut ? "Low Cut" : "High Cut") + " @ 1 kHz (digital 48 kHz):";
+
+            for (const auto slope : allSlopes)
+            {
+                const auto order = 2 * dsp::sectionsForSlope (slope);
+                const auto c = dsp::makeBandCoefficients (type, slope, 1000.0, 0.70710678, 0.0, sampleRate);
+                const auto p = dsp::makeBandPrototype (type, slope, 0.70710678, 0.0);
+                const auto past = [&] (double octaves) { return type == T::lowCut ? 1000.0 / std::pow (2.0, octaves) : 1000.0 * std::pow (2.0, octaves); };
+                const auto corner = db (dsp::magnitudeAt (c, 1000.0, sampleRate));
+                const auto one = db (dsp::magnitudeAt (c, past (1.0), sampleRate));
+                const auto two = db (dsp::magnitudeAt (c, past (2.0), sampleRate));
+                const auto analogOne = db (std::abs (dsp::analogResponseAt (p, 1000.0, past (1.0))));
+                const auto analogTwo = db (std::abs (dsp::analogResponseAt (p, 1000.0, past (2.0))));
+                const auto ideal = [order] (double octaves) { return -10.0 * std::log10 (1.0 + std::pow (2.0, 2.0 * order * octaves)); };
+                const auto name = params::slopeNames()[(int) slope].toStdString();
+                line += " " + name + ": corner " + format (corner, 2) + ", 1 oct " + format (one, 1) + ", 2 oct " + format (two, 1)
+                        + " (per oct " + format (one - two, 1) + ");";
+
+                check (std::abs (corner + 3.01) < 0.02, name + " " + (type == T::lowCut ? "low" : "high") + " cut: -3 dB at the corner");
+                check (std::abs (analogOne - ideal (1.0)) < 0.01 && std::abs (analogTwo - ideal (2.0)) < 0.01,
+                       name + ": analogue response is the order-" + std::to_string (order) + " Butterworth");
+
+                if (slope != S::brickwall)
+                {
+                    // 1 -> 2 octaves past the corner drops by ~6.02 dB per order (bilinear adds a
+                    // little more above the corner for a high cut).
+                    const auto perOctave = one - two;
+                    const auto expected = 6.0206 * order;
+                    check (perOctave > expected - 0.3 && perOctave < expected + (type == T::highCut ? 3.0 : 0.3),
+                           name + ": " + format (expected, 0) + " dB/oct measured " + format (perOctave, 2) + " between 1 and 2 octaves");
+                    check (std::abs (one - ideal (1.0)) < (type == T::highCut ? 1.5 : 0.3), name + ": attenuation one octave past matches the design");
+                }
+                else
+                {
+                    check (one < -180.0, "Brickwall: below -180 dB one octave past the corner (design)");
+                    const auto tenPercent = db (dsp::magnitudeAt (c, type == T::lowCut ? 900.0 : 1100.0, sampleRate));
+                    check (tenPercent < -25.0, "Brickwall: below -25 dB just 10 % past the corner (" + format (tenPercent, 1) + " dB)");
+                }
+            }
+
+            note (line);
+        }
+
+        // Resonance: Q scales the corner level to 20 log10 (Q) at every order.
+        auto resonance = true;
+        for (const auto slope : allSlopes)
+            for (const auto q : { 0.3, 2.0, 8.0 })
+                resonance = resonance && std::abs (db (dsp::magnitudeAt (dsp::makeBandCoefficients (T::lowCut, slope, 1000.0, q, 0.0, sampleRate), 1000.0, sampleRate))
+                                                   - 20.0 * std::log10 (q)) < 0.05;
+        check (resonance, "cut corner level = 20 log10 (Q) for every slope (Q adds resonance, 0.707 = -3 dB)");
+
+        // 3. Shelves and tilt get steeper while their midpoint stays at half the gain.
+        for (const auto type : { T::lowShelf, T::highShelf, T::tilt })
+        {
+            std::string line = params::filterTypeNames()[(int) type].toStdString() + " +18 dB @ 1 kHz, max transition slope:";
+            double previousSteepness = 0.0;
+            auto ok = true;
+
+            for (const auto slope : allSlopes)
+            {
+                const auto c = dsp::makeBandCoefficients (type, slope, 1000.0, 0.70710678, 18.0, sampleRate);
+                const auto mid = db (dsp::magnitudeAt (c, 1000.0, sampleRate));
+                const auto expectedMid = type == T::lowShelf || type == T::highShelf ? 9.0 : 0.0;
+                double steepness = 0.0;
+                for (double oct = -3.0; oct < 3.0; oct += 0.01)
+                    steepness = std::max (steepness, std::abs (db (dsp::magnitudeAt (c, 1000.0 * std::pow (2.0, oct + 0.01), sampleRate))
+                                                               - db (dsp::magnitudeAt (c, 1000.0 * std::pow (2.0, oct), sampleRate))) / 0.01);
+                const auto low = db (dsp::magnitudeAt (c, 40.0, sampleRate)), high = db (dsp::magnitudeAt (c, 15000.0, sampleRate));
+                const auto expectedLow = type == T::lowShelf ? 18.0 : type == T::tilt ? -9.0 : 0.0;
+                const auto expectedHigh = type == T::highShelf ? 18.0 : type == T::tilt ? 9.0 : 0.0;
+                line += " " + params::slopeNames()[(int) slope].toStdString() + " " + format (steepness, 1) + " dB/oct;";
+                ok = ok && std::abs (mid - expectedMid) < 0.02 && steepness > previousSteepness + 1.0
+                        && std::abs (low - expectedLow) < (slope == S::db12 ? 0.6 : 0.05) && std::abs (high - expectedHigh) < (slope == S::db12 ? 0.6 : 0.1);
+                previousSteepness = steepness;
+            }
+
+            note (line);
+            check (ok, params::filterTypeNames()[(int) type].toStdString() + ": each slope is steeper, midpoint at half the gain, plateaus exact");
+        }
+
+        // 4. Measured through the plugin (Zero Latency): slope per order with sines.
+        {
+            std::string line = "Zero Latency, Low Cut 1 kHz, measured:";
+            for (const auto slope : allSlopes)
+            {
+                DooblrQAudioProcessor processor;
+                setBand (processor, 0, params::band::enabled, 1.0f);
+                setBand (processor, 0, params::band::type, (float) T::lowCut);
+                setBand (processor, 0, params::band::frequency, 1000.0f);
+                setBand (processor, 0, params::band::q, 0.707f);
+                setBand (processor, 0, params::band::slope, (float) slope);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                check (processor.getBandSettings (0).slope == slope, "slope parameter reaches the band settings");
+
+                const auto corner = measureSineGainDb (processor, 1000.0, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto one = measureSineGainDb (processor, 500.0, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto two = measureSineGainDb (processor, 250.0, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto pass = measureSineGainDb (processor, 4000.0, 0.25f, sampleRate, 1.0);
+                const auto name = params::slopeNames()[(int) slope].toStdString();
+                line += " " + name + ": 1 kHz " + format (corner, 2) + ", 500 Hz " + format (one, 1) + ", 250 Hz " + format (two, 1) + ", 4 kHz " + format (pass, 2) + ";";
+
+                check (std::abs (corner + 3.01) < 0.1, name + ": measured -3 dB at the corner");
+                check (std::abs (pass) < 0.1, name + ": passband flat two octaves above");
+
+                if (slope != S::brickwall)
+                {
+                    const auto order = 2 * dsp::sectionsForSlope (slope);
+                    const auto ideal1 = -10.0 * std::log10 (1.0 + std::pow (2.0, 2.0 * order)), ideal2 = -10.0 * std::log10 (1.0 + std::pow (2.0, 4.0 * order));
+                    check (std::abs (one - ideal1) < 0.2 && std::abs (two - ideal2) < 0.5,
+                           name + ": measured " + format (one, 1) + " / " + format (two, 1) + " dB one / two octaves below (design "
+                               + format (ideal1, 1) + " / " + format (ideal2, 1) + ")");
+                }
+                else
+                {
+                    check (one < -110.0, "Brickwall: measured below -110 dB one octave below (" + format (one, 1) + " dB)");
+                    processor.reset();
+                    const auto near = measureSineGainDb (processor, 900.0, 0.25f, sampleRate, 1.0);
+                    line += " 900 Hz " + format (near, 1) + ";";
+                    check (near < -25.0, "Brickwall: measured below -25 dB 10 % below the corner");
+                }
+            }
+            note (line);
+        }
+
+        // 5. Natural / Linear phase: the kernels follow the slope too.
+        for (const auto mode : { PhaseMode::naturalPhase, PhaseMode::linearPhase })
+        {
+            std::string line = std::string (phaseName (mode)) + ", Low Cut 1 kHz:";
+            for (const auto slope : { S::db12, S::db48, S::brickwall })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                setBand (processor, 0, params::band::enabled, 1.0f);
+                setBand (processor, 0, params::band::type, (float) T::lowCut);
+                setBand (processor, 0, params::band::frequency, 1000.0f);
+                setBand (processor, 0, params::band::q, 0.707f);
+                setBand (processor, 0, params::band::slope, (float) slope);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                const auto corner = measureSineGainDb (processor, 1000.0, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto one = measureSineGainDb (processor, 500.0, 0.25f, sampleRate, 1.0);
+                processor.reset();
+                const auto pass = measureSineGainDb (processor, 4000.0, 0.25f, sampleRate, 1.0);
+                const auto name = params::slopeNames()[(int) slope].toStdString();
+                line += " " + name + ": 1 kHz " + format (corner, 2) + ", 500 Hz " + format (one, 1) + ", 4 kHz " + format (pass, 2) + ";";
+                const auto order = 2 * dsp::sectionsForSlope (slope);
+                const auto ideal1 = -10.0 * std::log10 (1.0 + std::pow (2.0, 2.0 * order));
+                check (std::abs (corner + 3.01) < 0.15 && std::abs (pass) < 0.15,
+                       std::string (phaseName (mode)) + " " + name + ": -3 dB corner and flat passband");
+                check (slope == S::brickwall ? one < -70.0 : std::abs (one - ideal1) < 0.5,
+                       std::string (phaseName (mode)) + " " + name + ": attenuation one octave below (" + format (one, 1) + " dB)");
+            }
+            note (line);
+        }
+
+        // 6. Bell and notch: slope does not apply (the control is disabled), and it truly has no effect.
+        for (const auto type : { T::bell, T::notch })
+        {
+            juce::AudioBuffer<float> outputs[2];
+            for (int i = 0; i < 2; ++i)
+            {
+                DooblrQAudioProcessor processor;
+                setBand (processor, 2, params::band::enabled, 1.0f);
+                setBand (processor, 2, params::band::type, (float) type);
+                setBand (processor, 2, params::band::gain, 6.0f);
+                setBand (processor, 2, params::band::slope, i == 0 ? 0.0f : (float) S::brickwall);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                outputs[i].setSize (2, 8192);
+                fillWithNoise (outputs[i], 5, 0.3f);
+                processInBlocks (processor, outputs[i], { 512 });
+            }
+            check (bitIdentical (outputs[0], outputs[1], 2), params::filterTypeNames()[(int) type].toStdString() + ": output identical at any slope setting");
+        }
+
+        // 7. Click-safe slope and type changes while audio runs (sine well inside the passband).
+        for (const auto change : { 0, 1 })
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 0, params::band::enabled, 1.0f);
+            setBand (processor, 0, params::band::type, (float) T::lowCut);
+            setBand (processor, 0, params::band::frequency, 100.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 64);
+            juce::AudioBuffer<float> buffer (2, 64);
+            juce::MidiBuffer midi;
+            float previous = 0.0f, steadyStep = 0.0f, switchStep = 0.0f;
+            int n = 0;
+            for (int block = 0; block < 1500; ++block)
+            {
+                if (block == 750)
+                {
+                    if (change == 0) setBand (processor, 0, params::band::slope, (float) S::brickwall);
+                    else             setBand (processor, 0, params::band::type, (float) T::lowShelf);
+                }
+                for (int i = 0; i < 64; ++i, ++n)
+                    for (int ch = 0; ch < 2; ++ch)
+                        buffer.setSample (ch, i, 0.5f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 2000.0 * n / sampleRate));
+                processor.processBlock (buffer, midi);
+                for (int i = 0; i < 64; ++i)
+                {
+                    const auto step = std::abs (buffer.getSample (0, i) - previous);
+                    previous = buffer.getSample (0, i);
+                    if (block > 300 && block < 750) steadyStep = std::max (steadyStep, step);
+                    if (block >= 750 && block < 800) switchStep = std::max (switchStep, step);
+                }
+            }
+            const auto label = change == 0 ? std::string ("slope 12 -> Brickwall") : std::string ("type Low Cut -> Low Shelf (48 dB/oct)");
+            note (label + " while running: max sample step " + format (switchStep, 4) + " vs steady " + format (steadyStep, 4));
+            check (switchStep < steadyStep * 1.15f, label + ": no click (sample steps stay within the steady-state sine's)");
+        }
+
+        // 8. Dynamics still work with a steep shelf.
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 4, params::band::enabled, 1.0f);
+            setBand (processor, 4, params::band::type, (float) T::highShelf);
+            setBand (processor, 4, params::band::frequency, 2000.0f);
+            setBand (processor, 4, params::band::slope, (float) S::db48);
+            setBand (processor, 4, params::band::dynamicsEnabled, 1.0f);
+            setBand (processor, 4, params::band::range, -12.0f);
+            setBand (processor, 4, params::band::threshold, -40.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            const auto loud = measureSineGainDb (processor, 8000.0, 0.5f, sampleRate, 1.0);
+            const auto dyn = processor.getBandDynamicGainDb (4);
+            note ("48 dB/oct dynamic high shelf (range -12 dB): loud 8 kHz sine measures " + format (loud, 2) + " dB, dynamic gain " + format (dyn, 2) + " dB");
+            check (dyn < -6.0 && loud < -6.0 && std::abs (loud - dyn) < 0.5, "dynamics drive a steep shelf (measured gain follows the dynamic gain)");
+        }
+
+        // 9. Old sessions (no slope parameters) load at 12 dB/oct.
+        {
+            DooblrQAudioProcessor source;
+            for (int b = 0; b < params::numBands; ++b)
+                setBand (source, b, params::band::slope, (float) S::db60);
+            auto tree = source.getParameterState().copyState();
+            for (int b = 0; b < params::numBands; ++b)
+                tree.removeChild (tree.getChildWithProperty ("id", params::bandId (b, params::band::slope)), nullptr);
+            juce::MemoryBlock block;
+            juce::AudioProcessor::copyXmlToBinary (*tree.createXml(), block);
+
+            DooblrQAudioProcessor target;
+            for (int b = 0; b < params::numBands; ++b)
+                setBand (target, b, params::band::slope, (float) S::brickwall);
+            target.setStateInformation (block.getData(), (int) block.getSize());
+            auto all12 = true;
+            for (int b = 0; b < params::numBands; ++b)
+                all12 = all12 && target.getBandSettings (b).slope == S::db12;
+            check (all12, "a session saved before 0.7.0 loads every band at 12 dB/oct");
+
+            setBand (target, 2, params::band::slope, (float) S::db36);
+            juce::MemoryBlock saved;
+            target.getStateInformation (saved);
+            DooblrQAudioProcessor restored;
+            restored.setStateInformation (saved.getData(), (int) saved.getSize());
+            check (restored.getBandSettings (2).slope == S::db36, "a slope survives save/restore");
+        }
+
+        // 10. Editor: slope selector, disabled with a reason for bell/notch, right-click menu, undo,
+        //     handles on the steep curves.
+        {
+            DooblrQAudioProcessor processor;
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            setBand (processor, 0, params::band::enabled, 1.0f);
+            setBand (processor, 0, params::band::frequency, 80.0f);
+            setBand (processor, 0, params::band::slope, (float) S::db48);
+            setBand (processor, 1, params::band::enabled, 1.0f);
+            setBand (processor, 1, params::band::type, (float) T::lowShelf);
+            setBand (processor, 1, params::band::frequency, 250.0f);
+            setBand (processor, 1, params::band::gain, 5.0f);
+            setBand (processor, 1, params::band::slope, (float) S::db24);
+            setBand (processor, 3, params::band::enabled, 1.0f);
+            setBand (processor, 3, params::band::gain, -4.0f);
+            setBand (processor, 5, params::band::enabled, 1.0f);
+            setBand (processor, 5, params::band::frequency, 9000.0f);
+            setBand (processor, 5, params::band::q, 1.4f);
+            setBand (processor, 5, params::band::slope, (float) S::brickwall);
+
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1300, 760);
+            auto* curve = dynamic_cast<Curve*> (findById (*editor, "responseCurve"));
+            auto* slopeBox = dynamic_cast<juce::ComboBox*> (findById (*editor, params::band::slope));
+            auto* editorImpl = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+            check (curve != nullptr && slopeBox != nullptr && editorImpl != nullptr, "editor has a slope selector");
+
+            if (curve != nullptr && slopeBox != nullptr && editorImpl != nullptr)
+            {
+                check (slopeBox->getNumItems() == dsp::numSlopes && slopeBox->getItemText (5) == "Brickwall", "slope selector lists 12-60 dB/oct and Brickwall");
+
+                editorImpl->selectBand (5);
+                check (slopeBox->getSelectedId() == (int) S::brickwall + 1 && slopeBox->isEnabled(), "band 6 (High Cut) shows Brickwall, enabled");
+
+                editorImpl->selectBand (3);
+                check (! slopeBox->isEnabled() && slopeBox->getTooltip().contains ("Width"), "a Bell band's slope selector is disabled, with the reason as tooltip");
+                const auto bellMenu = curve->createSlopeMenu (3);
+                auto anyEnabled = false;
+                for (juce::PopupMenu::MenuItemIterator it (bellMenu); it.next();)
+                    anyEnabled = anyEnabled || (it.getItem().itemID > 0 && it.getItem().isEnabled);
+                check (! anyEnabled, "a Bell's right-click slope menu is greyed out");
+
+                const auto cutMenu = curve->createSlopeMenu (0);
+                int items = 0, ticked = -1;
+                for (juce::PopupMenu::MenuItemIterator it (cutMenu); it.next();)
+                    if (it.getItem().itemID > 0 && it.getItem().isEnabled)
+                    {
+                        ++items;
+                        if (it.getItem().isTicked) ticked = it.getItem().itemID - 1;
+                    }
+                check (items == dsp::numSlopes && ticked == (int) S::db48, "a cut's right-click menu offers all six slopes, current one ticked");
+
+                // Undo: a slope change from the menu and from the selector are one step each.
+                auto& history = processor.getUndoHistory();
+                history.clear();
+                curve->setBandSlope (0, S::db60);
+                editorImpl->selectBand (0);
+                slopeBox->setSelectedId ((int) S::brickwall + 1, juce::sendNotificationSync);
+                check (processor.getBandSettings (0).slope == S::brickwall && history.getNumUndoableSteps() == 2,
+                       "menu and selector slope changes are one undo step each");
+                history.undo();
+                check (processor.getBandSettings (0).slope == S::db60, "undo restores the menu's slope (60 dB/oct)");
+                history.undo();
+                check (processor.getBandSettings (0).slope == S::db48, "second undo restores 48 dB/oct");
+                history.redo();
+                check (processor.getBandSettings (0).slope == S::db60, "redo re-applies the slope change");
+                curve->setBandSlope (0, S::db48);
+
+                // Handles sit on the steep curves and the drawn curve shows the true slope.
+                auto onCurve = true;
+                for (const auto b : { 0, 1, 5 })
+                {
+                    const auto s = processor.getBandSettings (b);
+                    // Against the band's own response (the drawn sum also contains the neighbouring bands).
+                    const auto own = db (dsp::magnitudeAt (dsp::makeBandCoefficients (s.type, s.slope, s.frequency, s.q, s.gainDb, sampleRate), s.frequency, sampleRate));
+                    const auto handleDb = curve->yToDecibels (curve->handlePosition (b).y);
+                    note ("band " + std::to_string (b + 1) + " (" + params::slopeNames()[(int) s.slope].toStdString() + ") handle "
+                          + format (handleDb, 2) + " dB, its own curve " + format (own, 2) + " dB");
+                    onCurve = onCurve && std::abs (own - handleDb) < 0.1;
+                }
+                check (onCurve, "cut and shelf handles sit on their band's curve at every slope");
+                const auto oneOctaveBelow = curve->responseDecibelsAt (40.0, false);
+                note ("drawn curve: 48 dB/oct low cut at 80 Hz reads " + format (oneOctaveBelow, 1) + " dB at 40 Hz; brickwall high cut at 9 kHz reads "
+                      + format (curve->responseDecibelsAt (9900.0, false), 1) + " dB at 9.9 kHz");
+                check (oneOctaveBelow < -40.0, "the drawn curve shows the 48 dB/oct slope (-48 dB, plus the +5 dB low shelf)");
+                check (curve->responseDecibelsAt (9900.0, false) < -20.0, "the drawn curve shows the brickwall");
+
+                editorImpl->selectBand (5);
+                saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.7.0");
+            }
+
+            processor.editorBeingDeleted (editor.get());
+        }
+    }
+
     void testCpuUsage()
     {
         constexpr double sampleRate = 48000.0;
@@ -2254,6 +2643,46 @@ namespace
         }
 
         note (line);
+
+        // Worst case for 0.7.0: all six bands steep (cuts / shelves / tilt on Brickwall, i.e.
+        // 16 sections each; band 4 a dynamic Brickwall shelf so its cascade is recomputed per block).
+        std::string worst = "CPU, all 6 bands Brickwall (16 sections each), stereo @ 48 kHz, 512-sample blocks:";
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            const dsp::FilterType types[] { dsp::FilterType::lowCut, dsp::FilterType::lowShelf, dsp::FilterType::tilt,
+                                            dsp::FilterType::highShelf, dsp::FilterType::lowShelf, dsp::FilterType::highCut };
+            const float freqs[] { 40.0f, 150.0f, 800.0f, 3000.0f, 6000.0f, 15000.0f };
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                setBand (processor, b, params::band::enabled, 1.0f);
+                setBand (processor, b, params::band::type, (float) types[b]);
+                setBand (processor, b, params::band::frequency, freqs[b]);
+                setBand (processor, b, params::band::gain, b % 2 == 0 ? 3.0f : -3.0f);
+                setBand (processor, b, params::band::slope, (float) dsp::Slope::brickwall);
+            }
+            setBand (processor, 3, params::band::dynamicsEnabled, 1.0f);
+            setBand (processor, 3, params::band::range, -9.0f);
+            setBand (processor, 3, params::band::threshold, -30.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            juce::Random random (11);
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            for (int block = 0; block < seconds * 48000 / 512; ++block)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < 512; ++i)
+                        buffer.setSample (ch, i, (random.nextFloat() - 0.5f) * ((block / 40) % 2 == 0 ? 1.0f : 0.05f));
+                processor.processBlock (buffer, midi);
+            }
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+            worst += std::string (" ") + phaseName (mode) + " " + format (100.0 * elapsed / (seconds * 1000.0), 2) + " % of one core";
+            check (elapsed < seconds * 1000.0 && allFinite (buffer), std::string (phaseName (mode)) + ": all-Brickwall runs faster than real time, finite output");
+        }
+        note (worst);
     }
 
     //==============================================================================
@@ -2883,6 +3312,7 @@ int main()
         { "smoothed spectrum display",              testSpectrumDisplay },
         { "undo / redo (50 steps, keys, buttons)",  testUndo },
         { "band tab on/off switches",               testBandTabSwitches },
+        { "per-band slope (12-60 dB/oct, Brickwall)", testSlopes },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

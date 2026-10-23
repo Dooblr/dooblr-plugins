@@ -22,6 +22,7 @@ namespace dooblrq::dsp
         float thresholdDb = -24.0f;
         float attackMs = 10.0f;
         float releaseMs = 120.0f;
+        Slope slope = Slope::db12;
     };
 
     /**
@@ -35,7 +36,11 @@ namespace dooblrq::dsp
             dynamic gain   = sign(range) * min(|range|, slope * over-threshold)
 
         where over-threshold uses a soft knee. The EQ filter itself is a TPT SVF whose
-        coefficients are recomputed for every sub-block passed to process().
+        coefficients are recomputed for every sub-block passed to process(). With a slope
+        above 12 dB/oct the filter is a cascade of SVF sections (see makeBandPrototype).
+        A change of type or slope (which changes the filter topology) is crossfaded: the
+        old cascade keeps running on its own state and fades out over
+        topologyFadeSeconds while the new one fades in, so switching never clicks.
 
         Real-time safe: no allocation, locks or system calls after prepare().
     */
@@ -48,6 +53,7 @@ namespace dooblrq::dsp
         static constexpr float dynamicSlope = 0.5f;
         static constexpr float kneeWidthDb = 6.0f;
         static constexpr float maxTotalGainDb = 30.0f;
+        static constexpr double topologyFadeSeconds = 0.01;
 
         /** Maps a detector level to the dynamic gain offset in dB. */
         static float computeDynamicGainDb (float levelDb, float thresholdDb, float rangeDb) noexcept;
@@ -66,6 +72,9 @@ namespace dooblrq::dsp
         /** Current dynamic gain offset (dB), safe to read from any thread. */
         float getDynamicGainDb() const noexcept { return dynamicGainForDisplay.load (std::memory_order_relaxed); }
 
+        /** True while a type/slope change is being crossfaded. */
+        bool isCrossfading() const noexcept { return crossfadeRemaining > 0; }
+
         /** True while the band is producing output (enabled or fading out). */
         bool isActive() const noexcept { return active; }
 
@@ -81,7 +90,14 @@ namespace dooblrq::dsp
 
         float attackCoefficient = 0.0f, releaseCoefficient = 0.0f;
 
-        std::array<SvfState, maxChannels> filterState {}, detectorState {};
+        using CascadeState = std::array<SvfState, maxSections>;
+        std::array<CascadeState, maxChannels> filterState {}, fadingState {};
+        std::array<SvfState, maxChannels> detectorState {};
+
+        // Topology currently running, and the one fading out during a crossfade.
+        FilterType appliedType = FilterType::bell, fadingType = FilterType::bell;
+        Slope appliedSlope = Slope::db12, fadingSlope = Slope::db12;
+        int crossfadeRemaining = 0, crossfadeLength = 1;
         std::array<float, maxChannels> envelope {}, dynamicGainDb {};
 
         bool active = false;

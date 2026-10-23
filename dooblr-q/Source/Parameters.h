@@ -25,6 +25,7 @@ namespace dooblrq::params
         inline constexpr const char* threshold       = "dyn_threshold";
         inline constexpr const char* attack          = "dyn_attack";
         inline constexpr const char* release         = "dyn_release";
+        inline constexpr const char* slope           = "slope"; // added in 0.7.0
     }
 
     inline constexpr const char* outputGain = "output_gain";
@@ -53,6 +54,9 @@ namespace dooblrq::params
 
     /** Host-visible names of the filter types, in dsp::FilterType order. */
     juce::StringArray filterTypeNames();
+
+    /** Names of the slope choices, in dsp::Slope order. */
+    juce::StringArray slopeNames();
 
     struct BandDefaults
     {

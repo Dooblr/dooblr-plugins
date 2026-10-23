@@ -62,6 +62,11 @@ namespace dooblrq::params
         return { "Bell", "Low Shelf", "High Shelf", "Low Cut", "High Cut", "Notch", "Tilt" };
     }
 
+    juce::StringArray slopeNames()
+    {
+        return { "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "60 dB/oct", "Brickwall" };
+    }
+
     BandDefaults bandDefaults (int bandIndex)
     {
         using dsp::FilterType;
@@ -158,6 +163,14 @@ namespace dooblrq::params
         constexpr int addedInV040 = 2;
         layout.add (std::make_unique<juce::AudioParameterChoice> (
             juce::ParameterID { phaseMode, addedInV040 }, "Phase Mode", phaseModeNames(), 0));
+
+        // Added in 0.7.0, again after everything older; old sessions load 12 dB/oct, which
+        // is exactly the filter every earlier version used.
+        constexpr int addedInV070 = 3;
+        for (int bandIndex = 0; bandIndex < numBands; ++bandIndex)
+            layout.add (std::make_unique<juce::AudioParameterChoice> (
+                juce::ParameterID { bandId (bandIndex, band::slope), addedInV070 },
+                "Band " + juce::String (bandIndex + 1) + " Slope", slopeNames(), (int) dsp::Slope::db12));
 
         return layout;
     }

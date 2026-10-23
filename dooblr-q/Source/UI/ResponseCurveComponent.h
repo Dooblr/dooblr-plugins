@@ -90,6 +90,14 @@ namespace dooblrq::ui
         std::pair<juce::Point<float>, juce::Point<float>> widthHandlePositions (int bandIndex) const;
         bool widthHandlesVisible() const;
 
+        /** Right-click menu on a handle: the band's slope choices (current one ticked). For
+            a bell or notch the choices are shown greyed with the reason, since slope does
+            not apply to them. Item IDs are slope index + 1. */
+        juce::PopupMenu createSlopeMenu (int bandIndex) const;
+
+        /** Sets a band's slope as one undoable gesture (what the slope menu does). */
+        void setBandSlope (int bandIndex, dsp::Slope slope);
+
         /** True when the display draws the analogue (Natural/Linear phase) response. */
         bool showsAnalogResponse() const;
 
@@ -136,8 +144,8 @@ namespace dooblrq::ui
 
         struct ResponseModel
         {
-            std::array<dsp::SvfCoefficients, params::numBands> coefficients {};
-            std::array<dsp::AnalogPrototype, params::numBands> prototypes {};
+            std::array<dsp::BandCoefficients, params::numBands> coefficients {};
+            std::array<dsp::BandPrototype, params::numBands> prototypes {};
             std::array<double, params::numBands> frequencies {};
             std::array<bool, params::numBands> enabled {};
             double sampleRate = 48000.0;

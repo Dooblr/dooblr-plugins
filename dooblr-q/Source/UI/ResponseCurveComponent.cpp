@@ -412,12 +412,15 @@ namespace dooblrq::ui
         if (s.type == dsp::FilterType::notch) // its centre is -inf: place the handle by Q instead
             return 20.0 * std::log10 (std::max ((double) s.q, 1.0e-3));
 
+        // With any slope the level at the band frequency is the corner level (cuts: -3 dB
+        // scaled by the resonance, i.e. 20 log10 Q) or half the gain (shelves), so the handle
+        // stays on the curve for every slope.
         if (analog)
             return juce::Decibels::gainToDecibels (
-                std::abs (dsp::analogResponseAt (dsp::makeEqPrototype (s.type, (double) s.q, (double) s.gainDb),
+                std::abs (dsp::analogResponseAt (dsp::makeBandPrototype (s.type, s.slope, (double) s.q, (double) s.gainDb),
                                                  (double) s.frequency, (double) s.frequency)), -100.0);
 
-        const auto c = dsp::makeEqCoefficients (s.type, (double) s.frequency, (double) s.q, (double) s.gainDb, sampleRate);
+        const auto c = dsp::makeBandCoefficients (s.type, s.slope, (double) s.frequency, (double) s.q, (double) s.gainDb, sampleRate);
         return juce::Decibels::gainToDecibels (dsp::magnitudeAt (c, (double) s.frequency, sampleRate), -100.0);
     }
 
@@ -470,9 +473,9 @@ namespace dooblrq::ui
             gain = juce::jlimit ((double) -dsp::DynamicEQBand::maxTotalGainDb,
                                  (double) dsp::DynamicEQBand::maxTotalGainDb, gain);
 
-            model.coefficients[(size_t) b] = dsp::makeEqCoefficients (s.type, (double) s.frequency, (double) s.q,
-                                                                      gain, model.sampleRate);
-            model.prototypes[(size_t) b] = dsp::makeEqPrototype (s.type, (double) s.q, gain);
+            model.prototypes[(size_t) b] = dsp::makeBandPrototype (s.type, s.slope, (double) s.q, gain);
+            model.coefficients[(size_t) b] = dsp::makeBandCoefficients (s.type, s.slope, (double) s.frequency,
+                                                                        (double) s.q, gain, model.sampleRate);
             model.frequencies[(size_t) b] = (double) s.frequency;
         }
 
@@ -819,8 +822,65 @@ namespace dooblrq::ui
             parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
     }
 
+    juce::PopupMenu ResponseCurveComponent::createSlopeMenu (int bandIndex) const
+    {
+        juce::PopupMenu menu;
+        const auto s = processor.getBandSettings (bandIndex);
+        const auto applies = dsp::slopeApplies (s.type);
+        const auto names = params::slopeNames();
+
+        menu.addSectionHeader ("Band " + juce::String (bandIndex + 1) + " Slope");
+
+        for (int i = 0; i < names.size(); ++i)
+            menu.addItem (i + 1, names[i], applies, applies && (int) s.slope == i);
+
+        if (! applies)
+        {
+            menu.addSeparator();
+            menu.addItem (-1, "Slope applies to Cut, Shelf and Tilt types", false, false);
+        }
+
+        return menu;
+    }
+
+    void ResponseCurveComponent::setBandSlope (int bandIndex, dsp::Slope slope)
+    {
+        if (auto* parameter = bandParameter (bandIndex, params::band::slope))
+        {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 ((float) (int) slope));
+            parameter->endChangeGesture();
+        }
+
+        repaint();
+    }
+
     void ResponseCurveComponent::mouseDown (const juce::MouseEvent& event)
     {
+        if (event.mods.isPopupMenu())
+        {
+            draggingBand = -1;
+            widthDragSide = 0;
+            qDrag = false;
+
+            if (const auto band = bandAt (event.position); band >= 0)
+            {
+                if (onBandSelected != nullptr)
+                    onBandSelected (band);
+
+                juce::Component::SafePointer<ResponseCurveComponent> safeThis (this);
+                createSlopeMenu (band).showMenuAsync (juce::PopupMenu::Options().withTargetComponent (this)
+                                                                                .withMousePosition(),
+                                                      [safeThis, band] (int result)
+                                                      {
+                                                          if (safeThis != nullptr && result > 0)
+                                                              safeThis->setBandSlope (band, (dsp::Slope) (result - 1));
+                                                      });
+            }
+
+            return;
+        }
+
         widthDragSide = widthHandleAt (event.position);
         qDrag = false;
 

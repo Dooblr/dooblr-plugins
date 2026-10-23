@@ -49,6 +49,9 @@ namespace dooblrq::dsp
         linearFft    = std::make_unique<juce::dsp::FFT> (log2Of (longest));
 
         designBuffer.assign ((size_t) longest * 2, 0.0f);
+        for (auto& r : bandResponse)
+            r.assign ((size_t) longest / 2 + 1, {});
+        invalidateBandResponses();
         accumulator.assign ((size_t) numBins, {});
         fftScratch.assign ((size_t) fftSize * 2, 0.0f);
         crossfadeScratch.assign ((size_t) partitionSize, 0.0f);
@@ -71,6 +74,7 @@ namespace dooblrq::dsp
     void FirEqEngine::setMode (Mode newMode) noexcept
     {
         mode = newMode;
+        invalidateBandResponses(); // the bin spacing depends on the kernel length
         numPartitions = std::min (maxPartitions, kernelLength (mode, sampleRate) / partitionSize);
 
         std::fill (current.begin(), current.end(), Complex {});
@@ -105,32 +109,38 @@ namespace dooblrq::dsp
         const auto n = kernelLength (mode, sampleRate);
         const auto delay = kernelDelay (mode, sampleRate);
         auto& fft = mode == Mode::linear ? *linearFft : *naturalFft;
-        std::array<AnalogPrototype, 6> eq {};
+        const auto sameBand = [] (const KernelBand& a, const KernelBand& b)
+        {
+            return a.enabled == b.enabled && a.type == b.type && juce::exactlyEqual (a.frequency, b.frequency)
+                   && juce::exactlyEqual (a.q, b.q) && juce::exactlyEqual (a.gainDb, b.gainDb) && a.slope == b.slope;
+        };
 
         for (size_t b = 0; b < bands.size(); ++b)
         {
             const auto& band = bands[b];
 
-            if (! band.enabled)
+            if (! band.enabled || (bandResponseValid[b] && sameBand (band, cachedBands[b])))
                 continue;
 
-            eq[b] = makeEqPrototype (band.type, band.q, band.gainDb);
+            const auto prototype = makeBandPrototype (band.type, band.slope, band.q, band.gainDb);
+            auto& response = bandResponse[b];
+
+            for (int bin = 0; bin <= n / 2; ++bin)
+                response[(size_t) bin] = analogResponseAt (prototype, band.frequency, bin * sampleRate / n);
+
+            cachedBands[b] = band;
+            bandResponseValid[b] = true;
         }
 
         std::fill (designBuffer.begin(), designBuffer.begin() + 2 * n, 0.0f);
 
         for (int bin = 0; bin <= n / 2; ++bin)
         {
-            const auto frequency = bin * sampleRate / n;
             std::complex<double> h (1.0, 0.0);
 
             for (size_t b = 0; b < bands.size(); ++b)
-            {
-                if (! bands[b].enabled)
-                    continue;
-
-                h *= analogResponseAt (eq[b], bands[b].frequency, frequency);
-            }
+                if (bands[b].enabled)
+                    h *= bandResponse[b][(size_t) bin];
 
             if (mode == Mode::linear)
                 h = std::abs (h);                 // zero phase

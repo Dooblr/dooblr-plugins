@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.6.1:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
+**Version 0.7.0:** six-band dynamic EQ with per-band slopes (12–60 dB/oct and Brickwall), Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -13,7 +13,8 @@ starts fresh when Freeze is turned on and stops and clears when it is turned off
 makes band 6 a High Cut (low-pass) by default, alongside band 1's Low Cut (high-pass), and
 gives every band type 2D handle dragging: horizontal = frequency, vertical = gain or, for
 cuts and notches, Q. 0.6.1 colours dynamic activity per band, only over the range the
-moving band affects, instead of recolouring the whole curve.)
+moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-band
+**Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt.)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -59,6 +60,7 @@ Six bands (`params::numBands` in `Source/Parameters.h`), each with:
 | Threshold | −60 – 0 dB | −24 dB |
 | Attack | 0.1 – 200 ms | 10 ms |
 | Release | 5 – 2000 ms | 120 ms |
+| Slope | 12, 24, 36, 48, 60 dB/oct, Brickwall (Cut, Shelf and Tilt types; disabled for Bell and Notch) | 12 dB/oct |
 
 Band defaults: 1 Low Cut 30 Hz, 2 Low Shelf 120 Hz, 3 Bell 400 Hz,
 4 Bell 1.5 kHz, 5 Bell 4 kHz, 6 High Cut 18 kHz (band 1 is a high-pass and band 6 a
@@ -82,6 +84,28 @@ sessions saved before it load at Zero Latency. 0.4.0 also had a per-band stereo
 `bN_width` parameter; it was removed in 0.4.1, and 0.4.0 sessions containing it load
 normally (the unknown parameter is ignored and not saved again).
 
+The six Slope parameters (`b1_slope` … `b6_slope`, added in 0.7.0) come after every older
+parameter, so no older ID or index moved. Sessions saved before 0.7.0 have no slope and
+load at 12 dB/oct, which is bit-identical to the old filters; `stateVersion` stays 1.
+
+### Slope (0.7.0)
+
+| Type | What Slope does |
+|---|---|
+| Low Cut / High Cut | A cascade of Butterworth sections: 12 dB/oct = 2nd order (1 section) … 60 dB/oct = 10th order (5 sections). The −3 dB corner stays at the set frequency for every order. Width/Q adds resonance: the corner level is 20·log10(Q) at every slope (−3 dB at Q 0.707), so the handle mapping is unchanged. |
+| Brickwall | 32nd-order Butterworth (16 sections), about 192 dB/oct asymptotically: −3 dB at the corner, ≈ −29 dB 10 % past it, below −110 dB (measured, float noise floor) one octave past it. |
+| Low / High Shelf, Tilt | Higher-order Butterworth shelving (order 2–10, 32 for Brickwall): the transition gets steeper (max ≈ 9, 19, 28, 38, 47, 149 dB/oct for an 18 dB shelf), the midpoint stays at half the gain and the plateaus are exact. Q still shapes the transition. |
+| Bell / Notch | Not applicable: their shape is set by Width. The Slope selector is disabled with a tooltip saying so, the right-click menu greys out, and the audio is bit-identical at any stored slope. |
+
+- Click-safe: changing a band's slope or type while audio runs crossfades the old and new
+  filter cascades over 10 ms (type changes were abrupt before 0.7.0).
+- Dynamics work at every slope (the band's whole cascade follows static + dynamic gain).
+- In Natural/Linear Phase the kernel is built from the same analogue cascade. Measured with a
+  1 kHz Brickwall low cut: ≈ −139 dB (Natural) / −138 dB (Linear) at 500 Hz. The kernel
+  length limits how steep a very low corner can be (5.9 / 11.7 Hz bins), and the long
+  impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
+  the ringing is pre- and post-).
+
 ### DSP
 
 - Each band is a topology-preserving-transform state-variable filter (Simper
@@ -97,7 +121,8 @@ normally (the unknown parameter is ignored and not saved again).
   with the attack/release times. The dynamic gain is
   `sign(range) × min(|range|, 0.5 × dB over threshold)`, a 2:1 ratio-style law
   with a 6 dB soft knee. The band then uses static gain + dynamic gain (total clamped to ±30 dB).
-- Low/High Cut are 12 dB/octave with Q as resonance.
+- Low/High Cut are 12 dB/octave (one SVF) by default, up to 60 dB/oct or Brickwall with
+  Slope (a cascade of SVF sections, see Slope above), with Q as resonance.
 - **Tilt** pivots around the band frequency. Gain is the total tilt: +6 dB means
   −3 dB in the lows, 0 dB at the pivot and +3 dB in the highs (positive = brighter).
   It is one SVF: a high shelf of the full gain scaled by −gain/2, so it is as
@@ -142,8 +167,11 @@ How it works:
 - The display draws the analogue response in Natural/Linear Phase (what those modes
   play) and the bilinear response in Zero Latency.
 
-Measured CPU (this Mac, Release, 48 kHz stereo, 512-sample blocks, 6 bands on with one
-dynamic band): Zero Latency ≈ 0.4 %, Natural ≈ 1.9 %, Linear ≈ 3.4 % of one core.
+Measured CPU (this Mac, test build, 48 kHz stereo, 512-sample blocks, 6 bands on with one
+dynamic band, 12 dB/oct): Zero Latency ≈ 0.7 %, Natural ≈ 1.5 %, Linear ≈ 2.4 % of one core.
+Worst case, all six bands on Brickwall (16 sections each) with one dynamic band: Zero
+Latency ≈ 3.6 %, Natural ≈ 6.3 %, Linear ≈ 8.5 %. (Since 0.7.0 the FIR modes cache each
+band's response and only recompute bands that changed when rebuilding the kernel.)
 
 Limitations: FIR modes have a finite frequency resolution (5.9 Hz bins at 48 kHz for
 Linear, 11.7 Hz for Natural), so very narrow/deep low-frequency features are smoothed
@@ -205,9 +233,12 @@ Handle mouse actions:
   and tilt, where it marks the transition width that Q controls.
 - Scroll over a handle to change Q; Option/Alt-drag a handle vertically to change Q (any type).
 - Disabled bands show grey, hollow handles.
+- Right-click (or Ctrl-click) a handle for a **Slope** menu (12–60 dB/oct, Brickwall; the
+  current one ticked). For a Bell or Notch the items are greyed with the reason. Choosing
+  one is one undo step. The curve and handles follow the slope.
 
 Below the display are six band tabs and the selected band's controls: on/off, type,
-frequency, gain, Width, dynamic on/off, range, threshold, attack, release. Controls that
+Slope (under Type), frequency, gain, Width, dynamic on/off, range, threshold, attack, release. Controls that
 currently have no audible effect (e.g. gain on a cut filter) are dimmed but still work.
 
 Each band tab has a small **on/off switch on its left** (bound to that band's on/off
@@ -401,7 +432,8 @@ Windows VST3 uses the same `CMakeLists.txt` with `-G "Visual Studio 17 2022"`.
 `Tests/PluginSmokeTests.cpp` links the plug-in's shared-code target, so it
 tests the same compiled code that goes into the VST3:
 
-- instantiation, factory, name, MIDI flags, latency, parameter count;
+- instantiation, factory, name, MIDI flags, latency, parameter count and order (69: the
+  slopes come after every older parameter);
 - supported/rejected bus layouts;
 - neutral settings (defaults, and all bands enabled at 0 dB with dynamics at 0 dB range) are identical to the input;
 - +12 dB bell at 1 kHz raises a 1 kHz sine by 12 ± 0.3 dB and leaves 60 Hz and 16 kHz within 0.5 dB.
@@ -487,7 +519,20 @@ tests the same compiled code that goes into the VST3:
   Peak, Clear, Spectrum controls and the readout; `Live` and no averaging while Freeze is
   off; Freeze on reads `Frozen: 0.0 s` and counts up from there while the overlay keeps
   changing with new audio; Freeze off clears it; display levels stay finite; closing the
-  editor stops the feed.
+  editor stops the feed;
+- slope (0.7.0): 12 dB/oct is bit-identical to the old single-section filter for every type;
+  for low and high cuts at every slope the corner is −3.01 dB and the analogue response is
+  the exact order-N Butterworth; 1→2 octaves past the corner drops 11.8 / 24.1 / 36.1 /
+  48.2 / 60.2 dB (low cut, digital) for 12–60 dB/oct; Brickwall is below −25 dB 10 % past
+  the corner; the corner level is 20·log10(Q) for every slope; shelves/tilt get steeper with
+  the midpoint at half the gain; measured through the plugin (Zero Latency, sines), a 1 kHz
+  low cut gives −3.01 dB at 1 kHz and −12.3 / −24.1 / −36.2 / −48.2 / −60.3 / −137 dB at 500 Hz;
+  Natural and Linear Phase match (Brickwall < −70 dB one octave out); Bell/Notch output is
+  identical at any slope; slope and type changes while running cause no click; a dynamic
+  48 dB/oct shelf follows its dynamic gain; a pre-0.7.0 state loads at 12 dB/oct and slopes
+  round-trip; the editor's Slope selector, its disabled state and tooltip for a Bell, the
+  right-click menu, undo/redo of slope changes, handles on their band's curve; CPU with
+  all bands on Brickwall per mode.
 
 Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 `build/Tests/DooblrQTests` to save images of the rendered editor. It writes `editor.png`,
@@ -496,7 +541,9 @@ plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png
 `editor-width-handles.png`, `editor-overview.png` (spectrum + frozen overlay + width handles)
 `editor-v0.5.1.png` (the same, showing the band-tab switches and the Undo/Redo buttons)
 `editor-v0.6.0.png` (the default band 1 high-pass and band 6 low-pass switched on) and
-`editor-v0.6.1.png` (a dynamic low shelf and a dynamic bell, each with its own region).
+`editor-v0.6.1.png` (a dynamic low shelf and a dynamic bell, each with its own region) and
+`editor-v0.7.0.png` (48 dB/oct low cut, 24 dB/oct low shelf, a bell and a resonant
+Brickwall high cut).
 
 ## Validation that still needs doing manually
 

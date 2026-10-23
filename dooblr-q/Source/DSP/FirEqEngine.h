@@ -17,6 +17,7 @@ namespace dooblrq::dsp
         bool enabled = false;
         FilterType type = FilterType::bell;
         double frequency = 1000.0, q = 1.0, gainDb = 0.0;
+        Slope slope = Slope::db12;
     };
 
     /**
@@ -100,6 +101,13 @@ namespace dooblrq::dsp
         std::array<std::vector<float>, maxChannels> inputBlock, outputBlock;
         std::vector<Complex> accumulator;
         std::vector<float> fftScratch, crossfadeScratch;
+
+        // Per-band analogue response per kernel bin, recomputed only when that band changes
+        // (a dynamic band redesigns every block; a steep cascade is up to 16 sections).
+        std::array<std::vector<std::complex<double>>, 6> bandResponse;
+        std::array<KernelBand, 6> cachedBands {};
+        std::array<bool, 6> bandResponseValid {};
+        void invalidateBandResponses() noexcept { bandResponseValid.fill (false); }
 
         int historyPosition = 0, blockPosition = 0;
         bool pendingCrossfade = false;

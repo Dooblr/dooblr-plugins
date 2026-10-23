@@ -29,6 +29,7 @@ DooblrQAudioProcessor::DooblrQAudioProcessor()
         p.threshold       = pointer (params::bandId (b, params::band::threshold));
         p.attack          = pointer (params::bandId (b, params::band::attack));
         p.release         = pointer (params::bandId (b, params::band::release));
+        p.slope           = pointer (params::bandId (b, params::band::slope));
     }
 
     outputGainDb = pointer (params::outputGain);
@@ -60,6 +61,7 @@ dsp::BandSettings DooblrQAudioProcessor::getBandSettings (int bandIndex) const n
     s.thresholdDb     = load (p.threshold);
     s.attackMs        = load (p.attack);
     s.releaseMs       = load (p.release);
+    s.slope           = (dsp::Slope) juce::jlimit (0, dsp::numSlopes - 1, juce::roundToInt (load (p.slope)));
     return s;
 }
 
@@ -175,6 +177,7 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
         k.type = s.type;
         k.frequency = (double) s.frequency;
         k.q = (double) s.q;
+        k.slope = s.slope;
 
         // Dynamics: the band's detector runs on a copy of the input (see processFirBlock).
         // With stereo link off, the louder channel's gain is used for both.
@@ -190,7 +193,7 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
             return false;
         if (! a.enabled)
             return true;
-        return a.type == b.type && std::abs (a.gainDb - b.gainDb) < 0.01
+        return a.type == b.type && a.slope == b.slope && std::abs (a.gainDb - b.gainDb) < 0.01
                && std::abs (std::log (a.frequency / b.frequency)) < 1.0e-5 && std::abs (std::log (a.q / b.q)) < 1.0e-5;
     };
 

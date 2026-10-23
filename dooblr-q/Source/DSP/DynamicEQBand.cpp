@@ -44,6 +44,7 @@ namespace dooblrq::dsp
         rangeDb.reset (sampleRate, smoothingSeconds);
         thresholdDb.reset (sampleRate, smoothingSeconds);
         wet.reset (sampleRate, enableFadeSeconds);
+        crossfadeLength = std::max (1, (int) std::lround (topologyFadeSeconds * sampleRate));
 
         setSettings (settings, true);
         reset();
@@ -62,7 +63,11 @@ namespace dooblrq::dsp
 
     void DynamicEQBand::resetFilterState() noexcept
     {
-        for (auto& state : filterState)   state.reset();
+        for (auto& cascade : filterState) for (auto& state : cascade) state.reset();
+        for (auto& cascade : fadingState) for (auto& state : cascade) state.reset();
+        crossfadeRemaining = 0;
+        appliedType = settings.type;
+        appliedSlope = settings.slope;
         for (auto& state : detectorState) state.reset();
         envelope.fill (0.0f);
         dynamicGainDb.fill (0.0f);
@@ -83,6 +88,9 @@ namespace dooblrq::dsp
             rangeDb.setCurrentAndTargetValue (settings.rangeDb);
             thresholdDb.setCurrentAndTargetValue (settings.thresholdDb);
             wet.setCurrentAndTargetValue (targetWet);
+            appliedType = settings.type;
+            appliedSlope = settings.slope;
+            crossfadeRemaining = 0;
         }
         else
         {
@@ -127,12 +135,31 @@ namespace dooblrq::dsp
                 resetFilterState();
                 active = false;
             }
+            appliedType = settings.type; // nothing to crossfade from while silent
+            appliedSlope = settings.slope;
             return;
         }
 
         active = true;
 
-        const auto type = settings.type;
+        // A new type or slope starts a crossfade from the running cascade (one at a time;
+        // a further change waits for the current crossfade to finish).
+        if (crossfadeRemaining <= 0
+            && (settings.type != appliedType
+                || numSectionsFor (settings.type, settings.slope) != numSectionsFor (appliedType, appliedSlope)
+                || (slopeApplies (settings.type) && settings.slope != appliedSlope)))
+        {
+            fadingType = appliedType;
+            fadingSlope = appliedSlope;
+            fadingState = filterState;
+            for (auto& cascade : filterState) for (auto& state : cascade) state.reset();
+            appliedType = settings.type;
+            appliedSlope = settings.slope;
+            crossfadeRemaining = crossfadeLength;
+        }
+
+        const auto type = appliedType;
+        const auto crossfading = crossfadeRemaining > 0;
         const auto dynamic = settings.dynamicsEnabled && supportsDynamics (type)
                              && (std::abs (currentRangeDb) > 1.0e-3f || rangeDb.isSmoothing());
 
@@ -148,15 +175,28 @@ namespace dooblrq::dsp
         }
 
         // Coefficients for this sub-block, using the dynamic gain measured up to its start.
-        std::array<SvfCoefficients, maxChannels> coefficients;
+        std::array<BandCoefficients, maxChannels> coefficients;
+        std::array<BandCoefficients, maxChannels> fadingCoefficients;
 
         for (int i = 0; i < numCoefficientSets; ++i)
         {
             const auto totalGain = std::clamp (currentGainDb + dynamicGainDb[(size_t) i],
                                                -maxTotalGainDb, maxTotalGainDb);
-            coefficients[(size_t) i] = makeEqCoefficients (type, currentFrequency, currentQ,
-                                                           (double) totalGain, sampleRate);
+            coefficients[(size_t) i] = makeBandCoefficients (type, appliedSlope, currentFrequency, currentQ,
+                                                             (double) totalGain, sampleRate);
+            if (crossfading)
+                fadingCoefficients[(size_t) i] = makeBandCoefficients (fadingType, fadingSlope, currentFrequency, currentQ,
+                                                                       (double) (hasGain (fadingType) ? totalGain : currentGainDb),
+                                                                       sampleRate);
         }
+
+        const auto runCascade = [] (float input, CascadeState& state, const BandCoefficients& c) noexcept
+        {
+            auto x = input;
+            for (int s = 0; s < c.numSections; ++s)
+                x = processSvf (x, state[(size_t) s], c.sections[(size_t) s]);
+            return x;
+        };
 
         const auto detector = dynamic ? makeDetectorCoefficients (type, currentFrequency, currentQ, sampleRate)
                                       : SvfCoefficients {};
@@ -190,12 +230,27 @@ namespace dooblrq::dsp
             }
 
             const auto mix = fading ? wet.getNextValue() : 1.0f;
+            float newWeight = 1.0f;
+
+            if (crossfadeRemaining > 0)
+            {
+                // Equal-gain (linear) crossfade: the two cascades are highly correlated.
+                newWeight = 1.0f - (float) crossfadeRemaining / (float) crossfadeLength;
+                --crossfadeRemaining;
+            }
 
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 auto& sample = channels[ch][n];
-                const auto filtered = processSvf (sample, filterState[(size_t) ch],
-                                                  coefficients[(size_t) (perChannelGain ? ch : 0)]);
+                const auto set = (size_t) (perChannelGain ? ch : 0);
+                auto filtered = runCascade (sample, filterState[(size_t) ch], coefficients[set]);
+
+                if (crossfading)
+                {
+                    const auto old = runCascade (sample, fadingState[(size_t) ch], fadingCoefficients[set]);
+                    filtered = old + newWeight * (filtered - old);
+                }
+
                 sample = fading ? sample + mix * (filtered - sample) : filtered;
             }
         }
