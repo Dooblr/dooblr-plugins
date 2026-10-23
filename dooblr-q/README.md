@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.6.0:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
+**Version 0.6.1:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -12,7 +12,8 @@ switches, the live Freeze overlay and display smoothing. 0.5.1 ties averaging to
 starts fresh when Freeze is turned on and stops and clears when it is turned off. 0.6.0
 makes band 6 a High Cut (low-pass) by default, alongside band 1's Low Cut (high-pass), and
 gives every band type 2D handle dragging: horizontal = frequency, vertical = gain or, for
-cuts and notches, Q.)
+cuts and notches, Q. 0.6.1 colours dynamic activity per band, only over the range the
+moving band affects, instead of recolouring the whole curve.)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -154,8 +155,15 @@ gain for both channels.
 ### Editor
 
 Dark, resizable editor (default 980×640). The header has the Phase Mode selector. It has a frequency-response display computed
-from the same filter maths as the DSP. It draws the static curve and, when dynamics are
-active, the live curve, using each band's current dynamic gain. The display redraws
+from the same filter maths as the DSP. It draws the combined static curve (always in the
+accent colour). Dynamic activity is shown per band: while a band's dynamics are actually
+moving its gain, the area between the curve without and with that band's dynamic gain is
+filled in the band's colour, and the live curve is drawn in that colour over the same span,
+only where that band's own change exceeds 0.1 dB. A bell shows a local dip or bump around
+its centre, a shelf only its shelf side, a tilt its moving side(s); several active bands
+each show their own region, and a band with dynamics on but idle (no gain change) shows
+nothing. (Before 0.6.1, any band with dynamics switched on greyed the static curve and drew
+the whole live curve in amber across the full spectrum.) The display redraws
 immediately on any parameter change (automation from the audio thread is picked up within
 one 60 Hz frame).
 
@@ -418,6 +426,12 @@ tests the same compiled code that goes into the VST3:
   The live dynamic curve equals static + dynamic gain. Double-click toggles a band.
   Off-thread automation schedules a redraw.
 
+- per-band dynamic regions: an idle dynamic bell draws nothing; a loud 1 kHz tone gives one
+  region confined to ~155 Hz–6 kHz whose depth at 1 kHz equals the dynamic gain, with no
+  change at 60 Hz or 15 kHz; a dynamic low shelf driven by noise gets its own region from
+  the bottom edge to ~620 Hz and nothing at 12 kHz, alongside the bell's; a static band has
+  none; against the same display with dynamics off, pixels change at 40 Hz and 1 kHz and
+  none at 10 or 15 kHz; dynamics off removes the regions.
 - band 1/6 defaults and 2D drag: band 1 = Low Cut 30 Hz and band 6 = High Cut 18 kHz
   (Q 0.707, off), handles at −3 dB. For all seven types on band 1 and on band 6, a drag
   60 px up and from 1 to 2 kHz sets the frequency and raises gain (Bell = Δ dB, shelves and
@@ -481,7 +495,8 @@ plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png
 `editor-tilt.png`, `editor-spectrum-live.png`, `editor-spectrum-frozen.png`,
 `editor-width-handles.png`, `editor-overview.png` (spectrum + frozen overlay + width handles)
 `editor-v0.5.1.png` (the same, showing the band-tab switches and the Undo/Redo buttons)
-and `editor-v0.6.0.png` (the default band 1 high-pass and band 6 low-pass switched on).
+`editor-v0.6.0.png` (the default band 1 high-pass and band 6 low-pass switched on) and
+`editor-v0.6.1.png` (a dynamic low shelf and a dynamic bell, each with its own region).
 
 ## Validation that still needs doing manually
 

@@ -19,8 +19,11 @@ namespace dooblrq::ui
     /**
         Frequency-response display computed from the same filter maths as the DSP.
 
-        Shows the static EQ curve and, where dynamics are active, the live curve
-        including each band's current dynamic gain (read lock-free). Each band has
+        Shows the combined static EQ curve. Each band whose dynamics are currently moving
+        its gain (read lock-free) also gets its own coloured region, in the band's colour:
+        the area between the curve without and with that band's dynamic gain, drawn only
+        over the frequencies where that band's dynamic change exceeds
+        dynamicRegionThresholdDb, plus the live curve over that region. Each band has
         a handle that sits on that band's own response at its frequency, so the
         curve's peak, dip, shelf midpoint or cut corner passes through the handle.
 
@@ -93,6 +96,18 @@ namespace dooblrq::ui
         /** Combined response (dB) of all enabled bands at a frequency, as drawn. */
         double responseDecibelsAt (double frequency, bool includeDynamics) const;
 
+        /** A band's dynamic region is drawn where its own dynamic change exceeds this. */
+        static constexpr double dynamicRegionThresholdDb = 0.1;
+
+        /** One band's own response change (dB) at a frequency from its current dynamic gain:
+            its response with the dynamic gain minus without it. 0 when the band is off or its
+            dynamics are off. */
+        double bandDynamicDeltaDecibelsAt (int bandIndex, double frequency) const;
+
+        /** The frequency spans over which a band's dynamic region is drawn (|delta| above the
+            threshold, sampled per 2 px as painted). Empty when its dynamics are idle. */
+        std::vector<juce::Range<double>> dynamicRegions (int bandIndex) const;
+
         /** Pulls new audio from the processor's analyzer FIFO into the analyzer (called by the
             timer; public so tests can drive it). Returns the number of new FFT frames. */
         int updateAnalyzer();
@@ -129,7 +144,19 @@ namespace dooblrq::ui
             bool analog = false;
 
             double decibelsAt (double frequency) const;
+            double bandDecibelsAt (size_t bandIndex, double frequency) const; // 0 if disabled
         };
+
+        /** Per band, the painted x columns with their dynamic delta (dB), split into the
+            contiguous runs where |delta| > dynamicRegionThresholdDb. */
+        struct DynamicRun
+        {
+            int band = -1;
+            std::vector<std::pair<float, double>> points; // x, delta dB
+        };
+
+        std::vector<DynamicRun> computeDynamicRuns (int onlyBand = -1) const;
+        bool bandDynamicsMoving (const dsp::BandSettings& settings, int bandIndex) const;
 
         ResponseModel makeResponseModel (bool includeDynamics) const;
         juce::Path makeSpectrumPath (const std::vector<float>& binDb, bool closed) const;

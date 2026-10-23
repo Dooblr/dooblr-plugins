@@ -1006,6 +1006,148 @@ namespace
     }
 
     //==============================================================================
+    // 0.6.1: dynamic activity is coloured per band, only over that band's affected range.
+    void testDynamicRegions()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        constexpr double sampleRate = 48000.0;
+
+        DooblrQAudioProcessor processor;
+        prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+        constexpr int bell = 2, shelf = 1, quiet = 4;
+        const auto setupDynamic = [&] (int b, dsp::FilterType type, float frequency, float q)
+        {
+            setBand (processor, b, params::band::type, (float) type);
+            setBand (processor, b, params::band::frequency, frequency);
+            setBand (processor, b, params::band::q, q);
+            setBand (processor, b, params::band::gain, 0.0f);
+            setBand (processor, b, params::band::enabled, 1.0f);
+            setBand (processor, b, params::band::dynamicsEnabled, 1.0f);
+            setBand (processor, b, params::band::range, -12.0f);
+            setBand (processor, b, params::band::threshold, -40.0f);
+        };
+
+        setupDynamic (bell, dsp::FilterType::bell, 1000.0f, 2.0f);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        editor->setSize (1300, 760);
+        auto* curve = dynamic_cast<Curve*> (editor->findChildWithID ("responseCurve"));
+        check (curve != nullptr, "response curve exists");
+
+        if (curve == nullptr)
+            return;
+
+        // Dynamics on but nothing pushing them: no coloured region.
+        check (std::abs (processor.getBandDynamicGainDb (bell)) < 1.0e-3f, "idle bell has no dynamic gain");
+        check (curve->dynamicRegions (bell).empty(), "idle dynamics draw no region");
+
+        // A loud 1 kHz tone pulls the bell down.
+        measureSineGainDb (processor, 1000.0, 0.5f, sampleRate, 0.3);
+        const auto bellGain = processor.getBandDynamicGainDb (bell);
+        const auto bellRegions = curve->dynamicRegions (bell);
+        note ("bell dynamic gain " + format (bellGain) + " dB; regions: " + std::to_string (bellRegions.size())
+              + (bellRegions.empty() ? std::string() : " (" + format (bellRegions.front().getStart(), 0) + " - "
+                                                         + format (bellRegions.front().getEnd(), 0) + " Hz)"));
+        check (bellGain < -3.0f, "loud in-band tone pushes the bell's dynamics");
+        check (bellRegions.size() == 1, "the bell has exactly one region");
+
+        if (bellRegions.size() == 1)
+        {
+            const auto r = bellRegions.front();
+            check (r.contains (1000.0), "the bell's region contains its centre");
+            check (r.getStart() > 100.0 && r.getEnd() < 10000.0, "the bell's region is confined around 1 kHz (not the whole spectrum)");
+            check (r.getStart() > 20.5 && r.getEnd() < 19500.0, "the bell's region does not reach either edge");
+        }
+
+        check (std::abs (curve->bandDynamicDeltaDecibelsAt (bell, 1000.0) - bellGain) < 0.05,
+               "the bell's region depth at its centre equals its dynamic gain");
+        check (std::abs (curve->bandDynamicDeltaDecibelsAt (bell, 60.0)) < Curve::dynamicRegionThresholdDb
+                   && std::abs (curve->bandDynamicDeltaDecibelsAt (bell, 15000.0)) < Curve::dynamicRegionThresholdDb,
+               "no dynamic change far from the bell (60 Hz, 15 kHz)");
+        check (std::abs (curve->responseDecibelsAt (1000.0, true) - curve->responseDecibelsAt (1000.0, false) - bellGain) < 0.05
+                   && std::abs (curve->responseDecibelsAt (60.0, true) - curve->responseDecibelsAt (60.0, false)) < 0.1,
+               "the combined live curve still moves only where the bell acts");
+
+        // Add a dynamic low shelf and a static bell; drive both dynamic bands with noise.
+        setupDynamic (shelf, dsp::FilterType::lowShelf, 200.0f, 0.707f);
+        setBand (processor, quiet, params::band::enabled, 1.0f);
+        setBand (processor, quiet, params::band::gain, 4.0f); // static only
+        {
+            juce::AudioBuffer<float> noise (2, (int) (0.3 * sampleRate));
+            fillWithNoise (noise, 1234, 0.7f);
+            processInBlocks (processor, noise, { 512 });
+        }
+
+        const auto shelfGain = processor.getBandDynamicGainDb (shelf);
+        const auto shelfRegions = curve->dynamicRegions (shelf);
+        const auto bellRegions2 = curve->dynamicRegions (bell);
+        note ("shelf dynamic gain " + format (shelfGain) + " dB, bell " + format (processor.getBandDynamicGainDb (bell))
+              + " dB; shelf regions " + std::to_string (shelfRegions.size())
+              + (shelfRegions.empty() ? std::string() : " (" + format (shelfRegions.front().getStart(), 0) + " - "
+                                                          + format (shelfRegions.front().getEnd(), 0) + " Hz)"));
+        check (shelfGain < -1.0f, "noise pushes the low shelf's dynamics");
+        check (shelfRegions.size() == 1 && shelfRegions.front().getStart() < 25.0 && shelfRegions.front().getEnd() < 3000.0,
+               "the low shelf's region covers only its low side (from the bottom edge, ending well below the top)");
+        check (std::abs (curve->bandDynamicDeltaDecibelsAt (shelf, 12000.0)) < Curve::dynamicRegionThresholdDb,
+               "no shelf change on its unaffected (high) side");
+        check (bellRegions2.size() == 1, "the bell keeps its own separate region alongside the shelf's");
+        check (curve->dynamicRegions (quiet).empty(), "a band without dynamics has no region");
+
+        // Pixels: the shelf's colour appears in its region and nowhere near 10 kHz.
+        const auto image = curve->createComponentSnapshot (curve->getLocalBounds());
+        const auto countBandPixels = [&] (int band, double frequency)
+        {
+            const juce::Image::BitmapData pixels (image, juce::Image::BitmapData::readOnly);
+            const auto colour = dooblrq::ui::bandColour (band);
+            const auto x = juce::roundToInt (curve->frequencyToX (frequency));
+            int count = 0;
+
+            for (int y = 0; y < image.getHeight(); ++y)
+            {
+                const auto p = pixels.getPixelColour (x, y);
+                count += std::abs (p.getRed() - colour.getRed()) + std::abs (p.getGreen() - colour.getGreen())
+                         + std::abs (p.getBlue() - colour.getBlue()) < 40 ? 1 : 0;
+            }
+
+            return count;
+        };
+        note ("band-colour pixels: bell at 1 kHz " + std::to_string (countBandPixels (bell, 1000.0)) + ", at 10 kHz "
+              + std::to_string (countBandPixels (bell, 10000.0)) + "; shelf at 40 Hz " + std::to_string (countBandPixels (shelf, 40.0))
+              + ", at 10 kHz " + std::to_string (countBandPixels (shelf, 10000.0)));
+        check (countBandPixels (bell, 1000.0) > 0 && countBandPixels (shelf, 40.0) > 0, "regions are drawn in each band's colour");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.6.1");
+
+        // Compare with the same display with both dynamic bands switched to static: only the
+        // columns inside a region may differ.
+        setBand (processor, bell, params::band::dynamicsEnabled, 0.0f);
+        setBand (processor, shelf, params::band::dynamicsEnabled, 0.0f);
+        check (curve->dynamicRegions (bell).empty() && curve->dynamicRegions (shelf).empty(), "dynamics off: no regions");
+        const auto staticImage = curve->createComponentSnapshot (curve->getLocalBounds());
+        const auto changedPixels = [&] (double frequency)
+        {
+            const juce::Image::BitmapData a (image, juce::Image::BitmapData::readOnly), b (staticImage, juce::Image::BitmapData::readOnly);
+            const auto x = juce::roundToInt (curve->frequencyToX (frequency));
+            int count = 0;
+
+            for (int y = 0; y < image.getHeight(); ++y)
+                count += a.getPixelColour (x, y) != b.getPixelColour (x, y) ? 1 : 0;
+
+            return count;
+        };
+        note ("pixels changed by dynamics: 40 Hz " + std::to_string (changedPixels (40.0)) + ", 1 kHz "
+              + std::to_string (changedPixels (1000.0)) + ", 10 kHz " + std::to_string (changedPixels (10000.0))
+              + ", 15 kHz " + std::to_string (changedPixels (15000.0)));
+        check (changedPixels (40.0) > 5 && changedPixels (1000.0) > 5, "the regions colour the shelf's and bell's ranges");
+        check (changedPixels (10000.0) == 0 && changedPixels (15000.0) == 0,
+               "nothing is coloured outside the active bands' ranges (10 kHz, 15 kHz)");
+
+
+        processor.editorBeingDeleted (editor.get());
+        editor.reset();
+    }
+
+    //==============================================================================
     // Spectrum analyzer
     using Analyzer = dooblrq::analysis::SpectrumAnalyzer;
     using AnalyzerFifo = dooblrq::analysis::AnalyzerFifo;
@@ -2725,6 +2867,7 @@ int main()
         { "editor controls, paint, open/close",      testEditor },
         { "curve follows dragged band handles",      testCurveFollowsHandles },
         { "band 1/6 cut defaults, 2D drag per type", testDefaultCutsAnd2dDrag },
+        { "per-band dynamic regions",               testDynamicRegions },
         { "spectrum analyzer core",                 testSpectrumAnalyzerCore },
         { "analyzer does not change the audio",     testAnalyzerIsTransparent },
         { "tilt band type",                         testTilt },

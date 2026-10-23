@@ -491,9 +491,98 @@ namespace dooblrq::ui
         return juce::Decibels::gainToDecibels (magnitude, -100.0);
     }
 
+    double ResponseCurveComponent::ResponseModel::bandDecibelsAt (size_t b, double frequency) const
+    {
+        if (! enabled[b])
+            return 0.0;
+
+        const auto magnitude = analog ? std::abs (dsp::analogResponseAt (prototypes[b], frequencies[b], frequency))
+                                      : dsp::magnitudeAt (coefficients[b], frequency, sampleRate);
+        return juce::Decibels::gainToDecibels (magnitude, -100.0);
+    }
+
     double ResponseCurveComponent::responseDecibelsAt (double frequency, bool includeDynamics) const
     {
         return makeResponseModel (includeDynamics).decibelsAt (frequency);
+    }
+
+    bool ResponseCurveComponent::bandDynamicsMoving (const dsp::BandSettings& s, int b) const
+    {
+        return s.enabled && s.dynamicsEnabled && dsp::supportsDynamics (s.type)
+            && std::abs (processor.getBandDynamicGainDb (b)) > 1.0e-3f;
+    }
+
+    double ResponseCurveComponent::bandDynamicDeltaDecibelsAt (int bandIndex, double frequency) const
+    {
+        if (! bandDynamicsMoving (processor.getBandSettings (bandIndex), bandIndex))
+            return 0.0;
+
+        const auto b = (size_t) bandIndex;
+        return makeResponseModel (true).bandDecibelsAt (b, frequency) - makeResponseModel (false).bandDecibelsAt (b, frequency);
+    }
+
+    std::vector<ResponseCurveComponent::DynamicRun> ResponseCurveComponent::computeDynamicRuns (int onlyBand) const
+    {
+        std::vector<DynamicRun> runs;
+        std::array<bool, params::numBands> moving {};
+        auto any = false;
+
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            moving[(size_t) b] = (onlyBand < 0 || b == onlyBand) && bandDynamicsMoving (processor.getBandSettings (b), b);
+            any = any || moving[(size_t) b];
+        }
+
+        if (! any)
+            return runs; // idle dynamics cost nothing beyond the gain reads
+
+        // Two models per paint; each band's delta only evaluates that band's own filter.
+        const auto area = plotArea();
+        const auto withDynamics = makeResponseModel (true);
+        const auto withoutDynamics = makeResponseModel (false);
+        constexpr auto step = 2.0f;
+
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            if (! moving[(size_t) b])
+                continue;
+
+            DynamicRun current;
+            current.band = b;
+
+            for (auto x = area.getX(); x <= area.getRight() + 0.5f; x += step)
+            {
+                const auto frequency = xToFrequency (x);
+                const auto delta = withDynamics.bandDecibelsAt ((size_t) b, frequency)
+                                 - withoutDynamics.bandDecibelsAt ((size_t) b, frequency);
+
+                if (std::abs (delta) > dynamicRegionThresholdDb)
+                {
+                    current.points.emplace_back (x, delta);
+                }
+                else if (! current.points.empty())
+                {
+                    runs.push_back (std::move (current));
+                    current = {};
+                    current.band = b;
+                }
+            }
+
+            if (! current.points.empty())
+                runs.push_back (std::move (current));
+        }
+
+        return runs;
+    }
+
+    std::vector<juce::Range<double>> ResponseCurveComponent::dynamicRegions (int bandIndex) const
+    {
+        std::vector<juce::Range<double>> regions;
+
+        for (const auto& run : computeDynamicRuns (bandIndex))
+            regions.emplace_back (xToFrequency (run.points.front().first), xToFrequency (run.points.back().first));
+
+        return regions;
     }
 
     //==============================================================================
@@ -572,7 +661,6 @@ namespace dooblrq::ui
         g.saveState();
         g.reduceClipRegion (area.toNearestInt().expanded (1));
 
-        const auto anyDynamic = anyDynamicsActive();
         const auto staticPath = makeResponsePath (false);
 
         juce::Path fill (staticPath);
@@ -582,13 +670,56 @@ namespace dooblrq::ui
         g.setColour (Palette::accent.withAlpha (0.08f));
         g.fillPath (fill);
 
-        g.setColour (anyDynamic ? Palette::textMuted : Palette::accent);
-        g.strokePath (staticPath, juce::PathStrokeType (anyDynamic ? 1.2f : 2.0f));
+        g.setColour (Palette::accent);
+        g.strokePath (staticPath, juce::PathStrokeType (2.0f));
 
-        if (anyDynamic)
+        // Dynamic activity, per band and only where that band is being pushed: fill between the
+        // static curve and the static curve moved by this band's own dynamic change, in the
+        // band's colour, then the live (combined) curve over the same span.
+        if (const auto runs = computeDynamicRuns(); ! runs.empty())
         {
-            g.setColour (Palette::dynamic);
-            g.strokePath (makeResponsePath (true), juce::PathStrokeType (2.0f));
+            const auto staticModel = makeResponseModel (false);
+            const auto liveModel = makeResponseModel (true);
+            const auto clampY = [&] (double db)
+            {
+                return juce::jlimit (area.getY() - 2.0f, area.getBottom() + 2.0f, decibelsToY (db));
+            };
+
+            for (const auto& run : runs)
+            {
+                const auto colour = bandColour (run.band);
+                juce::Path region, live;
+                std::vector<float> baseY;
+                baseY.reserve (run.points.size());
+
+                for (size_t i = 0; i < run.points.size(); ++i)
+                {
+                    const auto [x, delta] = run.points[i];
+                    const auto frequency = xToFrequency (x);
+                    const auto base = staticModel.decibelsAt (frequency);
+                    baseY.push_back (clampY (base));
+
+                    if (i == 0)
+                    {
+                        region.startNewSubPath (x, clampY (base + delta));
+                        live.startNewSubPath (x, clampY (liveModel.decibelsAt (frequency)));
+                    }
+                    else
+                    {
+                        region.lineTo (x, clampY (base + delta));
+                        live.lineTo (x, clampY (liveModel.decibelsAt (frequency)));
+                    }
+                }
+
+                for (auto i = run.points.size(); i-- > 0;)
+                    region.lineTo (run.points[i].first, baseY[i]);
+
+                region.closeSubPath();
+                g.setColour (colour.withAlpha (0.32f));
+                g.fillPath (region);
+                g.setColour (colour);
+                g.strokePath (live, juce::PathStrokeType (1.8f));
+            }
         }
 
         g.restoreState();
