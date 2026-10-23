@@ -24,8 +24,9 @@ namespace dooblrq::ui
         a handle that sits on that band's own response at its frequency, so the
         curve's peak, dip, shelf midpoint or cut corner passes through the handle.
 
-        Mouse: click a handle to select its band; drag it to change frequency and,
-        for bell and shelf types, gain (dragging a disabled band enables it);
+        Mouse: click a handle to select its band; drag it to change frequency
+        (horizontal) and, vertically, gain for bell, shelf and tilt types or Q for the
+        gainless cut and notch types (up = higher Q). Dragging a disabled band enables it;
         double-click a handle to toggle its band on or off.
     */
     class ResponseCurveComponent final : public juce::Component,
@@ -68,8 +69,12 @@ namespace dooblrq::ui
 
         /** Level (dB) of a band's own static response at its frequency, i.e. the handle level:
             the gain for a bell, half the gain for a shelf (its midpoint), the corner level for
-            a cut, and 0 dB for a notch (whose centre is -inf). */
+            a cut (20*log10(Q)), and 20*log10(Q) for a notch too (whose centre is -inf). */
         static double handleDecibels (const dsp::BandSettings& settings, double sampleRate, bool analog = false);
+
+        /** Q for a cut or notch handle dragged to this level (inverse of the 20*log10(Q) height),
+            clamped to the Q range. */
+        static double qFromHandleDecibels (double decibels);
 
         /** Bandwidth in octaves of a Q (shown as "Width") and back; see params::qToOctaves. */
         static double qToOctaves (double q);
@@ -152,6 +157,7 @@ namespace dooblrq::ui
         int widthDragSide = 0;          // bandwidth handle being dragged (-1 lower, +1 upper)
         bool qDrag = false;             // alt/option-drag on a band handle: vertical = Q
         float dragStartQ = 1.0f;
+        const char* dragVerticalSuffix = params::band::gain; // gain, or q for cut/notch handles
 
         std::atomic<bool> repaintPending { true };
 

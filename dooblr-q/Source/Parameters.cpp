@@ -66,14 +66,15 @@ namespace dooblrq::params
     {
         using dsp::FilterType;
 
-        // Spread across the spectrum so a freshly enabled band lands somewhere useful.
+        // Spread across the spectrum so a freshly enabled band lands somewhere useful:
+        // band 1 a high-pass (Low Cut) and band 6 a low-pass (High Cut), both Butterworth.
         static constexpr BandDefaults defaults[] {
             { FilterType::lowCut,    30.0f,    0.707f },
             { FilterType::lowShelf,  120.0f,   0.707f },
             { FilterType::bell,      400.0f,   1.0f   },
             { FilterType::bell,      1500.0f,  1.0f   },
             { FilterType::bell,      4000.0f,  1.0f   },
-            { FilterType::highShelf, 10000.0f, 0.707f },
+            { FilterType::highCut,   18000.0f, 0.707f },
         };
 
         if (bandIndex < (int) std::size (defaults))

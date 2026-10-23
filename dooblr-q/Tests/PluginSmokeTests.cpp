@@ -846,6 +846,166 @@ namespace
     }
 
     //==============================================================================
+    // 0.6.0: band 1 / band 6 defaults and 2D handle dragging for every band type.
+    void testDefaultCutsAnd2dDrag()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        using T = dsp::FilterType;
+        constexpr double sampleRate = 48000.0;
+
+        {
+            DooblrQAudioProcessor processor;
+            const auto b1 = processor.getBandSettings (0), b6 = processor.getBandSettings (5);
+            check (b1.type == T::lowCut && std::abs (b1.frequency - 30.0f) < 0.01f && std::abs (b1.q - 0.707f) < 1.0e-4f,
+                   "band 1 defaults to Low Cut (high-pass) at 30 Hz, Q 0.707");
+            check (b6.type == T::highCut && std::abs (b6.frequency - 18000.0f) < 0.5f && std::abs (b6.q - 0.707f) < 1.0e-4f,
+                   "band 6 defaults to High Cut (low-pass) at 18 kHz, Q 0.707");
+            check (! b1.enabled && ! b6.enabled, "bands 1 and 6 still default off (a fresh insert is transparent)");
+
+            // Snapshot with the two default cuts switched on.
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            setBand (processor, 0, params::band::enabled, 1.0f);
+            setBand (processor, 5, params::band::enabled, 1.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1300, 760);
+            auto* curve = dynamic_cast<Curve*> (editor->findChildWithID ("responseCurve"));
+            check (curve != nullptr, "response curve exists (defaults snapshot)");
+
+            if (curve != nullptr)
+            {
+                check (std::abs (curve->yToDecibels (curve->handlePosition (0).y) + 3.01) < 0.05
+                           && std::abs (curve->yToDecibels (curve->handlePosition (5).y) + 3.01) < 0.05,
+                       "default cut handles sit at their -3 dB corners");
+                saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.6.0");
+            }
+
+            processor.editorBeingDeleted (editor.get());
+        }
+
+        const std::pair<T, const char*> types[] {
+            { T::bell, "Bell" }, { T::lowShelf, "Low Shelf" }, { T::highShelf, "High Shelf" }, { T::tilt, "Tilt" },
+            { T::lowCut, "Low Cut" }, { T::highCut, "High Cut" }, { T::notch, "Notch" }
+        };
+
+        for (int bandIndex : { 0, 5 })
+        {
+            for (const auto& [type, name] : types)
+            {
+                const auto label = std::string (name) + " on band " + std::to_string (bandIndex + 1);
+                const bool qType = type == T::lowCut || type == T::highCut || type == T::notch;
+
+                DooblrQAudioProcessor processor;
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                setBand (processor, bandIndex, params::band::type, (float) type);
+                setBand (processor, bandIndex, params::band::frequency, 1000.0f);
+                setBand (processor, bandIndex, params::band::q, 1.0f);
+                setBand (processor, bandIndex, params::band::gain, 0.0f);
+                setBand (processor, bandIndex, params::band::enabled, 1.0f);
+
+                std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+                editor->setSize (1300, 760);
+                auto* curve = dynamic_cast<Curve*> (editor->findChildWithID ("responseCurve"));
+
+                if (curve == nullptr)
+                {
+                    check (false, "response curve exists for " + label);
+                    continue;
+                }
+
+                auto& history = processor.getUndoHistory();
+                history.clear();
+                const auto before = processor.getBandSettings (bandIndex);
+
+                // Up and to the right: 1 kHz -> 2 kHz, 60 px up.
+                const auto start = curve->handlePosition (bandIndex);
+                const auto up = juce::Point<float> (curve->frequencyToX (2000.0), start.y - 60.0f);
+                const auto deltaDb = curve->yToDecibels (up.y) - curve->yToDecibels (start.y);
+                simulateDrag (*curve, start, up);
+                const auto s = processor.getBandSettings (bandIndex);
+
+                check (std::abs (s.frequency - 2000.0f) < 10.0f, label + ": horizontal drag sets frequency (2 kHz)");
+
+                if (qType)
+                {
+                    const auto expectedQ = std::pow (10.0, deltaDb / 20.0);
+                    note (label + ": up " + format (deltaDb) + " dB -> Q " + format (s.q) + " (expected " + format (expectedQ) + ")");
+                    check (std::abs (s.q - expectedQ) < 0.02 * expectedQ, label + ": vertical drag up raises Q (Q = 10^(dB/20))");
+                    check (std::abs (s.gainDb - before.gainDb) < 1.0e-6f, label + ": vertical drag does not change gain");
+                }
+                else
+                {
+                    const auto expectedGain = type == T::bell ? deltaDb : 2.0 * deltaDb; // shelf midpoint / tilt pivot scale
+                    note (label + ": up " + format (deltaDb) + " dB -> gain " + format (s.gainDb) + " dB (expected " + format (expectedGain) + ")");
+                    check (std::abs (s.gainDb - expectedGain) < 0.1, label + ": vertical drag up raises gain");
+                    check (std::abs (s.q - before.q) < 1.0e-6f, label + ": vertical drag does not change Q");
+                }
+
+                const auto handle = curve->handlePosition (bandIndex);
+
+                if (type == T::tilt)
+                    check (std::abs (handle.x - up.x) < 0.5f && std::abs (curve->yToDecibels (handle.y)) < 0.05,
+                           label + ": handle follows horizontally and stays on its 0 dB pivot");
+                else
+                    check (handle.getDistanceFrom (up) < 0.75f, label + ": handle ends under the pointer");
+
+                // On the curve: the drawn (combined) response at the handle equals the handle level
+                // (the notch's centre is -inf, so its handle height is its Q instead).
+                if (type != T::notch)
+                    check (std::abs (curve->responseDecibelsAt (s.frequency, false) - curve->yToDecibels (handle.y)) < 0.1,
+                           label + ": handle sits on the drawn curve");
+                else
+                    check (curve->responseDecibelsAt (s.frequency, false) < -40.0,
+                           label + ": the curve follows (deep notch at the new centre)");
+
+                // Then 120 px down from the handle: the vertical value falls below where it began.
+                const auto down = juce::Point<float> (curve->frequencyToX (500.0), handle.y + 120.0f);
+                simulateDrag (*curve, handle, down);
+                const auto d = processor.getBandSettings (bandIndex);
+                check (std::abs (d.frequency - 500.0f) < 3.0f, label + ": horizontal drag back down in frequency");
+                check (qType ? (d.q < before.q && std::abs (d.gainDb - before.gainDb) < 1.0e-6f)
+                             : (d.gainDb < before.gainDb && std::abs (d.q - before.q) < 1.0e-6f),
+                       label + (qType ? ": dragging down lowers Q" : ": dragging down lowers gain"));
+
+                // Each drag is one undo step.
+                check (history.getNumUndoableSteps() == 2, label + ": two drags = two undo steps");
+                history.undo();
+                const auto u = processor.getBandSettings (bandIndex);
+                check (std::abs (u.frequency - s.frequency) < 0.5f && std::abs (u.q - s.q) < 1.0e-3f && std::abs (u.gainDb - s.gainDb) < 1.0e-3f,
+                       label + ": undo restores the first drag's result");
+                history.undo();
+                const auto u0 = processor.getBandSettings (bandIndex);
+                check (std::abs (u0.frequency - before.frequency) < 0.5f && std::abs (u0.q - before.q) < 1.0e-3f
+                           && std::abs (u0.gainDb - before.gainDb) < 1.0e-3f && u0.type == type,
+                       label + ": second undo restores the original band");
+
+                processor.editorBeingDeleted (editor.get());
+            }
+        }
+
+        // A horizontal-only drag of a cut at a Q above the display range keeps its Q.
+        {
+            DooblrQAudioProcessor processor;
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            setBand (processor, 0, params::band::enabled, 1.0f);
+            setBand (processor, 0, params::band::frequency, 200.0f);
+            setBand (processor, 0, params::band::q, 18.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1300, 760);
+
+            if (auto* curve = dynamic_cast<Curve*> (editor->findChildWithID ("responseCurve")))
+            {
+                const auto start = curve->handlePosition (0);
+                simulateDrag (*curve, start, { curve->frequencyToX (400.0), start.y });
+                const auto s = processor.getBandSettings (0);
+                check (std::abs (s.q - 18.0f) < 1.0e-3f && std::abs (s.frequency - 400.0f) < 2.0f,
+                       "horizontal-only drag of a Q-18 cut keeps Q 18");
+            }
+
+            processor.editorBeingDeleted (editor.get());
+        }
+    }
+
+    //==============================================================================
     // Spectrum analyzer
     using Analyzer = dooblrq::analysis::SpectrumAnalyzer;
     using AnalyzerFifo = dooblrq::analysis::AnalyzerFifo;
@@ -2564,6 +2724,7 @@ int main()
         { "state save/restore",                      testStateRoundTrip },
         { "editor controls, paint, open/close",      testEditor },
         { "curve follows dragged band handles",      testCurveFollowsHandles },
+        { "band 1/6 cut defaults, 2D drag per type", testDefaultCutsAnd2dDrag },
         { "spectrum analyzer core",                 testSpectrumAnalyzerCore },
         { "analyzer does not change the audio",     testAnalyzerIsTransparent },
         { "tilt band type",                         testTilt },

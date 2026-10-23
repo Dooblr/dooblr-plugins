@@ -27,6 +27,20 @@ namespace dooblrq::ui
 
             return 0.0;
         }
+
+        /** Gainless types (cuts, notch): the handle's vertical position is the Q. */
+        bool verticalIsQ (dsp::FilterType type)
+        {
+            return type == dsp::FilterType::lowCut || type == dsp::FilterType::highCut || type == dsp::FilterType::notch;
+        }
+    }
+
+    double ResponseCurveComponent::qFromHandleDecibels (double decibels)
+    {
+        // A 12 dB/oct cut's level at its cutoff is exactly 20*log10(Q) (analog prototype and
+        // the prewarped SVF alike): -3 dB at Q 0.707, 0 dB at Q 1, +6 dB at Q 2. The notch
+        // uses the same scale for its handle.
+        return juce::jlimit ((double) params::minQ, (double) params::maxQ, std::pow (10.0, decibels / 20.0));
     }
 
     ResponseCurveComponent::ResponseCurveComponent (DooblrQAudioProcessor& processorToDisplay)
@@ -395,8 +409,8 @@ namespace dooblrq::ui
 
     double ResponseCurveComponent::handleDecibels (const dsp::BandSettings& s, double sampleRate, bool analog)
     {
-        if (s.type == dsp::FilterType::notch)
-            return 0.0;
+        if (s.type == dsp::FilterType::notch) // its centre is -inf: place the handle by Q instead
+            return 20.0 * std::log10 (std::max ((double) s.q, 1.0e-3));
 
         if (analog)
             return juce::Decibels::gainToDecibels (
@@ -611,10 +625,13 @@ namespace dooblrq::ui
                 g.drawEllipse (circle.expanded (3.0f), 1.2f);
             }
 
-            // A tilt's handle sits on its 0 dB pivot, so show the amount next to it.
-            if (s.type == dsp::FilterType::tilt)
+            // A tilt's handle sits on its 0 dB pivot, and a notch's height is its Q (its centre is
+            // -inf), so show the amount next to them.
+            if (s.type == dsp::FilterType::tilt || s.type == dsp::FilterType::notch)
             {
-                const auto text = "Tilt " + juce::String (s.gainDb >= 0.0f ? "+" : "") + juce::String (s.gainDb, 1) + " dB";
+                const auto text = s.type == dsp::FilterType::tilt
+                                      ? "Tilt " + juce::String (s.gainDb >= 0.0f ? "+" : "") + juce::String (s.gainDb, 1) + " dB"
+                                      : "Q " + juce::String (s.q, 2);
                 g.setColour ((s.enabled ? colour : Palette::textMuted).withAlpha (0.9f));
                 g.setFont (juce::FontOptions (11.0f));
                 g.drawText (text, circle.translated (0.0f, -20.0f).withSizeKeepingCentre (90.0f, 14.0f),
@@ -711,12 +728,15 @@ namespace dooblrq::ui
 
         dragOffset = handlePosition (draggingBand) - event.position;
         dragStartGainDb = processor.getBandSettings (draggingBand).gainDb;
+        dragStartQ = processor.getBandSettings (draggingBand).q;
         dragStartY = event.position.y;
+        // Horizontal is always frequency; vertical is gain, or Q for gainless types.
+        dragVerticalSuffix = verticalIsQ (processor.getBandSettings (draggingBand).type) ? params::band::q : params::band::gain;
 
         if (onBandSelected != nullptr)
             onBandSelected (draggingBand);
 
-        for (const auto* suffix : { params::band::frequency, params::band::gain })
+        for (const auto* suffix : { params::band::frequency, dragVerticalSuffix })
             if (auto* parameter = bandParameter (draggingBand, suffix))
                 parameter->beginChangeGesture();
     }
@@ -767,9 +787,20 @@ namespace dooblrq::ui
                                              xToFrequency (target.x));
         setBandParameter (draggingBand, params::band::frequency, (float) frequency);
 
-        const auto scale = handleGainScale (processor.getBandSettings (draggingBand).type);
+        const auto type = processor.getBandSettings (draggingBand).type;
+        const auto scale = handleGainScale (type);
 
-        if (processor.getBandSettings (draggingBand).type == dsp::FilterType::tilt)
+        if (verticalIsQ (type))
+        {
+            // Cuts and notch: up = higher Q (a resonant peak at a cut's cutoff, a narrower
+            // notch), down = lower Q. The handle height is 20*log10(Q), so moving d dB scales Q
+            // by 10^(d/20) and the handle stays under the pointer. Relative to the start, so a
+            // purely horizontal drag never changes Q (even beyond the display's +-24 dB).
+            const auto delta = yToDecibels (event.position.y) - yToDecibels (dragStartY);
+            const auto q = qFromHandleDecibels (20.0 * std::log10 ((double) dragStartQ) + delta);
+            setBandParameter (draggingBand, params::band::q, (float) q);
+        }
+        else if (type == dsp::FilterType::tilt)
         {
             // A tilt's handle stays on its 0 dB pivot; vertical movement changes the tilt amount.
             // Moving by d dB on the scale moves the high end by d dB, i.e. the total tilt by 2d.
@@ -806,7 +837,7 @@ namespace dooblrq::ui
             return;
         }
 
-        for (const auto* suffix : { params::band::frequency, params::band::gain })
+        for (const auto* suffix : { params::band::frequency, dragVerticalSuffix })
             if (auto* parameter = bandParameter (draggingBand, suffix))
                 parameter->endChangeGesture();
 

@@ -2,14 +2,17 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.5.1:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
+**Version 0.6.0:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
 automated tests. (0.3.0 added the analyzer, Freeze and Tilt. 0.4.1 removed 0.4.0's per-band
 stereo width: "Width" now means the band's bandwidth. 0.5.0 added undo/redo, the band-tab
 switches, the live Freeze overlay and display smoothing. 0.5.1 ties averaging to Freeze: it
-starts fresh when Freeze is turned on and stops and clears when it is turned off.)
+starts fresh when Freeze is turned on and stops and clears when it is turned off. 0.6.0
+makes band 6 a High Cut (low-pass) by default, alongside band 1's Low Cut (high-pass), and
+gives every band type 2D handle dragging: horizontal = frequency, vertical = gain or, for
+cuts and notches, Q.)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -57,8 +60,10 @@ Six bands (`params::numBands` in `Source/Parameters.h`), each with:
 | Release | 5 – 2000 ms | 120 ms |
 
 Band defaults: 1 Low Cut 30 Hz, 2 Low Shelf 120 Hz, 3 Bell 400 Hz,
-4 Bell 1.5 kHz, 5 Bell 4 kHz, 6 High Shelf 10 kHz. All bands start disabled,
-so a fresh instance is an exact pass-through.
+4 Bell 1.5 kHz, 5 Bell 4 kHz, 6 High Cut 18 kHz (band 1 is a high-pass and band 6 a
+low-pass, both Q 0.707 Butterworth). All bands start disabled, so a fresh instance is an
+exact pass-through; dragging a handle switches its band on. Saved sessions keep the band
+types they were saved with (each type is stored explicitly).
 
 Global: **Output Gain** (±24 dB), **Stereo Link** (on by default: one
 detector drives both channels; off: each channel gets its own dynamic gain) and
@@ -169,7 +174,19 @@ curve passes through it:
 Handle mouse actions:
 
 - Click a handle to select its band.
-- Drag it to change frequency and, for bell, shelf and tilt types, gain.
+- Drag it in two dimensions, for every band and every type: **horizontal = frequency**;
+  **vertical = gain** for Bell, Low Shelf, High Shelf and Tilt, and **vertical = Q** for
+  the gainless Low Cut, High Cut and Notch. Each drag is one undo step.
+  - Bell: the handle is the gain. Shelves: the handle is the shelf midpoint (half the gain).
+    Tilt: the handle stays on its 0 dB pivot and moving up/down by d dB changes the tilt by
+    2d (shown as `Tilt +x.x dB` above it).
+  - Low/High Cut: up = higher Q, i.e. a bigger resonant peak at the cutoff; down = lower Q,
+    a gentler corner. The handle sits on the curve at the cutoff, whose level is exactly
+    20·log10(Q): −3 dB at Q 0.707, 0 dB at Q 1, +6 dB at Q 2, +12 dB at Q 4; Q range 0.1–18.
+  - Notch: up = narrower (higher Q), down = wider. Its centre is −∞ dB, so its handle height
+    shows the Q on the same scale (0 dB line = Q 1) and a `Q x.xx` label is shown above it.
+  - The vertical change is relative to where the drag starts, so a purely sideways drag
+    never changes gain or Q.
 - Dragging a disabled band's handle switches the band on.
 - Double-click a handle to toggle its band on or off.
 - The selected band also shows two small **bandwidth handles** on the curve at
@@ -178,7 +195,7 @@ Handle mouse actions:
   centre frequency stays put, and a readout (`Width 2.27 oct (Q 0.57)`) shows while dragging. The
   cursor becomes a left-right arrow over them. The same pair is shown for shelves, cuts
   and tilt, where it marks the transition width that Q controls.
-- Scroll over a handle to change Q; Option/Alt-drag a handle vertically to change Q.
+- Scroll over a handle to change Q; Option/Alt-drag a handle vertically to change Q (any type).
 - Disabled bands show grey, hollow handles.
 
 Below the display are six band tabs and the selected band's controls: on/off, type,
@@ -401,6 +418,14 @@ tests the same compiled code that goes into the VST3:
   The live dynamic curve equals static + dynamic gain. Double-click toggles a band.
   Off-thread automation schedules a redraw.
 
+- band 1/6 defaults and 2D drag: band 1 = Low Cut 30 Hz and band 6 = High Cut 18 kHz
+  (Q 0.707, off), handles at −3 dB. For all seven types on band 1 and on band 6, a drag
+  60 px up and from 1 to 2 kHz sets the frequency and raises gain (Bell = Δ dB, shelves and
+  Tilt = 2Δ) or Q (cuts and Notch: Q = 10^(Δ/20)) without touching the other; the handle
+  ends under the pointer (Tilt: on its pivot) and on the drawn curve; dragging down lowers
+  it; each drag is one undo step and two undos restore the band. A sideways drag of a Q-18
+  cut keeps Q 18.
+
 - spectrum analyzer core (no GUI): on-bin sine calibration (−6.02 dBFS for A = 0.5),
   1 kHz full-scale in bin 85, live release, white noise flat within 1 dB, silence at
   exactly the floor with no NaN/Inf, FIFO overflow bounded and counted, variable block
@@ -414,7 +439,7 @@ tests the same compiled code that goes into the VST3:
   smaller low-end corners; a tone still peaks at its frequency; rise/fall time constants
   hold at any frame rate and the fall is slower than the rise;
 - undo/redo: 300 host-automation changes (message thread and another thread) create no
-  entries; a knob drag, a handle drag (frequency + gain), a type change, a band-tab switch,
+  entries; a knob drag, a handle drag (frequency + gain, or frequency + Q), a type change, a band-tab switch,
   a double-click enable and a bandwidth-handle drag are one step each; undo walks back
   through them exactly, redo reapplies; a new edit clears redo; Cmd/Ctrl-Z,
   Cmd/Ctrl-Shift-Z and Cmd/Ctrl-Y work and other keys are not claimed; the Undo/Redo buttons
@@ -455,7 +480,8 @@ Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png`,
 `editor-tilt.png`, `editor-spectrum-live.png`, `editor-spectrum-frozen.png`,
 `editor-width-handles.png`, `editor-overview.png` (spectrum + frozen overlay + width handles)
-and `editor-v0.5.1.png` (the same, showing the band-tab switches and the Undo/Redo buttons).
+`editor-v0.5.1.png` (the same, showing the band-tab switches and the Undo/Redo buttons)
+and `editor-v0.6.0.png` (the default band 1 high-pass and band 6 low-pass switched on).
 
 ## Validation that still needs doing manually
 
