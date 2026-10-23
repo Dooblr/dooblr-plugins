@@ -263,7 +263,7 @@ void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
 
     peakButton.setComponentID ("analyzerPeak");
     peakButton.setToggleState (view.showPeak, juce::dontSendNotification);
-    peakButton.setTooltip ("Show the peak-hold line since the last Clear (or of the frozen capture)");
+    peakButton.setTooltip ("Show the peak-hold line since the last Clear");
     peakButton.onClick = [this, &view]
     {
         view.showPeak = peakButton.getToggleState();
@@ -274,11 +274,11 @@ void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
     freezeButton.setClickingTogglesState (true);
     freezeButton.setToggleState (analyzer.isFrozen(), juce::dontSendNotification);
     freezeButton.setColour (juce::TextButton::buttonOnColourId, dooblrq::ui::Palette::frozen.withAlpha (0.35f));
-    freezeButton.setTooltip ("Show the long-term average since the last Clear as an overlay; it keeps "
-                             "accumulating and updating while frozen");
+    freezeButton.setTooltip ("Start averaging the spectrum from now and show the average as an overlay; "
+                             "it keeps updating while frozen. Turning Freeze off stops and clears it");
     freezeButton.onClick = [this, &analyzer]
     {
-        // Freeze shows the running long-term average as an overlay; un-freezing only hides it.
+        // Freeze on starts a fresh average; Freeze off stops and discards it.
         if (freezeButton.getToggleState())
             analyzer.freeze();
         else
@@ -289,7 +289,7 @@ void DooblrQAudioProcessorEditor::setUpAnalyzerControls()
     };
 
     clearButton.setComponentID ("clear");
-    clearButton.setTooltip ("Restart the long-term average (and peak hold)");
+    clearButton.setTooltip ("Reset the peak hold and, while frozen, restart the average from zero");
     clearButton.onClick = [this, &analyzer]
     {
         analyzer.clear();
@@ -329,7 +329,7 @@ void DooblrQAudioProcessorEditor::updateAnalyzerControls()
     else if (analyzer.isFrozen())
         text = "Frozen: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s";
     else
-        text = "Averaging: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s";
+        text = "Live";
 
     if (analyzerReadout.getText() != text) // only repaint when the 0.1 s text changes
         analyzerReadout.setText (text, juce::dontSendNotification);

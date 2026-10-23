@@ -49,10 +49,11 @@ namespace dooblrq::analysis
         20*log10(A) at its bin (a full-scale sine reads 0 dBFS); a sine between bins
         reads up to 1.42 dB lower (Hann scalloping). Silence reads floorDb.
 
-        Accumulation: a running power average (and per-bin peak hold) of every frame
-        since the last clear(), so it represents "everything that has played" in that
-        window, weighted equally. Freeze shows that average as an overlay; it keeps
-        accumulating (and the overlay keeps updating) while frozen.
+        Averaging only runs while frozen: freeze() starts a fresh running power average
+        from zero, every frame while frozen is added to it (weighted equally, so the
+        overlay keeps updating), and unfreeze() stops it and discards it. While not
+        frozen nothing accumulates. The per-bin peak hold is independent: it runs all the
+        time since the last clear().
     */
     class SpectrumAnalyzer
     {
@@ -82,21 +83,27 @@ namespace dooblrq::analysis
         /** Per-bin dBFS with display ballistics: instant attack, liveReleaseDbPerSecond decay. */
         const std::vector<float>& getLiveDb() const noexcept { return liveDb; }
 
-        /** Per-bin power average since the last clear(). */
+        /** Per-bin power average since Freeze was engaged (or the last clear() while
+            frozen). Only frames whose whole window was played after that moment count, so
+            nothing from before is mixed in (the first frame arrives fftSize samples, about
+            85 ms at 48 kHz, after engaging). All floorDb when not frozen. */
         const std::vector<float>& getAverageDb();
-        /** Per-bin maximum since the last clear(). */
+        /** Per-bin maximum since the last clear() (runs whether or not frozen). */
         const std::vector<float>& getPeakDb() const noexcept { return peakDb; }
+        juce::int64 getPeakFrames() const noexcept { return peakFrames; }
+        /** Audio covered by the average; 0 when not frozen. */
         double getAccumulatedSeconds() const noexcept;
         juce::int64 getAccumulatedFrames() const noexcept { return framesAccumulated; }
 
-        /** Shows the long-term average as an overlay. It is not a static snapshot: the
-            average keeps accumulating live audio, so the overlay keeps updating. */
-        void freeze() noexcept { frozen = true; }
-        /** Hides the overlay (the average keeps running; clear() restarts it). */
-        void unfreeze() noexcept { frozen = false; }
+        /** Engages Freeze: starts a fresh average from zero that keeps accumulating (and
+            updating the overlay) while frozen. No effect if already frozen. */
+        void freeze() noexcept;
+        /** Disengages Freeze: stops averaging and discards the average. */
+        void unfreeze() noexcept;
         bool isFrozen() const noexcept { return frozen; }
 
-        /** Restarts the long-term average and peak hold. The Freeze state is kept. */
+        /** Resets the peak hold and, while frozen, restarts the average from zero.
+            The Freeze state is kept. */
         void clear();
 
         /** Level for display at a frequency: the maximum of the bins within +/- span/2
@@ -107,7 +114,8 @@ namespace dooblrq::analysis
 
     private:
         void processFrame();
-        void resetAccumulation();
+        void resetAverage() noexcept;
+        void resetPeak() noexcept;
         void resetAll();
 
         juce::dsp::FFT fft { fftOrder };
@@ -116,7 +124,8 @@ namespace dooblrq::analysis
         std::vector<double> powerSum;
 
         int inputFill = 0;
-        juce::int64 framesAccumulated = 0;
+        juce::int64 framesAccumulated = 0, peakFrames = 0;
+        juce::int64 samplesSinceAverageStart = 0;
         double sampleRate = 48000.0;
         bool frozen = false;
     };

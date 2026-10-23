@@ -94,12 +94,33 @@ namespace dooblrq::analysis
         }
     }
 
-    void SpectrumAnalyzer::resetAccumulation()
+    void SpectrumAnalyzer::resetAverage() noexcept
     {
         std::fill (powerSum.begin(), powerSum.end(), 0.0);
-        std::fill (peakDb.begin(), peakDb.end(), floorDb);
         std::fill (averageDb.begin(), averageDb.end(), floorDb);
         framesAccumulated = 0;
+        samplesSinceAverageStart = 0;
+    }
+
+    void SpectrumAnalyzer::resetPeak() noexcept
+    {
+        std::fill (peakDb.begin(), peakDb.end(), floorDb);
+        peakFrames = 0;
+    }
+
+    void SpectrumAnalyzer::freeze() noexcept
+    {
+        if (frozen)
+            return;
+
+        resetAverage(); // a fresh average from the moment Freeze is engaged
+        frozen = true;
+    }
+
+    void SpectrumAnalyzer::unfreeze() noexcept
+    {
+        frozen = false;
+        resetAverage(); // averaging stops; the next freeze() starts over
     }
 
     void SpectrumAnalyzer::resetAll()
@@ -108,7 +129,8 @@ namespace dooblrq::analysis
         inputFill = 0;
         std::fill (latestDb.begin(), latestDb.end(), floorDb);
         std::fill (liveDb.begin(), liveDb.end(), floorDb);
-        resetAccumulation();
+        resetAverage();
+        resetPeak();
     }
 
     int SpectrumAnalyzer::pull (AnalyzerFifo& fifo)
@@ -137,6 +159,7 @@ namespace dooblrq::analysis
             const auto count = std::min (numSamples, fftSize - inputFill);
             std::memcpy (input.data() + inputFill, samples, sizeof (float) * (size_t) count);
             inputFill += count;
+            samplesSinceAverageStart += count;
             samples += count;
             numSamples -= count;
 
@@ -167,6 +190,8 @@ namespace dooblrq::analysis
         const auto frameSeconds = (float) hopSize / (float) sampleRate;
         const auto release = liveReleaseDbPerSecond * frameSeconds;
         const auto floorPower = std::pow (10.0, (double) floorDb / 10.0);
+        // Average only frames played entirely after Freeze was engaged (or Clear while frozen).
+        const auto addToAverage = frozen && samplesSinceAverageStart >= fftSize;
 
         for (int bin = 0; bin < numBins; ++bin)
         {
@@ -178,11 +203,16 @@ namespace dooblrq::analysis
             latestDb[b] = db;
             liveDb[b] = db > liveDb[b] ? db : std::max (db, liveDb[b] - release);
 
-            powerSum[b] += power;
+            if (addToAverage)
+                powerSum[b] += power;
+
             peakDb[b] = std::max (peakDb[b], db);
         }
 
-        ++framesAccumulated;
+        ++peakFrames;
+
+        if (addToAverage)
+            ++framesAccumulated;
     }
 
     const std::vector<float>& SpectrumAnalyzer::getAverageDb()
@@ -211,7 +241,8 @@ namespace dooblrq::analysis
 
     void SpectrumAnalyzer::clear()
     {
-        resetAccumulation();
+        resetAverage(); // empty anyway when not frozen
+        resetPeak();
     }
 
     float SpectrumAnalyzer::levelAt (const std::vector<float>& binDb, double frequency, double rate,

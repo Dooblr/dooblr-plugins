@@ -2,13 +2,14 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.5.0:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
+**Version 0.5.1:** six-band dynamic EQ with Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
 automated tests. (0.3.0 added the analyzer, Freeze and Tilt. 0.4.1 removed 0.4.0's per-band
 stereo width: "Width" now means the band's bandwidth. 0.5.0 added undo/redo, the band-tab
-switches, the live Freeze overlay and display smoothing.)
+switches, the live Freeze overlay and display smoothing. 0.5.1 ties averaging to Freeze: it
+starts fresh when Freeze is turned on and stops and clears when it is turned off.)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -229,19 +230,21 @@ The response display has a spectrum analyzer behind the grid, curve and handles.
 - The live spectrum (soft blue-grey): per FFT frame an instant attack and a 30 dB/s fall,
   then display smoothing (below).
 
-Freeze shows the long-term average:
+Freeze averages the spectrum, and only while it is on:
 
-- From the last **Clear** the analyzer keeps a running **power average** of every FFT
-  frame, plus a per-bin peak-hold. The readout shows `Averaging: N s`.
-- **Freeze** shows that average as a pink overlay (`Frozen: N s` = how much audio it
-  covers). It is not a static snapshot: while frozen the average keeps accumulating the
-  live audio, and the overlay is redrawn every frame, gliding as it changes. The live
-  spectrum keeps moving on top, so you see the current audio against the long-term
-  balance.
-- **Clear** restarts the average (and the peak-hold); Freeze stays on and the overlay
-  rebuilds from the new audio. Turning **Freeze** off hides the overlay (the average
-  keeps running).
-- **Peak**: also draws the peak-hold since the last Clear as a dashed line.
+- With **Freeze** off there is no long-term averaging at all: just the live spectrum
+  (with its light display smoothing). The readout shows `Live`.
+- Turning **Freeze** on starts a fresh running **power average** of every FFT frame from
+  that moment, drawn as a pink overlay. `Frozen: N s` counts the audio since Freeze was
+  engaged (only FFT frames played entirely after that moment are averaged, so the first
+  one lands ~85 ms in and nothing from before leaks in). While frozen the average keeps accumulating the live audio and the overlay is
+  redrawn every frame, gliding as it changes; the live spectrum keeps moving on top.
+- Turning **Freeze** off stops the averaging and clears the overlay. Turning it on
+  again starts a new average from zero.
+- **Clear** resets the peak-hold and, while frozen, restarts the average from zero
+  (Freeze stays on).
+- **Peak**: also draws the peak-hold since the last Clear as a dashed line (the peak-hold
+  runs whether or not Freeze is on).
 - The readout counts in 0.1 s steps in a fixed-width font (it only repaints when the
   text changes, so it does not flicker or jitter).
 - The analyzer settings (visibility, source, tilt, peak, freeze) live in the plug-in
@@ -401,9 +404,11 @@ tests the same compiled code that goes into the VST3:
 - spectrum analyzer core (no GUI): on-bin sine calibration (−6.02 dBFS for A = 0.5),
   1 kHz full-scale in bin 85, live release, white noise flat within 1 dB, silence at
   exactly the floor with no NaN/Inf, FIFO overflow bounded and counted, variable block
-  sizes lose nothing, two tones both present in the average, the average keeps
-  accumulating while frozen (a 9 kHz tone raises it there by ~80 dB), unfreeze does not
-  reset it, Clear resets it and keeps Freeze on, sample-rate change resets;
+  sizes lose nothing; the average is idle and empty while Freeze is off, starts at zero
+  on engage, contains both tones played while frozen, keeps accumulating while frozen
+  (a 9 kHz tone raises it there by ~80 dB), stops and clears on disengage, restarts fresh
+  on re-engage; Clear restarts it while frozen and resets the peak-hold either way;
+  sample-rate change resets;
 - display smoothing: flat input stays flat; white noise spread across 1–20 kHz 4.9 dB per
   bin / 1.9 dB old display → 1.1 dB smoothed; live flicker at 5 kHz 0.73 → 0.10 dB per frame;
   smaller low-end corners; a tone still peaks at its frequency; rise/fall time constants
@@ -440,8 +445,9 @@ tests the same compiled code that goes into the VST3:
   and moves the lower handle 40 px the other way; inward narrows; scrolling changes Q;
   the Width knob shows octaves and setting 1.00 / 2.00 oct gives Q 1.414 / 0.667;
 - editor: version label = `JucePlugin_VersionString` = CMake project version; Freeze,
-  Peak, Clear, Spectrum controls and the readout; while frozen the overlay keeps changing
-  with new audio and the readout counts up; display levels stay finite; closing the
+  Peak, Clear, Spectrum controls and the readout; `Live` and no averaging while Freeze is
+  off; Freeze on reads `Frozen: 0.0 s` and counts up from there while the overlay keeps
+  changing with new audio; Freeze off clears it; display levels stay finite; closing the
   editor stops the feed.
 
 Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
@@ -449,7 +455,7 @@ Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png`,
 `editor-tilt.png`, `editor-spectrum-live.png`, `editor-spectrum-frozen.png`,
 `editor-width-handles.png`, `editor-overview.png` (spectrum + frozen overlay + width handles)
-and `editor-v0.5.png` (the same, showing the band-tab switches and the Undo/Redo buttons).
+and `editor-v0.5.1.png` (the same, showing the band-tab switches and the Undo/Redo buttons).
 
 ## Validation that still needs doing manually
 

@@ -945,6 +945,7 @@ namespace
             juce::Random random (42);
             for (auto& v : noise)
                 v = random.nextFloat() * 2.0f - 1.0f;
+            analyzer.freeze(); // the long-term average only runs while frozen
             analyzer.pushSamples (noise.data(), (int) noise.size());
             const auto& average = analyzer.getAverageDb();
             const auto low = meanDb (average, sampleRate, 100.0, 1000.0);
@@ -1018,62 +1019,99 @@ namespace
             check (streaming.getDroppedSamples() == 0 && frames == expected, "variable block sizes with a regular consumer lose nothing");
         }
 
-        // Accumulation, freeze, unfreeze and clear.
+        // Averaging is tied to Freeze: idle while off, fresh on engage, stops and clears on disengage.
         {
             Analyzer analyzer;
             analyzer.setSampleRate (sampleRate);
-            const auto lowTone = makeSine (300.0, 0.5f, sampleRate, 96000);
-            const auto highTone = makeSine (5000.0, 0.5f, sampleRate, 96000);
-            analyzer.pushSamples (lowTone.data(), (int) lowTone.size());
-            analyzer.pushSamples (highTone.data(), (int) highTone.size());
-
-            const auto average = analyzer.getAverageDb();
-            const auto lowLevel  = Analyzer::levelAt (average, 300.0, sampleRate, 1.0 / 12.0);
-            const auto highLevel = Analyzer::levelAt (average, 5000.0, sampleRate, 1.0 / 12.0);
-            const auto between   = Analyzer::levelAt (average, 1500.0, sampleRate, 1.0 / 12.0);
-            const auto liveLow   = Analyzer::levelAt (analyzer.getLatestFrameDb(), 300.0, sampleRate, 1.0 / 12.0);
-            note ("two tones in sequence (2 s each): average at 300 Hz " + format (lowLevel) + ", 5 kHz " + format (highLevel)
-                  + ", 1.5 kHz " + format (between) + " dBFS; latest frame at 300 Hz " + format (liveLow) + " dBFS; "
-                  + format (analyzer.getAccumulatedSeconds()) + " s accumulated");
-            check (lowLevel > -14.0f && highLevel > -14.0f, "the long-term average contains both tones");
-            check (between < -60.0f, "the average stays low between the tones");
-            check (liveLow < -60.0f, "the latest frame only shows the current tone");
-            check (std::abs (analyzer.getAccumulatedSeconds() - (double) analyzer.getAccumulatedFrames() * Analyzer::hopSize / sampleRate) < 1.0e-9
-                       && analyzer.getAccumulatedSeconds() > 3.5,
-                   "accumulated time counts the frames (hop 1024)");
-
-            analyzer.freeze();
-            const auto framesAtFreeze = analyzer.getAccumulatedFrames();
-            const auto nineBefore = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
-            check (analyzer.isFrozen() && analyzer.getAverageDb() == average, "freeze shows the current long-term average");
-
-            const auto other = makeSine (9000.0, 0.9f, sampleRate, 48000);
-            analyzer.pushSamples (other.data(), (int) other.size());
-            const auto nineAfter = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
-            note ("while frozen, a 1 s 9 kHz tone moves the overlay at 9 kHz from " + format (nineBefore) + " to "
-                  + format (nineAfter) + " dBFS; " + std::to_string (analyzer.getAccumulatedFrames() - framesAtFreeze) + " frames added");
-            check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() > framesAtFreeze && nineAfter > nineBefore + 40.0f,
-                   "the frozen overlay keeps accumulating live audio");
-            check (Analyzer::levelAt (analyzer.getLiveDb(), 9000.0, sampleRate, 1.0 / 12.0) > -3.0f,
-                   "the live spectrum keeps moving while frozen");
-
-            const auto framesBeforeUnfreeze = analyzer.getAccumulatedFrames();
-            analyzer.unfreeze();
-            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == framesBeforeUnfreeze,
-                   "unfreeze hides the overlay without resetting the average");
-
-            analyzer.pushSamples (other.data(), (int) other.size());
-            analyzer.freeze();
-            analyzer.clear();
             const auto floorOnly = [] (const std::vector<float>& v)
             {
                 return std::all_of (v.begin(), v.end(), [] (float x) { return juce::exactlyEqual (x, Analyzer::floorDb); });
             };
-            check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0
-                       && floorOnly (analyzer.getAverageDb()) && floorOnly (analyzer.getPeakDb()),
-                   "clear restarts the average and peak hold and keeps Freeze on");
-            analyzer.unfreeze();
+            const auto lowTone = makeSine (300.0, 0.5f, sampleRate, 96000);
+            const auto highTone = makeSine (5000.0, 0.5f, sampleRate, 96000);
+            const auto other = makeSine (9000.0, 0.9f, sampleRate, 48000);
 
+            // Freeze off: 2 s of audio, nothing accumulates (live view and peak hold still run).
+            analyzer.pushSamples (lowTone.data(), (int) lowTone.size());
+            note ("Freeze off, 2 s of 300 Hz: " + std::to_string (analyzer.getAccumulatedFrames()) + " averaged frames, "
+                  + std::to_string (analyzer.getPeakFrames()) + " live/peak frames");
+            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && juce::exactlyEqual (analyzer.getAccumulatedSeconds(), 0.0)
+                       && floorOnly (analyzer.getAverageDb()),
+                   "while Freeze is off the average is idle and empty");
+            check (analyzer.getPeakFrames() > 80 && Analyzer::levelAt (analyzer.getLiveDb(), 300.0, sampleRate, 1.0 / 12.0) > -14.0f
+                       && Analyzer::levelAt (analyzer.getPeakDb(), 300.0, sampleRate, 1.0 / 12.0) > -14.0f,
+                   "the live spectrum and peak hold still run while Freeze is off");
+
+            // Freeze on: starts from zero, then accumulates.
+            analyzer.freeze();
+            check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getAverageDb()),
+                   "engaging Freeze starts the average at zero (nothing from before)");
+
+            analyzer.pushSamples (highTone.data(), (int) highTone.size());
+            analyzer.pushSamples (lowTone.data(), (int) lowTone.size());
+            const auto average = analyzer.getAverageDb();
+            const auto lowLevel  = Analyzer::levelAt (average, 300.0, sampleRate, 1.0 / 12.0);
+            const auto highLevel = Analyzer::levelAt (average, 5000.0, sampleRate, 1.0 / 12.0);
+            const auto between   = Analyzer::levelAt (average, 1500.0, sampleRate, 1.0 / 12.0);
+            const auto liveHigh  = Analyzer::levelAt (analyzer.getLatestFrameDb(), 5000.0, sampleRate, 1.0 / 12.0);
+            note ("frozen, two tones in sequence (2 s each): average at 300 Hz " + format (lowLevel) + ", 5 kHz " + format (highLevel)
+                  + ", 1.5 kHz " + format (between) + " dBFS; latest frame at 5 kHz " + format (liveHigh) + " dBFS; "
+                  + format (analyzer.getAccumulatedSeconds()) + " s accumulated");
+            check (lowLevel > -14.0f && highLevel > -14.0f, "the average contains both tones played while frozen");
+            check (between < -60.0f, "the average stays low between the tones");
+            check (liveHigh < -60.0f, "the latest frame only shows the current tone");
+            check (std::abs (analyzer.getAccumulatedSeconds() - (double) analyzer.getAccumulatedFrames() * Analyzer::hopSize / sampleRate) < 1.0e-9
+                       && analyzer.getAccumulatedSeconds() > 3.9 && analyzer.getAccumulatedSeconds() < 4.1,
+                   "accumulated time counts only the frames since Freeze was engaged (hop 1024)");
+
+            const auto framesBefore = analyzer.getAccumulatedFrames();
+            const auto nineBefore = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
+            analyzer.pushSamples (other.data(), (int) other.size());
+            const auto nineAfter = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
+            note ("while frozen, a 1 s 9 kHz tone moves the overlay at 9 kHz from " + format (nineBefore) + " to "
+                  + format (nineAfter) + " dBFS; " + std::to_string (analyzer.getAccumulatedFrames() - framesBefore) + " frames added");
+            check (analyzer.getAccumulatedFrames() > framesBefore && nineAfter > nineBefore + 40.0f,
+                   "the frozen overlay keeps accumulating live audio");
+            check (Analyzer::levelAt (analyzer.getLiveDb(), 9000.0, sampleRate, 1.0 / 12.0) > -3.0f,
+                   "the live spectrum keeps moving while frozen");
+
+            const auto framesFrozen = analyzer.getAccumulatedFrames();
+            analyzer.freeze();
+            check (analyzer.getAccumulatedFrames() == framesFrozen, "freeze() while already frozen does not restart the average");
+
+            // Freeze off: stops and clears; stays idle with more audio.
+            analyzer.unfreeze();
+            check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getAverageDb()),
+                   "disengaging Freeze stops and clears the average");
+            analyzer.pushSamples (lowTone.data(), (int) lowTone.size());
+            check (analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getAverageDb()),
+                   "no averaging after Freeze is turned off");
+
+            // Freeze on again: a fresh average without the earlier material.
+            analyzer.freeze();
+            analyzer.pushSamples (other.data(), (int) other.size());
+            const auto freshLow = Analyzer::levelAt (analyzer.getAverageDb(), 300.0, sampleRate, 1.0 / 12.0);
+            const auto freshNine = Analyzer::levelAt (analyzer.getAverageDb(), 9000.0, sampleRate, 1.0 / 12.0);
+            note ("re-frozen with 1 s of 9 kHz: average at 9 kHz " + format (freshNine) + ", 300 Hz " + format (freshLow) + " dBFS");
+            check (freshNine > -3.0f && freshLow < -100.0f && analyzer.getAccumulatedSeconds() < 1.01,
+                   "re-engaging Freeze starts a fresh average");
+
+            // Clear while frozen restarts the average and the peak hold; Freeze stays on.
+            analyzer.clear();
+            check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && analyzer.getPeakFrames() == 0
+                       && floorOnly (analyzer.getAverageDb()) && floorOnly (analyzer.getPeakDb()),
+                   "clear while frozen restarts the average and peak hold and keeps Freeze on");
+            analyzer.pushSamples (other.data(), (int) other.size());
+            check (analyzer.getAccumulatedFrames() > 0, "after clear the average rebuilds while frozen");
+
+            // Clear while not frozen still has a job: it resets the peak hold.
+            analyzer.unfreeze();
+            analyzer.pushSamples (lowTone.data(), (int) lowTone.size());
+            analyzer.clear();
+            check (analyzer.getPeakFrames() == 0 && floorOnly (analyzer.getPeakDb()) && analyzer.getAccumulatedFrames() == 0,
+                   "clear while not frozen resets the peak hold");
+
+            analyzer.freeze();
             analyzer.pushSamples (other.data(), (int) other.size());
             analyzer.setSampleRate (44100.0);
             check (analyzer.getAccumulatedFrames() == 0 && floorOnly (analyzer.getLiveDb()), "a sample-rate change resets the analysis");
@@ -1133,6 +1171,7 @@ namespace
             processor.setAnalyzerRunning (true);
             Analyzer analyzer;
             analyzer.setSampleRate (sampleRate);
+            analyzer.freeze(); // the long-term average only runs while frozen
             juce::AudioBuffer<float> buffer (input);
 
             for (int start = 0; start < buffer.getNumSamples(); start += 8192)
@@ -1479,9 +1518,9 @@ namespace
         note ("after 6 s of material: readout \"" + readout->getText().toStdString() + "\", "
               + std::to_string (analyzer.getAccumulatedFrames()) + " frames, "
               + std::to_string (processor.getAnalyzerFifo().getDroppedSamples()) + " samples dropped");
-        check (analyzer.getAccumulatedFrames() > 250, "the editor pulls audio into the analyzer");
-        check (readout->getText() == "Averaging: " + juce::String (analyzer.getAccumulatedSeconds(), 1) + " s" && analyzer.getAccumulatedSeconds() > 5.5,
-               "readout shows the averaging time");
+        check (analyzer.getPeakFrames() > 250, "the editor pulls audio into the analyzer");
+        check (analyzer.getAccumulatedFrames() == 0 && readout->getText() == "Live",
+               "with Freeze off nothing is averaged and the readout says \"Live\"");
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-live");
 
         check (readout->getFont().getTypefaceName() == juce::Font::getDefaultMonospacedFontName(),
@@ -1504,12 +1543,9 @@ namespace
         dooblrEditor->updateAnalyzerControls();
         const auto frozenText = readout->getText();
         note ("after Freeze: readout \"" + frozenText.toStdString() + "\"");
-        check (analyzer.isFrozen() && frozenText.startsWith ("Frozen: ") && frozenText.endsWith (" s"), "Freeze shows \"Frozen: N s\"");
-        check (std::abs (frozenText.fromFirstOccurrenceOf ("Frozen: ", false, false).getDoubleValue() - analyzer.getAccumulatedSeconds()) < 0.06,
-               "the readout shows the averaging time");
+        check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && frozenText == "Frozen: 0.0 s",
+               "Freeze starts a fresh average: readout \"Frozen: 0.0 s\"");
         const auto overlayAtFreeze = curve->getOverlayDisplay().getLevels();
-        check (*std::max_element (overlayAtFreeze.begin(), overlayAtFreeze.end()) > -80.0f,
-               "the overlay starts from the current average, not from silence");
 
         // Material B: brighter mix; the overlay keeps updating (long-term average), the readout counts on.
         clickToggle (*peak);
@@ -1534,6 +1570,12 @@ namespace
               + format (overlayStepMax) + " dB); readout " + format (readoutValues.front(), 1) + " -> " + format (readoutValues.back(), 1)
               + " s; average now " + format (analyzer.getAccumulatedSeconds(), 1) + " s");
         check (analyzer.isFrozen() && overlayChange > 1.0f, "the frozen overlay keeps updating while frozen");
+        check (std::abs (readoutValues.back() - analyzer.getAccumulatedSeconds()) < 0.06 && readoutValues.back() > 2.8
+                   && readoutValues.back() < 3.1,
+               "the readout counts from the moment Freeze was engaged");
+        const auto& overlayLevels = curve->getOverlayDisplay().getLevels();
+        check (*std::max_element (overlayLevels.begin(), overlayLevels.end()) > -80.0f,
+               "the overlay shows the audio played since Freeze was engaged");
         check (analyzer.getAccumulatedSeconds() > secondsAtFreeze + 2.9, "the average keeps accumulating while frozen");
         check (std::is_sorted (readoutValues.begin(), readoutValues.end()) && readoutValues.back() > readoutValues.front() + 2.0,
                "the frozen readout counts up");
@@ -1543,16 +1585,20 @@ namespace
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-spectrum-frozen");
         dooblrEditor->selectBand (2); // shows its bandwidth handles over the spectrum and frozen overlay
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-overview");
-        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.5");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.5.1");
 
-        const auto framesBeforeUnfreeze = analyzer.getAccumulatedFrames();
+        clickToggle (*freeze);
+        curve->updateDisplay (1.0 / 60.0);
+        dooblrEditor->updateAnalyzerControls();
+        check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && readout->getText() == "Live",
+               "Freeze off stops and clears the average; readout back to \"Live\"");
+        playThroughEditor (processor, *curve, makeMusicLike (48000, sampleRate, 3, 0.5f));
+        check (analyzer.getAccumulatedFrames() == 0, "nothing accumulates after Freeze is turned off");
         clickToggle (*freeze);
         dooblrEditor->updateAnalyzerControls();
-        check (! analyzer.isFrozen() && analyzer.getAccumulatedFrames() == framesBeforeUnfreeze
-                   && readout->getText().startsWith ("Averaging: "),
-               "un-freezing hides the overlay; the average keeps running");
-        playThroughEditor (processor, *curve, makeMusicLike (48000, sampleRate, 3, 0.5f));
-        clickToggle (*freeze);
+        check (analyzer.isFrozen() && analyzer.getAccumulatedFrames() == 0 && readout->getText() == "Frozen: 0.0 s",
+               "Freeze on again starts a fresh average at 0 s");
+        playThroughEditor (processor, *curve, makeMusicLike (24000, sampleRate, 5, 0.5f));
         clear->onClick();
         curve->updateDisplay (1.0 / 60.0);
         dooblrEditor->updateAnalyzerControls();

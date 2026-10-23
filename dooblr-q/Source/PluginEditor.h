@@ -39,7 +39,7 @@ public:
     void selectBand (int bandIndex);
     int getSelectedBand() const noexcept { return selectedBand; }
 
-    /** Refreshes the Freeze button and the "Averaging / Frozen: N s" readout (timer; public for tests). */
+    /** Refreshes the Freeze button and the "Live" / "Frozen: N s" readout (timer; public for tests). */
     void updateAnalyzerControls();
 
     /** Cmd-Z / Ctrl-Z undo, Cmd-Shift-Z / Ctrl-Shift-Z / Ctrl-Y redo (while the editor has focus). */

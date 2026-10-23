@@ -104,9 +104,9 @@ namespace dooblrq::ui
         overlayDisplay.prepare (rate, analysis::SpectrumAnalyzer::numBins);
         liveDisplay.advance (analyzer.getLiveDb(), dtSeconds, liveRiseSeconds, liveFallSeconds);
 
-        // The overlay is the live long-term average: it glides as the average grows and
-        // starts from the current average (not from silence) when Freeze is engaged or the
-        // first frames after a Clear arrive.
+        // The overlay is the average since Freeze was engaged (or Clear while frozen): it
+        // appears with the first averaged frame (snapped, not faded in from silence) and
+        // then glides as the average grows. Nothing is averaged or drawn while not frozen.
         if (! analyzer.isFrozen() || analyzer.getAccumulatedFrames() == 0)
         {
             overlayPrimed = false;
@@ -217,7 +217,7 @@ namespace dooblrq::ui
 
         auto& analyzer = processor.getSpectrumAnalyzer();
 
-        if (view.showPeak && (analyzer.isFrozen() || analyzer.getAccumulatedFrames() > 0))
+        if (view.showPeak && analyzer.getPeakFrames() > 0)
         {
             // Peak-hold since the last Clear.
             const auto& peak = analyzer.getPeakDb();
@@ -230,7 +230,7 @@ namespace dooblrq::ui
 
         if (analyzer.isFrozen() && overlayPrimed)
         {
-            // The long-term average, still accumulating while frozen.
+            // The average since Freeze was engaged, still accumulating while frozen.
             g.setColour (Palette::frozen.withAlpha (0.05f));
             g.fillPath (makeDisplayPath (overlayDisplay, true));
             g.setColour (Palette::frozen.withAlpha (0.8f));
