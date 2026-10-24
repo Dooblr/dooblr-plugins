@@ -462,15 +462,29 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
     for (auto* knob : { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob })
         knob->slider.setAlpha (dynamicsUsed ? 1.0f : 0.4f);
 
-    // Slope has no meaning for a bell or notch (their shape is Width), so rather than a
-    // control that does nothing it is disabled, with the reason as its tooltip.
-    const auto slopeUsed = dooblrq::dsp::slopeApplies (settings.type);
-    slopeBox.setEnabled (slopeUsed);
-    slopeBox.setTooltip (slopeUsed ? juce::String ("Filter slope: 12 to 60 dB/oct (2nd to 10th order Butterworth), or Brickwall "
-                                                   "(32nd order, about 192 dB/oct). The corner stays at -3 dB; Width/Q adds resonance.")
-                                   : juce::String ("Slope applies to Low/High Cut, Low/High Shelf and Tilt. A ")
-                                         + params::filterTypeNames()[(int) settings.type]
-                                         + "'s shape is set by Width alone.");
+    // Slope works for every type; the tooltip says what it does for this one.
+    using T = dooblrq::dsp::FilterType;
+    const auto slopeTip = [&]() -> juce::String
+    {
+        switch (settings.type)
+        {
+            case T::lowCut: case T::highCut:
+                return "Filter slope: 12 to 60 dB/oct (2nd to 10th order Butterworth), or Brickwall "
+                       "(32nd order, about 192 dB/oct). The corner stays at -3 dB; Width/Q adds resonance.";
+            case T::bell:
+                return "Bell slope: steeper skirts and a flatter top at higher settings (Butterworth band "
+                       "shelf, order 2 to 10, Brickwall 32). Centre stays at the gain, the Width edges at half the gain.";
+            case T::notch:
+                return "Notch slope: steeper edges and a wider, flatter rejection band at higher settings "
+                       "(Butterworth band-stop, order 2 to 10, Brickwall 32). -3 dB stays at the Width edges.";
+            case T::lowShelf: case T::highShelf: case T::tilt:
+                break;
+        }
+        return "Transition slope: steeper at higher settings (Butterworth shelving, order 2 to 10, Brickwall 32). "
+               "The midpoint (Tilt: the pivot) stays put.";
+    };
+    slopeBox.setEnabled (true);
+    slopeBox.setTooltip (slopeTip());
 }
 
 void DooblrQAudioProcessorEditor::timerCallback()

@@ -125,8 +125,7 @@ namespace dooblrq::dsp
             const auto prototype = makeBandPrototype (band.type, band.slope, band.q, band.gainDb);
             auto& response = bandResponse[b];
 
-            for (int bin = 0; bin <= n / 2; ++bin)
-                response[(size_t) bin] = analogResponseAt (prototype, band.frequency, bin * sampleRate / n);
+            analogResponse (prototype, band.frequency, sampleRate, n, n / 2 + 1, response.data());
 
             cachedBands[b] = band;
             bandResponseValid[b] = true;

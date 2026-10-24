@@ -2414,24 +2414,7 @@ namespace
             note (line);
         }
 
-        // 6. Bell and notch: slope does not apply (the control is disabled), and it truly has no effect.
-        for (const auto type : { T::bell, T::notch })
-        {
-            juce::AudioBuffer<float> outputs[2];
-            for (int i = 0; i < 2; ++i)
-            {
-                DooblrQAudioProcessor processor;
-                setBand (processor, 2, params::band::enabled, 1.0f);
-                setBand (processor, 2, params::band::type, (float) type);
-                setBand (processor, 2, params::band::gain, 6.0f);
-                setBand (processor, 2, params::band::slope, i == 0 ? 0.0f : (float) S::brickwall);
-                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
-                outputs[i].setSize (2, 8192);
-                fillWithNoise (outputs[i], 5, 0.3f);
-                processInBlocks (processor, outputs[i], { 512 });
-            }
-            check (bitIdentical (outputs[0], outputs[1], 2), params::filterTypeNames()[(int) type].toStdString() + ": output identical at any slope setting");
-        }
+        // 6. Bell and notch slopes: see testBellNotchSlopes (0.7.1).
 
         // 7. Click-safe slope and type changes while audio runs (sine well inside the passband).
         for (const auto change : { 0, 1 })
@@ -2514,7 +2497,7 @@ namespace
             check (restored.getBandSettings (2).slope == S::db36, "a slope survives save/restore");
         }
 
-        // 10. Editor: slope selector, disabled with a reason for bell/notch, right-click menu, undo,
+        // 10. Editor: slope selector, right-click menu, undo,
         //     handles on the steep curves.
         {
             DooblrQAudioProcessor processor;
@@ -2548,13 +2531,6 @@ namespace
                 editorImpl->selectBand (5);
                 check (slopeBox->getSelectedId() == (int) S::brickwall + 1 && slopeBox->isEnabled(), "band 6 (High Cut) shows Brickwall, enabled");
 
-                editorImpl->selectBand (3);
-                check (! slopeBox->isEnabled() && slopeBox->getTooltip().contains ("Width"), "a Bell band's slope selector is disabled, with the reason as tooltip");
-                const auto bellMenu = curve->createSlopeMenu (3);
-                auto anyEnabled = false;
-                for (juce::PopupMenu::MenuItemIterator it (bellMenu); it.next();)
-                    anyEnabled = anyEnabled || (it.getItem().itemID > 0 && it.getItem().isEnabled);
-                check (! anyEnabled, "a Bell's right-click slope menu is greyed out");
 
                 const auto cutMenu = curve->createSlopeMenu (0);
                 int items = 0, ticked = -1;
@@ -2603,6 +2579,375 @@ namespace
 
                 editorImpl->selectBand (5);
                 saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.7.0");
+            }
+
+            processor.editorBeingDeleted (editor.get());
+        }
+    }
+
+    //==============================================================================
+    // 0.7.1: Slope for bells and notches.
+    void testBellNotchSlopes()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        using T = dsp::FilterType;
+        using S = dsp::Slope;
+        constexpr double sampleRate = 48000.0;
+        const auto db = [] (double magnitude) { return juce::Decibels::gainToDecibels (magnitude, -400.0); };
+        constexpr S allSlopes[] { S::db12, S::db24, S::db36, S::db48, S::db60, S::brickwall };
+        const auto slopeName = [] (S s) { return params::slopeNames()[(int) s].toStdString(); };
+        constexpr double centre = 1000.0, q = 1.414; // about 1 octave wide
+        const auto halfBw = std::pow (2.0, 0.5 * params::qToOctaves (q));
+        const auto lowerEdge = centre / halfBw, upperEdge = centre * halfBw;
+
+        // Responses on a fine log grid (1/192 octave) from centre / 64 to centre * 16.
+        struct Shape { double maxSlope = 0.0, transition = 0.0, flatWidth = 0.0, rejectWidth = 0.0; };
+        const auto analyse = [&] (const std::function<double (double)>& dbAt, double gainDb, bool isNotch)
+        {
+            Shape shape;
+            constexpr int steps = 192 * 10;
+            std::vector<double> f ((size_t) steps + 1), d ((size_t) steps + 1);
+            for (int i = 0; i <= steps; ++i)
+            {
+                f[(size_t) i] = centre / 64.0 * std::pow (2.0, i / 192.0);
+                d[(size_t) i] = dbAt (f[(size_t) i]);
+            }
+            // Max skirt slope: upper skirt (centre .. centre * 16), avoiding the notch's zero itself.
+            const auto firstAbove = [&] (double hz) { int i = 0; while (f[(size_t) i] < hz) ++i; return i; };
+            const auto c = firstAbove (centre);
+            for (int i = c; i < steps; ++i)
+            {
+                if (isNotch && d[(size_t) i] < -60.0) continue;
+                shape.maxSlope = std::max (shape.maxSlope, std::abs (d[(size_t) i + 1] - d[(size_t) i]) * 192.0);
+            }
+            // Octave positions above the centre where the response crosses a fraction of the gain.
+            const auto crossing = [&] (double level, bool below)
+            {
+                for (int i = c; i < steps; ++i)
+                    if (below ? (d[(size_t) i] <= level && d[(size_t) i + 1] > level) : (std::abs (d[(size_t) i]) >= std::abs (level) && std::abs (d[(size_t) i + 1]) < std::abs (level)))
+                        return std::log2 (f[(size_t) i] / centre) + (level - d[(size_t) i]) / (d[(size_t) i + 1] - d[(size_t) i]) / 192.0;
+                return 0.0;
+            };
+            if (! isNotch)
+            {
+                const auto at90 = crossing (0.9 * gainDb, false), at10 = crossing (0.1 * gainDb, false);
+                shape.transition = 0.8 * std::abs (gainDb) / std::max (at10 - at90, 1.0e-6); // dB/oct between 90 % and 10 % of the gain
+                shape.flatWidth = 2.0 * at90;                                                 // octaves within 10 % of the gain
+            }
+            else
+            {
+                const auto at20 = crossing (-20.0, true), at3 = crossing (-3.0103, true);
+                shape.transition = 16.99 / std::max (at3 - at20, 1.0e-6); // dB/oct between -20 and -3 dB
+                shape.rejectWidth = 2.0 * at20;                           // octaves below -20 dB
+            }
+            return shape;
+        };
+
+        // 1. Bells (+12 and -12 dB) and notches: analogue design and digital at 48 kHz.
+        for (const auto type : { T::bell, T::notch })
+            for (const auto gain : type == T::bell ? std::vector<double> { 12.0, -12.0 } : std::vector<double> { 0.0 })
+            {
+                const auto isNotch = type == T::notch;
+                std::string line = std::string (isNotch ? "Notch" : (gain > 0 ? "Bell +12 dB" : "Bell -12 dB")) + " @ 1 kHz, 1 oct:";
+                double previousMax = 0.0, previousTransition = 0.0, previousWidth = 0.0;
+                auto monotonic = true;
+
+                for (const auto slope : allSlopes)
+                {
+                    const auto name = slopeName (slope);
+                    const auto p = dsp::makeBandPrototype (type, slope, q, gain);
+                    const auto c = dsp::makeBandCoefficients (type, slope, centre, q, gain, sampleRate);
+                    check (p.numSections == dsp::sectionsForSlope (slope) && c.numSections == p.numSections, name + ": section count follows the slope");
+                    const auto analogDb = [&] (double hz) { return db (std::abs (dsp::analogResponseAt (p, centre, hz))); };
+                    const auto digitalDb = [&] (double hz) { return db (dsp::magnitudeAt (c, hz, sampleRate)); };
+                    const auto expectedEdge = isNotch ? -3.0103 : 0.5 * gain;
+
+                    const auto aCentre = analogDb (centre), dCentre = digitalDb (centre);
+                    const auto aLow = analogDb (lowerEdge), aHigh = analogDb (upperEdge);
+                    const auto dLow = digitalDb (lowerEdge), dHigh = digitalDb (upperEdge);
+                    if (isNotch)
+                        check (aCentre < -150.0 && dCentre < -100.0, name + " notch: a zero at the centre (analogue " + format (aCentre, 0) + ", digital " + format (dCentre, 0) + " dB)");
+                    else
+                        check (std::abs (aCentre - gain) < 1.0e-6 && std::abs (dCentre - gain) < 1.0e-3, name + ": centre exactly at the gain (digital " + format (dCentre, 4) + " dB)");
+                    check (std::abs (aLow - expectedEdge) < 1.0e-6 && std::abs (aHigh - expectedEdge) < 1.0e-6,
+                           name + ": analogue Width edges exactly at " + format (expectedEdge, 2) + " dB");
+                    check (std::abs (dLow - expectedEdge) < 0.15 && std::abs (dHigh - expectedEdge) < 0.15,
+                           name + ": digital Width edges at " + format (dLow, 2) + " / " + format (dHigh, 2) + " dB");
+
+                    const auto shape = analyse (analogDb, gain, isNotch);
+                    const auto dShape = analyse (digitalDb, gain, isNotch);
+                    line += " " + name + ": edges " + format (dLow, 2) + "/" + format (dHigh, 2) + ", max " + format (shape.maxSlope, 1)
+                            + " dB/oct, " + (isNotch ? "-3..-20 dB " : "90..10 % ") + format (shape.transition, 1) + " dB/oct, "
+                            + (isNotch ? "< -20 dB over " + format (shape.rejectWidth, 3) : "within 10 % over " + format (shape.flatWidth, 3)) + " oct;";
+                    check (std::abs (dShape.maxSlope - shape.maxSlope) < 0.1 * shape.maxSlope + 1.0, name + ": digital skirt matches the analogue design at 1 kHz");
+
+                    const auto width = isNotch ? shape.rejectWidth : shape.flatWidth;
+                    if (slope != S::db12)
+                        monotonic = monotonic && (isNotch || shape.maxSlope > previousMax) && shape.transition > previousTransition && width > previousWidth;
+                    previousMax = shape.maxSlope; previousTransition = shape.transition; previousWidth = width;
+
+                    if (slope == S::brickwall)
+                    {
+                        check (shape.transition > (isNotch ? 200.0 : 100.0), name + ": very steep edges (" + format (shape.transition, 0) + " dB/oct)");
+                        if (isNotch)
+                            check (shape.rejectWidth > 0.85, "Brickwall notch: below -20 dB over most of the Width (" + format (shape.rejectWidth, 2) + " of 1 oct)");
+                        else
+                        {
+                            // Near-rectangular: flat within 10 % over most of the Width, and nearly 0 dB a little outside.
+                            check (shape.flatWidth > 0.8, "Brickwall bell: within 10 % of the gain over " + format (shape.flatWidth, 2) + " of 1 oct");
+                            const auto outside = analogDb (upperEdge * std::pow (2.0, 0.1));
+                            check (std::abs (outside) < 0.1 * std::abs (gain), "Brickwall bell: within 10 % of 0 dB 0.1 oct outside the edge (" + format (outside, 2) + " dB)");
+                        }
+                    }
+                }
+                check (monotonic, line.substr (0, line.find (':')) + (isNotch ? ": edges get steeper, and the rejection band wider, at every step up in slope"
+                                                                              : ": skirts get steeper, and the flat top wider, at every step up in slope"));
+                note (line);
+            }
+
+        // 1b. Digital Width edges stay on their marks at high frequencies too (warp-corrected design).
+        for (const auto type : { T::bell, T::notch })
+        {
+            std::string line = std::string (type == T::bell ? "Bell +12 dB" : "Notch") + ", 1 oct, digital 48 kHz, centre / edges (dB):";
+            auto ok = true;
+            for (const auto frequency : { 1000.0, 5000.0, 10000.0, 15000.0 })
+                for (const auto slope : { S::db24, S::db60, S::brickwall })
+                {
+                    const auto c = dsp::makeBandCoefficients (type, slope, frequency, q, 12.0, sampleRate);
+                    const auto at = [&] (double hz) { return db (dsp::magnitudeAt (c, hz, sampleRate)); };
+                    const auto mid = at (frequency), lo = at (frequency / halfBw), hi = at (frequency * halfBw);
+                    line += " " + format (frequency / 1000.0, 0) + "k " + slopeName (slope) + " " + format (mid, 3) + " / " + format (lo, 2) + ", " + format (hi, 2) + ";";
+                    if (type == T::bell)
+                        ok = ok && std::abs (mid - 12.0) < (frequency < 12000.0 ? 0.05 : 0.3) && std::abs (lo - 6.0) < 0.05 && std::abs (hi - 6.0) < 0.05;
+                    else
+                        ok = ok && mid < -60.0 && std::abs (lo + 3.01) < 0.05 && hi > -3.1 && (frequency > 2000.0 || std::abs (hi + 3.01) < 0.2);
+                }
+            note (line);
+            check (ok, std::string (type == T::bell ? "bell: digital half-gain edges on their marks up to 15 kHz, centre within 0.05 dB up to 10 kHz (0.3 at 15 kHz)"
+                                                    : "notch: digital null at the frequency and -3 dB at the lower edge up to 15 kHz; the upper -3 dB point no further out than its mark (within 0.2 dB of it at 1 kHz)"));
+        }
+
+        // 2. 12 dB/oct is still the pre-0.7.1 bell / notch, through the plugin too.
+        for (const auto type : { T::bell, T::notch })
+        {
+            juce::AudioBuffer<float> outputs[2];
+            for (int i = 0; i < 2; ++i)
+            {
+                DooblrQAudioProcessor processor;
+                setBand (processor, 2, params::band::enabled, 1.0f);
+                setBand (processor, 2, params::band::type, (float) type);
+                setBand (processor, 2, params::band::gain, 6.0f);
+                if (i == 1) setBand (processor, 2, params::band::slope, (float) S::db12);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                outputs[i].setSize (2, 8192);
+                fillWithNoise (outputs[i], 5, 0.3f);
+                processInBlocks (processor, outputs[i], { 512 });
+            }
+            check (bitIdentical (outputs[0], outputs[1], 2), params::filterTypeNames()[(int) type].toStdString() + ": 12 dB/oct output identical to the default (pre-0.7.1) band");
+        }
+
+        // 3. Measured with sines in every phase mode: centre, edges, and the skirt half an octave out.
+        for (const auto mode : allPhaseModes)
+            for (const auto type : { T::bell, T::notch })
+            {
+                std::string line = std::string (phaseName (mode)) + ", " + (type == T::bell ? "Bell +12 dB" : "Notch") + " 1 kHz 1 oct, measured:";
+                double previousOutside = 1.0e9;
+                auto steeper = true;
+                for (const auto slope : { S::db12, S::db36, S::db60, S::brickwall })
+                {
+                    DooblrQAudioProcessor processor;
+                    setParameter (processor, params::phaseMode, (float) mode);
+                    setBand (processor, 2, params::band::enabled, 1.0f);
+                    setBand (processor, 2, params::band::type, (float) type);
+                    setBand (processor, 2, params::band::frequency, (float) centre);
+                    setBand (processor, 2, params::band::q, (float) q);
+                    setBand (processor, 2, params::band::gain, 12.0f);
+                    setBand (processor, 2, params::band::slope, (float) slope);
+                    prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                    const auto measure = [&] (double hz) { processor.reset(); return measureSineGainDb (processor, hz, 0.25f, sampleRate, 1.0); };
+                    const auto mCentre = measure (centre), mLow = measure (lowerEdge), mHigh = measure (upperEdge);
+                    const auto outside = measure (upperEdge * std::pow (2.0, 0.5));
+                    const auto name = slopeName (slope);
+                    line += " " + name + ": centre " + format (mCentre, 2) + ", edges " + format (mLow, 2) + "/" + format (mHigh, 2) + ", +0.5 oct out " + format (outside, 2) + ";";
+                    const auto edge = type == T::bell ? 6.0 : -3.01;
+                    if (type == T::bell)
+                        check (std::abs (mCentre - 12.0) < 0.15, std::string (phaseName (mode)) + " " + name + " bell: measured centre at the gain");
+                    else
+                        check (mCentre < -30.0, std::string (phaseName (mode)) + " " + name + " notch: measured deep rejection at the centre (" + format (mCentre, 1) + " dB)");
+                    check (std::abs (mLow - edge) < 0.3 && std::abs (mHigh - edge) < 0.3, std::string (phaseName (mode)) + " " + name + ": measured Width edges at " + format (edge, 2) + " dB");
+                    // Outside the band: the steeper the slope, the closer to 0 dB.
+                    const auto distance = std::abs (outside);
+                    steeper = steeper && distance < previousOutside;
+                    previousOutside = distance;
+                }
+                check (steeper, line.substr (0, line.find (',')) + std::string (type == T::bell ? " bell" : " notch") + ": higher slope, closer to 0 dB outside the Width");
+                note (line);
+            }
+
+        // 4. Dynamics on a Brickwall bell (every phase mode), and the cascade stays finite at extremes.
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::type, (float) T::bell);
+            setBand (processor, 2, params::band::frequency, 1000.0f);
+            setBand (processor, 2, params::band::q, 1.414f);
+            setBand (processor, 2, params::band::slope, (float) S::brickwall);
+            setBand (processor, 2, params::band::dynamicsEnabled, 1.0f);
+            setBand (processor, 2, params::band::range, -12.0f);
+            setBand (processor, 2, params::band::threshold, -40.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            const auto loud = measureSineGainDb (processor, 1000.0, 0.5f, sampleRate, 1.0);
+            const auto dyn = processor.getBandDynamicGainDb (2);
+            processor.reset();
+            const auto outside = measureSineGainDb (processor, 2000.0, 0.5f, sampleRate, 1.0); // > 0.5 oct outside the edge
+            note (std::string (phaseName (mode)) + ", dynamic Brickwall bell (range -12 dB): loud 1 kHz sine " + format (loud, 2)
+                  + " dB, dynamic gain " + format (dyn, 2) + " dB; loud 2 kHz sine " + format (outside, 2) + " dB");
+            check (dyn < -6.0 && std::abs (loud - dyn) < 0.5, std::string (phaseName (mode)) + ": dynamics drive a Brickwall bell (measured gain follows the dynamic gain)");
+            check (std::abs (outside) < 0.5, std::string (phaseName (mode)) + ": a loud sine outside the Brickwall bell's Width passes untouched");
+        }
+        {
+            auto finite = true;
+            float peak = 0.0f;
+            for (const auto type : { T::bell, T::notch })
+                for (const auto frequency : { 20.0f, 1000.0f, 20000.0f })
+                    for (const auto qValue : { params::minQ, params::maxQ })
+                        for (const auto gain : { params::minGainDb, params::maxGainDb })
+                        {
+                            DooblrQAudioProcessor processor;
+                            setBand (processor, 2, params::band::enabled, 1.0f);
+                            setBand (processor, 2, params::band::type, (float) type);
+                            setBand (processor, 2, params::band::frequency, frequency);
+                            setBand (processor, 2, params::band::q, qValue);
+                            setBand (processor, 2, params::band::gain, gain);
+                            setBand (processor, 2, params::band::slope, (float) S::brickwall);
+                            setBand (processor, 2, params::band::dynamicsEnabled, 1.0f);
+                            setBand (processor, 2, params::band::range, gain > 0 ? -24.0f : 24.0f);
+                            setBand (processor, 2, params::band::threshold, -50.0f);
+                            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 256);
+                            juce::AudioBuffer<float> buffer (2, 24000);
+                            fillWithNoise (buffer, 9, 0.3f);
+                            processInBlocks (processor, buffer, { 256, 17, 512 });
+                            finite = finite && allFinite (buffer);
+                            peak = std::max (peak, buffer.getMagnitude (0, buffer.getNumSamples()));
+                        }
+            note ("Brickwall bell / notch at 20 Hz, 1 kHz, 20 kHz x Q 0.1 / 18 x gain -24 / +24 dB, dynamic, noise 0.3: peak output " + format (peak, 3));
+            check (finite && peak < 20.0f, "Brickwall bell / notch stays finite and bounded at every frequency, Q and gain extreme");
+        }
+
+        // 5. Click-safe slope change on a running bell (sine at the centre, where every slope has the same gain).
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::type, (float) T::bell);
+            setBand (processor, 2, params::band::frequency, 1000.0f);
+            setBand (processor, 2, params::band::gain, 6.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 64);
+            juce::AudioBuffer<float> buffer (2, 64);
+            juce::MidiBuffer midi;
+            float previous = 0.0f, steadyStep = 0.0f, switchStep = 0.0f;
+            int n = 0;
+            for (int block = 0; block < 1500; ++block)
+            {
+                if (block == 750) setBand (processor, 2, params::band::slope, (float) S::brickwall);
+                for (int i = 0; i < 64; ++i, ++n)
+                    for (int ch = 0; ch < 2; ++ch)
+                        buffer.setSample (ch, i, 0.3f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * n / sampleRate));
+                processor.processBlock (buffer, midi);
+                for (int i = 0; i < 64; ++i)
+                {
+                    const auto step = std::abs (buffer.getSample (0, i) - previous);
+                    previous = buffer.getSample (0, i);
+                    if (block > 300 && block < 750) steadyStep = std::max (steadyStep, step);
+                    if (block >= 750 && block < 800) switchStep = std::max (switchStep, step);
+                }
+            }
+            note ("bell slope 12 -> Brickwall while running: max sample step " + format (switchStep, 4) + " vs steady " + format (steadyStep, 4));
+            check (switchStep < steadyStep * 1.15f, "bell slope change: no click (sample steps stay within the steady-state sine's)");
+        }
+
+        // 6. Editor: the selector and the right-click menu work for bells and notches; undo; handles.
+        {
+            DooblrQAudioProcessor processor;
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1300, 760);
+            auto* curve = dynamic_cast<Curve*> (findById (*editor, "responseCurve"));
+            auto* slopeBox = dynamic_cast<juce::ComboBox*> (findById (*editor, params::band::slope));
+            auto* editorImpl = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+            check (curve != nullptr && slopeBox != nullptr && editorImpl != nullptr, "editor has a slope selector");
+
+            if (curve != nullptr && slopeBox != nullptr && editorImpl != nullptr)
+            {
+                // A lone bell on band 3: handle on the centre gain, width handles at half the gain, every slope.
+                for (int b = 0; b < params::numBands; ++b)
+                    setBand (processor, b, params::band::enabled, b == 2 ? 1.0f : 0.0f);
+                setBand (processor, 2, params::band::type, (float) T::bell);
+                setBand (processor, 2, params::band::frequency, 1000.0f);
+                setBand (processor, 2, params::band::q, 1.414f);
+                setBand (processor, 2, params::band::gain, 10.0f);
+                editorImpl->selectBand (2);
+                check (slopeBox->isEnabled() && slopeBox->getTooltip().contains ("Bell"), "a Bell band's slope selector is enabled, with a Bell tooltip");
+                std::string line = "lone +10 dB bell, handle / width handles (dB):";
+                auto handlesOk = true;
+                for (const auto slope : allSlopes)
+                {
+                    curve->setBandSlope (2, slope);
+                    const auto handleDb = curve->yToDecibels (curve->handlePosition (2).y);
+                    const auto [lower, upper] = curve->widthHandlePositions (2);
+                    const auto lowDb = curve->yToDecibels (lower.y), highDb = curve->yToDecibels (upper.y);
+                    line += " " + slopeName (slope) + " " + format (handleDb, 2) + " / " + format (lowDb, 2) + ", " + format (highDb, 2) + ";";
+                    handlesOk = handlesOk && std::abs (handleDb - 10.0) < 0.1 && std::abs (lowDb - 5.0) < 0.2 && std::abs (highDb - 5.0) < 0.2;
+                }
+                note (line);
+                check (handlesOk, "bell handle stays on the gain and width handles on half the gain at every slope");
+                const auto drawnOutside = curve->responseDecibelsAt (1000.0 * std::pow (2.0, 0.7), false);
+                check (drawnOutside < 1.0, "the drawn curve shows the Brickwall bell's steep skirt (" + format (drawnOutside, 2) + " dB 0.7 oct out)");
+
+                setBand (processor, 2, params::band::type, (float) T::notch);
+                editorImpl->selectBand (2);
+                check (slopeBox->isEnabled() && slopeBox->getTooltip().contains ("Notch"), "a Notch band's slope selector is enabled, with a Notch tooltip");
+                setBand (processor, 2, params::band::type, (float) T::bell);
+
+                setBand (processor, 2, params::band::slope, (float) S::db48);
+                const auto bellMenu = curve->createSlopeMenu (2);
+                int items = 0, ticked = -1;
+                for (juce::PopupMenu::MenuItemIterator it (bellMenu); it.next();)
+                    if (it.getItem().itemID > 0 && it.getItem().isEnabled)
+                    {
+                        ++items;
+                        if (it.getItem().isTicked) ticked = it.getItem().itemID - 1;
+                    }
+                check (items == dsp::numSlopes && ticked == (int) S::db48, "a Bell's right-click menu offers all six slopes, current one ticked");
+
+                auto& history = processor.getUndoHistory();
+                history.clear();
+                curve->setBandSlope (2, S::db60);
+                editorImpl->selectBand (2);
+                slopeBox->setSelectedId ((int) S::brickwall + 1, juce::sendNotificationSync);
+                check (processor.getBandSettings (2).slope == S::brickwall && history.getNumUndoableSteps() == 2, "bell: menu and selector slope changes are one undo step each");
+                history.undo();
+                check (processor.getBandSettings (2).slope == S::db60, "bell: undo restores 60 dB/oct");
+                history.undo();
+                check (processor.getBandSettings (2).slope == S::db48, "bell: second undo restores 48 dB/oct");
+
+                // Snapshot: bells and a notch at different slopes.
+                struct B { T type; float frequency, gain, q; S slope; };
+                const B bands[] { { T::bell, 60.0f, 6.0f, 1.414f, S::db12 },    { T::bell, 220.0f, -8.0f, 1.414f, S::db24 },
+                                  { T::bell, 700.0f, 9.0f, 1.414f, S::db48 },   { T::notch, 2200.0f, 0.0f, 2.0f, S::brickwall },
+                                  { T::bell, 5500.0f, -10.0f, 1.414f, S::brickwall }, { T::bell, 14000.0f, 6.0f, 1.414f, S::db36 } };
+                for (int b = 0; b < params::numBands; ++b)
+                {
+                    setBand (processor, b, params::band::enabled, 1.0f);
+                    setBand (processor, b, params::band::type, (float) bands[b].type);
+                    setBand (processor, b, params::band::frequency, bands[b].frequency);
+                    setBand (processor, b, params::band::gain, bands[b].gain);
+                    setBand (processor, b, params::band::q, bands[b].q);
+                    setBand (processor, b, params::band::slope, (float) bands[b].slope);
+                }
+                editorImpl->selectBand (4);
+                saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.7.1");
             }
 
             processor.editorBeingDeleted (editor.get());
@@ -2683,6 +3028,45 @@ namespace
             check (elapsed < seconds * 1000.0 && allFinite (buffer), std::string (phaseName (mode)) + ": all-Brickwall runs faster than real time, finite output");
         }
         note (worst);
+
+        // Worst case for 0.7.1: all six bands Brickwall bells, all dynamic (every cascade
+        // redesigned as the gain moves).
+        std::string bells = "CPU, all 6 bands Brickwall bells (16 sections each), all dynamic, stereo @ 48 kHz, 512-sample blocks:";
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            const float freqs[] { 60.0f, 200.0f, 700.0f, 2000.0f, 5000.0f, 12000.0f };
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                setBand (processor, b, params::band::enabled, 1.0f);
+                setBand (processor, b, params::band::type, (float) dsp::FilterType::bell);
+                setBand (processor, b, params::band::frequency, freqs[b]);
+                setBand (processor, b, params::band::q, 1.4f);
+                setBand (processor, b, params::band::gain, b % 2 == 0 ? 3.0f : -3.0f);
+                setBand (processor, b, params::band::slope, (float) dsp::Slope::brickwall);
+                setBand (processor, b, params::band::dynamicsEnabled, 1.0f);
+                setBand (processor, b, params::band::range, -9.0f);
+                setBand (processor, b, params::band::threshold, -30.0f);
+            }
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            juce::Random random (11);
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            for (int block = 0; block < seconds * 48000 / 512; ++block)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < 512; ++i)
+                        buffer.setSample (ch, i, (random.nextFloat() - 0.5f) * ((block / 40) % 2 == 0 ? 1.0f : 0.05f));
+                processor.processBlock (buffer, midi);
+            }
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+            bells += std::string (" ") + phaseName (mode) + " " + format (100.0 * elapsed / (seconds * 1000.0), 2) + " % of one core";
+            check (elapsed < seconds * 1000.0 && allFinite (buffer), std::string (phaseName (mode)) + ": all-Brickwall dynamic bells run faster than real time, finite output");
+        }
+        note (bells);
     }
 
     //==============================================================================
@@ -3313,6 +3697,7 @@ int main()
         { "undo / redo (50 steps, keys, buttons)",  testUndo },
         { "band tab on/off switches",               testBandTabSwitches },
         { "per-band slope (12-60 dB/oct, Brickwall)", testSlopes },
+        { "bell / notch slopes (0.7.1)", testBellNotchSlopes },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

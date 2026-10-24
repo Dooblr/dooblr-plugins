@@ -58,21 +58,15 @@ namespace dooblrq::dsp
     inline constexpr int brickwallSections = 16;
     inline constexpr int maxSections = brickwallSections;
 
-    /** Slope changes the response of cuts, shelves and tilt (they become higher-order
-        Butterworth designs). A bell's and a notch's shape is set by Q/Width alone. */
-    constexpr bool slopeApplies (FilterType type) noexcept
-    {
-        return type != FilterType::bell && type != FilterType::notch;
-    }
-
     constexpr int sectionsForSlope (Slope slope) noexcept
     {
         return slope == Slope::brickwall ? brickwallSections : (int) slope + 1;
     }
 
-    constexpr int numSectionsFor (FilterType type, Slope slope) noexcept
+    /** Every type (0.7.1): the slope sets the number of second-order sections. */
+    constexpr int numSectionsFor (FilterType, Slope slope) noexcept
     {
-        return slopeApplies (type) ? sectionsForSlope (slope) : 1;
+        return sectionsForSlope (slope);
     }
 
     /** Asymptotic roll-off of a cut at this slope, dB per octave. */
@@ -121,7 +115,8 @@ namespace dooblrq::dsp
     AnalogPrototype makeEqPrototype (FilterType type, double q, double gainDb) noexcept;
 
     /**
-        A band as a cascade of second-order sections (1 for 12 dB/oct and for bells/notches).
+        A band as a cascade of second-order sections (1 for 12 dB/oct; n = 1-5 for 12-60
+        dB/oct, 16 for Brickwall).
 
         Cuts: Butterworth sections (product of the section levels at the corner = 0.707, so
         the corner is -3 dB at every order). The band's Q is applied as resonance to the
@@ -130,7 +125,17 @@ namespace dooblrq::dsp
         Shelves / tilt: Butterworth shelving of order 2n (zeros and poles on Butterworth
         circles a gain-dependent ratio apart), so the transition gets steeper (up to 6 dB
         per order per octave) while the midpoint stays at half the gain. Q again scales
-        the lowest-Q section. With one section every type equals makeEqPrototype exactly.
+        the lowest-Q section.
+        Bell (0.7.1): Butterworth band-shelf of order 2n, i.e. the order-n Butterworth low
+        shelf (gain V at DC, half the dB gain at its corner) mapped through the low-pass to
+        band-pass transform s -> (s^2 + 1) / (s / Q). The centre is exactly at the gain and
+        the Width edges (centre / 2^(BW/2), centre * 2^(BW/2), BW from Q) are exactly at half
+        the dB gain for every order; a higher order makes the skirts steeper and the top
+        flatter. Notch (0.7.1): Butterworth band-stop of order 2n (order-n Butterworth
+        low-pass through s -> (s / Q) / (s^2 + 1)): -3 dB exactly at the Width edges and a
+        zero at the centre for every order; a higher order makes the edges steeper and the
+        rejection band wider and flatter.
+        With one section every type equals makeEqPrototype exactly.
     */
     struct BandPrototype
     {
@@ -157,6 +162,11 @@ namespace dooblrq::dsp
     std::complex<double> analogResponseAt (const AnalogPrototype& p, double bandFrequency, double frequency) noexcept;
 
     std::complex<double> analogResponseAt (const BandPrototype& p, double bandFrequency, double frequency) noexcept;
+
+    /** analogResponseAt for bins 0 .. numBins - 1 at bin * sampleRate / fftLength Hz, computed
+        faster for cascades (used to design the Natural / Linear Phase kernels). */
+    void analogResponse (const BandPrototype& prototype, double bandFrequency, double sampleRate, int fftLength,
+                         int numBins, std::complex<double>* destination) noexcept;
 
     /** Exact complex response of the digital filter at a frequency. */
     std::complex<double> responseAt (const SvfCoefficients& c, double frequency, double sampleRate) noexcept;

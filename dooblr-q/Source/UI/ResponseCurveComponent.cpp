@@ -826,19 +826,12 @@ namespace dooblrq::ui
     {
         juce::PopupMenu menu;
         const auto s = processor.getBandSettings (bandIndex);
-        const auto applies = dsp::slopeApplies (s.type);
         const auto names = params::slopeNames();
 
         menu.addSectionHeader ("Band " + juce::String (bandIndex + 1) + " Slope");
 
         for (int i = 0; i < names.size(); ++i)
-            menu.addItem (i + 1, names[i], applies, applies && (int) s.slope == i);
-
-        if (! applies)
-        {
-            menu.addSeparator();
-            menu.addItem (-1, "Slope applies to Cut, Shelf and Tilt types", false, false);
-        }
+            menu.addItem (i + 1, names[i], true, (int) s.slope == i);
 
         return menu;
     }

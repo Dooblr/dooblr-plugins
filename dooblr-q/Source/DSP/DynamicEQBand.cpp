@@ -146,8 +146,7 @@ namespace dooblrq::dsp
         // a further change waits for the current crossfade to finish).
         if (crossfadeRemaining <= 0
             && (settings.type != appliedType
-                || numSectionsFor (settings.type, settings.slope) != numSectionsFor (appliedType, appliedSlope)
-                || (slopeApplies (settings.type) && settings.slope != appliedSlope)))
+                || settings.slope != appliedSlope))
         {
             fadingType = appliedType;
             fadingSlope = appliedSlope;

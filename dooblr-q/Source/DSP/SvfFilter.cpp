@@ -1,6 +1,8 @@
 #include "SvfFilter.h"
 
 #include <algorithm>
+#include <complex>
+#include <utility>
 
 namespace dooblrq::dsp
 {
@@ -34,6 +36,69 @@ namespace dooblrq::dsp
         }
     }
 
+    namespace
+    {
+        /** Section of a cascade from monic polynomials: (s^2 + b1 s + b0) / (s^2 + a1 s + a0). */
+        AnalogPrototype sectionFromPolynomials (double b1, double b0, double a1, double a0) noexcept
+        {
+            const auto w0 = std::sqrt (a0);
+            const auto k = a1 / w0;
+            return { w0, k, 1.0, b1 / w0 - k, b0 / a0 - 1.0 };
+        }
+
+        /** The two roots of s^2 - b s + 1 (product 1), the larger magnitude first. */
+        std::pair<std::complex<double>, std::complex<double>> unitProductRoots (std::complex<double> b) noexcept
+        {
+            const auto d = std::sqrt (b * b - 4.0);
+            auto r1 = 0.5 * (b + d), r2 = 0.5 * (b - d);
+            if (std::abs (r1) < std::abs (r2))
+                std::swap (r1, r2);
+            return { r1, r2 };
+        }
+
+        /** Bell / notch of order 2n as n sections (see BandPrototype). */
+        void makeBandpassFamily (FilterType type, int n, double q, double gainDb, BandPrototype& p) noexcept
+        {
+            const auto beta = 1.0 / std::max (q, 0.025);       // bandwidth: edges at centre * 2^(+-BW/2)
+            const auto v = std::pow (10.0, gainDb / 20.0);
+            const auto wz = std::pow (v, 1.0 / (2.0 * n));      // shelf zeros / poles radii
+            const auto wp = 1.0 / wz;
+            int index = 0;
+
+            for (int i = 0; i < n; ++i)
+            {
+                // Order-n Butterworth poles; conjugates (lower half) are covered by their partners.
+                const auto angle = pi * (2.0 * i + n + 1.0) / (2.0 * n);
+                if (angle > pi + 1.0e-9)
+                    continue;
+
+                const auto pole = std::polar (1.0, angle);
+                auto& sections = p.sections;
+
+                if (std::abs (pole.imag()) < 1.0e-9) // the real pole (odd n): one section
+                {
+                    sections[(size_t) index++] = type == FilterType::bell
+                        ? sectionFromPolynomials (wz * beta, 1.0, wp * beta, 1.0)
+                        : sectionFromPolynomials (0.0, 1.0, beta, 1.0);
+                    continue;
+                }
+
+                // Low-pass to band-pass (bell): each prototype root x maps to the roots of
+                // s^2 - x beta s + 1. Low-pass to band-stop (notch): poles at the roots of
+                // s^2 - (beta / x) s + 1, zeros at +-j (the centre).
+                const auto poles = type == FilterType::bell ? unitProductRoots (wp * pole * beta)
+                                                            : unitProductRoots (beta / pole);
+                const auto zeros = type == FilterType::bell ? unitProductRoots (wz * pole * beta)
+                                                            : std::make_pair (std::complex<double> (0.0, 1.0), std::complex<double> (0.0, 1.0));
+
+                for (const auto& [z, r] : { std::make_pair (zeros.first, poles.first), std::make_pair (zeros.second, poles.second) })
+                    sections[(size_t) index++] = sectionFromPolynomials (-2.0 * z.real(), std::norm (z), -2.0 * r.real(), std::norm (r));
+            }
+
+            p.numSections = index;
+        }
+    }
+
     double butterworthSectionQ (int numSections, int index) noexcept
     {
         // Order N = 2n: poles at angles (2i - 1) pi / (2N) from the negative real axis.
@@ -61,6 +126,12 @@ namespace dooblrq::dsp
         {
             p.sections[0] = makeEqPrototype (type, q, gainDb);
             p.numSections = 1;
+            return p;
+        }
+
+        if (type == FilterType::bell || type == FilterType::notch)
+        {
+            makeBandpassFamily (type, n, q, gainDb, p);
             return p;
         }
 
@@ -103,7 +174,7 @@ namespace dooblrq::dsp
 
                 case FilterType::bell:
                 case FilterType::notch:
-                    break; // single section (handled above)
+                    break; // handled above
             }
         }
 
@@ -132,6 +203,43 @@ namespace dooblrq::dsp
         {
             c.sections[0] = makeEqCoefficients (type, frequency, q, gainDb, sampleRate);
             c.numSections = 1;
+            return c;
+        }
+
+        if (type == FilterType::bell || type == FilterType::notch)
+        {
+            // The bilinear transform squeezes frequencies towards Nyquist, which a steep bell or
+            // notch would show as Width edges off their marks. Correct the design for it, using
+            // the edges' warped positions o1 < 1 < o2 (relative to the warped centre):
+            //  - Bell: centre the band between them (warped geometric mean), so the half-gain
+            //    points land exactly on the Width edges. The bell's top is its maximum, so the
+            //    small centre move barely changes the gain at the frequency (flat at high slopes).
+            //  - Notch: keep the null exactly at the frequency and put the lower -3 dB point
+            //    exactly on its edge; the warp then pulls the upper -3 dB point a little inside
+            //    its mark (negligible below a few kHz; see the README).
+            const auto fc = std::clamp (frequency, 10.0, sampleRate * 0.49);
+            const auto w = std::tan (pi * fc / sampleRate);
+            const auto beta = 1.0 / std::max (q, 0.025);
+            const auto ratio = 0.5 * (beta + std::sqrt (beta * beta + 4.0)); // upper edge / centre
+            const auto o1 = std::tan (pi * fc / ratio / sampleRate) / w;
+            const auto upperAngle = pi * fc * ratio / sampleRate;
+            auto designQ = q, centreScale = 1.0;
+
+            if (type == FilterType::bell && upperAngle < pi * 0.4999)
+            {
+                const auto o2 = std::tan (upperAngle) / w;
+                centreScale = std::sqrt (o1 * o2);
+                designQ = centreScale / (o2 - o1);
+            }
+            else
+            {
+                designQ = 1.0 / (1.0 / o1 - o1); // band edges at o1 and 1 / o1 around the centre
+            }
+
+            auto prototype = makeBandPrototype (type, slope, designQ, gainDb);
+            for (int i = 0; i < prototype.numSections; ++i)
+                prototype.sections[(size_t) i].scale *= centreScale;
+            makeBandCoefficients (prototype, frequency, sampleRate, c);
             return c;
         }
 
@@ -238,6 +346,51 @@ namespace dooblrq::dsp
             h *= analogResponseAt (p.sections[(size_t) i], bandFrequency, frequency);
 
         return h;
+    }
+
+    void analogResponse (const BandPrototype& p, double bandFrequency, double sampleRate, int fftLength,
+                         int numBins, std::complex<double>* destination) noexcept
+    {
+        if (p.numSections <= 1)
+        {
+            // Exactly as before 0.7.1 for single-section bands.
+            for (int bin = 0; bin < numBins; ++bin)
+                destination[bin] = analogResponseAt (p, bandFrequency, bin * sampleRate / fftLength);
+            return;
+        }
+
+        // Cascades: numerator and denominator products in plain real arithmetic (no complex
+        // division per section), renormalised every few sections, one division at the end.
+        std::array<double, maxSections> inverseScale {};
+        for (int i = 0; i < p.numSections; ++i)
+            inverseScale[(size_t) i] = 1.0 / (std::max (bandFrequency, 1.0) * p.sections[(size_t) i].scale);
+
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            const auto f = bin * sampleRate / fftLength;
+            double nr = 1.0, ni = 0.0, dr = 1.0, di = 0.0;
+
+            for (int i = 0; i < p.numSections; ++i)
+            {
+                const auto& s = p.sections[(size_t) i];
+                const auto x = f * inverseScale[(size_t) i];
+                const auto denRe = 1.0 - x * x, denIm = s.k * x;
+                const auto numRe = s.m0 * denRe + s.m2, numIm = s.m0 * denIm + s.m1 * x;
+
+                const auto tnr = nr * numRe - ni * numIm, tni = nr * numIm + ni * numRe;
+                const auto tdr = dr * denRe - di * denIm, tdi = dr * denIm + di * denRe;
+                nr = tnr; ni = tni; dr = tdr; di = tdi;
+
+                if ((i & 3) == 3)
+                {
+                    const auto norm = 1.0 / (std::abs (dr) + std::abs (di) + 1.0e-300);
+                    nr *= norm; ni *= norm; dr *= norm; di *= norm;
+                }
+            }
+
+            const auto inv = 1.0 / (dr * dr + di * di);
+            destination[bin] = { (nr * dr + ni * di) * inv, (ni * dr - nr * di) * inv };
+        }
     }
 
     std::complex<double> responseAt (const BandCoefficients& c, double frequency, double sampleRate) noexcept
