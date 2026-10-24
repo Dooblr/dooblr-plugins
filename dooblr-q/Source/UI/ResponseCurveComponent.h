@@ -98,8 +98,16 @@ namespace dooblrq::ui
         /** Sets a band's slope as one undoable gesture (what the slope menu does). */
         void setBandSlope (int bandIndex, dsp::Slope slope);
 
+        /** 0.8.0: the menu also lists the models (IDs modelMenuBase + model) and Stepped (steppedMenuId). */
+        static constexpr int modelMenuBase = 100, steppedMenuId = 200;
+
+        /** Applies a band menu choice (slope, model or Stepped) as one undoable gesture. */
+        void handleBandMenuResult (int bandIndex, int result);
+
         /** True when the display draws the analogue (Natural/Linear phase) response. */
         bool showsAnalogResponse() const;
+
+        void setBandChoice (int bandIndex, const char* suffix, float value);
 
         /** Combined response (dB) of all enabled bands at a frequency, as drawn. */
         double responseDecibelsAt (double frequency, bool includeDynamics) const;

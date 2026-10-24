@@ -67,6 +67,14 @@ namespace dooblrq::params
         return { "12 dB/oct", "24 dB/oct", "36 dB/oct", "48 dB/oct", "60 dB/oct", "Brickwall" };
     }
 
+    juce::StringArray modelNames()
+    {
+        juce::StringArray names;
+        for (int m = 0; m < dsp::numModels; ++m)
+            names.add (dsp::modelName ((dsp::Model) m));
+        return names;
+    }
+
     BandDefaults bandDefaults (int bandIndex)
     {
         using dsp::FilterType;
@@ -171,6 +179,23 @@ namespace dooblrq::params
             layout.add (std::make_unique<juce::AudioParameterChoice> (
                 juce::ParameterID { bandId (bandIndex, band::slope), addedInV070 },
                 "Band " + juce::String (bandIndex + 1) + " Slope", slopeNames(), (int) dsp::Slope::db12));
+
+        // Added in 0.8.0 after everything older: per band Model, Stepped, Drive and Atten.
+        // Old sessions load Digital / off / 0 dB / 0 dB, which is exactly the 0.7.1 sound.
+        constexpr int addedInV080 = 4;
+        for (int bandIndex = 0; bandIndex < numBands; ++bandIndex)
+        {
+            const auto prefix = "Band " + juce::String (bandIndex + 1) + " ";
+            const auto id = [bandIndex] (const char* suffix) { return juce::ParameterID { bandId (bandIndex, suffix), addedInV080 }; };
+            layout.add (std::make_unique<juce::AudioParameterChoice> (id (band::model), prefix + "Model", modelNames(), 0));
+            layout.add (std::make_unique<juce::AudioParameterBool> (id (band::stepped), prefix + "Stepped", false));
+            layout.add (std::make_unique<juce::AudioParameterFloat> (
+                id (band::drive), prefix + "Drive", juce::NormalisableRange<float> (minDriveDb, maxDriveDb), 0.0f,
+                withFormatter (formatDecibels)));
+            layout.add (std::make_unique<juce::AudioParameterFloat> (
+                id (band::atten), prefix + "Atten", juce::NormalisableRange<float> (minAttenDb, maxAttenDb), 0.0f,
+                withFormatter (formatDecibels)));
+        }
 
         return layout;
     }

@@ -5,6 +5,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include "AnalogModels.h"
 #include "SvfFilter.h"
 
 namespace dooblrq::dsp
@@ -23,6 +24,10 @@ namespace dooblrq::dsp
         float attackMs = 10.0f;
         float releaseMs = 120.0f;
         Slope slope = Slope::db12;
+        // 0.8.0: analogue model (frequency / gain arrive already snapped when Stepped is on).
+        Model model = Model::digital;
+        float attenDb = 0.0f;  // Pultec low / high atten (ignored by other models)
+        float driveDb = 0.0f;  // colour stage drive (analogue models only)
     };
 
     /**
@@ -38,7 +43,7 @@ namespace dooblrq::dsp
         where over-threshold uses a soft knee. The EQ filter itself is a TPT SVF whose
         coefficients are recomputed for every sub-block passed to process(). With a slope
         above 12 dB/oct the filter is a cascade of SVF sections (see makeBandPrototype).
-        A change of type or slope (which changes the filter topology) is crossfaded: the
+        A change of type, slope or model (which changes the filter topology) is crossfaded: the
         old cascade keeps running on its own state and fades out over
         topologyFadeSeconds while the new one fades in, so switching never clicks.
 
@@ -67,7 +72,16 @@ namespace dooblrq::dsp
         /** Processes [startSample, startSample + numSamples) in place. Coefficients are
             computed once per call, so callers pass short sub-blocks (e.g. 16 samples). */
         void process (float* const* channels, int numChannels, int startSample, int numSamples,
-                      bool stereoLinked) noexcept;
+                      bool stereoLinked, bool applyColour = true) noexcept;
+
+        /** Runs only the model's colour stage (Natural / Linear Phase: after the FIR). */
+        void processColour (float* const* channels, int numChannels, int startSample, int numSamples) noexcept
+        {
+            colour.process (channels, numChannels, startSample, numSamples);
+        }
+
+        bool hasColour() const noexcept { return ! colour.isSilent(); }
+        float getColourLatency() const noexcept { return colour.getResidualLatency(); }
 
         /** Current dynamic gain offset (dB), safe to read from any thread. */
         float getDynamicGainDb() const noexcept { return dynamicGainForDisplay.load (std::memory_order_relaxed); }
@@ -86,7 +100,8 @@ namespace dooblrq::dsp
         BandSettings settings;
 
         juce::SmoothedValue<float, juce::ValueSmoothingTypes::Multiplicative> frequency { 1000.0f }, q { 1.0f };
-        juce::SmoothedValue<float> gainDb, rangeDb, thresholdDb, wet;
+        juce::SmoothedValue<float> gainDb, rangeDb, thresholdDb, wet, attenDb;
+        ColourStage colour;
 
         float attackCoefficient = 0.0f, releaseCoefficient = 0.0f;
 
@@ -97,6 +112,7 @@ namespace dooblrq::dsp
         // Topology currently running, and the one fading out during a crossfade.
         FilterType appliedType = FilterType::bell, fadingType = FilterType::bell;
         Slope appliedSlope = Slope::db12, fadingSlope = Slope::db12;
+        Model appliedModel = Model::digital, fadingModel = Model::digital;
         int crossfadeRemaining = 0, crossfadeLength = 1;
         std::array<float, maxChannels> envelope {}, dynamicGainDb {};
 

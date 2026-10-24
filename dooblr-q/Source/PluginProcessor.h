@@ -135,6 +135,10 @@ private:
         std::atomic<float>* attack = nullptr;
         std::atomic<float>* release = nullptr;
         std::atomic<float>* slope = nullptr;
+        std::atomic<float>* model = nullptr;
+        std::atomic<float>* stepped = nullptr;
+        std::atomic<float>* drive = nullptr;
+        std::atomic<float>* atten = nullptr;
     };
 
     juce::AudioProcessorValueTreeState parameters;

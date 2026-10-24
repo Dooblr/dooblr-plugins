@@ -7,6 +7,7 @@
 
 #include <juce_dsp/juce_dsp.h>
 
+#include "AnalogModels.h"
 #include "SvfFilter.h"
 
 namespace dooblrq::dsp
@@ -18,6 +19,8 @@ namespace dooblrq::dsp
         FilterType type = FilterType::bell;
         double frequency = 1000.0, q = 1.0, gainDb = 0.0;
         Slope slope = Slope::db12;
+        Model model = Model::digital; // 0.8.0: the model's linear shape is designed into the kernel
+        double attenDb = 0.0;
     };
 
     /**

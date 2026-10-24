@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <cstring>
 #include <functional>
 #include <iostream>
@@ -188,8 +189,8 @@ namespace
         check (processor->getTotalNumInputChannels() == 2, "default input is stereo");
         check (processor->getTotalNumOutputChannels() == 2, "default output is stereo");
         check (processor->hasEditor(), "has an editor");
-        check (processor->getParameters().size() == params::numBands * 11 + 3,
-               "exposes 11 parameters per band plus output gain, stereo link and phase mode");
+        check (processor->getParameters().size() == params::numBands * 15 + 3,
+               "exposes 15 parameters per band plus output gain, stereo link and phase mode");
         check (processor->getParameters()[params::numBands * 10]->getName (64) == "Output Gain"
                    && processor->getParameters()[params::numBands * 10 + 2]->getName (64) == "Phase Mode",
                "phase mode (added in 0.4.0) comes after all older parameters (old indices unchanged)");
@@ -201,6 +202,17 @@ namespace
                 slopesLast = slopesLast && p != nullptr && p->paramID == params::bandId (b, params::band::slope);
             }
             check (slopesLast, "the six band slopes (added in 0.7.0) come after every older parameter");
+        }
+        {
+            auto modelsLast = true;
+            const char* suffixes[] { params::band::model, params::band::stepped, params::band::drive, params::band::atten };
+            for (int b = 0; b < params::numBands; ++b)
+                for (int k = 0; k < 4; ++k)
+                {
+                    auto* p = dynamic_cast<juce::AudioProcessorParameterWithID*> (processor->getParameters()[params::numBands * 11 + 3 + b * 4 + k]);
+                    modelsLast = modelsLast && p != nullptr && p->paramID == params::bandId (b, suffixes[k]);
+                }
+            check (modelsLast, "the 0.8.0 model parameters come after every older parameter");
         }
 
         std::unique_ptr<juce::AudioProcessor> fromFactory (createPluginFilter());
@@ -2535,7 +2547,7 @@ namespace
                 const auto cutMenu = curve->createSlopeMenu (0);
                 int items = 0, ticked = -1;
                 for (juce::PopupMenu::MenuItemIterator it (cutMenu); it.next();)
-                    if (it.getItem().itemID > 0 && it.getItem().isEnabled)
+                    if (it.getItem().itemID > 0 && it.getItem().itemID <= dsp::numSlopes && it.getItem().isEnabled)
                     {
                         ++items;
                         if (it.getItem().isTicked) ticked = it.getItem().itemID - 1;
@@ -2914,7 +2926,7 @@ namespace
                 const auto bellMenu = curve->createSlopeMenu (2);
                 int items = 0, ticked = -1;
                 for (juce::PopupMenu::MenuItemIterator it (bellMenu); it.next();)
-                    if (it.getItem().itemID > 0 && it.getItem().isEnabled)
+                    if (it.getItem().itemID > 0 && it.getItem().itemID <= dsp::numSlopes && it.getItem().isEnabled)
                     {
                         ++items;
                         if (it.getItem().isTicked) ticked = it.getItem().itemID - 1;
@@ -3067,6 +3079,149 @@ namespace
             check (elapsed < seconds * 1000.0 && allFinite (buffer), std::string (phaseName (mode)) + ": all-Brickwall dynamic bells run faster than real time, finite output");
         }
         note (bells);
+
+        // 0.8.0: all six bands on one analogue model (each with its 4x oversampled colour stage),
+        // mixed types, all dynamic, Drive +6 dB; Digital with the same settings for reference.
+        std::string models = "CPU per model, 6 bands (cut, shelves, 2 bells, cut), all dynamic, Drive +6, stereo @ 48 kHz, 512-sample blocks:";
+        for (const auto model : { dsp::Model::digital, dsp::Model::neve, dsp::Model::pultec, dsp::Model::helios })
+        {
+            models += std::string ("\n      ") + dsp::modelName (model) + ":";
+            for (const auto mode : allPhaseModes)
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                const dsp::FilterType types[] { dsp::FilterType::lowCut, dsp::FilterType::lowShelf, dsp::FilterType::bell,
+                                                dsp::FilterType::bell, dsp::FilterType::highShelf, dsp::FilterType::highCut };
+                const float freqs[] { 40.0f, 100.0f, 700.0f, 3000.0f, 10000.0f, 16000.0f };
+                for (int b = 0; b < params::numBands; ++b)
+                {
+                    setBand (processor, b, params::band::enabled, 1.0f);
+                    setBand (processor, b, params::band::type, (float) types[b]);
+                    setBand (processor, b, params::band::frequency, freqs[b]);
+                    setBand (processor, b, params::band::gain, b % 2 == 0 ? 4.0f : -4.0f);
+                    setBand (processor, b, params::band::model, (float) model);
+                    setBand (processor, b, params::band::drive, 6.0f);
+                    setBand (processor, b, params::band::atten, 4.0f);
+                    setBand (processor, b, params::band::dynamicsEnabled, 1.0f);
+                    setBand (processor, b, params::band::range, -6.0f);
+                    setBand (processor, b, params::band::threshold, -30.0f);
+                }
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+                juce::AudioBuffer<float> buffer (2, 512);
+                juce::MidiBuffer midi;
+                juce::Random random (13);
+                const auto start = juce::Time::getMillisecondCounterHiRes();
+                for (int block = 0; block < seconds * 48000 / 512; ++block)
+                {
+                    for (int ch = 0; ch < 2; ++ch)
+                        for (int i = 0; i < 512; ++i)
+                            buffer.setSample (ch, i, (random.nextFloat() - 0.5f) * ((block / 40) % 2 == 0 ? 1.0f : 0.05f));
+                    processor.processBlock (buffer, midi);
+                }
+                const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+                models += std::string (" ") + phaseName (mode) + " " + format (100.0 * elapsed / (seconds * 1000.0), 2) + " %";
+                check (elapsed < seconds * 1000.0 && allFinite (buffer),
+                       std::string (dsp::modelName (model)) + ", " + phaseName (mode) + ": faster than real time, finite output");
+            }
+        }
+        note (models + "   (of one core)");
+    }
+
+
+    //==============================================================================
+    // 0.8.0: Digital (the default model) must sound exactly like 0.7.1. The golden hashes
+    // and the saved state below were produced by the 0.7.1 build (commit 8d7bd9b).
+    std::uint64_t hashBuffer (const juce::AudioBuffer<float>& buffer)
+    {
+        std::uint64_t h = 1469598103934665603ull;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        {
+            const auto* bytes = reinterpret_cast<const unsigned char*> (buffer.getReadPointer (ch));
+            for (size_t i = 0; i < sizeof (float) * (size_t) buffer.getNumSamples(); ++i)
+                h = (h ^ bytes[i]) * 1099511628211ull;
+        }
+        return h;
+    }
+
+    void configureGoldenEq (DooblrQAudioProcessor& processor, int variant)
+    {
+        const dsp::FilterType typesA[] { dsp::FilterType::lowCut, dsp::FilterType::lowShelf, dsp::FilterType::bell,
+                                         dsp::FilterType::bell, dsp::FilterType::highShelf, dsp::FilterType::highCut };
+        const dsp::FilterType typesB[] { dsp::FilterType::lowShelf, dsp::FilterType::notch, dsp::FilterType::tilt,
+                                         dsp::FilterType::bell, dsp::FilterType::bell, dsp::FilterType::highShelf };
+        const float freqs[] { 45.0f, 160.0f, 700.0f, 2200.0f, 6000.0f, 14000.0f };
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            setBand (processor, b, params::band::enabled, 1.0f);
+            setBand (processor, b, params::band::type, (float) (variant == 0 ? typesA[b] : typesB[b]));
+            setBand (processor, b, params::band::frequency, freqs[b]);
+            setBand (processor, b, params::band::gain, (b % 2 == 0 ? 4.5f : -6.0f) * (variant == 0 ? 1.0f : 1.5f));
+            setBand (processor, b, params::band::q, 0.6f + 0.4f * (float) b);
+            setBand (processor, b, params::band::slope, (float) ((b + variant * 3) % dsp::numSlopes));
+        }
+        setBand (processor, 2, params::band::dynamicsEnabled, 1.0f);
+        setBand (processor, 2, params::band::range, variant == 0 ? -9.0f : 6.0f);
+        setBand (processor, 2, params::band::threshold, -24.0f);
+        setBand (processor, 4, params::band::dynamicsEnabled, 1.0f);
+        setBand (processor, 4, params::band::range, -6.0f);
+        setBand (processor, 4, params::band::threshold, -30.0f);
+        setParameter (processor, params::outputGain, -1.5f);
+        setParameter (processor, params::stereoLink, variant == 0 ? 1.0f : 0.0f);
+    }
+
+    std::uint64_t goldenRun (DooblrQAudioProcessor& processor, int mode)
+    {
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+        juce::AudioBuffer<float> buffer (2, 96000);
+        fillWithNoise (buffer, 2024 + mode);
+        for (int i = 0; i < buffer.getNumSamples(); ++i)  // level changes so dynamics move
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.setSample (ch, i, buffer.getSample (ch, i) * ((i / 12000) % 2 == 0 ? 0.8f : 0.03f) * (ch == 0 ? 1.0f : 0.7f));
+        processInBlocks (processor, buffer, { 512, 37, 128, 1, 300 });
+        return hashBuffer (buffer);
+    }
+
+    // Saved by 0.7.1 from configureGoldenEq (variant 0 and 1) with phase mode Zero Latency.
+    const char* const goldenState071[] {
+        "2877.VMjLgPyB...O+fWarAhckI2bo8la8HRLt.iHfTlai8FYo41Y8HRUTYTK3HxO9.BOD81ahwlbQMEcgQWYfLGcgQWYVUlbyk1at0iHwHhO7.UPRETSfjFY8HhXw7EY441WgQGcgM1Zh.hcgwVck0iHw.iKvHxK9vCTAIUPMARZj0iHhEyWjkmae8lah.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HhXw7EY441WxElamUlHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHVLeQVdt8kbkwVYgMWYh.hcgwVck0iHwDSNtjSN4jSNxLyMvXCL0TiHu3COPEjTA0DHoQVOhHVLeQVdt8EcnIWYyg1arQlHfXWXrUWY8HRKxLiK4jSN4jCNvjiL1TSLybiHu3COPEjTA0DHoQVOhHVLeUlagIFakQlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhHVLeYlbkEmHfXWXrUWY8HBMz3RN4jSN4XSL3TyLvHyMyHxK9vCTAIUPMARZj0iHhEyWmEVZtIBH1EFa0UVOhPiK0HxK9vCTAIUPMARZj0iHhEyWwIBH1EFa0UVOh.iK1.CLv.CLvfyLzPiM0.iL2HxK9vCTAIUPMARZj0iHhEyWyw1avUlHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHVLeQWdvUlHfXWXrUWY8HxLt.iHu3COPEjTA0DHoQVOhHlLeQVdt8UXzQWXislHfXWXrUWY8HRLv3BLh7hO7.UPRETSfjFY8HhXx7EY441Wu4lHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHlLeQVdt8kbg41YkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhIyWjkmaeIWYrUVXyUlHfXWXrUWY8HRLwjiK4jSN4jiLybCL1.SM0HxK9vCTAIUPMARZj0iHhIyWjkmaeQGZxU1bn8FajIBH1EFa0UVOhzhLy3RN4jSN4fCL4HiM0DyL2HxK9vCTAIUPMARZj0iHhIyWk4VXhwVYjIBH1EFa0UVOhDiKvHxK9vCTAIUPMARZj0iHhIyWlIWYwIBH1EFa0UVOhDSM43RN4jSN0PiLxLiMyHCNh7hO7.UPRETSfjFY8HhXx70Ygklah.hcgwVck0iHsXiKvHxK9vCTAIUPMARZj0iHhIyWwIBH1EFa0UVOhDiKvHxK9vCTAIUPMARZj0iHhIyWyw1avUlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhHlLeQWdvUlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhH1LeQVdt8UXzQWXislHfXWXrUWY8HRLv3BLh7hO7.UPRETSfjFY8HhXy7EY441Wu4lHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhH1LeQVdt8kbg41YkIBH1EFa0UVOhzRNt.iHu3COPEjTA0DHoQVOhH1LeQVdt8kbkwVYgMWYh.hcgwVck0iHwDSNtjSN4jSNxLyMvXCL0TiHu3COPEjTA0DHoQVOhH1LeQVdt8EcnIWYyg1arQlHfXWXrUWY8HRKxLiK4jSN4jCNvjiL1TSLybiHu3COPEjTA0DHoQVOhH1LeUlagIFakQlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhH1LeYlbkEmHfXWXrUWY8HhM4jiK4jSN4LCN4XCM3PyL3HxK9vCTAIUPMARZj0iHhMyWmEVZtIBH1EFa0UVOhPiK0HxK9vCTAIUPMARZj0iHhMyWwIBH1EFa0UVOhDiKyjSN4jSN3TiM4PCN3TyLh7hO7.UPRETSfjFY8HhXy70br8FbkIBH1EFa0UVOhHiKvHxK9vCTAIUPMARZj0iHhMyWzkGbkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhQyWjkmaeEFczE1XqIBH1EFa0UVOhDCLt.iHu3COPEjTA0DHoQVOhHFMeQVdt80atIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhQyWjkmaeIWXtcVYh.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HhXz7EY441WxUFakE1bkIBH1EFa0UVOhDSL43RN4jSN4HyL2.iMvTSMh7hO7.UPRETSfjFY8HhXz7EY441WzglbkMGZuwFYh.hcgwVck0iHsHyLtjSN4jSN3.SNxXSMwLyMh7hO7.UPRETSfjFY8HhXz7UYtElXrUFYh.hcgwVck0iHw3BLh7hO7.UPRETSfjFY8HhXz7kYxUVbh.hcgwVck0iHxDSN43RN4jyM0TCN0jyL2TiHu3COPEjTA0DHoQVOhHFMecVXo4lHfXWXrUWY8HRK13BLh7hO7.UPRETSfjFY8HhXz7Ubh.hcgwVck0iHw3BNv.CLv.CL2DSMxTSM2PiHu3COPEjTA0DHoQVOhHFMeMGauAWYh.hcgwVck0iHy3BLh7hO7.UPRETSfjFY8HhXz7Ec4AWYh.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HhX07EY441WgQGcgM1Zh.hcgwVck0iHw.iKvHxK9vCTAIUPMARZj0iHhUyWjkmae8lah.hcgwVck0iHw3BLh7hO7.UPRETSfjFY8HhX07EY441WxElamUlHfXWXrUWY8HRK13BLh7hO7.UPRETSfjFY8HhX07EY441WxUFakE1bkIBH1EFa0UVOhDSL43RN4jSN4HyL2.iMvTSMh7hO7.UPRETSfjFY8HhX07EY441WzglbkMGZuwFYh.hcgwVck0iHsLCLt.iHu3COPEjTA0DHoQVOhHVMeUlagIFakQlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhHVMeYlbkEmHfXWXrUWY8HhMv.CLt.iHu3COPEjTA0DHoQVOhHVMecVXo4lHfXWXrUWY8HBMtTiHu3COPEjTA0DHoQVOhHVMeEmHfXWXrUWY8HhLtHCLv.CLvTiLzTiLvfyMzHxK9vCTAIUPMARZj0iHhUyWyw1avUlHfXWXrUWY8HBMt.iHu3COPEjTA0DHoQVOhHVMeQWdvUlHfXWXrUWY8HhLt.iHu3COPEjTA0DHoQVOhHlMeQVdt8UXzQWXislHfXWXrUWY8HRLv3BLh7hO7.UPRETSfjFY8HhX17EY441Wu4lHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHlMeQVdt8kbg41YkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhYyWjkmaeIWYrUVXyUlHfXWXrUWY8HRLwjiK4jSN4jiLybCL1.SM0HxK9vCTAIUPMARZj0iHhYyWjkmaeQGZxU1bn8FajIBH1EFa0UVOhzhLy3RN4jSN4fCL4HiM0DyL2HxK9vCTAIUPMARZj0iHhYyWk4VXhwVYjIBH1EFa0UVOhDiKvHxK9vCTAIUPMARZj0iHhYyWlIWYwIBH1EFa0UVOhDyL4jSNtjSN3.CM1fyM0HxK9vCTAIUPMARZj0iHhYyWmEVZtIBH1EFa0UVOhzhMt.iHu3COPEjTA0DHoQVOhHlMeEmHfXWXrUWY8HhLtXCLv.CLvDCMy.SMwDCM2HxK9vCTAIUPMARZj0iHhYyWyw1avUlHfXWXrUWY8HRMt.iHu3COPEjTA0DHoQVOhHlMeQWdvUlHfXWXrUWY8HBMt.iHu3COPEjTA0DHoQVOh7VczAWcz80Ygklah.hcgwVck0iHsDiK0HxK9vCTAIUPMARZj0iHvgVXyU1Ws8FYkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHyQWYxU1aewVZtslHfXWXrUWY8HRLt.iHu3COuPzauIFaxE0TzEFck4C.",
+        "2879.VMjLgXyB...O+fWarAhckI2bo8la8HRLt.iHfTlai8FYo41Y8HRUTYTK3HxO9.BOD81ahwlbQMEcgQWYfLGcgQWYVUlbyk1at0iHwHhO7.UPRETSfjFY8HhXw7EY441WgQGcgM1Zh.hcgwVck0iHw.iKvHxK9vCTAIUPMARZj0iHhEyWjkmae8lah.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HhXw7EY441WxElamUlHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHVLeQVdt8kbkwVYgMWYh.hcgwVck0iHwDSNtjSN4jSNxLyMvXCL0TiHu3COPEjTA0DHoQVOhHVLeQVdt8EcnIWYyg1arQlHfXWXrUWY8HRKxLiK4jSN4jCNvjiL1TSLybiHu3COPEjTA0DHoQVOhHVLeUlagIFakQlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhHVLeYlbkEmHfXWXrUWY8HBMz3RN4jSN4XSL3TyLvHyMyHxK9vCTAIUPMARZj0iHhEyWmEVZtIBH1EFa0UVOhXiK2TiHu3COPEjTA0DHoQVOhHVLeEmHfXWXrUWY8HBLtXCLv.CLv.CNyPCM1TCLxbiHu3COPEjTA0DHoQVOhHVLeMGauAWYh.hcgwVck0iHy3BLh7hO7.UPRETSfjFY8HhXw7Ec4AWYh.hcgwVck0iHw3BLh7hO7.UPRETSfjFY8HhXx7EY441WgQGcgM1Zh.hcgwVck0iHw.iKvHxK9vCTAIUPMARZj0iHhIyWjkmae8lah.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HhXx7EY441WxElamUlHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHlLeQVdt8kbkwVYgMWYh.hcgwVck0iHwDSNtjSN4jSNxLyMvXCL0TiHu3COPEjTA0DHoQVOhHlLeQVdt8EcnIWYyg1arQlHfXWXrUWY8HRKxLiK4jSN4jCNvjiL1TSLybiHu3COPEjTA0DHoQVOhHlLeUlagIFakQlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhHlLeYlbkEmHfXWXrUWY8HRL0jiK4jSN4TCMxHyL1LiL3HxK9vCTAIUPMARZj0iHhIyWmEVZtIBH1EFa0UVOhzRNt.iHu3COPEjTA0DHoQVOhHlLeEmHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhHlLeMGauAWYh.hcgwVck0iHz3BLh7hO7.UPRETSfjFY8HhXx7Ec4AWYh.hcgwVck0iH03BLh7hO7.UPRETSfjFY8HhXy7EY441WgQGcgM1Zh.hcgwVck0iHw.iKvHxK9vCTAIUPMARZj0iHhMyWjkmae8lah.hcgwVck0iHw3BLh7hO7.UPRETSfjFY8HhXy7EY441WxElamUlHfXWXrUWY8HhMt.iHu3COPEjTA0DHoQVOhH1LeQVdt8kbkwVYgMWYh.hcgwVck0iHwDSNtjSN4jSNxLyMvXCL0TiHu3COPEjTA0DHoQVOhH1LeQVdt8EcnIWYyg1arQlHfXWXrUWY8HRKxLiK4jSN4jCNvjiL1TSLybiHu3COPEjTA0DHoQVOhH1LeUlagIFakQlHfXWXrUWY8HRLt.iHu3COPEjTA0DHoQVOhH1LeYlbkEmHfXWXrUWY8HhM4jiK4jSN4LCN4XCM3PyL3HxK9vCTAIUPMARZj0iHhMyWmEVZtIBH1EFa0UVOhXiK2TiHu3COPEjTA0DHoQVOhH1LeEmHfXWXrUWY8HRLtLSN4jSN4fSM1jCM3fSMyHxK9vCTAIUPMARZj0iHhMyWyw1avUlHfXWXrUWY8HRMt.iHu3COPEjTA0DHoQVOhH1LeQWdvUlHfXWXrUWY8HhMt.iHu3COPEjTA0DHoQVOhHFMeQVdt8UXzQWXislHfXWXrUWY8HRLv3BLh7hO7.UPRETSfjFY8HhXz7EY441Wu4lHfXWXrUWY8HBLt.iHu3COPEjTA0DHoQVOhHFMeQVdt8kbg41YkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhQyWjkmaeIWYrUVXyUlHfXWXrUWY8HRLwjiK4jSN4jiLybCL1.SM0HxK9vCTAIUPMARZj0iHhQyWjkmaeQGZxU1bn8FajIBH1EFa0UVOhzhLy3RN4jSN4fCL4HiM0DyL2HxK9vCTAIUPMARZj0iHhQyWk4VXhwVYjIBH1EFa0UVOhDiKvHxK9vCTAIUPMARZj0iHhQyWlIWYwIBH1EFa0UVOhHSL4jiK4jSN2TSM3TSNybSMh7hO7.UPRETSfjFY8HhXz70Ygklah.hcgwVck0iHsjiKvHxK9vCTAIUPMARZj0iHhQyWwIBH1EFa0UVOhDiK3.CLv.CLvbSL0HSM0bCMh7hO7.UPRETSfjFY8HhXz70br8FbkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhQyWzkGbkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhUyWjkmaeEFczE1XqIBH1EFa0UVOhDCLt.iHu3COPEjTA0DHoQVOhHVMeQVdt80atIBH1EFa0UVOhDiKvHxK9vCTAIUPMARZj0iHhUyWjkmaeIWXtcVYh.hcgwVck0iHsXiKvHxK9vCTAIUPMARZj0iHhUyWjkmaeIWYrUVXyUlHfXWXrUWY8HRLwjiK4jSN4jiLybCL1.SM0HxK9vCTAIUPMARZj0iHhUyWjkmaeQGZxU1bn8FajIBH1EFa0UVOhzxLv3BLh7hO7.UPRETSfjFY8HhX07UYtElXrUFYh.hcgwVck0iHw3BLh7hO7.UPRETSfjFY8HhX07kYxUVbh.hcgwVck0iH1.CLv3BLh7hO7.UPRETSfjFY8HhX070Ygklah.hcgwVck0iH13xM0HxK9vCTAIUPMARZj0iHhUyWwIBH1EFa0UVOhHiKx.CLv.CL0HCM0HCL3bCMh7hO7.UPRETSfjFY8HhX070br8FbkIBH1EFa0UVOhDiKvHxK9vCTAIUPMARZj0iHhUyWzkGbkIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhYyWjkmaeEFczE1XqIBH1EFa0UVOhDCLt.iHu3COPEjTA0DHoQVOhHlMeQVdt80atIBH1EFa0UVOh.iKvHxK9vCTAIUPMARZj0iHhYyWjkmaeIWXtcVYh.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HhX17EY441WxUFakE1bkIBH1EFa0UVOhDSL43RN4jSN4HyL2.iMvTSMh7hO7.UPRETSfjFY8HhX17EY441WzglbkMGZuwFYh.hcgwVck0iHsHyLtjSN4jSN3.SNxXSMwLyMh7hO7.UPRETSfjFY8HhX17UYtElXrUFYh.hcgwVck0iHw3BLh7hO7.UPRETSfjFY8HhX17kYxUVbh.hcgwVck0iHwLSN4jiK4jCNvPiM3bSMh7hO7.UPRETSfjFY8HhX170Ygklah.hcgwVck0iHsjiKvHxK9vCTAIUPMARZj0iHhYyWwIBH1EFa0UVOhHiK1.CLv.CLwPyLvTSLwPyMh7hO7.UPRETSfjFY8HhX170br8FbkIBH1EFa0UVOhHiKvHxK9vCTAIUPMARZj0iHhYyWzkGbkIBH1EFa0UVOhHiKvHxK9vCTAIUPMARZj0iHuUGcvUGcecVXo4lHfXWXrUWY8HRKw3RMh7hO7.UPRETSfjFY8HBbnE1bk8UauQVYh.hcgwVck0iHv3BLh7hO7.UPRETSfjFY8HxbzUlbk81WrklaqIBH1EFa0UVOh.iKvHxK9vyKD81ahwlbQMEcgQWY9.." };
+    // The same 0.7.1 build loading goldenState071 (then setting the phase mode): a loaded session
+    // differs from one configured by parameter calls in 0.7.1 too, so it has its own reference.
+    constexpr std::uint64_t goldenLoadHash071[2][3] { { 8881870267597058686ull, 17602331995269512671ull, 736504212581514666ull }, { 18361192930680165835ull, 5193833403056371000ull, 13193493206338719672ull } };
+    constexpr std::uint64_t goldenHash071[2][3] { { 12293026835121715796ull, 15259565978756077211ull, 15257821685803047736ull }, { 15353161111764110854ull, 15996728495184292435ull, 12518503497226783880ull } };
+
+    void testDigitalMatches071()
+    {
+        for (int variant = 0; variant < 2; ++variant)
+            for (int mode = 0; mode < 3; ++mode)
+            {
+                {
+                    DooblrQAudioProcessor processor;
+                    setParameter (processor, params::phaseMode, (float) mode);
+                    configureGoldenEq (processor, variant);
+                    check (goldenRun (processor, mode) == goldenHash071[variant][mode],
+                           "Digital model output is bit-identical to 0.7.1 (variant " + std::to_string (variant)
+                               + ", " + phaseName ((PhaseMode) mode) + ")");
+                }
+                {
+                    // A session saved by 0.7.1 (no model parameters in it) loads as Digital.
+                    DooblrQAudioProcessor processor;
+                    for (int b = 0; b < params::numBands; ++b)
+                        setBand (processor, b, params::band::model, (float) dsp::Model::neve); // must be reset
+                    juce::MemoryBlock state;
+                    state.fromBase64Encoding (goldenState071[variant]);
+                    processor.setStateInformation (state.getData(), (int) state.getSize());
+                    auto allDigital = true;
+                    for (int b = 0; b < params::numBands; ++b)
+                        allDigital = allDigital && juce::roundToInt (getParameter (processor, params::bandId (b, params::band::model))) == 0;
+                    check (allDigital, "0.7.1 session loads with every band on Digital");
+                    setParameter (processor, params::phaseMode, (float) mode);
+                    check (goldenRun (processor, mode) == goldenLoadHash071[variant][mode],
+                           "0.7.1 session sounds bit-identical (variant " + std::to_string (variant)
+                               + ", " + phaseName ((PhaseMode) mode) + ")");
+                }
+            }
     }
 
     //==============================================================================
@@ -3659,6 +3814,635 @@ namespace
         const char* name;
         std::function<void()> run;
     };
+    //==============================================================================
+    // 0.8.0 analogue models
+    using dsp::Model;
+
+    double protoDb (const dsp::BandPrototype& p, double bandHz, double hz)
+    {
+        return juce::Decibels::gainToDecibels (std::abs (dsp::analogResponseAt (p, bandHz, hz)), -200.0);
+    }
+
+    /** Width (octaves) of a bell between the points at half its centre dB gain. */
+    double bellWidthOctaves (Model model, double q, double gainDb)
+    {
+        const auto p = dsp::makeModelPrototype (model, dsp::FilterType::bell, dsp::Slope::db12, q, gainDb, 0.0);
+        const auto centre = protoDb (p, 1000.0, 1000.0);
+        const auto half = centre * 0.5;
+        const auto edge = [&] (double direction)
+        {
+            double lo = 0.0, hi = 6.0; // octaves away from the centre
+            for (int i = 0; i < 60; ++i)
+            {
+                const auto mid = 0.5 * (lo + hi);
+                const auto db = protoDb (p, 1000.0, 1000.0 * std::pow (2.0, direction * mid));
+                ((gainDb > 0.0 ? db > half : db < half) ? lo : hi) = mid;
+            }
+            return 0.5 * (lo + hi);
+        };
+        return edge (-1.0) + edge (1.0);
+    }
+
+    void testModelShapes()
+    {
+        // Digital is the 0.7.1 function, untouched.
+        auto digitalSame = true;
+        for (int t = 0; t < dsp::numFilterTypes; ++t)
+            for (int sl = 0; sl < dsp::numSlopes; ++sl)
+            {
+                const auto a = dsp::makeModelPrototype (Model::digital, (dsp::FilterType) t, (dsp::Slope) sl, 1.3, 7.0, 5.0);
+                const auto b = dsp::makeBandPrototype ((dsp::FilterType) t, (dsp::Slope) sl, 1.3, 7.0);
+                digitalSame = digitalSame && a.numSections == b.numSections;
+                for (int i = 0; digitalSame && i < a.numSections; ++i)
+                {
+                    const auto& x = a.sections[(size_t) i];
+                    const auto& y = b.sections[(size_t) i];
+                    digitalSame = juce::exactlyEqual (x.scale, y.scale) && juce::exactlyEqual (x.k, y.k) && juce::exactlyEqual (x.m0, y.m0)
+                                  && juce::exactlyEqual (x.m1, y.m1) && juce::exactlyEqual (x.m2, y.m2);
+                }
+            }
+        check (digitalSame, "Digital model prototype is exactly the 0.7.1 band prototype (every type and slope)");
+
+        // SSL: E keeps its bell Q constant with gain; G narrows as the gain rises.
+        const auto eLow = bellWidthOctaves (Model::sslE, 1.0, 3.0), eHigh = bellWidthOctaves (Model::sslE, 1.0, 15.0);
+        const auto gLow = bellWidthOctaves (Model::sslG, 1.0, 3.0), gHigh = bellWidthOctaves (Model::sslG, 1.0, 15.0);
+        note ("SSL bell width (oct) at +3 / +15 dB: E " + format (eLow, 3) + " / " + format (eHigh, 3)
+              + ", G " + format (gLow, 3) + " / " + format (gHigh, 3));
+        check (std::abs (eHigh / eLow - 1.0) < 0.05, "SSL E: bell Q does not change with gain");
+        check (gHigh / gLow < 0.8, "SSL G: bell narrows (Q rises) as gain rises");
+        check (std::abs (gLow / eLow - 1.0) > 0.15, "SSL E and G bells differ at low gain");
+
+        // API: proportional Q, narrows monotonically as gain rises (boost and cut).
+        std::string apiLine = "API bell width (oct) at 2/4/8/12 dB:";
+        auto narrowing = true;
+        for (const auto sign : { 1.0, -1.0 })
+        {
+            auto previous = 1.0e9;
+            for (const auto g : { 2.0, 4.0, 8.0, 12.0 })
+            {
+                const auto w = bellWidthOctaves (Model::api, 1.0, sign * g);
+                apiLine += " " + format (w, 3);
+                narrowing = narrowing && w < previous;
+                previous = w;
+            }
+        }
+        note (apiLine);
+        check (narrowing, "API: bell narrows as gain rises (boost and cut)");
+        check (bellWidthOctaves (Model::api, 1.0, 12.0) < 0.7 * bellWidthOctaves (Model::api, 1.0, 2.0),
+               "API: at 12 dB the bell is at least 30 % narrower than at 2 dB");
+
+        // Pultec: low boost + atten at the same frequency = shelf with a dip above it.
+        {
+            const auto both = dsp::makeModelPrototype (Model::pultec, dsp::FilterType::lowShelf, dsp::Slope::db12, 0.707, 10.0, 10.0);
+            const auto boostOnly = dsp::makeModelPrototype (Model::pultec, dsp::FilterType::lowShelf, dsp::Slope::db12, 0.707, 10.0, 0.0);
+            auto dipMin = 100.0, dipAt = 0.0, boostOnlyMin = 100.0;
+            for (double hz = 100.0; hz <= 400.0; hz *= 1.02)
+            {
+                if (protoDb (both, 60.0, hz) < dipMin) { dipMin = protoDb (both, 60.0, hz); dipAt = hz; }
+                boostOnlyMin = std::min (boostOnlyMin, protoDb (boostOnly, 60.0, hz));
+            }
+            const auto low = protoDb (both, 60.0, 30.0);
+            note ("Pultec 60 Hz, boost 10 + atten 10: " + format (protoDb (both, 60.0, 20.0), 1) + " dB @ 20 Hz, "
+                  + format (low, 1) + " dB @ 30 Hz, dip " + format (dipMin, 1) + " dB @ " + format (dipAt, 0) + " Hz");
+            check (low > 3.0 && protoDb (both, 60.0, 40.0) > 3.0, "Pultec boost + atten: low end still boosted (> +3 dB at 30-40 Hz)");
+            check (dipMin < -1.0, "Pultec boost + atten: dip below -1 dB between 100 and 400 Hz");
+            check (boostOnlyMin > -0.3, "Pultec boost alone: no dip");
+            check (std::abs (protoDb (both, 60.0, 5000.0)) < 0.3, "Pultec boost + atten: flat in the mids/highs");
+        }
+
+        // Every model and gain type is an exact identity at 0 dB (a neutral band does nothing).
+        auto neutral = true;
+        for (int m = 1; m < dsp::numModels; ++m)
+            for (const auto t : { dsp::FilterType::bell, dsp::FilterType::lowShelf, dsp::FilterType::highShelf, dsp::FilterType::tilt })
+            {
+                const auto p = dsp::makeModelPrototype ((Model) m, t, dsp::Slope::db12, 0.9, 0.0, 0.0);
+                for (double hz = 20.0; hz < 20000.0; hz *= 1.3)
+                    neutral = neutral && std::abs (protoDb (p, 700.0, hz)) < 0.01;
+            }
+        check (neutral, "every model: 0 dB gain is flat (bell, shelves, tilt)");
+
+        // Each model's boost peaks at the band's gain (bell) and cuts are -3 dB-ish at the corner.
+        auto bellsHitGain = true, cutsSane = true;
+        for (int m = 1; m < dsp::numModels; ++m)
+        {
+            const auto p = dsp::makeModelPrototype ((Model) m, dsp::FilterType::bell, dsp::Slope::db12, 1.0, 9.0, 0.0);
+            bellsHitGain = bellsHitGain && std::abs (protoDb (p, 1000.0, 1000.0) - 9.0) < 0.05;
+            const auto hp = dsp::makeModelPrototype ((Model) m, dsp::FilterType::lowCut, dsp::Slope::db12, 0.707, 0.0, 0.0);
+            cutsSane = cutsSane && protoDb (hp, 100.0, 10.0) < -30.0 && std::abs (protoDb (hp, 100.0, 2000.0)) < 0.3;
+        }
+        check (bellsHitGain, "every model's bell reaches the set gain at its centre");
+        check (cutsSane, "every model's low cut rejects a decade below and is flat well above");
+    }
+
+    void testSteppedPositions()
+    {
+        DooblrQAudioProcessor processor;
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::type, (float) dsp::FilterType::bell);
+        setBand (processor, 2, params::band::frequency, 1000.0f);
+        setBand (processor, 2, params::band::gain, 5.2f);
+        setBand (processor, 2, params::band::model, (float) Model::neve);
+        check (juce::approximatelyEqual (processor.getBandSettings (2).frequency, 1000.0f), "Stepped off: frequency is continuous");
+        setBand (processor, 2, params::band::stepped, 1.0f);
+        check (juce::approximatelyEqual (processor.getBandSettings (2).frequency, 700.0f), "Neve stepped: 1 kHz snaps to the 700 Hz position");
+        setBand (processor, 2, params::band::frequency, 2900.0f);
+        check (juce::approximatelyEqual (processor.getBandSettings (2).frequency, 3200.0f), "Neve stepped: 2.9 kHz snaps to 3.2 kHz");
+        note ("Neve stepped, gain parameter 5.2 dB -> band gain " + format (processor.getBandSettings (2).gainDb, 4) + " dB");
+        check (std::abs (processor.getBandSettings (2).gainDb - 5.2f) < 0.01f, "Neve stepped: gain stays continuous (no gain table)");
+
+        setBand (processor, 2, params::band::model, (float) Model::api);
+        check (juce::approximatelyEqual (processor.getBandSettings (2).gainDb, 6.0f), "API stepped: +5.2 dB snaps to +6 dB");
+        setBand (processor, 2, params::band::gain, -10.0f);
+        check (juce::approximatelyEqual (processor.getBandSettings (2).gainDb, -9.0f) || juce::approximatelyEqual (processor.getBandSettings (2).gainDb, -12.0f),
+               "API stepped: -10 dB snaps to a switched position");
+
+        setBand (processor, 2, params::band::model, (float) Model::sslE);
+        setBand (processor, 2, params::band::frequency, 1234.0f);
+        check (juce::approximatelyEqual (processor.getBandSettings (2).frequency, 1234.0f), "SSL (continuous pots): Stepped has no effect");
+        check (! dsp::hasSteps (Model::sslE, dsp::FilterType::bell) && ! dsp::hasSteps (Model::digital, dsp::FilterType::bell),
+               "SSL and Digital have no step tables (Stepped is disabled for them)");
+
+        auto tablesSorted = true;
+        for (int m = 0; m < dsp::numModels; ++m)
+            for (int t = 0; t < dsp::numFilterTypes; ++t)
+                for (const auto table : { dsp::frequencySteps ((Model) m, (dsp::FilterType) t), dsp::gainSteps ((Model) m, (dsp::FilterType) t) })
+                    for (int i = 1; i < table.size; ++i)
+                        tablesSorted = tablesSorted && table.values[i] > table.values[i - 1];
+        check (tablesSorted, "every step table is strictly ascending");
+
+        // The editor shows the snapped value and the handle sits at the snapped position.
+        setBand (processor, 2, params::band::model, (float) Model::neve);
+        setBand (processor, 2, params::band::frequency, 1000.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        auto* frequencyKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::frequency));
+        auto* steppedButton = dynamic_cast<juce::Button*> (findById (*editor, params::band::stepped));
+        auto* curve = dynamic_cast<dooblrq::ui::ResponseCurveComponent*> (findById (*editor, "responseCurve"));
+        check (dooblrEditor && frequencyKnob && steppedButton && curve, "editor has the Stepped toggle");
+        if (! (dooblrEditor && frequencyKnob && steppedButton && curve))
+            return;
+        dooblrEditor->selectBand (2);
+        check (frequencyKnob->getTextFromValue (1000.0) == "700 Hz", "Frequency knob shows the snapped position (700 Hz)");
+        check (steppedButton->isEnabled() && steppedButton->getToggleState(), "Stepped toggle is on and enabled for Neve");
+        const auto handleX = curve->handlePosition (2).x;
+        check (std::abs (handleX - curve->frequencyToX (700.0)) < 0.5f, "the band's handle sits at the snapped 700 Hz");
+
+        setBand (processor, 2, params::band::model, (float) Model::sslG);
+        dooblrEditor->updateUndoButtons(); // any timer-equivalent refresh below
+        dooblrEditor->selectBand (2);
+        check (! steppedButton->isEnabled(), "Stepped is disabled for SSL G (continuous controls)");
+    }
+
+    /** Total harmonic distortion + noise of a steady sine (least-squares fit of the fundamental). */
+    double thdOf (const float* x, int length, double frequency, double sampleRate)
+    {
+        double ss = 0, sc = 0, cc = 0, xs = 0, xc = 0, sum = 0;
+        for (int i = 0; i < length; ++i)
+        {
+            const auto w = 2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate;
+            const auto s = std::sin (w), c = std::cos (w);
+            ss += s * s; cc += c * c; sc += s * c; xs += x[i] * s; xc += x[i] * c; sum += x[i];
+        }
+        const auto det = ss * cc - sc * sc;
+        const auto a = (xs * cc - xc * sc) / det, b = (xc * ss - xs * sc) / det, mean = sum / length;
+        double residual = 0, fundamental = 0;
+        for (int i = 0; i < length; ++i)
+        {
+            const auto w = 2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate;
+            const auto f = a * std::sin (w) + b * std::cos (w);
+            residual += juce::square (x[i] - mean - f);
+            fundamental += f * f;
+        }
+        return std::sqrt (residual / std::max (1.0e-30, fundamental));
+    }
+
+    double modelThd (Model model, PhaseMode mode, float levelDb, float driveDb, double frequency = 100.0)
+    {
+        constexpr double sampleRate = 48000.0;
+        DooblrQAudioProcessor processor;
+        setParameter (processor, params::phaseMode, (float) mode);
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::type, (float) dsp::FilterType::bell);
+        setBand (processor, 2, params::band::frequency, 1000.0f);
+        setBand (processor, 2, params::band::gain, 0.0f); // flat: only the colour stage acts
+        setBand (processor, 2, params::band::model, (float) model);
+        setBand (processor, 2, params::band::drive, driveDb);
+        prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+        const auto amplitude = juce::Decibels::decibelsToGain (levelDb);
+        const int numSamples = 48000;
+        juce::AudioBuffer<float> buffer (2, numSamples);
+        for (int i = 0; i < numSamples; ++i)
+            for (int ch = 0; ch < 2; ++ch)
+                buffer.setSample (ch, i, amplitude * (float) std::sin (2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate));
+        processInBlocks (processor, buffer, { 512 });
+        return thdOf (buffer.getReadPointer (0, numSamples / 2), numSamples / 2, frequency, sampleRate);
+    }
+
+    void testModelColour()
+    {
+        std::string table = "THD+N of a 100 Hz sine through a flat band (Zero Latency), at -40 / -20 / -6 / 0 dBFS:";
+        auto risesWithLevel = true, cleanWhenQuiet = true, subtle = true;
+        for (int m = 1; m < dsp::numModels; ++m)
+        {
+            table += std::string ("\n      ") + dsp::modelName ((Model) m) + ":";
+            auto previous = 0.0;
+            for (const auto level : { -40.0f, -20.0f, -6.0f, 0.0f })
+            {
+                const auto thd = modelThd ((Model) m, PhaseMode::zeroLatency, level, 0.0f);
+                table += " " + format (100.0 * thd, 4) + " %";
+                risesWithLevel = risesWithLevel && thd > previous;
+                previous = thd;
+                if (juce::exactlyEqual (level, -40.0f)) cleanWhenQuiet = cleanWhenQuiet && thd < 5.0e-4;
+                if (juce::exactlyEqual (level, -6.0f))  subtle = subtle && thd < 0.03;
+            }
+        }
+        note (table);
+        check (risesWithLevel, "every analogue model: distortion rises with level");
+        check (cleanWhenQuiet, "every analogue model: < 0.05 % THD+N (below -66 dB) at -40 dBFS (near clean when quiet)");
+        check (subtle, "every analogue model: < 3 % THD+N at -6 dBFS (subtle at nominal level)");
+
+        const auto digital = modelThd (Model::digital, PhaseMode::zeroLatency, 0.0f, 24.0f);
+        note ("Digital THD+N at 0 dBFS with Drive +24: " + format (100.0 * digital, 6) + " %");
+        check (digital < 1.0e-5, "Digital stays clean (Drive does nothing on Digital)");
+
+        const auto neve0 = modelThd (Model::neve, PhaseMode::zeroLatency, -20.0f, 0.0f);
+        const auto neve12 = modelThd (Model::neve, PhaseMode::zeroLatency, -20.0f, 12.0f);
+        const auto neveMinus = modelThd (Model::neve, PhaseMode::zeroLatency, -20.0f, -12.0f);
+        note ("Neve at -20 dBFS, Drive -12 / 0 / +12 dB: " + format (100.0 * neveMinus, 4) + " / " + format (100.0 * neve0, 4)
+              + " / " + format (100.0 * neve12, 4) + " %");
+        check (neve12 > 4.0 * neve0 && neveMinus < neve0, "Drive works: more drive = more colour, less drive = cleaner");
+
+        // The colour is applied the same way in the FIR modes (after the linear-phase EQ).
+        std::string modes = "Neve THD+N at -6 dBFS per mode:";
+        auto consistent = true;
+        const auto reference = modelThd (Model::neve, PhaseMode::zeroLatency, -6.0f, 0.0f);
+        for (const auto mode : allPhaseModes)
+        {
+            const auto thd = modelThd (Model::neve, mode, -6.0f, 0.0f);
+            modes += std::string (" ") + phaseName (mode) + " " + format (100.0 * thd, 4) + " %";
+            consistent = consistent && std::abs (thd / reference - 1.0) < 0.1;
+        }
+        note (modes);
+        check (consistent, "the colour stage gives the same distortion in all three phase modes (within 10 %)");
+
+        // Even harmonics: Pultec (tube) has a 2nd harmonic, SSL E is nearly odd-only.
+        const auto secondHarmonic = [] (Model model)
+        {
+            constexpr double sampleRate = 48000.0;
+            DooblrQAudioProcessor processor;
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::gain, 0.0f);
+            setBand (processor, 2, params::band::model, (float) model);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            juce::AudioBuffer<float> buffer (2, 48000);
+            for (int i = 0; i < 48000; ++i)
+                for (int ch = 0; ch < 2; ++ch)
+                    buffer.setSample (ch, i, 0.7f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * i / sampleRate));
+            processInBlocks (processor, buffer, { 512 });
+            const auto amplitudeAt = [&] (double hz)
+            {
+                double s = 0, c = 0;
+                for (int i = 24000; i < 48000; ++i)
+                {
+                    const auto w = 2.0 * juce::MathConstants<double>::pi * hz * i / sampleRate;
+                    s += buffer.getSample (0, i) * std::sin (w);
+                    c += buffer.getSample (0, i) * std::cos (w);
+                }
+                return std::sqrt (s * s + c * c) * 2.0 / 24000.0;
+            };
+            return juce::Decibels::gainToDecibels (amplitudeAt (2000.0) / amplitudeAt (1000.0), -200.0);
+        };
+        const auto pultecH2 = secondHarmonic (Model::pultec), sslH2 = secondHarmonic (Model::sslE);
+        note ("2nd harmonic at -3 dBFS: Pultec " + format (pultecH2, 1) + " dBc, SSL E " + format (sslH2, 1) + " dBc");
+        check (pultecH2 > sslH2 + 10.0, "Pultec (tube make-up) has clearly more 2nd harmonic than SSL E");
+    }
+
+    void testModelExtremesAndModes()
+    {
+        constexpr double sampleRate = 48000.0;
+        auto finite = true, bounded = true;
+        for (int m = 0; m < dsp::numModels; ++m)
+            for (const auto mode : allPhaseModes)
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                for (int b = 0; b < params::numBands; ++b)
+                {
+                    setBand (processor, b, params::band::enabled, 1.0f);
+                    setBand (processor, b, params::band::type, (float) (b % dsp::numFilterTypes));
+                    setBand (processor, b, params::band::frequency, b % 2 == 0 ? 20.0f : 20000.0f);
+                    setBand (processor, b, params::band::gain, b % 3 == 0 ? -24.0f : 24.0f);
+                    setBand (processor, b, params::band::q, b % 2 == 0 ? params::maxQ : params::minQ);
+                    setBand (processor, b, params::band::model, (float) m);
+                    setBand (processor, b, params::band::drive, params::maxDriveDb);
+                    setBand (processor, b, params::band::atten, params::maxAttenDb);
+                    setBand (processor, b, params::band::stepped, b % 2 == 0 ? 1.0f : 0.0f);
+                    setBand (processor, b, params::band::dynamicsEnabled, 1.0f);
+                    setBand (processor, b, params::band::range, 24.0f);
+                    setBand (processor, b, params::band::threshold, -60.0f);
+                }
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                juce::AudioBuffer<float> buffer (2, 24000);
+                fillWithNoise (buffer, 77 + m);
+                for (int i = 0; i < 24000; i += 997)
+                    buffer.setSample (0, i, 1.0f); // impulses
+                processInBlocks (processor, buffer, { 512, 1, 77 });
+                finite = finite && allFinite (buffer);
+                bounded = bounded && buffer.getMagnitude (0, buffer.getNumSamples()) < 1.0e4f;
+            }
+        check (finite, "every model x every phase mode: output finite at extreme settings (+-24 dB, Q extremes, Drive +24, Atten 18)");
+        check (bounded, "every model x every phase mode: output bounded at extreme settings");
+
+        // Latency: the models add none.
+        auto latencySame = true;
+        for (const auto mode : allPhaseModes)
+        {
+            DooblrQAudioProcessor digital, neve;
+            for (auto* p : { &digital, &neve })
+            {
+                setParameter (*p, params::phaseMode, (float) mode);
+                setBand (*p, 2, params::band::enabled, 1.0f);
+            }
+            setBand (neve, 2, params::band::model, (float) Model::neve);
+            prepare (digital, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            prepare (neve, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            latencySame = latencySame && digital.getLatencySamples() == neve.getLatencySamples();
+        }
+        check (latencySame, "models do not change the reported latency in any phase mode");
+        {
+            dsp::ColourStage stage;
+            stage.prepare (sampleRate);
+            note ("colour stage: dry path 0 samples; distortion residual delayed by the oversampling filters ("
+                  + format (stage.getResidualLatency(), 2) + " samples @ 48 kHz)");
+        }
+
+        // Natural / Linear: the FIR carries the model's linear magnitude (Pultec boost + atten, quiet signal).
+        std::string line = "Pultec 60 Hz boost 10 + atten 10, quiet sine, measured vs model (dB):";
+        auto matches = true;
+        const auto proto = dsp::makeModelPrototype (Model::pultec, dsp::FilterType::lowShelf, dsp::Slope::db12, 0.707, 10.0, 10.0);
+        for (const auto mode : allPhaseModes)
+            for (const auto hz : { 30.0, 60.0, 150.0, 1000.0 })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                setBand (processor, 1, params::band::enabled, 1.0f);
+                setBand (processor, 1, params::band::type, (float) dsp::FilterType::lowShelf);
+                setBand (processor, 1, params::band::frequency, 60.0f);
+                setBand (processor, 1, params::band::gain, 10.0f);
+                setBand (processor, 1, params::band::atten, 10.0f);
+                setBand (processor, 1, params::band::model, (float) Model::pultec);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                const auto measured = measureSineGainDb (processor, hz, 0.01f, sampleRate, 1.5);
+                const auto expected = protoDb (proto, 60.0, hz);
+                line += std::string (" ") + phaseName (mode) + "@" + format (hz, 0) + " " + format (measured, 2) + "/" + format (expected, 2);
+                matches = matches && std::abs (measured - expected) < (mode == PhaseMode::zeroLatency ? 0.35 : 0.2);
+            }
+        note (line);
+        check (matches, "every phase mode reproduces the model's magnitude (Pultec shelf + dip)");
+
+        // Dynamics work with every model.
+        auto dynamicsWork = true;
+        for (int m = 0; m < dsp::numModels; ++m)
+        {
+            DooblrQAudioProcessor processor;
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            setBand (processor, 2, params::band::type, (float) dsp::FilterType::bell);
+            setBand (processor, 2, params::band::frequency, 1000.0f);
+            setBand (processor, 2, params::band::model, (float) m);
+            setBand (processor, 2, params::band::dynamicsEnabled, 1.0f);
+            setBand (processor, 2, params::band::range, -9.0f);
+            setBand (processor, 2, params::band::threshold, -40.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            const auto gain = measureSineGainDb (processor, 1000.0, 0.3f, sampleRate, 1.0);
+            dynamicsWork = dynamicsWork && gain < -4.0 && processor.getBandDynamicGainDb (2) < -4.0f;
+        }
+        check (dynamicsWork, "dynamics (downward, -9 dB range) work on every model");
+    }
+
+    void testModelStateUndoAndSwitch()
+    {
+        // State round trip.
+        {
+            DooblrQAudioProcessor a;
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                setBand (a, b, params::band::model, (float) ((b * 3 + 1) % dsp::numModels));
+                setBand (a, b, params::band::stepped, (float) (b % 2));
+                setBand (a, b, params::band::drive, -6.0f + 4.0f * (float) b);
+                setBand (a, b, params::band::atten, 2.5f * (float) b);
+            }
+            juce::MemoryBlock state;
+            a.getStateInformation (state);
+            DooblrQAudioProcessor c;
+            c.setStateInformation (state.getData(), (int) state.getSize());
+            check (sameValues (allParameterValues (a), allParameterValues (c)), "model, Stepped, Drive and Atten round-trip through the saved state");
+        }
+
+        // Undo.
+        {
+            DooblrQAudioProcessor processor;
+            auto& history = processor.getUndoHistory();
+            history.clear();
+            const auto id = params::bandId (3, params::band::model);
+            uiGesture (processor, id, (float) Model::pultec);
+            check (history.canUndo() && juce::roundToInt (getParameter (processor, id)) == (int) Model::pultec, "a model change is recorded");
+            history.undo();
+            check (juce::roundToInt (getParameter (processor, id)) == 0, "undo restores Digital");
+            history.redo();
+            check (juce::roundToInt (getParameter (processor, id)) == (int) Model::pultec, "redo re-applies the model");
+            uiGesture (processor, params::bandId (3, params::band::stepped), 1.0f);
+            history.undo();
+            check (getParameter (processor, params::bandId (3, params::band::stepped)) < 0.5f, "undo works for Stepped");
+        }
+
+        // Click-free switching: a steady 1 kHz sine through a +6 dB bell; switching model mid-stream
+        // must not produce a step larger than the signal's own sample-to-sample movement.
+        constexpr double sampleRate = 48000.0;
+        std::string line = "model switch, max |y[n]-y[n-1]| during switch / steady:";
+        auto clickFree = true;
+        for (const auto mode : allPhaseModes)
+            for (const auto [from, to] : { std::pair { Model::digital, Model::neve }, std::pair { Model::sslE, Model::pultec },
+                                           std::pair { Model::api, Model::digital } })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                setBand (processor, 2, params::band::enabled, 1.0f);
+                setBand (processor, 2, params::band::frequency, 1000.0f);
+                setBand (processor, 2, params::band::gain, 6.0f);
+                setBand (processor, 2, params::band::model, (float) from);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                const int numSamples = 48000;
+                juce::AudioBuffer<float> buffer (2, numSamples);
+                for (int i = 0; i < numSamples; ++i)
+                    for (int ch = 0; ch < 2; ++ch)
+                        buffer.setSample (ch, i, 0.25f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * i / sampleRate));
+                juce::AudioBuffer<float> first (buffer.getArrayOfWritePointers(), 2, 0, 24000);
+                juce::AudioBuffer<float> second (buffer.getArrayOfWritePointers(), 2, 24000, 24000);
+                processInBlocks (processor, first, { 512 });
+                setBand (processor, 2, params::band::model, (float) to);
+                processInBlocks (processor, second, { 512 });
+                const auto* y = buffer.getReadPointer (0);
+                auto steady = 0.0f, during = 0.0f;
+                for (int i = 12001; i < 24000; ++i) steady = std::max (steady, std::abs (y[i] - y[i - 1]));
+                for (int i = 24001; i < 24000 + 9600; ++i) during = std::max (during, std::abs (y[i] - y[i - 1]));
+                line += " " + format (during / steady, 3);
+                clickFree = clickFree && during < 1.1f * steady;
+            }
+        note (line);
+        check (clickFree, "model switches are click-free in every phase mode");
+    }
+
+
+    void testModelUi()
+    {
+        DooblrQAudioProcessor processor;
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        auto* modelBox = dynamic_cast<juce::ComboBox*> (findById (*editor, params::band::model));
+        auto* slopeBox = dynamic_cast<juce::ComboBox*> (findById (*editor, params::band::slope));
+        auto* drive = dynamic_cast<juce::Slider*> (findById (*editor, params::band::drive));
+        auto* atten = dynamic_cast<juce::Slider*> (findById (*editor, params::band::atten));
+        auto* curve = dynamic_cast<dooblrq::ui::ResponseCurveComponent*> (findById (*editor, "responseCurve"));
+        check (dooblrEditor && modelBox && slopeBox && drive && atten && curve, "editor has Model, Drive and Atten controls");
+        if (! (dooblrEditor && modelBox && slopeBox && drive && atten && curve))
+            return;
+
+        dooblrEditor->selectBand (1); // band 2: Low Shelf by default
+        setBand (processor, 1, params::band::enabled, 1.0f);
+        setBand (processor, 1, params::band::type, (float) dsp::FilterType::lowShelf);
+        dooblrEditor->selectBand (1);
+        check (modelBox->getNumItems() == dsp::numModels && modelBox->getSelectedId() == 1, "Model box lists all 10 models, Digital selected");
+        check (slopeBox->isEnabled() && ! drive->isEnabled() && ! atten->isEnabled(), "Digital: Slope enabled, Drive and Atten disabled");
+        check (atten->getTooltip().contains ("Pultec"), "disabled Atten explains it is Pultec-only");
+
+        modelBox->setSelectedId ((int) Model::pultec + 1, juce::sendNotificationSync);
+        check (juce::roundToInt (getParameter (processor, params::bandId (1, params::band::model))) == (int) Model::pultec, "choosing Pultec in the box sets the parameter");
+        dooblrEditor->selectBand (1);
+        check (! slopeBox->isEnabled() && slopeBox->getTooltip().contains ("model"), "analogue model: Slope disabled, tooltip says why");
+        check (drive->isEnabled() && atten->isEnabled(), "Pultec low shelf: Drive and Atten enabled");
+
+        setBand (processor, 1, params::band::type, (float) dsp::FilterType::bell);
+        dooblrEditor->selectBand (1);
+        check (! atten->isEnabled(), "Pultec mid band: Atten disabled (Atten is a shelf control)");
+        setBand (processor, 1, params::band::model, (float) Model::neve);
+        dooblrEditor->selectBand (1);
+        check (drive->isEnabled() && ! atten->isEnabled(), "Neve: Drive enabled, Atten disabled");
+
+        // Right-click menu: models ticked, choosing one is a single undo step.
+        auto& history = processor.getUndoHistory();
+        history.clear();
+        const auto menu = curve->createSlopeMenu (1);
+        int modelItems = 0, tickedModel = -1, slopeItemsEnabled = 0;
+        bool hasStepped = false;
+        for (juce::PopupMenu::MenuItemIterator it (menu); it.next();)
+        {
+            const auto& item = it.getItem();
+            if (item.itemID >= dooblrq::ui::ResponseCurveComponent::modelMenuBase && item.itemID < dooblrq::ui::ResponseCurveComponent::modelMenuBase + dsp::numModels)
+            {
+                ++modelItems;
+                if (item.isTicked) tickedModel = item.itemID - dooblrq::ui::ResponseCurveComponent::modelMenuBase;
+            }
+            if (item.itemID == dooblrq::ui::ResponseCurveComponent::steppedMenuId) hasStepped = item.isEnabled;
+            if (item.itemID > 0 && item.itemID <= dsp::numSlopes && item.isEnabled) ++slopeItemsEnabled;
+        }
+        check (modelItems == dsp::numModels && tickedModel == (int) Model::neve, "right-click menu lists every model, current one ticked");
+        check (hasStepped && slopeItemsEnabled == 0, "right-click menu: Stepped available for Neve, slopes greyed out");
+        curve->handleBandMenuResult (1, dooblrq::ui::ResponseCurveComponent::modelMenuBase + (int) Model::api);
+        check (juce::roundToInt (getParameter (processor, params::bandId (1, params::band::model))) == (int) Model::api
+                   && history.getNumUndoableSteps() == 1, "choosing a model from the menu sets it as one undo step");
+        curve->handleBandMenuResult (1, dooblrq::ui::ResponseCurveComponent::steppedMenuId);
+        check (getParameter (processor, params::bandId (1, params::band::stepped)) > 0.5f, "menu Stepped toggles the parameter");
+        history.undo();
+        history.undo();
+        check (juce::roundToInt (getParameter (processor, params::bandId (1, params::band::model))) == (int) Model::neve, "two undos restore Neve");
+
+        // The drawn curve follows the model: API's proportional Q makes a +4 dB bell wider than
+        // Digital's at the same Width (they meet at about +12 dB).
+        setBand (processor, 1, params::band::gain, 4.0f);
+        setBand (processor, 1, params::band::frequency, 1000.0f);
+        setBand (processor, 1, params::band::stepped, 0.0f);
+        setBand (processor, 1, params::band::model, (float) Model::api);
+        const auto apiAt2k = curve->responseDecibelsAt (2000.0, false);
+        setBand (processor, 1, params::band::model, (float) Model::digital);
+        const auto digitalAt2k = curve->responseDecibelsAt (2000.0, false);
+        note ("drawn +4 dB bell at 2 kHz (1 oct up): API " + format (apiAt2k, 2) + " dB, Digital " + format (digitalAt2k, 2) + " dB");
+        check (apiAt2k > digitalAt2k + 0.3, "the drawn curve shows the model's response (API wider at +4 dB)");
+
+        // Every EQ knob readout fits its text box (squeezed to at most 80 % width) at the default and minimum sizes.
+        {
+            const auto fits = [&] (const char* id, std::initializer_list<double> values, std::string& worst)
+            {
+                auto* slider = dynamic_cast<juce::Slider*> (findById (*editor, id));
+                juce::Label* box = nullptr;
+                for (auto* child : slider->getChildren())
+                    if (auto* label = dynamic_cast<juce::Label*> (child)) box = label;
+                if (box == nullptr) return false;
+                auto ok = true;
+                for (const auto v : values)
+                {
+                    const auto text = slider->getTextFromValue (v);
+                    const auto needed = juce::GlyphArrangement::getStringWidth (box->getFont(), text)
+                                        + (float) box->getBorderSize().getLeftAndRight();
+                    if (needed * box->getMinimumHorizontalScale() > (float) box->getWidth())
+                    {
+                        ok = false;
+                        worst += " " + text.toStdString() + " (" + format (needed, 0) + " > " + std::to_string (box->getWidth()) + " px)";
+                    }
+                }
+                return ok;
+            };
+            setBand (processor, 1, params::band::model, (float) Model::digital);
+            dooblrEditor->selectBand (1);
+            for (const auto [w, h] : { std::pair { DooblrQAudioProcessorEditor::defaultWidth, DooblrQAudioProcessorEditor::defaultHeight },
+                                       std::pair { DooblrQAudioProcessorEditor::minimumWidth, DooblrQAudioProcessorEditor::minimumHeight } })
+            {
+                editor->setSize (w, h);
+                std::string worst;
+                const auto ok = fits (params::band::q, { params::minQ, 0.73, 1.0, 9.99, params::maxQ }, worst)
+                                && fits (params::band::frequency, { 20.0, 1234.5, 19999.0 }, worst)
+                                && fits (params::band::gain, { -23.9, 23.9 }, worst)
+                                && fits (params::band::drive, { -12.0, 24.0 }, worst)
+                                && fits (params::band::atten, { 0.0, 17.9 }, worst);
+                check (ok, "knob readouts fit their text boxes at " + std::to_string (w) + " x " + std::to_string (h) + worst);
+            }
+        }
+
+        // Snapshot: Trident stepped low cut, Pultec low shelf boost + atten (shelf with dip), API bell,
+        // SSL G bell cut, Helios high shelf, Digital high cut; Pultec band selected.
+        {
+            struct Setup { dsp::FilterType type; Model model; float freq, gain, q, drive, atten; bool stepped; };
+            const Setup setups[] {
+                { dsp::FilterType::lowCut,    Model::trident, 25.0f,    0.0f, 0.707f, 0.0f, 0.0f, true },
+                { dsp::FilterType::lowShelf,  Model::pultec,  100.0f,  10.0f, 0.707f, 6.0f, 10.0f, true },
+                { dsp::FilterType::bell,      Model::api,     600.0f,   6.0f, 1.0f,   0.0f, 0.0f, true },
+                { dsp::FilterType::bell,      Model::sslG,    2500.0f, -8.0f, 1.5f,   0.0f, 0.0f, false },
+                { dsp::FilterType::highShelf, Model::helios,  10000.0f, 4.0f, 0.707f, 3.0f, 0.0f, true },
+                { dsp::FilterType::highCut,   Model::digital, 18000.0f, 0.0f, 0.707f, 0.0f, 0.0f, false },
+            };
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                const auto& c = setups[b];
+                setBand (processor, b, params::band::enabled, 1.0f);
+                setBand (processor, b, params::band::type, (float) c.type);
+                setBand (processor, b, params::band::model, (float) c.model);
+                setBand (processor, b, params::band::frequency, c.freq);
+                setBand (processor, b, params::band::gain, c.gain);
+                setBand (processor, b, params::band::q, c.q);
+                setBand (processor, b, params::band::drive, c.drive);
+                setBand (processor, b, params::band::atten, c.atten);
+                setBand (processor, b, params::band::stepped, c.stepped ? 1.0f : 0.0f);
+                setBand (processor, b, params::band::dynamicsEnabled, 0.0f);
+            }
+            dooblrEditor->selectBand (1);
+            editor->setSize (1080, 660);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.8.0");
+        }
+    }
+
+
 }
 
 int main()
@@ -3698,6 +4482,13 @@ int main()
         { "band tab on/off switches",               testBandTabSwitches },
         { "per-band slope (12-60 dB/oct, Brickwall)", testSlopes },
         { "bell / notch slopes (0.7.1)", testBellNotchSlopes },
+        { "Digital model matches 0.7.1 exactly",      testDigitalMatches071 },
+        { "analogue model shapes",                  testModelShapes },
+        { "Stepped switched positions",             testSteppedPositions },
+        { "model colour (THD vs level, Drive)",     testModelColour },
+        { "models at extremes, latency, FIR, dynamics", testModelExtremesAndModes },
+        { "model state, undo, click-free switch",   testModelStateUndoAndSwitch },
+        { "model controls in the editor and menu",  testModelUi },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

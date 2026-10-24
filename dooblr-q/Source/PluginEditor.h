@@ -49,10 +49,10 @@ public:
     /** Enables the Undo / Redo buttons to match the history (public for tests). */
     void updateUndoButtons();
 
-    static constexpr int defaultWidth  = 980;
-    static constexpr int defaultHeight = 640;
-    static constexpr int minimumWidth  = 860;
-    static constexpr int minimumHeight = 580;
+    static constexpr int defaultWidth  = 1080;
+    static constexpr int defaultHeight = 660;
+    static constexpr int minimumWidth  = 940;
+    static constexpr int minimumHeight = 600;
     static constexpr int maximumWidth  = 2400;
     static constexpr int maximumHeight = 1400;
 
@@ -71,6 +71,7 @@ private:
     void changeListenerCallback (juce::ChangeBroadcaster*) override;
     void setUpKnob (Knob& knob, const juce::String& caption, const char* parameterSuffix);
     void updateBandIndicators();
+    void updateModelControls (const dooblrq::dsp::BandSettings& settings);
     void setUpAnalyzerControls();
 
     DooblrQAudioProcessor& audioProcessor;
@@ -98,6 +99,12 @@ private:
     juce::ComboBox slopeBox; // 12 ... 60 dB/oct, Brickwall; disabled for Bell and Notch
     Knob frequencyKnob, gainKnob, qKnob; // qKnob is shown as "Width" in octaves
 
+    // 0.8.0: analogue model of the band, Stepped (switched positions), colour Drive, Pultec Atten.
+    juce::ComboBox modelBox;
+    juce::ToggleButton steppedButton { "Stepped" };
+    Knob driveKnob, attenKnob;
+    juce::String lastStepKey; // refreshes the snapped knob texts when model / type / Stepped change
+
     juce::ToggleButton dynamicsButton { "Dynamic" };
     Knob rangeKnob, thresholdKnob, attackKnob, releaseKnob;
 
@@ -114,7 +121,9 @@ private:
     std::array<std::unique_ptr<ButtonAttachment>, dooblrq::params::numBands> bandSwitchAttachments;
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, dynamicsAttachment;
-    std::unique_ptr<ComboBoxAttachment> typeAttachment, slopeAttachment;
+    std::unique_ptr<ComboBoxAttachment> typeAttachment, slopeAttachment, modelAttachment;
+    std::unique_ptr<ButtonAttachment> steppedAttachment;
+    std::unique_ptr<SliderAttachment> driveAttachment, attenAttachment;
     std::unique_ptr<juce::ParameterAttachment> qAttachment; // Width knob (octaves) <-> Q parameter
     std::unique_ptr<SliderAttachment> frequencyAttachment, gainAttachment,
                                       rangeAttachment, thresholdAttachment, attackAttachment, releaseAttachment;

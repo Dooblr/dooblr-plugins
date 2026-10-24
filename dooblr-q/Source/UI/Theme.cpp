@@ -48,7 +48,9 @@ namespace dooblrq::ui
                                               juce::Slider& slider)
     {
         const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (4.0f);
-        const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) * 0.5f;
+        // A slider in a wider column (Width, for its long readout) can cap its knob so every knob matches.
+        const auto maxDiameter = (float) (double) slider.getProperties().getWithDefault ("maxKnobDiameter", 1.0e6);
+        const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight(), maxDiameter - 8.0f) * 0.5f;
         const auto centre = bounds.getCentre();
         const auto lineWidth = juce::jmax (2.0f, radius * 0.12f);
         const auto arcRadius = radius - lineWidth * 0.5f;

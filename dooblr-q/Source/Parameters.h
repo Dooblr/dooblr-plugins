@@ -2,6 +2,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "DSP/AnalogModels.h"
 #include "DSP/SvfFilter.h"
 
 /** Parameter IDs, ranges and defaults shared by the processor, editor and tests. */
@@ -26,6 +27,10 @@ namespace dooblrq::params
         inline constexpr const char* attack          = "dyn_attack";
         inline constexpr const char* release         = "dyn_release";
         inline constexpr const char* slope           = "slope"; // added in 0.7.0
+        inline constexpr const char* model           = "model";   // added in 0.8.0
+        inline constexpr const char* stepped         = "stepped"; // added in 0.8.0
+        inline constexpr const char* drive           = "drive";   // added in 0.8.0
+        inline constexpr const char* atten           = "atten";   // added in 0.8.0
     }
 
     inline constexpr const char* outputGain = "output_gain";
@@ -48,6 +53,8 @@ namespace dooblrq::params
     inline constexpr float minThresholdDb = -60.0f, maxThresholdDb = 0.0f;
     inline constexpr float minAttackMs  = 0.1f,    maxAttackMs  = 200.0f;
     inline constexpr float minReleaseMs = 5.0f,    maxReleaseMs = 2000.0f;
+    inline constexpr float minDriveDb   = -12.0f,  maxDriveDb   = 24.0f;
+    inline constexpr float minAttenDb   = 0.0f,    maxAttenDb   = 18.0f;
 
     /** Parameter ID for a band (0-based index), e.g. bandId (0, band::gain) == "b1_gain". */
     juce::String bandId (int bandIndex, const char* suffix);
@@ -57,6 +64,9 @@ namespace dooblrq::params
 
     /** Names of the slope choices, in dsp::Slope order. */
     juce::StringArray slopeNames();
+
+    /** Names of the analogue models, in dsp::Model order. */
+    juce::StringArray modelNames();
 
     struct BandDefaults
     {

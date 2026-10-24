@@ -331,7 +331,9 @@ namespace dooblrq::ui
     std::pair<juce::Point<float>, juce::Point<float>> ResponseCurveComponent::widthHandlePositions (int bandIndex) const
     {
         const auto s = processor.getBandSettings (bandIndex);
-        const auto factor = std::pow (2.0, 0.5 * qToOctaves ((double) s.q));
+        // Analogue models change the bell's effective Q (e.g. proportional Q): the handles follow it.
+        const auto effectiveQ = (double) s.q * dsp::modelBellQFactor (s.model, s.type, (double) s.gainDb);
+        const auto factor = std::pow (2.0, 0.5 * qToOctaves (effectiveQ));
         const auto model = makeResponseModel (false);
         const auto at = [&] (double frequency)
         {
@@ -417,10 +419,13 @@ namespace dooblrq::ui
         // stays on the curve for every slope.
         if (analog)
             return juce::Decibels::gainToDecibels (
-                std::abs (dsp::analogResponseAt (dsp::makeBandPrototype (s.type, s.slope, (double) s.q, (double) s.gainDb),
+                std::abs (dsp::analogResponseAt (dsp::makeModelPrototype (s.model, s.type, s.slope, (double) s.q,
+                                                                          (double) s.gainDb, (double) s.attenDb),
                                                  (double) s.frequency, (double) s.frequency)), -100.0);
 
-        const auto c = dsp::makeBandCoefficients (s.type, s.slope, (double) s.frequency, (double) s.q, (double) s.gainDb, sampleRate);
+        dsp::BandCoefficients c;
+        dsp::makeModelCoefficients (s.model, s.type, s.slope, (double) s.frequency, (double) s.q, (double) s.gainDb,
+                                    (double) s.attenDb, sampleRate, c);
         return juce::Decibels::gainToDecibels (dsp::magnitudeAt (c, (double) s.frequency, sampleRate), -100.0);
     }
 
@@ -473,9 +478,9 @@ namespace dooblrq::ui
             gain = juce::jlimit ((double) -dsp::DynamicEQBand::maxTotalGainDb,
                                  (double) dsp::DynamicEQBand::maxTotalGainDb, gain);
 
-            model.prototypes[(size_t) b] = dsp::makeBandPrototype (s.type, s.slope, (double) s.q, gain);
-            model.coefficients[(size_t) b] = dsp::makeBandCoefficients (s.type, s.slope, (double) s.frequency,
-                                                                        (double) s.q, gain, model.sampleRate);
+            model.prototypes[(size_t) b] = dsp::makeModelPrototype (s.model, s.type, s.slope, (double) s.q, gain, (double) s.attenDb);
+            dsp::makeModelCoefficients (s.model, s.type, s.slope, (double) s.frequency, (double) s.q, gain,
+                                        (double) s.attenDb, model.sampleRate, model.coefficients[(size_t) b]);
             model.frequencies[(size_t) b] = (double) s.frequency;
         }
 
@@ -830,10 +835,50 @@ namespace dooblrq::ui
 
         menu.addSectionHeader ("Band " + juce::String (bandIndex + 1) + " Slope");
 
+        const auto slopeUsed = dsp::usesSlope (s.model);
         for (int i = 0; i < names.size(); ++i)
-            menu.addItem (i + 1, names[i], true, (int) s.slope == i);
+            menu.addItem (i + 1, names[i], slopeUsed, (int) s.slope == i);
+
+        if (! slopeUsed)
+            menu.addItem (999, "(Slope is set by the analogue model)", false, false);
+
+        // 0.8.0: model and Stepped.
+        menu.addSectionHeader ("Model");
+        const auto models = params::modelNames();
+        for (int m = 0; m < models.size(); ++m)
+            menu.addItem (modelMenuBase + m, models[m], true, (int) s.model == m);
+
+        const auto stepped = processor.getParameterState().getRawParameterValue (params::bandId (bandIndex, params::band::stepped));
+        menu.addSeparator();
+        menu.addItem (steppedMenuId, "Stepped (switched positions)", dsp::hasSteps (s.model, s.type),
+                      stepped != nullptr && stepped->load() >= 0.5f);
 
         return menu;
+    }
+
+    void ResponseCurveComponent::handleBandMenuResult (int bandIndex, int result)
+    {
+        if (result >= modelMenuBase && result < modelMenuBase + dsp::numModels)
+            setBandChoice (bandIndex, params::band::model, (float) (result - modelMenuBase));
+        else if (result == steppedMenuId)
+        {
+            const auto* stepped = processor.getParameterState().getRawParameterValue (params::bandId (bandIndex, params::band::stepped));
+            setBandChoice (bandIndex, params::band::stepped, stepped != nullptr && stepped->load() >= 0.5f ? 0.0f : 1.0f);
+        }
+        else if (result >= 1 && result <= dsp::numSlopes)
+            setBandSlope (bandIndex, (dsp::Slope) (result - 1));
+    }
+
+    void ResponseCurveComponent::setBandChoice (int bandIndex, const char* suffix, float value)
+    {
+        if (auto* parameter = bandParameter (bandIndex, suffix))
+        {
+            parameter->beginChangeGesture();
+            parameter->setValueNotifyingHost (parameter->convertTo0to1 (value));
+            parameter->endChangeGesture();
+        }
+
+        repaint();
     }
 
     void ResponseCurveComponent::setBandSlope (int bandIndex, dsp::Slope slope)
@@ -867,7 +912,7 @@ namespace dooblrq::ui
                                                       [safeThis, band] (int result)
                                                       {
                                                           if (safeThis != nullptr && result > 0)
-                                                              safeThis->setBandSlope (band, (dsp::Slope) (result - 1));
+                                                              safeThis->handleBandMenuResult (band, result);
                                                       });
             }
 

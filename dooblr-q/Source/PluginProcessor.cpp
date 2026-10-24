@@ -30,6 +30,10 @@ DooblrQAudioProcessor::DooblrQAudioProcessor()
         p.attack          = pointer (params::bandId (b, params::band::attack));
         p.release         = pointer (params::bandId (b, params::band::release));
         p.slope           = pointer (params::bandId (b, params::band::slope));
+        p.model           = pointer (params::bandId (b, params::band::model));
+        p.stepped         = pointer (params::bandId (b, params::band::stepped));
+        p.drive           = pointer (params::bandId (b, params::band::drive));
+        p.atten           = pointer (params::bandId (b, params::band::atten));
     }
 
     outputGainDb = pointer (params::outputGain);
@@ -62,6 +66,16 @@ dsp::BandSettings DooblrQAudioProcessor::getBandSettings (int bandIndex) const n
     s.attackMs        = load (p.attack);
     s.releaseMs       = load (p.release);
     s.slope           = (dsp::Slope) juce::jlimit (0, dsp::numSlopes - 1, juce::roundToInt (load (p.slope)));
+    s.model           = (dsp::Model) juce::jlimit (0, dsp::numModels - 1, juce::roundToInt (load (p.model)));
+    s.driveDb         = load (p.drive);
+    s.attenDb         = dsp::usesAtten (s.model, s.type) ? load (p.atten) : 0.0f;
+
+    // Stepped: switched models snap to their documented positions (DSP, curve and handles).
+    if (load (p.stepped) >= 0.5f && dsp::isAnalog (s.model))
+    {
+        s.frequency = dsp::snapFrequency (s.model, s.type, s.frequency);
+        s.gainDb    = dsp::snapGain (s.model, s.type, s.gainDb);
+    }
     return s;
 }
 
@@ -178,6 +192,8 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
         k.frequency = (double) s.frequency;
         k.q = (double) s.q;
         k.slope = s.slope;
+        k.model = s.model;
+        k.attenDb = (double) s.attenDb;
 
         // Dynamics: the band's detector runs on a copy of the input (see processFirBlock).
         // With stereo link off, the louder channel's gain is used for both.
@@ -193,7 +209,8 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
             return false;
         if (! a.enabled)
             return true;
-        return a.type == b.type && a.slope == b.slope && std::abs (a.gainDb - b.gainDb) < 0.01
+        return a.type == b.type && a.slope == b.slope && a.model == b.model && std::abs (a.attenDb - b.attenDb) < 0.01
+               && std::abs (a.gainDb - b.gainDb) < 0.01
                && std::abs (std::log (a.frequency / b.frequency)) < 1.0e-5 && std::abs (std::log (a.q / b.q)) < 1.0e-5;
     };
 
@@ -231,7 +248,7 @@ void DooblrQAudioProcessor::processFirBlock (float* const* channels, int numChan
         auto* const* detection = detectionScratch.getArrayOfWritePointers();
         for (int sub = 0; sub < length; sub += coefficientUpdateInterval)
             for (auto& band : bands)
-                band.process (detection, numChannels, sub, juce::jmin (coefficientUpdateInterval, length - sub), linked);
+                band.process (detection, numChannels, sub, juce::jmin (coefficientUpdateInterval, length - sub), linked, false);
 
         // 2. Rebuild the kernel if the target moved (rate-limited, crossfaded).
         samplesSinceKernel += length;
@@ -258,8 +275,17 @@ void DooblrQAudioProcessor::processFirBlock (float* const* channels, int numChan
         firEngine.process (chunk, numChannels, length);
 
         if (outputDry)
+        {
             for (int ch = 0; ch < numChannels; ++ch)
                 juce::FloatVectorOperations::copy (chunk[ch], dryScratch.getReadPointer (ch), length);
+        }
+        else
+        {
+            // 5. Model colour (0.8.0): the nonlinear stage of each analogue band, in band order,
+            //    on the EQ'd output (its linear shape is already in the kernel). No latency added.
+            for (auto& band : bands)
+                band.processColour (chunk, numChannels, 0, length);
+        }
     }
 }
 

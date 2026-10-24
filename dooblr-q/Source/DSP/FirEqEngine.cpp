@@ -112,7 +112,8 @@ namespace dooblrq::dsp
         const auto sameBand = [] (const KernelBand& a, const KernelBand& b)
         {
             return a.enabled == b.enabled && a.type == b.type && juce::exactlyEqual (a.frequency, b.frequency)
-                   && juce::exactlyEqual (a.q, b.q) && juce::exactlyEqual (a.gainDb, b.gainDb) && a.slope == b.slope;
+                   && juce::exactlyEqual (a.q, b.q) && juce::exactlyEqual (a.gainDb, b.gainDb) && a.slope == b.slope
+                   && a.model == b.model && juce::exactlyEqual (a.attenDb, b.attenDb);
         };
 
         for (size_t b = 0; b < bands.size(); ++b)
@@ -122,7 +123,7 @@ namespace dooblrq::dsp
             if (! band.enabled || (bandResponseValid[b] && sameBand (band, cachedBands[b])))
                 continue;
 
-            const auto prototype = makeBandPrototype (band.type, band.slope, band.q, band.gainDb);
+            const auto prototype = makeModelPrototype (band.model, band.type, band.slope, band.q, band.gainDb, band.attenDb);
             auto& response = bandResponse[b];
 
             analogResponse (prototype, band.frequency, sampleRate, n, n / 2 + 1, response.data());

@@ -155,6 +155,16 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     slopeBox.addItemList (params::slopeNames(), 1);
     addAndMakeVisible (slopeBox);
 
+    modelBox.setComponentID (params::band::model);
+    modelBox.addItemList (params::modelNames(), 1);
+    modelBox.setTooltip ("Analogue model of this band: its filter shapes (Q behaviour, shelf curves, switched "
+                         "positions) and a level-dependent output colour. Original behavioural models, not "
+                         "hardware captures. Digital = the clean 0.7 filters.");
+    addAndMakeVisible (modelBox);
+
+    steppedButton.setComponentID (params::band::stepped);
+    addAndMakeVisible (steppedButton);
+
     dynamicsButton.setComponentID (params::band::dynamicsEnabled);
     addAndMakeVisible (dynamicsButton);
 
@@ -189,6 +199,10 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
         else
             qAttachment->setValueAsCompleteGesture (q);
     };
+    setUpKnob (driveKnob, "Drive", params::band::drive);
+    setUpKnob (attenKnob, "Atten", params::band::atten);
+    driveKnob.slider.setDoubleClickReturnValue (true, 0.0);
+    attenKnob.slider.setDoubleClickReturnValue (true, 0.0);
     setUpKnob (rangeKnob, "Range", params::band::range);
     setUpKnob (thresholdKnob, "Threshold", params::band::threshold);
     setUpKnob (attackKnob, "Attack", params::band::attack);
@@ -402,6 +416,10 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     dynamicsAttachment.reset();
     typeAttachment.reset();
     slopeAttachment.reset();
+    modelAttachment.reset();
+    steppedAttachment.reset();
+    driveAttachment.reset();
+    attenAttachment.reset();
     frequencyAttachment.reset();
     gainAttachment.reset();
     qAttachment.reset();
@@ -418,6 +436,32 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     slopeAttachment     = std::make_unique<ComboBoxAttachment> (state, id (params::band::slope), slopeBox);
     frequencyAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::frequency), frequencyKnob.slider);
     gainAttachment      = std::make_unique<SliderAttachment>   (state, id (params::band::gain), gainKnob.slider);
+    modelAttachment     = std::make_unique<ComboBoxAttachment> (state, id (params::band::model), modelBox);
+    steppedAttachment   = std::make_unique<ButtonAttachment>   (state, id (params::band::stepped), steppedButton);
+    driveAttachment     = std::make_unique<SliderAttachment>   (state, id (params::band::drive), driveKnob.slider);
+    attenAttachment     = std::make_unique<SliderAttachment>   (state, id (params::band::atten), attenKnob.slider);
+
+    // With Stepped on, the Frequency / Gain texts show the switched position actually used.
+    const auto snappedText = [this] (const char* suffix)
+    {
+        auto* parameter = audioProcessor.getParameterState().getParameter (params::bandId (selectedBand, suffix));
+        const auto isFrequency = juce::String (suffix) == params::band::frequency;
+        return [this, parameter, isFrequency] (double value)
+        {
+            const auto settings = audioProcessor.getBandSettings (selectedBand); // already snapped
+            const auto* stepped = audioProcessor.getParameterState().getRawParameterValue (params::bandId (selectedBand, params::band::stepped));
+            auto shown = (float) value;
+            if (stepped != nullptr && stepped->load() >= 0.5f && dooblrq::dsp::isAnalog (settings.model))
+                shown = isFrequency ? dooblrq::dsp::snapFrequency (settings.model, settings.type, shown)
+                                    : dooblrq::dsp::snapGain (settings.model, settings.type, shown);
+            return parameter->getText (parameter->convertTo0to1 (shown), 0);
+        };
+    };
+    frequencyKnob.slider.textFromValueFunction = snappedText (params::band::frequency);
+    gainKnob.slider.textFromValueFunction      = snappedText (params::band::gain);
+    frequencyKnob.slider.updateText();
+    gainKnob.slider.updateText();
+    lastStepKey = {};
     qAttachment = std::make_unique<juce::ParameterAttachment> (
         *state.getParameter (id (params::band::q)),
         [this] (float q) { qKnob.slider.setValue (params::qToOctaves ((double) q), juce::dontSendNotification); });
@@ -432,7 +476,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     responseCurve.setSelectedBand (selectedBand);
 
     const auto colour = dooblrq::ui::bandColour (selectedBand);
-    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob })
+    for (auto* knob : { &frequencyKnob, &gainKnob, &qKnob, &driveKnob, &attenKnob })
         knob->slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
 
     updateBandIndicators();
@@ -485,6 +529,60 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
     };
     slopeBox.setEnabled (true);
     slopeBox.setTooltip (slopeTip());
+    updateModelControls (settings);
+}
+
+void DooblrQAudioProcessorEditor::updateModelControls (const dooblrq::dsp::BandSettings& settings)
+{
+    namespace dsp = dooblrq::dsp;
+    const auto modelName = juce::String (dsp::modelName (settings.model));
+    const auto analog = dsp::isAnalog (settings.model);
+
+    // Slope: the analogue models have their own filter orders, so the choice is disabled there.
+    if (! dsp::usesSlope (settings.model))
+    {
+        slopeBox.setEnabled (false);
+        slopeBox.setTooltip ("Slope is set by the " + modelName + " model (its own filter orders). "
+                             "Choose the Digital model for 12 to 60 dB/oct and Brickwall.");
+    }
+
+    const auto stepsAvailable = dsp::hasSteps (settings.model, settings.type);
+    steppedButton.setEnabled (stepsAvailable);
+    steppedButton.setTooltip (stepsAvailable
+        ? "Stepped: snap Frequency" + juce::String (dsp::gainSteps (settings.model, settings.type).empty() ? "" : " and Gain")
+              + " to the " + modelName + "'s switched positions (the handle snaps too)"
+        : (analog ? "The " + modelName + " has no switched positions for this filter type (continuous controls)"
+                  : juce::String ("Stepped needs an analogue model with switched positions")));
+
+    const auto* stepped = audioProcessor.getParameterState().getRawParameterValue (params::bandId (selectedBand, params::band::stepped));
+    const auto steppedOn = stepped != nullptr && stepped->load() >= 0.5f && stepsAvailable;
+    const auto steps = dsp::frequencySteps (settings.model, settings.type);
+    const auto fixed = steppedOn && steps.size == 1;
+    frequencyKnob.slider.setEnabled (! fixed);
+    frequencyKnob.slider.setTooltip (fixed ? "Fixed at " + frequencyKnob.slider.getTextFromValue (steps.values[0])
+                                                 + " on the " + modelName + " (Stepped)"
+                                           : juce::String());
+
+    driveKnob.slider.setEnabled (analog);
+    driveKnob.slider.setTooltip (analog ? "Drive into the " + modelName + " colour stage (transformer / amplifier "
+                                          "saturation, level-dependent; 0 dB = nominal level)"
+                                        : juce::String ("Drive applies to the analogue models' colour stage (Digital is clean)"));
+
+    const auto attenUsed = dsp::usesAtten (settings.model, settings.type);
+    attenKnob.slider.setEnabled (attenUsed);
+    attenKnob.slider.setTooltip (attenUsed ? juce::String ("Pultec Atten: cut at the same frequency as the boost. Boost + Atten "
+                                                           "together gives the shelf with a dip above it (low) or a "
+                                                           "cut shelf (high).")
+                                           : juce::String ("Atten is for the Pultec EQP-1A model with a Low or High Shelf"));
+
+    const auto key = juce::String ((int) settings.model) + "/" + juce::String ((int) settings.type) + "/"
+                     + (steppedOn ? "1" : "0");
+    if (key != lastStepKey)
+    {
+        lastStepKey = key;
+        frequencyKnob.slider.updateText();
+        gainKnob.slider.updateText();
+    }
 }
 
 void DooblrQAudioProcessorEditor::timerCallback()
@@ -565,7 +663,7 @@ void DooblrQAudioProcessorEditor::resized()
         analyzerReadout.setBounds (toolbar.removeFromRight (150));
     }
 
-    controlsArea = bounds.removeFromBottom (180);
+    controlsArea = bounds.removeFromBottom (200);
     auto bandRow = bounds.removeFromBottom (40).reduced (16, 6);
     const auto buttonWidth = bandRow.getWidth() / params::numBands;
     for (size_t b = 0; b < bandButtons.size(); ++b)
@@ -579,37 +677,45 @@ void DooblrQAudioProcessorEditor::resized()
     responseCurve.setBounds (bounds.reduced (16, 10));
 
     auto controls = controlsArea.reduced (20, 12);
-    const auto switchColumnWidth = 120;
-    const auto knobWidth = (controls.getWidth() - 2 * switchColumnWidth - 24) / 7;
+    // The Width readout ("1.90 oct (Q 0.73)") is the longest, so its column gets more room;
+    // the Dynamics section only has one switch, so its left column is narrower.
+    const auto switchColumnWidth = 120, dynamicsSwitchWidth = 100;
+    constexpr double widthColumnWeight = 1.7;
+    const auto unit = (double) (controls.getWidth() - switchColumnWidth - dynamicsSwitchWidth - 24) / (8.0 + widthColumnWeight);
 
-    eqSectionArea = controls.removeFromLeft (switchColumnWidth + 3 * knobWidth);
+    eqSectionArea = controls.removeFromLeft (switchColumnWidth + juce::roundToInt (unit * (4.0 + widthColumnWeight)));
     controls.removeFromLeft (24);
     dynamicsSectionArea = controls;
 
-    const auto layoutSection = [knobWidth] (juce::Rectangle<int> area,
-                                                                juce::Component& toggle,
-                                                                juce::Component* secondControl,
+    const auto layoutSection = [this, unit] (juce::Rectangle<int> area, int switchWidth,
+                                                                std::initializer_list<juce::Component*> leftColumn,
                                                                 std::initializer_list<Knob*> knobs)
     {
         area.removeFromTop (20);
-        auto switches = area.removeFromLeft (switchColumnWidth).reduced (0, 6);
-        toggle.setBounds (switches.removeFromTop (26));
-
-        if (secondControl != nullptr)
+        auto switches = area.removeFromLeft (switchWidth).reduced (0, 4);
+        for (auto* control : leftColumn)
         {
-            switches.removeFromTop (10);
-            secondControl->setBounds (switches.removeFromTop (26).withTrimmedRight (12));
+            control->setBounds (switches.removeFromTop (24).withTrimmedRight (12));
+            switches.removeFromTop (6);
         }
 
+        auto x = (double) area.getX();
         for (auto* knob : knobs)
         {
-            auto column = area.removeFromLeft (knobWidth);
+            const auto right = x + unit * (knob == &qKnob ? widthColumnWeight : 1.0);
+            auto column = area.withLeft (juce::roundToInt (x)).withRight (juce::roundToInt (right));
+            x = right;
             knob->caption.setBounds (column.removeFromTop (18));
             knob->slider.setBounds (column.reduced (4, 0));
+            knob->slider.getProperties().set ("maxKnobDiameter", unit - 8.0);
+            knob->slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, knob->slider.getWidth(), 18);
+            for (auto* child : knob->slider.getChildren())   // at small sizes squeeze rather than truncate
+                if (auto* label = dynamic_cast<juce::Label*> (child))
+                    label->setMinimumHorizontalScale (0.8f);
         }
     };
 
-    layoutSection (eqSectionArea, enabledButton, &typeBox, { &frequencyKnob, &gainKnob, &qKnob });
-    slopeBox.setBounds (typeBox.getBounds().translated (0, 34));
-    layoutSection (dynamicsSectionArea, dynamicsButton, nullptr, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
+    layoutSection (eqSectionArea, switchColumnWidth, { &enabledButton, &typeBox, &slopeBox, &modelBox, &steppedButton },
+                   { &frequencyKnob, &gainKnob, &qKnob, &driveKnob, &attenKnob });
+    layoutSection (dynamicsSectionArea, dynamicsSwitchWidth, { &dynamicsButton }, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
 }

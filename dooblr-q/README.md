@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.7.1:** six-band dynamic EQ with per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.8.0:** six-band dynamic EQ with per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -15,7 +15,8 @@ gives every band type 2D handle dragging: horizontal = frequency, vertical = gai
 cuts and notches, Q. 0.6.1 colours dynamic activity per band, only over the range the
 moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-band
 **Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt. 0.7.1 extends
-Slope to Bell and Notch, so it applies to every band type.)
+Slope to Bell and Notch, so it applies to every band type. 0.8.0 adds the per-band Model,
+Stepped, Drive and Atten controls; see [Models](#models-080).)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -61,7 +62,11 @@ Six bands (`params::numBands` in `Source/Parameters.h`), each with:
 | Threshold | −60 – 0 dB | −24 dB |
 | Attack | 0.1 – 200 ms | 10 ms |
 | Release | 5 – 2000 ms | 120 ms |
-| Slope | 12, 24, 36, 48, 60 dB/oct, Brickwall (every band type) | 12 dB/oct |
+| Slope | 12, 24, 36, 48, 60 dB/oct, Brickwall (every band type; Digital model only) | 12 dB/oct |
+| Model | Digital, Neve 1073/1081, SSL 4000 E, SSL 4000 G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG | Digital |
+| Stepped | on/off: snap Frequency (and API / Helios-treble Gain) to the model's switch positions | off |
+| Drive | −12 – +24 dB into the model's colour stage (analogue models only) | 0 dB |
+| Atten | 0 – 18 dB, Pultec EQP-1A Low/High Shelf only | 0 dB |
 
 Band defaults: 1 Low Cut 30 Hz, 2 Low Shelf 120 Hz, 3 Bell 400 Hz,
 4 Bell 1.5 kHz, 5 Bell 4 kHz, 6 High Cut 18 kHz (band 1 is a high-pass and band 6 a
@@ -110,6 +115,97 @@ band was a cut, shelf or tilt.
   length limits how steep a very low corner can be (5.9 / 11.7 Hz bins), and the long
   impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
   the ringing is pre- and post-).
+
+## Models (0.8.0)
+
+Every band has a **Model**. **Digital** (the default) is exactly the 0.7.1 filter: a test
+checks Digital output is bit-identical to 0.7.1 in all three phase modes (against output
+hashes recorded from the 0.7.1 build), and sessions saved
+before 0.8.0 load as Digital, so they sound exactly as before. The four new parameters per
+band (`bN_model`, `bN_stepped`, `bN_drive`, `bN_atten`) come after every older parameter
+(no older ID or index moved); `stateVersion` stays 1.
+
+**These are original behavioural models built from publicly documented characteristics of
+the units (published switch positions, how their Q and shelves are described to behave,
+their topology: transformers, discrete op-amps, passive networks, tube make-up). They are
+not circuit simulations and have not been compared against or matched to hardware; no claim
+of hardware-accurate matching is made.** Neve, SSL, Solid State Logic, API, Pultec,
+Harrison, Trident, Helios, EMI and the model numbers are trademarks of their respective
+owners, used here only descriptively to name the style of behaviour; dooblr-q is not
+affiliated with or endorsed by any of them, and uses none of their artwork or logos.
+
+Each analogue model has two parts:
+
+1. **Linear shaping**: the model's own filter shapes for every band type (its Q-versus-gain
+   law for bells, its shelf curves, its cut orders). Slope does not apply (the model sets its
+   own orders), so the Slope selector is disabled with a tooltip saying so. Notch and Tilt use
+   the Digital 12 dB/oct shapes.
+2. **Colour**: a level-dependent saturation stage after the band (transformer / amplifier
+   style: soft odd-order clipping, a model-specific amount of even harmonics, and more
+   low-frequency saturation for transformer models). It is near-clean at low level and grows
+   with level; **Drive** pushes the band into it (0 dB = nominal). Digital has no colour
+   stage, and Drive is disabled for it.
+
+| Model | Bell (Q vs gain) | Shelves | Cuts | Stepped positions | Colour |
+|---|---|---|---|---|---|
+| Neve 1073/1081 | broad, inductor-style: Q × 0.55, narrowing a little with gain | resonant (bump next to the shelf) | low 18 dB/oct, high 12 dB/oct, soft corner (Q 0.6) | HPF 50/80/160/300 Hz, low 35/60/110/220 Hz, mid 0.36–7.2 kHz (6), high fixed 12 kHz | transformer: strongest LF saturation, some even harmonics |
+| SSL 4000 E | constant Q (same width at every gain) | gentle | low 18 dB/oct, Butterworth | continuous | cleanest, mostly odd |
+| SSL 4000 G | proportional: wide at low gain, narrower as gain rises | slight overshoot | low 18 dB/oct, Butterworth | continuous | cleanest, mostly odd |
+| API 550A/B | proportional Q (strongly narrows with gain), the same for boost and cut | steepen with gain | 12 dB/oct | the 550's frequency positions per band, HPF 50 Hz, LPF 15 kHz; Gain in steps of −12 … +12 dB | discrete op-amp style, moderate |
+| Pultec EQP-1A | very broad (Q × 0.5); cuts 1.6 × narrower | low: boost shelf and separate **Atten** cut at the same frequency — together a shelf with a dip above it; high: broad bell boost, Atten = 1st-order high-shelf cut | 12 dB/oct, Q 0.6 | low 20/30/60/100 Hz, high boost 3–16 kHz (7), atten 5/10/20 kHz | tube make-up: most even harmonics |
+| Harrison 32C | proportional, moderate | smooth | 12 dB/oct | continuous | clean, light |
+| Trident A-Range | broad, constant (Q × 0.7) | 1st-order high shelf | low 18 dB/oct, Butterworth | low 50/80/100/150 Hz, mid 250 Hz–9 kHz (8), high 8/10/12/15 kHz, HPF 25/50/100 Hz, LPF 9/12/15 kHz | moderate, some even |
+| Helios | boost Q × 0.8, cut Q × 1.4 (cuts narrower) | peaky bass boost, 1st-order bass cut | 12 dB/oct, Q 0.6 | bass 50–300 Hz (5), mid 0.7–6 kHz (8), treble fixed 10 kHz with Gain steps −16 … +12 dB | strongest overall |
+| EMI TG | broad (Q × 0.6) | 1st-order low shelf; the treble boost is a broad bell an octave below the set frequency | 12 dB/oct, Q 0.6 | low fixed 50 Hz, high fixed 10 kHz | moderate, some even |
+
+Measured (tests, 48 kHz):
+
+- SSL bell width at +3 / +15 dB: E 1.39 / 1.39 octaves (constant), G 2.35 / 1.22 octaves.
+- API bell width at 2 / 4 / 8 / 12 dB: 2.93 / 2.41 / 1.77 / 1.39 octaves, identical for cuts.
+- Pultec low, 60 Hz, Boost 10 + Atten 10: +3.9 dB at 20 Hz, +4.3 dB at 30 Hz, a −1.3 dB dip
+  at ≈ 115 Hz; Boost alone has no dip. Measured with a quiet sine in every phase mode it is
+  within 0.05 dB of the model curve.
+- THD+N of a 100 Hz sine through a flat band, Zero Latency, at −40 / −20 / −6 / 0 dBFS:
+
+  | Model | −40 dBFS | −20 dBFS | −6 dBFS | 0 dBFS |
+  |---|---|---|---|---|
+  | Neve 1073/1081 | 0.017 % | 0.17 % | 0.93 % | 2.36 % |
+  | SSL 4000 E | 0.001 % | 0.010 % | 0.083 % | 0.29 % |
+  | SSL 4000 G | 0.001 % | 0.008 % | 0.063 % | 0.21 % |
+  | API 550A/B | 0.005 % | 0.054 % | 0.34 % | 1.00 % |
+  | Pultec EQP-1A | 0.025 % | 0.25 % | 1.27 % | 2.79 % |
+  | Harrison 32C | 0.002 % | 0.023 % | 0.15 % | 0.45 % |
+  | Trident A-Range | 0.011 % | 0.12 % | 0.66 % | 1.70 % |
+  | Helios | 0.026 % | 0.26 % | 1.40 % | 3.38 % |
+  | EMI TG | 0.017 % | 0.17 % | 0.87 % | 1.97 % |
+
+  Digital at 0 dBFS with Drive +24: 0.000002 %. Neve at −20 dBFS with Drive −12 / 0 / +12 dB:
+  0.04 / 0.17 / 0.71 %. 2nd harmonic at −3 dBFS: Pultec −39.3 dBc, SSL E −64.0 dBc.
+
+**Stepped** snaps Frequency (and Gain where the unit's gain is switched: API, Helios treble)
+to the positions in the table, in the audio, the curve and the handles; a model/type with a
+single position fixes Frequency (the knob is disabled with a tooltip). Stepped is disabled
+for SSL, Harrison and Digital, which have continuous controls.
+
+**Atten** is enabled only for Pultec EQP-1A Low and High Shelf bands; otherwise it is
+disabled with a tooltip.
+
+**Phase and latency.** Models change no latency in any mode (Zero Latency 0, Natural 1024,
+Linear 4352 samples at 48 kHz, as before). In Zero Latency the model's filters are
+minimum-phase IIRs like Digital. In Natural / Linear Phase the model's magnitude response is
+built into the FIR kernel (so Linear Phase stays linear-phase), and the colour stage runs per
+band on the FIR output. The colour stage oversamples 4 × with polyphase IIR filters, but
+only the distortion residual (output minus input) goes through them: the dry signal has no
+added delay, and the small harmonic residual lags it by ≈ 4.4 samples at 48 kHz (inaudible,
+but it means the colour is not strictly linear-phase in Linear Phase mode).
+
+Dynamics work with every model (the model's whole response follows static + dynamic gain;
+the colour stage follows the band's level). Changing Model while audio runs crossfades the
+old and new filters over 10 ms (as for type and slope changes) and glides the colour
+character over 20 ms: the largest sample-to-sample step
+during a switch is within 1 % of the steady-state step (click-free). Model, Stepped, Drive and
+Atten are in the band's right-click menu (Model and Stepped) and the controls panel, and
+take part in undo / redo.
 
 ### DSP
 
@@ -177,7 +273,18 @@ dynamic band, 12 dB/oct): Zero Latency ≈ 0.6 %, Natural ≈ 1.6 %, Linear ≈ 
 All six bands on Brickwall (16 sections each) with one dynamic band: Zero Latency ≈ 3.4 %,
 Natural ≈ 4.2 %, Linear ≈ 5.2 %. Worst case, all six bands Brickwall bells, all dynamic (so
 every band's response changes every block): Zero Latency ≈ 5.0 %, Natural ≈ 9.4 %,
-Linear ≈ 13.9 %. (Since 0.7.0 the FIR modes cache each band's response and only recompute
+Linear ≈ 13.9 %. Per model, six bands (cut, two shelves, two bells, cut) all dynamic,
+Drive +6 dB:
+
+| Model | Zero Latency | Natural Phase | Linear Phase |
+|---|---|---|---|
+| Digital | 0.6 % | 2.1 % | 3.6 % |
+| Neve 1073/1081 | 4.2 % | 5.5 % | 7.1 % |
+| Pultec EQP-1A | 4.2 % | 5.6 % | 6.9 % |
+| Helios | 4.2 % | 5.6 % | 7.1 % |
+
+(Most of the model cost is the 4 × oversampled colour stage, about 0.6 % per band;
+every analogue model costs about the same.) (Since 0.7.0 the FIR modes cache each band's response and only recompute
 bands that changed; since 0.7.1 multi-section responses are evaluated in one pass per bin.)
 
 Zero Latency and high frequencies: the bilinear transform squeezes the top of the spectrum,
@@ -557,7 +664,21 @@ tests the same compiled code that goes into the VST3:
   in every mode; extreme Brickwall bells/notches stay finite; a running 12 → Brickwall bell
   change is click-free; the editor's Slope selector is enabled with a Bell/Notch tooltip,
   handles and width handles sit at the gain / half gain for every slope, the right-click
-  menu and undo; CPU for six dynamic Brickwall bells per mode.
+  menu and undo; CPU for six dynamic Brickwall bells per mode;
+- models (0.8.0): Digital bit-identical to 0.7.1 in every mode and a pre-0.8.0 session loads
+  as Digital; parameter count and the new IDs appended after the old ones; SSL E constant
+  and SSL G proportional bell width, API width shrinking with gain for boost and cut, Pultec
+  Boost + Atten shelf-with-dip and no dip from Boost alone, Neve / Helios / EMI shapes;
+  Stepped snapping of frequency and gain to every table, fixed positions, Stepped off is
+  continuous; colour: THD rises with level and Drive for every model, stays under 0.05 %
+  at −40 dBFS, Digital is clean at any Drive, the same THD in all three phase modes, Pultec
+  more 2nd harmonic than SSL; every model × type × mode at extreme settings stays finite,
+  latency unchanged, FIR modes match the model curve with a quiet sine, a dynamic band
+  follows its dynamic gain with every model; model state round-trips, undo / redo, a
+  click-free switch between every model while running; editor Model selector and right-click
+  menu items, Slope / Stepped / Drive / Atten enabled or disabled with tooltips, the drawn
+  curve shows the model's response, and every knob readout fits its text box at the default
+  and minimum editor sizes; CPU per model and mode.
 
 Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 `build/Tests/DooblrQTests` to save images of the rendered editor. It writes `editor.png`,
@@ -569,7 +690,9 @@ plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png
 `editor-v0.6.1.png` (a dynamic low shelf and a dynamic bell, each with its own region) and
 `editor-v0.7.0.png` (48 dB/oct low cut, 24 dB/oct low shelf, a bell and a resonant
 Brickwall high cut) and `editor-v0.7.1.png` (bells at 12, 24, 48 dB/oct, Brickwall and
-36 dB/oct, and a Brickwall notch).
+36 dB/oct, and a Brickwall notch) and `editor-v0.8.0.png` (Trident stepped low cut, Pultec
+low shelf with Boost + Atten, API stepped bell, SSL G bell cut, Helios high shelf, Digital
+high cut).
 
 ## Validation that still needs doing manually
 

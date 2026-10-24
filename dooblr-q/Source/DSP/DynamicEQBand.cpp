@@ -44,6 +44,8 @@ namespace dooblrq::dsp
         rangeDb.reset (sampleRate, smoothingSeconds);
         thresholdDb.reset (sampleRate, smoothingSeconds);
         wet.reset (sampleRate, enableFadeSeconds);
+        attenDb.reset (sampleRate, smoothingSeconds);
+        colour.prepare (sampleRate);
         crossfadeLength = std::max (1, (int) std::lround (topologyFadeSeconds * sampleRate));
 
         setSettings (settings, true);
@@ -59,6 +61,8 @@ namespace dooblrq::dsp
         rangeDb.setCurrentAndTargetValue (rangeDb.getTargetValue());
         thresholdDb.setCurrentAndTargetValue (thresholdDb.getTargetValue());
         wet.setCurrentAndTargetValue (wet.getTargetValue());
+        attenDb.setCurrentAndTargetValue (attenDb.getTargetValue());
+        colour.reset();
     }
 
     void DynamicEQBand::resetFilterState() noexcept
@@ -68,6 +72,7 @@ namespace dooblrq::dsp
         crossfadeRemaining = 0;
         appliedType = settings.type;
         appliedSlope = settings.slope;
+        appliedModel = settings.model;
         for (auto& state : detectorState) state.reset();
         envelope.fill (0.0f);
         dynamicGainDb.fill (0.0f);
@@ -88,8 +93,10 @@ namespace dooblrq::dsp
             rangeDb.setCurrentAndTargetValue (settings.rangeDb);
             thresholdDb.setCurrentAndTargetValue (settings.thresholdDb);
             wet.setCurrentAndTargetValue (targetWet);
+            attenDb.setCurrentAndTargetValue (settings.attenDb);
             appliedType = settings.type;
             appliedSlope = settings.slope;
+            appliedModel = settings.model;
             crossfadeRemaining = 0;
         }
         else
@@ -100,7 +107,10 @@ namespace dooblrq::dsp
             rangeDb.setTargetValue (settings.rangeDb);
             thresholdDb.setTargetValue (settings.thresholdDb);
             wet.setTargetValue (targetWet);
+            attenDb.setTargetValue (settings.attenDb);
         }
+
+        colour.setTarget (colourFor (settings.enabled ? settings.model : Model::digital), settings.driveDb, snap);
 
         updateBallistics();
     }
@@ -112,7 +122,7 @@ namespace dooblrq::dsp
     }
 
     void DynamicEQBand::process (float* const* channels, int numChannels, int startSample, int numSamples,
-                                 bool stereoLinked) noexcept
+                                 bool stereoLinked, bool applyColour) noexcept
     {
         numChannels = std::min (numChannels, maxChannels);
 
@@ -124,6 +134,7 @@ namespace dooblrq::dsp
         const auto currentGainDb    = gainDb.skip (numSamples);
         const auto currentRangeDb   = rangeDb.skip (numSamples);
         const auto currentThreshold = thresholdDb.skip (numSamples);
+        const auto currentAtten     = (double) attenDb.skip (numSamples);
 
         const auto fading = wet.isSmoothing();
 
@@ -137,6 +148,9 @@ namespace dooblrq::dsp
             }
             appliedType = settings.type; // nothing to crossfade from while silent
             appliedSlope = settings.slope;
+            appliedModel = settings.model;
+            if (applyColour)
+                colour.process (channels, numChannels, startSample, numSamples); // fading out
             return;
         }
 
@@ -146,14 +160,17 @@ namespace dooblrq::dsp
         // a further change waits for the current crossfade to finish).
         if (crossfadeRemaining <= 0
             && (settings.type != appliedType
-                || settings.slope != appliedSlope))
+                || settings.slope != appliedSlope
+                || settings.model != appliedModel))
         {
             fadingType = appliedType;
             fadingSlope = appliedSlope;
+            fadingModel = appliedModel;
             fadingState = filterState;
             for (auto& cascade : filterState) for (auto& state : cascade) state.reset();
             appliedType = settings.type;
             appliedSlope = settings.slope;
+            appliedModel = settings.model;
             crossfadeRemaining = crossfadeLength;
         }
 
@@ -181,12 +198,12 @@ namespace dooblrq::dsp
         {
             const auto totalGain = std::clamp (currentGainDb + dynamicGainDb[(size_t) i],
                                                -maxTotalGainDb, maxTotalGainDb);
-            coefficients[(size_t) i] = makeBandCoefficients (type, appliedSlope, currentFrequency, currentQ,
-                                                             (double) totalGain, sampleRate);
+            makeModelCoefficients (appliedModel, type, appliedSlope, currentFrequency, currentQ,
+                                   (double) totalGain, currentAtten, sampleRate, coefficients[(size_t) i]);
             if (crossfading)
-                fadingCoefficients[(size_t) i] = makeBandCoefficients (fadingType, fadingSlope, currentFrequency, currentQ,
-                                                                       (double) (hasGain (fadingType) ? totalGain : currentGainDb),
-                                                                       sampleRate);
+                makeModelCoefficients (fadingModel, fadingType, fadingSlope, currentFrequency, currentQ,
+                                       (double) (hasGain (fadingType) ? totalGain : currentGainDb),
+                                       currentAtten, sampleRate, fadingCoefficients[(size_t) i]);
         }
 
         const auto runCascade = [] (float input, CascadeState& state, const BandCoefficients& c) noexcept
@@ -273,5 +290,9 @@ namespace dooblrq::dsp
         {
             dynamicGainForDisplay.store (0.0f, std::memory_order_relaxed);
         }
+
+        // Output stage colour of the model (transformers / amplifiers), after the filter.
+        if (applyColour)
+            colour.process (channels, numChannels, startSample, numSamples);
     }
 }
