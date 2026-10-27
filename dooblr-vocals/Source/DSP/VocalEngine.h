@@ -13,7 +13,9 @@
 namespace dooblrvocals::dsp
 {
     /**
-        Pitch correction (always first), then Gate / EQ / Comp / Limiter in the chosen order.
+        Pitch correction and the harmonizer (always first; the harmonies are summed with the
+        corrected lead so Gate / EQ / Comp / Limiter process the whole stack and the limiter
+        protects the sum), then Gate / EQ / Comp / Limiter in the chosen order.
 
         Pitch stays first so the detector sees the incoming vocal, not a compressed or
         EQ'd version: gating, EQ and dynamics after correction is the usual vocal chain.
@@ -37,6 +39,7 @@ namespace dooblrvocals::dsp
         int getLatencySamples() const noexcept { return pitch.currentLatency(); }
         int latencyFor (const PitchSettings& s, bool nonRealtime) const noexcept { return pitch.latencySamples (s, nonRealtime); }
 
+        ProcessMode getProcessMode() const noexcept { return pitch.currentMode(); }
         float getGainReductionDb() const noexcept { return lastGrDb; }
         PitchEstimate getLastPitch() const noexcept { return pitch.getLastEstimate(); }
 

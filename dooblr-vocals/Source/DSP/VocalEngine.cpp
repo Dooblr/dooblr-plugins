@@ -100,6 +100,8 @@ namespace dooblrvocals::dsp
         settings.pitch.formant = target.pitch.formant;
         settings.pitch.input = target.pitch.input;
         settings.pitch.quality = target.pitch.quality;
+        settings.pitch.latency = target.pitch.latency;
+        settings.harmony = target.harmony; // the harmonizer de-zippers its own gains, pans and delays
         settings.gate.enabled = target.gate.enabled;
         settings.eq.enabled = target.eq.enabled;
         settings.compressor.enabled = target.compressor.enabled;
@@ -126,7 +128,7 @@ namespace dooblrvocals::dsp
             juce::AudioBuffer<float> slice (buffer.getArrayOfWritePointers(),
                                             buffer.getNumChannels(), offset, chunk);
 
-            pitch.process (slice, chunk, settings.pitch, settings.nonRealtime, pitchTap);
+            pitch.process (slice, chunk, settings.pitch, settings.harmony, settings.nonRealtime, pitchTap);
 
             const auto wanted = std::clamp (settings.chainOrder, 0, numChainOrders - 1);
             MeterBlock meter;

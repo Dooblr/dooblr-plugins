@@ -5,6 +5,7 @@
 
 #include "../DSP/Effects.h"
 #include "../Parameters.h"
+#include "OutputMeter.h"
 #include "Theme.h"
 
 namespace dooblrvocals::ui
@@ -1094,18 +1095,186 @@ namespace dooblrvocals::ui
         constexpr float limLowDb = -36.0f, limHighDb = 12.0f;
     }
 
+    LimiterMeter::LimiterMeter()
+    {
+        setComponentID ("limiterMeter");
+        setOpaque (false);
+        setInterceptsMouseClicks (false, false);
+    }
+
+    void LimiterMeter::reset()
+    {
+        level = hold = minDb;
+        gr = 0.0f;
+        holdAge = 0.0;
+        repaint();
+    }
+
+    void LimiterMeter::setCeiling (float ceilingDb, bool limiterOn)
+    {
+        ceiling = ceilingDb;
+        on = limiterOn;
+    }
+
+    void LimiterMeter::push (float outDb, float grDb, double elapsedSeconds)
+    {
+        // Same ballistics as the header's output meter.
+        const auto dt = juce::jlimit (0.0, 0.25, elapsedSeconds);
+        outDb = juce::jlimit (minDb, maxDb, outDb);
+        level = std::max (outDb, std::max (minDb, level - (float) (OutputMeter::releaseDbPerSecond * dt)));
+
+        holdAge += dt * 1000.0;
+        if (outDb >= hold)
+        {
+            hold = outDb;
+            holdAge = 0.0;
+        }
+        else if (holdAge > OutputMeter::holdMs)
+        {
+            hold = std::max (level, std::max (minDb, hold - (float) (OutputMeter::holdDecayDbPerSecond * dt)));
+        }
+
+        gr = std::min (std::min (0.0f, grDb), std::min (0.0f, gr + (float) (12.0 * dt)));
+        if (gr > -0.05f)
+            gr = 0.0f;
+
+        const auto h = pictureHash();
+        if (h != lastHash)
+        {
+            lastHash = h;
+            repaint();
+        }
+    }
+
+    int LimiterMeter::pictureHash() const
+    {
+        // Quantised to half-pixels of the bars, so an unchanged picture never repaints.
+        const auto bar = getLevelBar();
+        const auto px = [&bar] (float db) { return juce::roundToInt ((db - minDb) / (maxDb - minDb) * bar.getHeight() * 2.0f); };
+        return (((px (level) * 4099 + px (hold)) * 4099 + juce::roundToInt (gr * 8.0f)) * 4099 + px (ceiling)) * 2 + (on ? 1 : 0);
+    }
+
+    juce::Rectangle<float> LimiterMeter::getLevelBar() const
+    {
+        auto r = getLocalBounds().toFloat().reduced (8.0f, 0.0f).withTrimmedTop (24.0f).withTrimmedBottom (20.0f);
+        return { r.getX() + 24.0f, r.getY(), 24.0f, r.getHeight() };
+    }
+
+    juce::Rectangle<float> LimiterMeter::getGrBar() const
+    {
+        const auto l = getLevelBar();
+        return { l.getRight() + 10.0f, l.getY(), 12.0f, l.getHeight() };
+    }
+
+    float LimiterMeter::dbToY (float db) const
+    {
+        const auto bar = getLevelBar();
+        return juce::jmap (juce::jlimit (minDb, maxDb, db), minDb, maxDb, bar.getBottom(), bar.getY());
+    }
+
+    void LimiterMeter::paint (juce::Graphics& g)
+    {
+        g.setColour (Palette::panel);
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+
+        const auto bar = getLevelBar();
+        const auto grBar = getGrBar();
+
+        // dB scale (left of the level bar) and gain-reduction scale (right of the GR bar).
+        for (auto db : { 12.0f, 6.0f, 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -30.0f, -36.0f })
+        {
+            const auto y = dbToY (db);
+            g.setColour (Palette::grid);
+            g.fillRect (bar.getX() - 4.0f, y - 0.5f, 3.0f, 1.0f);
+            drawLabel (g, (db > 0 ? "+" : "") + juce::String ((int) db), { bar.getX() - 32.0f, y - 6.0f, 27.0f, 12.0f },
+                       juce::Justification::centredRight, Palette::textMuted, 9.5f);
+        }
+        for (auto grDb : { 0.0f, 6.0f, 12.0f, 18.0f, 24.0f })
+        {
+            const auto y = grBar.getY() + grBar.getHeight() * grDb / grRangeDb;
+            g.setColour (Palette::grid);
+            g.fillRect (grBar.getRight() + 1.0f, y - 0.5f, 3.0f, 1.0f);
+            drawLabel (g, juce::String ((int) grDb), { grBar.getRight() + 5.0f, y - 6.0f, 20.0f, 12.0f },
+                       juce::Justification::centredLeft, Palette::textMuted, 9.0f);
+        }
+
+        // Level bar: zone-coloured segments up to the level, then the peak hold.
+        g.setColour (Palette::background);
+        g.fillRoundedRectangle (bar, 2.0f);
+        g.fillRoundedRectangle (grBar, 2.0f);
+
+        if (level > minDb + 0.01f)
+        {
+            // One continuous fill: green, a short blend into yellow at -6 dBFS, into red at 0.
+            juce::ColourGradient fill (OutputMeter::colourFor (minDb), 0.0f, dbToY (minDb), OutputMeter::colourFor (maxDb), 0.0f, dbToY (maxDb), false);
+            const auto at = [] (float db) { return (double) ((db - minDb) / (maxDb - minDb)); };
+            using M = OutputMeter;
+            fill.addColour (at (M::yellowDb - M::blendDb), M::colourFor (M::yellowDb - M::blendDb - 0.01f));
+            fill.addColour (at (M::yellowDb), M::colourFor (M::yellowDb));
+            fill.addColour (at (M::redDb - M::blendDb), M::colourFor (M::redDb - M::blendDb - 0.01f));
+            fill.addColour (at (M::redDb), M::colourFor (M::redDb));
+            g.setGradientFill (fill);
+            g.fillRect (juce::Rectangle<float>::leftTopRightBottom (bar.getX() + 1.0f, dbToY (level), bar.getRight() - 1.0f, bar.getBottom()));
+        }
+
+        g.setColour (Palette::textMuted.withAlpha (0.5f));
+        g.fillRect (bar.getX(), dbToY (0.0f) - 0.5f, bar.getWidth(), 1.0f);
+
+        if (hold > minDb + 0.5f)
+        {
+            g.setColour (OutputMeter::colourFor (hold).brighter (0.2f));
+            g.fillRect (bar.getX(), dbToY (hold) - 1.0f, bar.getWidth(), 2.0f);
+        }
+
+        // Ceiling across the level bar (dashed when the limiter is off).
+        const auto cy = dbToY (ceiling);
+        const auto ceilingColour = on ? Palette::frozen : Palette::textMuted;
+        if (on)
+        {
+            g.setColour (ceilingColour);
+            g.fillRect (bar.getX() - 3.0f, cy - 0.75f, bar.getWidth() + 6.0f, 1.5f);
+        }
+        else
+        {
+            g.setColour (ceilingColour.withAlpha (0.7f));
+            for (auto x = bar.getX() - 3.0f; x < bar.getRight() + 3.0f; x += 6.0f)
+                g.fillRect (x, cy - 0.5f, 3.0f, 1.0f);
+        }
+
+        // Gain reduction from the top.
+        if (on && gr < 0.0f)
+        {
+            const auto depth = grBar.getHeight() * juce::jmin (1.0f, -gr / grRangeDb);
+            g.setColour (Palette::dynamic);
+            g.fillRoundedRectangle (grBar.withHeight (std::max (1.5f, depth)).reduced (1.0f, 0.0f), 1.5f);
+        }
+
+        // Peak-hold and GR values above the bars, captions below.
+        drawLabel (g, hold > minDb + 0.5f ? formatDb (hold) : juce::String ("-inf"), { bar.getX() - 14.0f, 4.0f, bar.getWidth() + 28.0f, 14.0f },
+                   juce::Justification::centred, Palette::accent, 10.0f);
+        drawLabel (g, on ? juce::String (gr, 1) : juce::String ("-"), { grBar.getX() - 8.0f, 4.0f, grBar.getWidth() + 22.0f, 14.0f },
+                   juce::Justification::centred, on ? Palette::dynamic : Palette::textMuted, 10.0f);
+        drawLabel (g, "OUT", { bar.getX() - 8.0f, bar.getBottom() + 4.0f, bar.getWidth() + 16.0f, 12.0f },
+                   juce::Justification::centred, Palette::textMuted, 9.0f);
+        drawLabel (g, "GR", { grBar.getX() - 8.0f, bar.getBottom() + 4.0f, grBar.getWidth() + 16.0f, 12.0f },
+                   juce::Justification::centred, Palette::textMuted, 9.0f);
+    }
+
+    //==============================================================================
     LimiterDisplay::LimiterDisplay (juce::AudioProcessorValueTreeState& s) : gesture (s)
     {
         setOpaque (true);
         setComponentID ("limiterDisplay");
         history.setRange (limLowDb, limHighDb, { 6.0f, 0.0f, -6.0f, -12.0f, -18.0f, -24.0f, -30.0f });
         history.setColours ({ Palette::spectrum.withAlpha (0.30f), Palette::accent, Palette::textMuted, Palette::dynamic });
+        addAndMakeVisible (meter);
         updateReadouts();
     }
 
     void LimiterDisplay::reset()
     {
         history.clear();
+        meter.reset();
         shownGrDb = 0.0f;
         shownOutDb = -120.0f;
         updateReadouts();
@@ -1126,6 +1295,7 @@ namespace dooblrvocals::ui
     {
         auto area = getLocalBounds();
         readoutArea = area.removeFromRight (112).withTrimmedLeft (12);
+        meter.setBounds (readoutArea);
         history.setBounds (area.withTrimmedLeft (30).withTrimmedTop (4).withTrimmedBottom (14), pixelScaleFor (*this));
         rebuildBackground();
     }
@@ -1149,40 +1319,19 @@ namespace dooblrvocals::ui
         drawLabel (g, "dBFS", { 0.0f, h.getBottom() - 12.0f, h.getX() - 5.0f, 14.0f }, juce::Justification::centredRight, Palette::textMuted, 9.0f);
         drawLabel (g, "time (newest right)   levels before the output gain", { h.getX(), h.getBottom() + 1.0f, h.getWidth(), 13.0f },
                    juce::Justification::centredRight, Palette::textMuted, 9.0f);
-
-        g.setColour (Palette::panel);
-        g.fillRoundedRectangle (readoutArea.toFloat(), 4.0f);
-        auto r = readoutArea.toFloat().reduced (10.0f, 8.0f);
-        drawLabel (g, "GAIN REDUCTION", r.removeFromTop (14.0f), juce::Justification::centredLeft, Palette::textMuted, 9.5f);
-        r.removeFromTop (26.0f);
-        drawLabel (g, "PEAK OUT", r.removeFromTop (14.0f), juce::Justification::centredLeft, Palette::textMuted, 9.5f);
-        r.removeFromTop (26.0f);
-        drawLabel (g, "CEILING", r.removeFromTop (14.0f), juce::Justification::centredLeft, Palette::textMuted, 9.5f);
-        r.removeFromTop (26.0f);
-        drawLabel (g, "MODE", r.removeFromTop (14.0f), juce::Justification::centredLeft, Palette::textMuted, 9.5f);
     }
 
     void LimiterDisplay::updateReadouts()
     {
         const auto mode = juce::roundToInt (gesture.get ("lim_mode"));
-        const auto on = mode != 0;
-        auto changed = false;
-        auto assign = [&changed] (juce::String& target, const juce::String& value)
+        const auto ceilingDb = gesture.get ("lim_ceiling");
+        const auto text = formatDb (ceilingDb);
+        meter.setCeiling (ceilingDb, mode != 0);
+        if (text != ceilingText)
         {
-            if (target != value)
-            {
-                target = value;
-                changed = true;
-            }
-        };
-
-        assign (grText, on ? formatDb (shownGrDb > -0.05f ? 0.0f : shownGrDb) : juce::String ("-"));
-        assign (outText, formatDb (shownOutDb));
-        assign (ceilingText, formatDb (gesture.get ("lim_ceiling")));
-        assign (modeText, mode == 2 ? "Limiter" : mode == 1 ? "Clipper" : "Off");
-
-        if (changed)
-            repaint (readoutArea);
+            ceilingText = text;
+            meter.repaint();
+        }
     }
 
     void LimiterDisplay::update (const dsp::MeterFrame* frames, int numFrames, double elapsedSeconds)
@@ -1213,6 +1362,7 @@ namespace dooblrvocals::ui
         }
 
         updateReadouts();
+        meter.push (batchOut, batchGr, elapsedSeconds);
     }
 
     void LimiterDisplay::paint (juce::Graphics& g)
@@ -1255,19 +1405,6 @@ namespace dooblrvocals::ui
             drawLabel (g, name, legend.withTrimmedLeft (11.0f), juce::Justification::centredLeft, Palette::textMuted, 9.5f);
             legend.translate (44.0f, 0.0f);
         }
-
-        auto r = readoutArea.toFloat().reduced (10.0f, 8.0f);
-        r.removeFromTop (14.0f);
-        drawLabel (g, grText, r.removeFromTop (22.0f), juce::Justification::centredLeft, on ? Palette::dynamic : Palette::textMuted, 15.0f);
-        r.removeFromTop (4.0f);
-        r.removeFromTop (14.0f);
-        drawLabel (g, outText, r.removeFromTop (22.0f), juce::Justification::centredLeft, Palette::accent, 15.0f);
-        r.removeFromTop (4.0f);
-        r.removeFromTop (14.0f);
-        drawLabel (g, ceilingText, r.removeFromTop (22.0f), juce::Justification::centredLeft, colour, 15.0f);
-        r.removeFromTop (4.0f);
-        r.removeFromTop (14.0f);
-        drawLabel (g, modeText, r.removeFromTop (22.0f), juce::Justification::centredLeft, Palette::textPrimary, 13.0f);
     }
 
     void LimiterDisplay::mouseMove (const juce::MouseEvent& e)

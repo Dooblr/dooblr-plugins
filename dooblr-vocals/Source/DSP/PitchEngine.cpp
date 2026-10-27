@@ -295,20 +295,26 @@ namespace dooblrvocals::dsp
     {
         /** Grain half-length (output samples) for period T at the ratio, limited so the grain's
             input never reaches past the newest sample (lookahead = latency). */
-        float grainHalf (float period, float ratio, bool formant, float lookahead, int maxHalf) noexcept
+        float grainHalf (float period, float ratio, bool formant, float lookahead, int maxHalf, bool causal) noexcept
         {
             const auto hopOut = period / ratio;
             const auto stretch = formant ? 1.0f : ratio;
             const auto wanted = formant ? std::max (period, hopOut) : hopOut;
+
+            if (causal)
+                return std::clamp (wanted, 8.0f, (float) maxHalf);
+
+            // Never shorter than the hop (the windows must still cover the output; the epoch
+            // then steps back a period instead), else as long as the look-ahead allows.
             const auto fit = (lookahead - 4.0f - 0.5f * period) / (1.0f + stretch);
-            return std::clamp (std::min (wanted, fit), 8.0f, (float) maxHalf);
+            return std::clamp (std::max (std::min (wanted, fit), std::min (wanted, hopOut)), 8.0f, (float) maxHalf);
         }
     }
 
-    void PitchShifter::addGrain (float period, float ratio, bool formant) noexcept
+    void PitchShifter::addGrain (float period, float ratio, bool formant, bool causal) noexcept
     {
         const auto lookahead = (float) (newestInput - lastOut - 1);
-        const auto half = grainHalf (period, ratio, formant, lookahead, maxHalf);
+        const auto half = grainHalf (period, ratio, formant, lookahead, maxHalf, causal);
         const auto stretch = (double) (formant ? 1.0f : ratio);
         const auto T = (double) period;
 
@@ -318,6 +324,40 @@ namespace dooblrvocals::dsp
         while (analysisEpoch - 0.5 * T > synthMark) analysisEpoch -= T;
         while (analysisEpoch + (double) half * stretch > (double) newestInput && analysisEpoch - T > (double) (newestInput - delaySize + 4))
             analysisEpoch -= T;
+
+        // Harmony voices: snap the epoch to the waveform's maximum within a quarter period (a
+        // pitch mark). A unison voice then stays sample-aligned with the lead.
+        auto shortHalf = 0.0;
+        if (harmonyVoice)
+        {
+            const auto reach = std::max (1, (int) (0.25 * T));
+            const auto centre = (std::int64_t) std::llround (analysisEpoch);
+            auto best = analysisEpoch;
+            auto bestValue = -1.0e30f;
+            for (auto j = centre - reach; j <= centre + reach; ++j)
+            {
+                if ((double) j + (double) half * stretch > (double) newestInput)
+                    break;
+                // Signed maximum: always the same side of the waveform, so successive marks
+                // never alternate between a positive and a negative peak.
+                const auto v = readAbs (delayL, (double) j) + readAbs (delayR, (double) j);
+                if (v > bestValue)
+                {
+                    bestValue = v;
+                    best = (double) j;
+                }
+            }
+            // The synthesis mark follows the snap (scaled to the output's time base), so the
+            // output pulses keep the input's real spacing rather than the period estimate's.
+            synthMark += (best - analysisEpoch) / (double) std::max (0.25f, ratio);
+            analysisEpoch = best;
+
+            // Formant-preserving downshift: grains are spaced more than a period apart, so
+            // read a two-period window around the mark (one pulse per grain) and leave the
+            // longer synthesis window for coverage.
+            if (formant && (double) half > 1.05 * T)
+                shortHalf = T;
+        }
 
         const auto now = lastOut + 1; // the output sample being produced
         const auto first = std::max (now, (std::int64_t) std::ceil (synthMark - (double) half));
@@ -332,8 +372,11 @@ namespace dooblrvocals::dsp
                 continue;
             const auto x = analysisEpoch + d * stretch;
             const auto idx = (size_t) (j & olaMask);
-            olaL[idx] += w * readAbs (delayL, x);
-            olaR[idx] += w * readAbs (delayR, x);
+            auto a = w;
+            if (shortHalf > 0.0)
+                a = std::abs (d) >= shortHalf ? 0.0f : w * (float) (0.5 + 0.5 * std::cos ((double) pi * d / shortHalf));
+            olaL[idx] += a * readAbs (delayL, x);
+            olaR[idx] += a * readAbs (delayR, x);
             olaW[idx] += w;
         }
 
@@ -341,7 +384,7 @@ namespace dooblrvocals::dsp
     }
 
     void PitchShifter::processSample (std::int64_t tOut, std::int64_t newest, float ratio, float period,
-                                      bool voiced, bool formant, float& outL, float& outR) noexcept
+                                      bool voiced, bool formant, float& outL, float& outR, bool causal) noexcept
     {
         newestInput = newest;
 
@@ -355,7 +398,7 @@ namespace dooblrvocals::dsp
         }
 
         lastOut = tOut - 1; // addGrain() writes from tOut on
-        ratio = std::clamp (ratio, 0.5f, 2.0f);
+        ratio = std::clamp (ratio, 0.25f, 4.0f);
         period = std::clamp (period, 16.0f, (float) maxHalf);
 
         if (voiced)
@@ -365,15 +408,15 @@ namespace dooblrvocals::dsp
             if (! marking)
             {
                 marking = true;
-                synthMark = (double) tOut + (double) grainHalf (period, ratio, formant, lookahead, maxHalf);
+                synthMark = (double) tOut + (double) grainHalf (period, ratio, formant, lookahead, maxHalf, causal);
                 analysisEpoch = synthMark;
             }
 
             for (int guard = 0; guard < 32; ++guard)
             {
-                if (synthMark - (double) grainHalf (period, ratio, formant, lookahead, maxHalf) > (double) tOut)
+                if (synthMark - (double) grainHalf (period, ratio, formant, lookahead, maxHalf, causal) > (double) tOut)
                     break;
-                addGrain (period, ratio, formant);
+                addGrain (period, ratio, formant, causal);
             }
         }
         else
@@ -384,7 +427,14 @@ namespace dooblrvocals::dsp
         const auto idx = (size_t) (tOut & olaMask);
         const auto w = olaW[idx];
 
-        if (w >= 1.0f || (marking && w > 1.0e-3f))
+        if (harmonyVoice)
+        {
+            // No dry fill: a harmony voice is silent wherever its grains do not reach.
+            const auto norm = std::max (1.0f, w);
+            outL = olaL[idx] / norm;
+            outR = olaR[idx] / norm;
+        }
+        else if (w >= 1.0f || (marking && w > 1.0e-3f))
         {
             outL = olaL[idx] / w;
             outR = olaR[idx] / w;
@@ -402,6 +452,109 @@ namespace dooblrvocals::dsp
     }
 
     //==============================================================================
+    void Harmonizer::prepare (double newSampleRate, int maxGrainHalf, const float* left, const float* right, int size)
+    {
+        sampleRate = newSampleRate;
+        for (auto& s : shifters)
+        {
+            s.prepare (sampleRate, maxGrainHalf);
+            s.setHarmonyVoice (true);
+            s.setDelayBuffers (left, right, size);
+        }
+
+        lineSize = 64;
+        while (lineSize < (int) std::ceil (0.032 * sampleRate) + 4)
+            lineSize <<= 1;
+        for (auto& l : lines)
+            l.assign ((size_t) lineSize, 0.0f);
+        reset();
+    }
+
+    void Harmonizer::reset() noexcept
+    {
+        for (auto& s : shifters)
+            s.reset();
+        for (auto& l : lines)
+            std::fill (l.begin(), l.end(), 0.0f);
+        ratios.fill (1.0f);
+        gains.fill (0.0f);
+        panL.fill (std::sqrt (0.5f));
+        panR.fill (std::sqrt (0.5f));
+        delays.fill (0.0f);
+        linePos = 0;
+        env = 0.0f;
+        voiced = false;
+    }
+
+    int Harmonizer::intervalFor (const HarmonyVoice& v, int leadMidi, int mask) noexcept
+    {
+        if (v.fixed)
+            return std::clamp (v.semitones, -24, 24);
+
+        return std::clamp (scaleStepMidi (leadMidi, std::clamp (v.degrees, -14, 14), mask) - leadMidi, -24, 24);
+    }
+
+    void Harmonizer::setPitch (float detectedHz, float leadHz, bool isVoiced, const HarmonySettings& h, int mask, float a4) noexcept
+    {
+        voiced = isVoiced && detectedHz > 20.0f && leadHz > 20.0f;
+        if (! voiced)
+            return;
+
+        const auto leadMidi = (int) std::lround (PitchCorrector::hzToMidi (leadHz, a4));
+        const auto leadRatio = leadHz / detectedHz;
+
+        for (size_t v = 0; v < ratios.size(); ++v)
+        {
+            const auto& voice = h.voices[v];
+            const auto semis = (float) intervalFor (voice, leadMidi, mask) + std::clamp (voice.detuneCents, -100.0f, 100.0f) * 0.01f;
+            ratios[v] = std::clamp (leadRatio * std::exp2 (semis / 12.0f), 0.25f, 4.0f);
+        }
+    }
+
+    void Harmonizer::processSample (std::int64_t tOut, std::int64_t newest, float period, bool causal,
+                                    const HarmonySettings& h, float& outL, float& outR) noexcept
+    {
+        const auto smooth = 1.0f - std::exp (-1.0f / (0.010f * (float) sampleRate));
+        const auto envCoeff = 1.0f - std::exp (-1.0f / (0.008f * (float) sampleRate));
+        env += ((voiced ? 1.0f : 0.0f) - env) * envCoeff;
+        const auto bus = h.enabled ? juce::Decibels::decibelsToGain (h.levelDb, -60.0f) : 0.0f;
+        linePos = (linePos + 1) & (lineSize - 1);
+
+        for (size_t v = 0; v < shifters.size(); ++v)
+        {
+            const auto& voice = h.voices[v];
+            const auto want = voice.enabled ? bus * juce::Decibels::decibelsToGain (voice.levelDb, -60.0f) : 0.0f;
+            gains[v] += (want - gains[v]) * smooth;
+
+            if (gains[v] < 1.0e-5f && want == 0.0f)
+            {
+                gains[v] = 0.0f;
+                lines[v][(size_t) linePos] = 0.0f;
+                continue; // idle voice: its shifter restarts its time line when it comes back
+            }
+
+            const auto angle = (std::clamp (voice.pan, -1.0f, 1.0f) + 1.0f) * 0.25f * pi;
+            panL[v] += (std::cos (angle) - panL[v]) * smooth;
+            panR[v] += (std::sin (angle) - panR[v]) * smooth;
+            delays[v] += (std::clamp (voice.delayMs, 0.0f, 30.0f) * 0.001f * (float) sampleRate - delays[v]) * smooth;
+
+            float l = 0.0f, r = 0.0f;
+            shifters[v].processSample (tOut, newest, ratios[v], period, voiced, h.formant, l, r, causal);
+
+            auto& line = lines[v];
+            line[(size_t) linePos] = 0.5f * (l + r);
+            const auto d = std::clamp (delays[v], 0.0f, (float) (lineSize - 2));
+            const auto di = (int) d;
+            const auto frac = d - (float) di;
+            const auto a = line[(size_t) ((linePos - di) & (lineSize - 1))];
+            const auto b = line[(size_t) ((linePos - di - 1) & (lineSize - 1))];
+            const auto mono = (a + frac * (b - a)) * gains[v] * env;
+            outL += mono * panL[v];
+            outR += mono * panR[v];
+        }
+    }
+
+    //==============================================================================
     void PitchEngine::prepare (double newSampleRate, int maxBlockSize)
     {
         sampleRate = newSampleRate;
@@ -415,6 +568,7 @@ namespace dooblrvocals::dsp
         corrector.prepare (sampleRate);
         shifter.prepare (sampleRate, hq + 64);
         shifter.setDelayBuffers (delayL.data(), delayR.data(), delaySize);
+        harmonizer.prepare (sampleRate, hq + 64, delayL.data(), delayR.data(), delaySize);
         reset();
     }
 
@@ -435,12 +589,14 @@ namespace dooblrvocals::dsp
         detector.reset();
         corrector.reset();
         shifter.reset();
+        harmonizer.reset();
+        mode = ProcessMode::mix;
+        harmonyTail = 0;
     }
 
     int PitchEngine::latencySamples (const PitchSettings& s, bool nonRealtime) const noexcept
     {
-        const auto hq = nonRealtime || s.quality == QualityMode::hq;
-        return hq ? hqLatencySamples (sampleRate) : liveLatencySamples (sampleRate);
+        return latencyForMode (processModeFor (s, nonRealtime), sampleRate);
     }
 
     float PitchEngine::readDelay (const std::vector<float>& buf, int delay) const noexcept
@@ -449,28 +605,44 @@ namespace dooblrvocals::dsp
         return buf[(size_t) wrap (writePos - 1 - delay, delaySize)];
     }
 
-    void PitchEngine::analyseIfDue (const PitchSettings& s, bool hq) noexcept
+    void PitchEngine::analyseIfDue (const PitchSettings& s, const HarmonySettings& h) noexcept
     {
+        const auto hq = mode == ProcessMode::hq;
         const auto range = rangeFor (s.input);
         const auto minHz = range.minHz;
         const auto maxHz = range.maxHz;
-        auto window = std::min (detector.recommendedWindow (minHz) * (hq ? 2 : 1), delaySize - latency - 4);
-        if (window < 64)
-            return;
+        int window = 0;
 
-        // Centre the window where the next grains are taken: one period after the playback
-        // point (latency samples back). A window ending at the playback point lags the audio
-        // being shifted by half a window, which smears vibrato and glides.
-        window = std::min (window, 2 * latency);
-        const auto centre = window / 2;
-        const auto ahead = lastEstimate.hz > 20.0f
-                               ? std::clamp ((int) std::lround (sampleRate / lastEstimate.hz), 0, std::max (0, latency - centre))
-                               : 0;
-
-        for (int i = 0; i < window; ++i)
+        if (mode == ProcessMode::tracking)
         {
-            const auto d = std::max (0, latency - ahead + centre - 1 - i);
-            monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
+            // Causal: the newest window of input (there is no look-ahead to centre it in).
+            window = std::min (detector.recommendedWindow (minHz), delaySize - 4);
+            for (int i = 0; i < window; ++i)
+            {
+                const auto d = window - 1 - i;
+                monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
+            }
+        }
+        else
+        {
+            window = std::min (detector.recommendedWindow (minHz) * (hq ? 2 : 1), delaySize - latency - 4);
+            if (window < 64)
+                return;
+
+            // Centre the window where the next grains are taken: one period after the playback
+            // point (latency samples back). A window ending at the playback point lags the audio
+            // being shifted by half a window, which smears vibrato and glides.
+            window = std::min (window, 2 * latency);
+            const auto centre = window / 2;
+            const auto ahead = lastEstimate.hz > 20.0f
+                                   ? std::clamp ((int) std::lround (sampleRate / lastEstimate.hz), 0, std::max (0, latency - centre))
+                                   : 0;
+
+            for (int i = 0; i < window; ++i)
+            {
+                const auto d = std::max (0, latency - ahead + centre - 1 - i);
+                monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
+            }
         }
 
         const auto threshold = hq ? 0.10f : 0.15f;
@@ -485,10 +657,14 @@ namespace dooblrvocals::dsp
             lastRatio = std::clamp (lastCorrectedHz / lastEstimate.hz, 0.5f, 2.0f);
         else
             lastRatio = 1.0f;
+
+        // Harmonies follow what the lead plays: the corrected note when correction is on.
+        const auto leadHz = s.enabled ? lastCorrectedHz : lastEstimate.hz;
+        harmonizer.setPitch (lastEstimate.hz, leadHz, lastVoiced, h, harmonyMask (s), std::clamp (s.a4Hz, 415.0f, 466.0f));
     }
 
     void PitchEngine::process (juce::AudioBuffer<float>& buffer, int numSamples, const PitchSettings& s,
-                               bool nonRealtime, PitchTap* tap) noexcept
+                               const HarmonySettings& harmony, bool nonRealtime, PitchTap* tap) noexcept
     {
         const auto n = std::min (numSamples, maxBlock);
         const auto channels = std::min (2, buffer.getNumChannels());
@@ -498,9 +674,10 @@ namespace dooblrvocals::dsp
         auto* left = buffer.getWritePointer (0);
         auto* right = channels > 1 ? buffer.getWritePointer (1) : left;
 
-        const auto hq = nonRealtime || s.quality == QualityMode::hq;
-        latency = latencySamples (s, nonRealtime);
-        hop = hq ? 32 : 64;
+        mode = processModeFor (s, nonRealtime);
+        latency = latencyForMode (mode, sampleRate);
+        hop = mode == ProcessMode::hq ? 32 : 64;
+        const auto causal = mode == ProcessMode::tracking;
 
         const auto mixTarget = s.enabled ? std::clamp (s.amount, 0.0f, 1.0f) : 0.0f;
         const auto mixCoeff = 1.0f - std::exp (-1.0f / (0.005f * (float) sampleRate));
@@ -519,7 +696,7 @@ namespace dooblrvocals::dsp
             if (++hopCounter >= hop)
             {
                 hopCounter = 0;
-                analyseIfDue (s, hq);
+                analyseIfDue (s, harmony);
 
                 if (tap != nullptr)
                     tap->push ({ lastEstimate.hz, lastVoiced ? lastCorrectedHz : 0.0f, lastEstimate.confidence, lastVoiced });
@@ -531,16 +708,36 @@ namespace dooblrvocals::dsp
             // Output time: the input sample written latency samples ago.
             const auto newest = inputCount - 1;
             float wetL = 0.0f, wetR = 0.0f;
-            shifter.processSample (newest - latency, newest, lastRatio, period(), voicedNow, s.formant, wetL, wetR);
+            const auto tOut = newest - latency;
+            shifter.processSample (tOut, newest, lastRatio, period(), voicedNow, s.formant, wetL, wetR, causal);
 
             const auto dryL = readDelay (delayL, latency);
             const auto dryR = readDelay (delayR, latency);
             const auto want = (voicedNow && mixSmoothed > 1.0e-4f) ? 1.0f : 0.0f;
             voiceEnv += (want - voiceEnv) * voiceCoeff;
             const auto wetAmt = voiceEnv * mixSmoothed;
-            left[i] = dryL + wetAmt * (wetL - dryL);
+            auto outL = dryL + wetAmt * (wetL - dryL);
+            auto outR = dryR + wetAmt * (wetR - dryR);
+
+            // Harmonies: same tOut as the lead, so they share its latency exactly. After the
+            // switch goes off the voices run until their gains have faded (no click).
+            if (harmony.enabled || harmonyTail > 0)
+            {
+                harmonyTail = harmony.enabled ? (int) (0.1 * sampleRate) : harmonyTail - 1;
+                float hL = 0.0f, hR = 0.0f;
+                harmonizer.processSample (tOut, newest, period(), causal, harmony, hL, hR);
+                if (channels > 1)
+                {
+                    outL += hL;
+                    outR += hR;
+                }
+                else
+                    outL += 0.5f * (hL + hR);
+            }
+
+            left[i] = outL;
             if (channels > 1)
-                right[i] = dryR + wetAmt * (wetR - dryR);
+                right[i] = outR;
         }
     }
 }

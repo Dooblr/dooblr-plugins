@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -17,6 +18,13 @@ namespace dooblrvocals::params
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::String formatHz (float hz);
+
+    /** v0.2 harmonizer: "harm<N>_<suffix>" for voice index 0..3, e.g. harm1_degree. */
+    juce::String harmonyId (int voice, const char* suffix);
+    const dsp::HarmonyVoice& defaultHarmonyVoice (int voice);
+    juce::String degreeName (int steps);   // +2 -> "+3rd", -7 -> "-Oct", 0 -> "Unison"
+    int degreeFromName (const juce::String& text);
+    juce::String panName (float pan);      // "L35", "C", "R70"
     juce::String noteName (int midiNote);
 
     /** Reads every parameter into a dsp::VocalSettings (allocation free; any thread). */
@@ -38,5 +46,10 @@ namespace dooblrvocals::params
         Value eqHighFreq = nullptr, eqHighGain = nullptr;
         Value compOn = nullptr, compThreshold = nullptr, compRatio = nullptr, compAttack = nullptr, compRelease = nullptr, compMakeup = nullptr;
         Value limMode = nullptr, limCeiling = nullptr, limRelease = nullptr, outputGain = nullptr, chainOrder = nullptr;
+        Value latencyMode = nullptr, harmOn = nullptr, harmLevel = nullptr, harmFormant = nullptr;
+
+        struct VoiceValues { Value on = nullptr, mode = nullptr, degree = nullptr, semis = nullptr, level = nullptr,
+                             pan = nullptr, detune = nullptr, delay = nullptr; };
+        std::array<VoiceValues, dsp::numHarmonyVoices> harmVoices;
     };
 }

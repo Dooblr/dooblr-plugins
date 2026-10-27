@@ -2,6 +2,7 @@
 
 #include "DSP/ProcessingChain.h"
 
+#include <array>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -108,6 +109,46 @@ namespace dooblrvocals::params
                  "Harm. minor", "Mel. minor", "Custom" };
     }
 
+    juce::String harmonyId (int voice, const char* suffix)
+    {
+        return "harm" + juce::String (voice + 1) + "_" + suffix;
+    }
+
+    const dsp::HarmonyVoice& defaultHarmonyVoice (int voice)
+    {
+        // Voices 1 / 2: a third and a fifth above in the key; 3 / 4: octaves (off).
+        static const std::array<dsp::HarmonyVoice, dsp::numHarmonyVoices> defaults { {
+            { true,  false,  2,   4, -3.0f, -0.35f, 0.0f, 0.0f },
+            { true,  false,  4,   7, -4.0f,  0.35f, 0.0f, 0.0f },
+            { false, true,  -7, -12, -6.0f, -0.70f, 0.0f, 0.0f },
+            { false, true,   7,  12, -6.0f,  0.70f, 0.0f, 0.0f },
+        } };
+        return defaults[(size_t) juce::jlimit (0, dsp::numHarmonyVoices - 1, voice)];
+    }
+
+    juce::String degreeName (int steps)
+    {
+        static const char* names[] = { "Unison", "2nd", "3rd", "4th", "5th", "6th", "7th", "Oct",
+                                       "9th", "10th", "11th", "12th", "13th", "14th", "2 Oct" };
+        const auto a = juce::jlimit (0, 14, std::abs (steps));
+        return a == 0 ? juce::String (names[0]) : juce::String (steps > 0 ? "+" : "-") + names[a];
+    }
+
+    int degreeFromName (const juce::String& text)
+    {
+        const auto t = text.trim();
+        for (int steps = -14; steps <= 14; ++steps)
+            if (t.equalsIgnoreCase (degreeName (steps)) || (steps > 0 && t.equalsIgnoreCase (degreeName (steps).substring (1))))
+                return steps;
+        return juce::jlimit (-14, 14, t.retainCharacters ("-0123456789").getIntValue());
+    }
+
+    juce::String panName (float pan)
+    {
+        const auto p = juce::roundToInt (pan * 100.0f);
+        return p == 0 ? juce::String ("C") : (p < 0 ? "L" : "R") + juce::String (std::abs (p));
+    }
+
     juce::String noteName (int midiNote)
     {
         return juce::MidiMessage::getMidiNoteName (midiNote, true, true, 3);
@@ -173,6 +214,39 @@ namespace dooblrvocals::params
 
         addChoice (layout, "chain_order", "Chain Order", chainOrderChoices(), 0);
 
+        //== v0.2: appended so older sessions keep their parameter indices ==================
+        // Default Mix is the v0.1 Live path, so a v0.1 session sounds and reports the same.
+        addChoice (layout, "latency_mode", "Latency", { "Tracking", "Mix" }, 1);
+
+        addBool (layout, "harm_on", "Harmony On", false);
+        addFloat (layout, "harm_level", "Harmony Level", range (-60.0f, 6.0f, -12.0f), -6.0f, dbString(), "dB");
+        addBool (layout, "harm_formant", "Harmony Formant", true);
+
+        for (int v = 0; v < dsp::numHarmonyVoices; ++v)
+        {
+            const auto& d = defaultHarmonyVoice (v);
+            const auto id = [v] (const char* suffix) { return harmonyId (v, suffix); };
+            const auto name = [v] (const char* what) { return "Voice " + juce::String (v + 1) + " " + what; };
+
+            addBool (layout, id ("on"), name ("On"), d.enabled);
+            addChoice (layout, id ("mode"), name ("Mode"), { "Scale", "Fixed" }, d.fixed ? 1 : 0);
+            layout.add (std::make_unique<juce::AudioParameterInt> (
+                juce::ParameterID { id ("degree"), parameterVersion }, name ("Scale Interval"), -14, 14, d.degrees,
+                juce::AudioParameterIntAttributes()
+                    .withStringFromValueFunction ([] (int value, int) { return degreeName (value); })
+                    .withValueFromStringFunction ([] (const juce::String& text) { return degreeFromName (text); })));
+            layout.add (std::make_unique<juce::AudioParameterInt> (
+                juce::ParameterID { id ("semis"), parameterVersion }, name ("Semitones"), -24, 24, d.semitones,
+                juce::AudioParameterIntAttributes()
+                    .withStringFromValueFunction ([] (int value, int) { return (value > 0 ? "+" : "") + juce::String (value) + " st"; })
+                    .withValueFromStringFunction ([] (const juce::String& text) { return text.retainCharacters ("-0123456789").getIntValue(); })));
+            addFloat (layout, id ("level"), name ("Level"), range (-60.0f, 6.0f, -12.0f), d.levelDb, dbString(), "dB");
+            addFloat (layout, id ("pan"), name ("Pan"), range (-1.0f, 1.0f), d.pan, [] (float x, int) { return panName (x); });
+            addFloat (layout, id ("detune"), name ("Detune"), range (-50.0f, 50.0f), d.detuneCents,
+                      [] (float c, int) { return (c > 0.05f ? "+" : "") + juce::String (c, 1) + " c"; }, "cents");
+            addFloat (layout, id ("delay"), name ("Delay"), range (0.0f, 30.0f, 8.0f), d.delayMs, msString(), "ms");
+        }
+
         return layout;
     }
 
@@ -193,6 +267,21 @@ namespace dooblrvocals::params
         compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup");
         limMode = getId ("lim_mode"); limCeiling = getId ("lim_ceiling"); limRelease = getId ("lim_release");
         outputGain = getId ("output_gain"); chainOrder = getId ("chain_order");
+        latencyMode = getId ("latency_mode");
+        harmOn = getId ("harm_on"); harmLevel = getId ("harm_level"); harmFormant = getId ("harm_formant");
+
+        for (int v = 0; v < dsp::numHarmonyVoices; ++v)
+        {
+            auto& h = harmVoices[(size_t) v];
+            h.on = getId (harmonyId (v, "on").toRawUTF8());
+            h.mode = getId (harmonyId (v, "mode").toRawUTF8());
+            h.degree = getId (harmonyId (v, "degree").toRawUTF8());
+            h.semis = getId (harmonyId (v, "semis").toRawUTF8());
+            h.level = getId (harmonyId (v, "level").toRawUTF8());
+            h.pan = getId (harmonyId (v, "pan").toRawUTF8());
+            h.detune = getId (harmonyId (v, "detune").toRawUTF8());
+            h.delay = getId (harmonyId (v, "delay").toRawUTF8());
+        }
     }
 
     dsp::VocalSettings SettingsReader::read() const noexcept
@@ -219,6 +308,26 @@ namespace dooblrvocals::params
         s.compressor = { b (compOn), f (compThreshold), f (compRatio), f (compAttack), f (compRelease), f (compMakeup) };
         s.limiter = { i (limMode), f (limCeiling), f (limRelease), f (outputGain) };
         s.chainOrder = i (chainOrder);
+        s.pitch.latency = (dsp::LatencyMode) juce::jlimit (0, 1, i (latencyMode));
+
+        s.harmony.enabled = b (harmOn);
+        s.harmony.levelDb = f (harmLevel);
+        s.harmony.formant = b (harmFormant);
+
+        for (size_t v = 0; v < harmVoices.size(); ++v)
+        {
+            const auto& h = harmVoices[v];
+            auto& voice = s.harmony.voices[v];
+            voice.enabled = b (h.on);
+            voice.fixed = i (h.mode) == 1;
+            voice.degrees = i (h.degree);
+            voice.semitones = i (h.semis);
+            voice.levelDb = f (h.level);
+            voice.pan = f (h.pan);
+            voice.detuneCents = f (h.detune);
+            voice.delayMs = f (h.delay);
+        }
+
         return s;
     }
 }

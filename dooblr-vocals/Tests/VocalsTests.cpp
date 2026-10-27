@@ -322,7 +322,7 @@ namespace
         check (p->getTotalNumInputChannels() == 2, "stereo input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRVOCALS_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.2.0", "version 0.2.0");
         check (JucePlugin_IsSynth == 0, "built as an effect");
         check (JucePlugin_PluginCode == 0x44627678, "plugin code is Dbvx");
         check (p->getNumPrograms() >= 6, "Init plus factory presets");
@@ -529,6 +529,78 @@ namespace
         const auto noise = render (*p, [&rng] (int i) { return i < 2048 ? 0.0f : (rng.nextFloat() * 2.0f - 1.0f) * 0.002f; }, n);
         check (allFinite (noise) && peakOf (noise, lat + 256, n) < 0.02f,
                "low-level noise (unvoiced) is not amplified into a tone");
+    }
+
+    int measuredDryLatency (Processor& p)
+    {
+        p.reset();
+        p.prepareToPlay (sampleRate, blockSize);
+        const auto lat = p.getLatencySamples();
+        const auto out = render (p, [] (int i) { return i == 0 ? 1.0f : 0.0f; }, lat + 512);
+        int peakAt = -1;
+        float peak = 0.0f;
+        for (int i = 0; i < out.getNumSamples(); ++i)
+            if (std::abs (out.getSample (0, i)) > peak)
+            {
+                peak = std::abs (out.getSample (0, i));
+                peakAt = i;
+            }
+        return peak > 0.5f ? peakAt : -1;
+    }
+
+    void testLatencyModes()
+    {
+        check (dsp::trackingLatencySamples (48000.0) == 256, "Tracking is 256 samples at 48k");
+        check (dsp::trackingLatencySamples (96000.0) == 512, "Tracking scales with rate (512 at 96k)");
+        check (dsp::trackingLatencySamples (44100.0) == 235, "Tracking is 235 samples at 44.1k");
+
+        auto p = makeProcessor();
+        setParam (*p, "pitch_on", 0.0f);
+        setParam (*p, "lim_mode", 0.0f);
+        juce::MidiBuffer midi;
+        juce::AudioBuffer<float> block (2, blockSize);
+
+        struct Case { const char* name; float quality, latencyMode; bool offline; int expect; };
+        const Case cases[] {
+            { "Tracking",                  0.0f, 0.0f, false, dsp::trackingLatencySamples (sampleRate) },
+            { "Mix",                       0.0f, 1.0f, false, liveLatency() },
+            { "HQ (Latency Tracking)",     1.0f, 0.0f, false, hqLatency() },
+            { "HQ (Latency Mix)",          1.0f, 1.0f, false, hqLatency() },
+            { "offline render (Tracking)", 0.0f, 0.0f, true,  hqLatency() },
+        };
+
+        for (const auto& c : cases)
+        {
+            setParam (*p, "quality", c.quality);
+            setParam (*p, "latency_mode", c.latencyMode);
+            p->setNonRealtime (c.offline);
+            block.clear();
+            p->processBlock (block, midi);
+            const auto reported = p->getLatencySamples();
+            const auto measured = measuredDryLatency (*p);
+            note (std::string (c.name) + ": reported " + std::to_string (reported) + " samples ("
+                  + format (1000.0 * reported / sampleRate, 2) + " ms), measured " + std::to_string (measured));
+            check (reported == c.expect, std::string (c.name) + " reports " + std::to_string (c.expect)
+                                             + " (got " + std::to_string (reported) + ")");
+            check (measured == reported, std::string (c.name) + " impulse appears at the reported latency");
+        }
+
+        // Switching modes mid-stream updates the host latency on the next block.
+        p->setNonRealtime (false);
+        setParam (*p, "quality", 0.0f);
+        setParam (*p, "latency_mode", 1.0f);
+        block.clear();
+        p->processBlock (block, midi);
+        const auto before = p->getLatencySamples();
+        setParam (*p, "latency_mode", 0.0f);
+        block.clear();
+        p->processBlock (block, midi);
+        check (before == liveLatency() && p->getLatencySamples() == dsp::trackingLatencySamples (sampleRate),
+               "Mix -> Tracking switch calls setLatencySamples");
+        const auto noisy = render (*p, [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f); }, 8192);
+        setParam (*p, "latency_mode", 1.0f);
+        const auto back = render (*p, [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f); }, 8192);
+        check (allFinite (noisy) && allFinite (back) && peakOf (back) < 1.5f, "mode switches mid-stream stay finite and bounded");
     }
 
     void testLatencyReporting()
@@ -815,6 +887,33 @@ namespace
         pulse ("formant", sawBb, 0.0f, 1.0f, 0.05);
         pulse ("input_type", [] (int i) { return sineAt (90.0, i, sampleRate, 0.4f); }, 0.0f, 4.0f, 0.05);
 
+        // Harmony (pitch still on, keyed C major).
+        setParam (*p, "harm_on", 1.0f);
+        pulse ("harm_on", sawBb, 0.0f, 1.0f, 1.0);
+        pulse ("harm_level", sawBb, -30.0f, 0.0f, 1.0);
+        pulse ("harm_formant", sawBb, 0.0f, 1.0f, 0.05);
+        for (int v = 1; v <= dsp::numHarmonyVoices; ++v)
+        {
+            const auto id = [v] (const char* suffix) { return "harm" + juce::String (v) + "_" + suffix; };
+            const auto wasOn = getPlain (*p, id ("on"));
+            setParam (*p, id ("on"), 1.0f);
+            pulse (id ("on"), sawBb, 0.0f, 1.0f, 0.5);
+            // Distinct intervals per mode (the octave voices default to an octave in both).
+            setParam (*p, id ("degree"), 2.0f);
+            setParam (*p, id ("semis"), 7.0f);
+            setParam (*p, id ("mode"), 0.0f);
+            pulse (id ("mode"), sawBb, 0.0f, 1.0f, 0.5);
+            pulse (id ("degree"), sawBb, 1.0f, 4.0f, 0.5);
+            setParam (*p, id ("mode"), 1.0f);
+            pulse (id ("semis"), sawBb, -12.0f, 7.0f, 0.5);
+            pulse (id ("level"), sawBb, -30.0f, 0.0f, 0.5);
+            pulse (id ("pan"), sawBb, -1.0f, 1.0f, 0.5);
+            pulse (id ("detune"), sawBb, -50.0f, 50.0f, 0.2);
+            pulse (id ("delay"), sawBb, 0.0f, 30.0f, 0.2);
+            setParam (*p, id ("on"), wasOn);
+        }
+        setParam (*p, "harm_on", 0.0f);
+
         {
             setParam (*p, "quality", 0.0f);
             juce::AudioBuffer<float> b (2, blockSize);
@@ -827,6 +926,12 @@ namespace
             if (p->getLatencySamples() == live)
                 dead.add ("quality");
             setParam (*p, "quality", 0.0f);
+            p->processBlock (b, midi);
+            setParam (*p, "latency_mode", 0.0f);
+            p->processBlock (b, midi);
+            if (p->getLatencySamples() == live)
+                dead.add ("latency_mode");
+            setParam (*p, "latency_mode", 1.0f);
             p->processBlock (b, midi);
         }
 
@@ -993,11 +1098,39 @@ namespace
         auto* version = findById (*editor, "version");
         check (version != nullptr, "version label exists");
         if (auto* label = dynamic_cast<juce::Label*> (version))
-            check (label->getText().contains ("0.1.0"), "header shows v0.1.0 (got " + label->getText().toStdString() + ")");
+            check (label->getText().contains ("0.2.0"), "header shows v0.2.0 (got " + label->getText().toStdString() + ")");
 
         check (findById (*editor, "pitchDisplay") != nullptr, "pitch display is in the tree");
         check (findById (*editor, "power_pitch") != nullptr, "pitch power toggle");
         check (findById (*editor, "power_gate") != nullptr, "gate power toggle");
+        check (findById (*editor, "power_harmony") != nullptr, "harmony power toggle");
+        check (findById (*editor, "harmonyDisplay") != nullptr, "harmony display is in the tree");
+        for (int v = 1; v <= dsp::numHarmonyVoices; ++v)
+            check (findById (*editor, "harmonyVoice" + juce::String (v)) != nullptr, "harmony voice strip " + std::to_string (v));
+
+        // Latency switch + readout follow the mode.
+        {
+            auto* readout = dynamic_cast<juce::Label*> (findById (*editor, "latencyReadout"));
+            check (readout != nullptr, "latency readout label exists");
+            setParam (*p, "quality", 0.0f);
+            setParam (*p, "latency_mode", 0.0f);
+            editor->refreshLatencyLabelNow();
+            if (readout != nullptr)
+                check (readout->getText().startsWith ("Tracking") && readout->getText().contains ("5.3 ms"),
+                       "readout shows Tracking 5.3 ms (got " + readout->getText().toStdString() + ")");
+            setParam (*p, "latency_mode", 1.0f);
+            editor->refreshLatencyLabelNow();
+            if (readout != nullptr)
+                check (readout->getText().startsWith ("Mix") && readout->getText().contains ("43 ms"),
+                       "readout shows Mix 43 ms (got " + readout->getText().toStdString() + ")");
+            setParam (*p, "quality", 1.0f);
+            editor->refreshLatencyLabelNow();
+            if (readout != nullptr)
+                check (readout->getText().startsWith ("HQ") && readout->getText().contains ("171 ms"),
+                       "readout shows HQ 171 ms (got " + readout->getText().toStdString() + ")");
+            setParam (*p, "quality", 0.0f);
+            editor->refreshLatencyLabelNow();
+        }
 
         std::set<juce::String> reachable;
         for (int page = 0; page < Editor::numPages; ++page)
@@ -1031,6 +1164,7 @@ namespace
         reachable.insert ("eq_on");
         reachable.insert ("comp_on");
         reachable.insert ("lim_mode");
+        reachable.insert ("harm_on");
 
         juce::StringArray missing;
         for (const auto& id : allParameterIds (*p))
@@ -1045,6 +1179,7 @@ namespace
         missing.removeString ("eq_on");
         missing.removeString ("comp_on");
         missing.removeString ("lim_mode");
+        missing.removeString ("harm_on");
         check (missing.isEmpty() || missing.size() <= 2,
                "parameters have controls (leftover " + missing.joinIntoString (", ").toStdString() + ")");
 
@@ -1085,10 +1220,53 @@ namespace
         editor->selectPage (Editor::pitchPage);
         editor->setSize (1080, 660);
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch");
+        editor->selectPage (Editor::harmonyPage);
+        setParam (*p, "harm_on", 1.0f);
+        editor->getHarmonyDisplay().refresh();
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-harmony");
+        editor->setSize (940, 600);
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-harmony-940x600");
+        editor->setSize (1080, 660);
+        setParam (*p, "harm_on", 0.0f);
         editor->selectPage (Editor::gatePage);
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-gate");
         editor->selectPage (Editor::eqPage);
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-eq");
+
+        // Limiter page: the right column is a vertical meter (level, peak hold, GR, ceiling).
+        {
+            editor->selectPage (Editor::limiterPage);
+            setParam (*p, "lim_mode", 2.0f);
+            setParam (*p, "lim_ceiling", -1.0f);
+            auto& lim = editor->getLimiterDisplay();
+            auto& meter = lim.getMeter();
+            check (findById (*editor, "limiterMeter") == &meter && meter.isVisible() && lim.isVisible(), "limiter page shows the vertical level meter");
+            std::vector<dsp::MeterFrame> frames (8);
+            for (auto& f : frames)
+            {
+                f.limiterInDb = 3.0f;
+                f.limiterOutDb = -1.2f;
+                f.limiterGrDb = -4.2f;
+            }
+            lim.update (frames.data(), (int) frames.size(), 0.016);
+            check (std::abs (meter.getLevelDb() + 1.2f) < 0.01f && std::abs (meter.getHoldDb() + 1.2f) < 0.01f,
+                   "meter level and peak hold follow the limiter output (" + format (meter.getLevelDb(), 2) + " dB)");
+            check (std::abs (meter.getGainReductionDb() + 4.2f) < 0.01f, "meter GR bar follows the limiter GR");
+            check (std::abs (meter.getCeilingDb() + 1.0f) < 0.01f, "meter ceiling line follows lim_ceiling");
+            // Release: level falls, the hold stays for a moment then decays.
+            for (auto& f : frames) { f.limiterOutDb = -20.0f; f.limiterGrDb = 0.0f; }
+            for (int i = 0; i < 12; ++i) // ~0.2 s
+                lim.update (frames.data(), 1, 0.016);
+            check (meter.getLevelDb() < -4.0f && meter.getLevelDb() > -20.0f && std::abs (meter.getHoldDb() + 1.2f) < 0.01f,
+                   "meter releases smoothly while the peak hold holds (level " + format (meter.getLevelDb(), 1) + ", hold " + format (meter.getHoldDb(), 1) + ")");
+            for (auto& f : frames) { f.limiterOutDb = -1.2f; f.limiterGrDb = -4.2f; }
+            lim.update (frames.data(), (int) frames.size(), 0.016);
+            check (meter.getLevelBar().getHeight() > 100.0f, "meter bar is tall (" + format (meter.getLevelBar().getHeight(), 0) + " px)");
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-limiter");
+            editor->setSize (940, 600);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-limiter-940x600");
+            editor->setSize (1080, 660);
+        }
 
         p->editorBeingDeleted (editor);
         base.reset();
@@ -1416,6 +1594,12 @@ namespace
         }
 
         drags.push_back ({ Editor::gatePage, &editor->getGateDisplay(), {} });
+        editor->selectPage (Editor::harmonyPage);
+        for (const auto* id : { "harm1_pan", "harm2_degree", "harm4_delay" })
+            if (auto* c = editor->getHarmonyDisplay().findControl (id))
+                drags.push_back ({ Editor::harmonyPage, c, { 0.0f, -6.0f } });
+            else
+                check (false, std::string ("harmony display has a control for ") + id);
 
         for (const auto& d : drags)
         {
@@ -1712,7 +1896,7 @@ namespace
     struct SnapResult { double maxAbs = 0.0, mean = 0.0; int windows = 0, unvoiced = 0; };
 
     SnapResult measureSnap (double rate, bool hq, bool chromatic, bool formant, const SnapSignal& signal,
-                            float retuneMs = 0.0f, float humanize = 0.0f)
+                            float retuneMs = 0.0f, float humanize = 0.0f, int latencyMode = 1)
     {
         auto p = makeProcessor (rate, 512);
         setParam (*p, "pitch_on", 1.0f);
@@ -1725,6 +1909,7 @@ namespace
         setParam (*p, "formant", formant ? 1.0f : 0.0f);
         setParam (*p, "input_type", 2.0f);
         setParam (*p, "quality", hq ? 1.0f : 0.0f);
+        setParam (*p, "latency_mode", (float) latencyMode);
         setParam (*p, "lim_mode", 0.0f);
         setParam (*p, "gate_on", 0.0f);
         setParam (*p, "eq_on", 0.0f);
@@ -1814,6 +1999,279 @@ namespace
         check (r.windows >= 20 && r.maxAbs <= 5.0, "Init defaults snap A3 +35c within 5 c (max " + format (r.maxAbs, 1) + ")");
     }
 
+    //==============================================================================
+    // Latency modes: Tracking (causal, 256 samples) vs Mix (2048) snapping quality.
+    void testTrackingSnapping()
+    {
+        const auto signals = snapSignals();
+        double worstTracking = 0.0, worstMix = 0.0, sumTracking = 0.0, sumMix = 0.0;
+        int count = 0;
+
+        for (const auto chromatic : { true, false })
+            for (const auto& signal : signals)
+            {
+                const auto mix = measureSnap (48000.0, false, chromatic, true, signal, 0.0f, 0.0f, 1);
+                const auto trk = measureSnap (48000.0, false, chromatic, true, signal, 0.0f, 0.0f, 0);
+                const auto label = std::string (signal.name) + (chromatic ? " chromatic" : " keyed C");
+                note ("snap " + label + ": Tracking max " + format (trk.maxAbs, 1) + " / mean " + format (trk.mean, 2)
+                      + " c (" + std::to_string (trk.windows) + " win, " + std::to_string (trk.unvoiced) + " unvoiced) | Mix max "
+                      + format (mix.maxAbs, 1) + " / mean " + format (mix.mean, 2) + " c");
+                const auto vibrato = signal.sawtooth;
+                check (trk.windows >= 20 && trk.unvoiced <= trk.windows / 10 && trk.maxAbs <= (vibrato ? 12.0 : 8.0)
+                           && trk.mean <= (vibrato ? 5.0 : 3.0),
+                       "Tracking snap " + label + " (max " + format (trk.maxAbs, 1) + ", mean " + format (trk.mean, 2) + ")");
+                worstTracking = std::max (worstTracking, trk.maxAbs);
+                worstMix = std::max (worstMix, mix.maxAbs);
+                sumTracking += trk.mean;
+                sumMix += mix.mean;
+                ++count;
+            }
+
+        note ("Tracking: worst window " + format (worstTracking, 1) + " c, average mean " + format (sumTracking / count, 2)
+              + " c; Mix: worst " + format (worstMix, 1) + " c, average mean " + format (sumMix / count, 2) + " c");
+    }
+
+    //==============================================================================
+    // Harmony: render with and without the harmonizer; the processing chain is off so the
+    // difference is exactly the harmony bus.
+    struct HarmonyRender { juce::AudioBuffer<float> harmony, full; int latency = 0; };
+
+    HarmonyRender renderHarmony (const std::function<void (Processor&)>& setup, const std::function<float (int)>& fill,
+                                 double seconds, float latencyMode = 1.0f)
+    {
+        auto make = [&] (bool on)
+        {
+            auto p = makeProcessor();
+            setParam (*p, "lim_mode", 0.0f);
+            setParam (*p, "gate_on", 0.0f);
+            setParam (*p, "eq_on", 0.0f);
+            setParam (*p, "comp_on", 0.0f);
+            setParam (*p, "quality", 0.0f);
+            setParam (*p, "latency_mode", latencyMode);
+            setParam (*p, "retune_speed", 0.0f);
+            setParam (*p, "humanize", 0.0f);
+            setParam (*p, "input_type", 2.0f);
+            setParam (*p, "harm_level", 0.0f);
+            for (int v = 1; v <= dsp::numHarmonyVoices; ++v)
+            {
+                const auto id = [v] (const char* suffix) { return "harm" + juce::String (v) + "_" + suffix; };
+                setParam (*p, id ("on"), 0.0f);
+                setParam (*p, id ("level"), 0.0f);
+                setParam (*p, id ("pan"), 0.0f);
+                setParam (*p, id ("detune"), 0.0f);
+                setParam (*p, id ("delay"), 0.0f);
+            }
+            setup (*p);
+            setParam (*p, "harm_on", on ? 1.0f : 0.0f);
+            p->prepareToPlay (sampleRate, blockSize);
+            const auto lat = p->getLatencySamples();
+            return std::pair { render (*p, fill, lat + (int) (seconds * sampleRate)), lat };
+        };
+
+        auto [with, lat] = make (true);
+        auto [without, lat2] = make (false);
+        HarmonyRender r;
+        r.latency = lat;
+        r.full = with;
+        r.harmony.makeCopyOf (with);
+        for (int ch = 0; ch < 2; ++ch)
+            r.harmony.addFrom (ch, 0, without, ch, 0, without.getNumSamples(), -1.0f);
+        check (lat == lat2, "harmony on/off does not change latency");
+        return r;
+    }
+
+    float energyOf (const juce::AudioBuffer<float>& b, int ch, int start, int end)
+    {
+        double sum = 0.0;
+        for (int i = start; i < std::min (end, b.getNumSamples()); ++i)
+            sum += (double) b.getSample (ch, i) * (double) b.getSample (ch, i);
+        return (float) sum;
+    }
+
+    void testHarmonyIntervals()
+    {
+        const auto cMajor = dsp::effectiveMask (dsp::CorrectionMode::keyed, dsp::ScaleType::major, 0, 0);
+        auto voice = [] (bool fixed, int degrees, int semis)
+        {
+            dsp::HarmonyVoice v;
+            v.enabled = true;
+            v.fixed = fixed;
+            v.degrees = degrees;
+            v.semitones = semis;
+            return v;
+        };
+        struct Case { const char* name; dsp::HarmonyVoice v; int lead, mask, expect; };
+        const Case cases[] {
+            { "E +3rd in C major = G (+3)",   voice (false, 2, 0), 64, cMajor, 3 },
+            { "C +3rd in C major = E (+4)",   voice (false, 2, 0), 60, cMajor, 4 },
+            { "D +3rd in C major = F (+3)",   voice (false, 2, 0), 62, cMajor, 3 },
+            { "B +5th in C major = F (+6)",   voice (false, 4, 0), 59, cMajor, 6 },
+            { "A -3rd in C major = F (-4)",   voice (false, -2, 0), 57, cMajor, -4 },
+            { "C +octave (7 degrees) = +12",  voice (false, 7, 0), 60, cMajor, 12 },
+            { "C# (off-scale) +3rd = E (+3)", voice (false, 2, 0), 61, cMajor, 3 },
+            { "fixed +7 ignores the scale",   voice (true, 2, 7), 64, cMajor, 7 },
+            { "fixed -12",                    voice (true, 2, -12), 64, cMajor, -12 },
+        };
+        for (const auto& c : cases)
+        {
+            const auto got = dsp::Harmonizer::intervalFor (c.v, c.lead, c.mask);
+            check (got == c.expect, std::string (c.name) + " (got " + std::to_string (got) + ")");
+        }
+
+        // Measured: harmony bus alone, per mode.
+        for (const auto latencyMode : { 1.0f, 0.0f })
+        {
+            const auto modeName = std::string (latencyMode > 0.5f ? "Mix" : "Tracking");
+            struct Measured { const char* name; double inHz; bool pitchOn, chromatic; bool fixed; int degrees, semis; double expectHz; };
+            const Measured measured[] {
+                { "E3 in, Scale +3rd in C major -> G3",           midiHz (52), false, false, false, 2, 0, midiHz (55) },
+                { "A3 in, Scale +5th in C major -> E4",           midiHz (57), false, false, false, 4, 0, midiHz (64) },
+                { "A3 in, Fixed +7 -> E4",                        midiHz (57), false, false, true, 0, 7, midiHz (64) },
+                { "A3 in, Fixed -12 -> A2",                       midiHz (57), false, false, true, 0, -12, midiHz (45) },
+                { "A3 in, Fixed +12 -> A4",                       midiHz (57), false, false, true, 0, 12, midiHz (69) },
+                { "E3 in, Scale -3rd (6th below) in C major -> C3", midiHz (52), false, false, false, -2, 0, midiHz (48) },
+                { "A3 +35c corrected, Fixed +7 -> E4 (on grid)",  midiHz (57) * std::exp2 (35.0 / 1200.0), true, true, true, 0, 7, midiHz (64) },
+                { "D3 -30c corrected keyed, Scale +3rd -> F3",    midiHz (50) * std::exp2 (-30.0 / 1200.0), true, false, false, 2, 0, midiHz (53) },
+            };
+
+            for (const auto& m : measured)
+            {
+                const auto hz = m.inHz;
+                const auto r = renderHarmony ([&] (Processor& p)
+                {
+                    setParam (p, "pitch_on", m.pitchOn ? 1.0f : 0.0f);
+                    setParam (p, "corr_mode", m.chromatic ? 1.0f : 0.0f);
+                    setParam (p, "corr_key", 0.0f);
+                    setParam (p, "corr_scale", 0.0f);
+                    setParam (p, "corr_amount", 1.0f);
+                    setParam (p, "harm1_on", 1.0f);
+                    setParam (p, "harm1_mode", m.fixed ? 1.0f : 0.0f);
+                    setParam (p, "harm1_degree", (float) m.degrees);
+                    setParam (p, "harm1_semis", (float) m.semis);
+                }, [hz] (int i) { return sawAt (hz, i, sampleRate, 0.3f); }, 1.2, latencyMode);
+
+                double worst = 0.0;
+                int windows = 0;
+                for (int start = r.latency + 14400; start + 1440 <= r.harmony.getNumSamples(); start += 2400)
+                {
+                    const auto got = detectHzAt (r.harmony, sampleRate, start, 1440, 50.0f, 1000.0f);
+                    worst = std::max (worst, std::abs (centsBetween (got, m.expectHz)));
+                    ++windows;
+                }
+                const auto level = rmsOf (r.harmony, r.latency + 14400);
+                note (modeName + " harmony " + m.name + ": worst " + format (worst, 1) + " c over " + std::to_string (windows)
+                      + " windows, rms " + format (level, 3));
+                check (windows >= 8 && worst <= 8.0 && level > 0.03f,
+                       modeName + " harmony " + m.name + " (worst " + format (worst, 1) + " c, rms " + format (level, 3) + ")");
+            }
+        }
+    }
+
+    void testHarmonyPanAndAlignment()
+    {
+        auto fill = [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f); };
+
+        for (const auto latencyMode : { 1.0f, 0.0f })
+        {
+            const auto modeName = std::string (latencyMode > 0.5f ? "Mix" : "Tracking");
+            for (const auto pan : { -1.0f, -0.5f, 0.0f, 0.5f, 1.0f })
+            {
+                const auto r = renderHarmony ([pan] (Processor& p)
+                {
+                    setParam (p, "pitch_on", 0.0f);
+                    setParam (p, "harm1_on", 1.0f);
+                    setParam (p, "harm1_mode", 1.0f);
+                    setParam (p, "harm1_semis", 7.0f);
+                    setParam (p, "harm1_pan", pan);
+                }, fill, 1.0, latencyMode);
+
+                const auto start = r.latency + 9600;
+                const auto l = energyOf (r.harmony, 0, start, r.harmony.getNumSamples());
+                const auto rr = energyOf (r.harmony, 1, start, r.harmony.getNumSamples());
+                const auto total = l + rr;
+                const auto leftShare = total > 0.0f ? l / total : 0.5f;
+                const auto angle = (pan + 1.0f) * 0.25f * juce::MathConstants<float>::pi;
+                const auto expectLeft = std::cos (angle) * std::cos (angle);
+                note (modeName + " pan " + format (pan, 2) + ": left share " + format (leftShare, 4) + " (equal-power expects "
+                      + format (expectLeft, 4) + "), total energy " + format (total, 2));
+                check (std::abs (leftShare - expectLeft) < 0.01f && total > 1.0f,
+                       modeName + " pan " + format (pan, 2) + " puts " + format (100.0 * expectLeft, 1) + " % of the energy left (got "
+                           + format (100.0 * leftShare, 1) + " %)");
+            }
+
+            // Constant power: hard left, centre and hard right carry the same total energy.
+            float totals[3] {};
+            int k = 0;
+            for (const auto pan : { -1.0f, 0.0f, 1.0f })
+            {
+                const auto r = renderHarmony ([pan] (Processor& p)
+                {
+                    setParam (p, "pitch_on", 0.0f);
+                    setParam (p, "harm1_on", 1.0f);
+                    setParam (p, "harm1_mode", 1.0f);
+                    setParam (p, "harm1_semis", 7.0f);
+                    setParam (p, "harm1_pan", pan);
+                }, fill, 1.0, latencyMode);
+                const auto start = r.latency + 9600;
+                totals[k++] = energyOf (r.harmony, 0, start, r.harmony.getNumSamples()) + energyOf (r.harmony, 1, start, r.harmony.getNumSamples());
+            }
+            const auto spread = juce::Decibels::gainToDecibels (std::max ({ totals[0], totals[1], totals[2] })
+                                                                / std::max (1.0e-9f, std::min ({ totals[0], totals[1], totals[2] }))) * 0.5f;
+            note (modeName + " equal-power spread L/C/R: " + format (spread, 3) + " dB");
+            check (spread < 0.25f, modeName + " pan law is equal power (spread " + format (spread, 3) + " dB)");
+
+            // Alignment: a unison voice (Fixed 0, pitch off) on a steady note is the input at
+            // the lead's latency, sample for sample (no comb filtering against the lead).
+            for (const auto hz : { 165.0, 220.0, 330.0 })
+            {
+                const auto r = renderHarmony ([] (Processor& p)
+                {
+                    setParam (p, "pitch_on", 0.0f);
+                    setParam (p, "harm1_on", 1.0f);
+                    setParam (p, "harm1_mode", 1.0f);
+                    setParam (p, "harm1_semis", 0.0f);
+                }, [hz] (int i) { return sawAt (hz, i, sampleRate, 0.3f); }, 1.0, latencyMode);
+                double err = 0.0, ref = 0.0;
+                int bestLag = 0;
+                double bestErr = 1.0e30;
+                for (int lag = -32; lag <= 32; ++lag)
+                {
+                    // Residual after the best gain (voice and bus levels are not unity).
+                    double xy = 0.0, yy = 0.0, xx = 0.0;
+                    for (int i = 14400; i + r.latency + lag < r.harmony.getNumSamples() && i < 14400 + 24000; ++i)
+                    {
+                        const auto x = (double) sawAt (hz, i, sampleRate, 0.3f);
+                        const auto y = (double) r.harmony.getSample (0, i + r.latency + lag) + r.harmony.getSample (1, i + r.latency + lag);
+                        xy += x * y; yy += y * y; xx += x * x;
+                    }
+                    const auto e2 = xx - xy * xy / std::max (1.0e-12, yy);
+                    if (lag == 0) { err = e2; ref = xx; }
+                    if (e2 < bestErr) { bestErr = e2; bestLag = lag; }
+                }
+                const auto rel = std::sqrt (err / std::max (1.0e-12, ref));
+                note (modeName + " unison harmony vs input at the reported latency, saw " + format (hz, 0) + " Hz: error "
+                      + format (20.0 * std::log10 (std::max (1.0e-9, rel)), 1) + " dB, best lag " + std::to_string (bestLag));
+                // Tracking's grains are clamped to its 256-sample lookahead, so its residual is
+                // higher (about -17 dB on a bright saw); the alignment itself is exact in both.
+                check (bestLag == 0 && rel < (latencyMode < 0.5f ? 0.2 : 0.1), modeName + " unison harmony is sample-aligned with the lead at " + format (hz, 0)
+                                                    + " Hz (error " + format (rel, 3) + ", best lag " + std::to_string (bestLag) + ")");
+            }
+        }
+
+        // Master off: the bus fades out (no click) and goes silent.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 0.0f);
+            setParam (*p, "lim_mode", 0.0f);
+            setParam (*p, "harm_on", 1.0f);
+            const auto lat = p->getLatencySamples();
+            render (*p, fill, lat + 9600);
+            setParam (*p, "harm_on", 0.0f);
+            const auto after = render (*p, fill, 9600);
+            check (allFinite (after), "harmony off is finite");
+        }
+    }
+
     void testPresetSanity()
     {
         auto p = makeProcessor();
@@ -1853,6 +2311,10 @@ int main()
         { "mouse across sections",          testMouseAcrossSections },
         { "unvoiced passthrough",           testUnvoicedPassthrough },
         { "latency reporting",              testLatencyReporting },
+        { "latency modes (Tracking / Mix / HQ)", testLatencyModes },
+        { "tracking vs mix snapping (cents)", testTrackingSnapping },
+        { "harmony intervals",              testHarmonyIntervals },
+        { "harmony pan and alignment",      testHarmonyPanAndAlignment },
         { "gate behaviour",                 testGateBehaviour },
         { "chain reorder",                  testChainReorder },
         { "parameter / state round-trip",   testParameterAndStateRoundTrip },

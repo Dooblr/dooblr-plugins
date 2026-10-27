@@ -201,6 +201,45 @@ namespace dooblrvocals::ui
 
     //==============================================================================
     /**
+        The limiter page's right column: a vertical output meter (zone colours from the
+        header's OutputMeter, instant attack, smooth release, a peak-hold tick that decays
+        after a moment, a dB scale) beside a gain-reduction bar growing down from the top, with
+        the ceiling drawn across the level bar. Fed by LimiterDisplay::update (the editor's
+        VBlank read of the meter FIFO); repaints only when the picture changes. Mouse-transparent.
+    */
+    class LimiterMeter final : public juce::Component
+    {
+    public:
+        static constexpr float minDb = -36.0f, maxDb = 12.0f, grRangeDb = 24.0f;
+
+        LimiterMeter();
+
+        /** One VBlank batch: loudest limiter output and deepest GR (dB, <= 0) since the last. */
+        void push (float outDb, float grDb, double elapsedSeconds);
+        void setCeiling (float ceilingDb, bool limiterOn);
+        void reset();
+
+        float getLevelDb() const noexcept { return level; }
+        float getHoldDb() const noexcept { return hold; }
+        float getGainReductionDb() const noexcept { return gr; }
+        float getCeilingDb() const noexcept { return ceiling; }
+        juce::Rectangle<float> getLevelBar() const;
+        juce::Rectangle<float> getGrBar() const;
+        float dbToY (float db) const;
+
+        void paint (juce::Graphics& g) override;
+
+    private:
+        int pictureHash() const;
+
+        float level = minDb, hold = minDb, gr = 0.0f, ceiling = 0.0f;
+        double holdAge = 0.0;
+        bool on = true;
+        int lastHash = 0;
+    };
+
+    //==============================================================================
+    /**
         Limiter view: a scrolling history of the clipper / limiter input (fill), its output
         before the output gain (line) and its gain reduction (from the top), with the ceiling.
         - drag the ceiling line vertically: ceiling
@@ -228,6 +267,7 @@ namespace dooblrvocals::ui
         float getShownGainReductionDb() const noexcept { return shownGrDb; }
         float getShownPeakOutDb() const noexcept { return shownOutDb; }
         int getFramesReceived() const noexcept { return framesReceived; }
+        LimiterMeter& getMeter() noexcept { return meter; }
 
     private:
         juce::uint64 paramHash() const;
@@ -236,12 +276,13 @@ namespace dooblrvocals::ui
 
         ParameterGesture gesture;
         HistoryStrip history;
+        LimiterMeter meter;
         juce::Rectangle<int> readoutArea;
         juce::Image background;
         juce::uint64 lastHash = 0;
         bool hover = false, dragging = false;
         float shownGrDb = 0.0f, shownOutDb = -120.0f;
         int framesReceived = 0;
-        juce::String grText, outText, ceilingText, modeText;
+        juce::String ceilingText;
     };
 }

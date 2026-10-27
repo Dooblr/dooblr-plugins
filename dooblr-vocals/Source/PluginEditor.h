@@ -11,6 +11,7 @@
 #include "Parameters.h"
 #include "UI/ControlPanel.h"
 #include "UI/GateDisplay.h"
+#include "UI/HarmonyDisplay.h"
 #include "UI/OutputMeter.h"
 #include "UI/OutputVisuals.h"
 #include "UI/PitchDisplay.h"
@@ -27,7 +28,7 @@ public:
     int getStage() const noexcept { return stage; }
 
     static constexpr int size = 20;
-    static constexpr int pitchStage = -1;
+    static constexpr int pitchStage = -1, harmonyStage = -2;
 
 private:
     int stage;
@@ -70,7 +71,7 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
 
-    enum Page { pitchPage = 0, gatePage, eqPage, dynamicsPage, limiterPage, numPages };
+    enum Page { pitchPage = 0, harmonyPage, gatePage, eqPage, dynamicsPage, limiterPage, numPages };
     static int pageForStage (int stage) noexcept { return gatePage + stage; }
     void selectPage (int page);
     int getSelectedPage() const noexcept { return selectedPage; }
@@ -86,6 +87,9 @@ public:
     dooblrvocals::ui::LimiterDisplay& getLimiterDisplay() noexcept { return limiterDisplay; }
     dooblrvocals::ui::GateDisplay& getGateDisplay() noexcept { return gateDisplay; }
     dooblrvocals::ui::PitchDisplay& getPitchDisplay() noexcept { return pitchDisplay; }
+    dooblrvocals::ui::HarmonyDisplay& getHarmonyDisplay() noexcept { return harmonyDisplay; }
+    juce::Label& getLatencyLabel() noexcept { return latencyLabel; }
+    void refreshLatencyLabelNow() { updateLatencyLabel(); }
     dooblrvocals::ui::OutputMeter& getOutputMeter() noexcept { return outputMeter; }
     juce::Rectangle<int> getHeaderArea() const noexcept { return headerArea; }
     juce::Label& getStatusLabel() noexcept { return statusLabel; }
@@ -94,6 +98,7 @@ public:
     NavButton& getPageButton (int page) noexcept { return pageButtons[(size_t) page]; }
     ProcessorPowerButton& getPowerButton (int stage) noexcept { return *powerButtons[(size_t) stage]; }
     ProcessorPowerButton& getPitchPowerButton() noexcept { return *pitchPower; }
+    ProcessorPowerButton& getHarmonyPowerButton() noexcept { return *harmonyPower; }
 
     bool isStageOn (int stage) const;
     void setStageOn (int stage, bool on);
@@ -119,6 +124,7 @@ private:
     void chainHandleDrag (int stage, const juce::MouseEvent&);
     void chainHandleUp (int stage, const juce::MouseEvent&);
     void setStatus (const juce::String& text);
+    void updateLatencyLabel();
 
     DooblrVocalsAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState& state;
@@ -128,7 +134,7 @@ private:
     juce::Rectangle<int> headerArea, navArea, displayArea, controlsArea;
     juce::Rectangle<int> correctionTitleArea, fxTitleArea, graphTitleArea;
 
-    juce::Label titleLabel, subtitleLabel, outputCaption, statusLabel;
+    juce::Label titleLabel, subtitleLabel, outputCaption, statusLabel, latencyLabel;
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
     juce::ComboBox presetBox;
     juce::TextButton saveButton { "Save" }, loadButton { "Load" }, randomButton { "Random" };
@@ -139,9 +145,10 @@ private:
     dooblrvocals::dsp::ChainOrder shownOrder { 0, 1, 2, 3 };
     int draggingStage = -1, dragGrabOffset = 0, dragY = 0;
     std::array<std::unique_ptr<ProcessorPowerButton>, dooblrvocals::dsp::numChainStages> powerButtons;
-    std::unique_ptr<ProcessorPowerButton> pitchPower;
+    std::unique_ptr<ProcessorPowerButton> pitchPower, harmonyPower;
 
     dooblrvocals::ui::PitchDisplay pitchDisplay;
+    dooblrvocals::ui::HarmonyDisplay harmonyDisplay;
     dooblrvocals::ui::GateDisplay gateDisplay;
     dooblrvocals::ui::EqDisplay eqDisplay;
     dooblrvocals::ui::DynamicsDisplay dynamicsDisplay;
@@ -163,7 +170,7 @@ private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment> outputAttachment;
-    std::unique_ptr<ButtonAttachment> pitchPowerAttachment;
+    std::unique_ptr<ButtonAttachment> pitchPowerAttachment, harmonyPowerAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrVocalsAudioProcessorEditor)
 };

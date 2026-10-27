@@ -74,6 +74,32 @@ namespace dooblrvocals::presets
                 presets.push_back ({ "HQ Mix", std::move (v) });
             }
 
+            {
+                ValueList v;
+                add (v, { { "corr_mode", 0 }, { "retune_speed", 15 }, { "humanize", 0.12f }, { "corr_amount", 1 },
+                          { "formant", 1 }, { "harm_on", 1 }, { "harm_level", -5 }, { "harm_formant", 1 },
+                          { "harm1_on", 1 }, { "harm1_mode", 0 }, { "harm1_degree", 2 }, { "harm1_level", -3 }, { "harm1_pan", -0.4f },
+                          { "harm2_on", 1 }, { "harm2_mode", 0 }, { "harm2_degree", 4 }, { "harm2_level", -4 }, { "harm2_pan", 0.4f },
+                          { "harm3_on", 0 }, { "harm4_on", 0 },
+                          { "comp_on", 1 }, { "comp_threshold", -18 }, { "comp_ratio", 3 }, { "lim_mode", 2 } });
+                presets.push_back ({ "Harmony 3rd + 5th", std::move (v) });
+            }
+
+            {
+                ValueList v;
+                add (v, { { "corr_mode", 0 }, { "retune_speed", 20 }, { "humanize", 0.15f }, { "formant", 1 },
+                          { "harm_on", 1 }, { "harm_level", -6 }, { "harm_formant", 1 },
+                          { "harm1_on", 1 }, { "harm1_mode", 1 }, { "harm1_semis", -12 }, { "harm1_level", -4 },
+                          { "harm1_pan", -0.8f }, { "harm1_detune", -7 }, { "harm1_delay", 12 },
+                          { "harm2_on", 1 }, { "harm2_mode", 0 }, { "harm2_degree", 4 }, { "harm2_level", -6 },
+                          { "harm2_pan", 0.8f }, { "harm2_detune", 6 }, { "harm2_delay", 18 },
+                          { "harm3_on", 1 }, { "harm3_mode", 1 }, { "harm3_semis", 12 }, { "harm3_level", -14 },
+                          { "harm3_pan", 0 }, { "harm3_detune", 4 }, { "harm3_delay", 6 },
+                          { "harm4_on", 0 },
+                          { "comp_on", 1 }, { "comp_threshold", -20 }, { "comp_ratio", 2.5f }, { "lim_mode", 2 } });
+                presets.push_back ({ "Wide Oct + 5th", std::move (v) });
+            }
+
             return presets;
         }
     }

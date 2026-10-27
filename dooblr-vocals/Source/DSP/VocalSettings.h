@@ -13,6 +13,13 @@ namespace dooblrvocals::dsp
 
     enum class CorrectionMode { keyed = 0, chromatic };
     enum class QualityMode { live = 0, hq };
+
+    /** Latency parameter (v0.2): Tracking is the near-zero-latency causal path, Mix the 2048-sample
+        look-ahead path. Quality HQ (and offline renders) overrides both with the 8192 path. */
+    enum class LatencyMode { tracking = 0, mix };
+
+    /** What actually runs: resolved from Latency, Quality and the host's offline flag. */
+    enum class ProcessMode { tracking = 0, mix, hq };
     enum class InputType { soprano = 0, alto, tenor, baritone, bass, numTypes };
     enum class ScaleType
     {
@@ -104,6 +111,72 @@ namespace dooblrvocals::dsp
         return liveLatencySamples (sampleRate) * 4;
     }
 
+    /** Tracking (near-zero latency): 256 samples at 48 kHz (5.3 ms), scaled with the rate. */
+    inline int trackingLatencySamples (double sampleRate) noexcept
+    {
+        return std::max (32, (int) std::lround (256.0 * sampleRate / 48000.0));
+    }
+
+    inline int latencyForMode (ProcessMode mode, double sampleRate) noexcept
+    {
+        switch (mode)
+        {
+            case ProcessMode::tracking: return trackingLatencySamples (sampleRate);
+            case ProcessMode::hq:       return hqLatencySamples (sampleRate);
+            case ProcessMode::mix:      break;
+        }
+
+        return liveLatencySamples (sampleRate);
+    }
+
+    inline const char* processModeName (ProcessMode mode) noexcept
+    {
+        return mode == ProcessMode::tracking ? "Tracking" : mode == ProcessMode::hq ? "HQ" : "Mix";
+    }
+
+    /** Scale-mode harmony: the note `degrees` scale steps from noteMidi (counting only notes in
+        mask; noteMidi itself need not be in it). 0 returns noteMidi. */
+    inline int scaleStepMidi (int noteMidi, int degrees, int mask) noexcept
+    {
+        mask &= 0x0fff;
+        if (mask == 0)
+            mask = 0x0fff;
+
+        const auto dir = degrees > 0 ? 1 : -1;
+        auto n = noteMidi;
+
+        for (int k = 0, guard = 0; k < std::abs (degrees) && guard < 64; ++guard)
+        {
+            n += dir;
+            if (((mask >> (((n % 12) + 12) % 12)) & 1) != 0)
+                ++k;
+        }
+
+        return n;
+    }
+
+    inline constexpr int numHarmonyVoices = 4;
+
+    struct HarmonyVoice
+    {
+        bool enabled = false;
+        bool fixed = false;        // false: Scale (diatonic steps), true: Fixed (semitones)
+        int degrees = 2;           // Scale mode: +2 = a third above
+        int semitones = 4;         // Fixed mode
+        float levelDb = -3.0f;
+        float pan = 0.0f;          // -1 (left) .. +1 (right), equal power
+        float detuneCents = 0.0f;
+        float delayMs = 0.0f;
+    };
+
+    struct HarmonySettings
+    {
+        bool enabled = false;
+        float levelDb = -6.0f;     // harmony bus level
+        bool formant = true;
+        std::array<HarmonyVoice, numHarmonyVoices> voices;
+    };
+
     struct PitchSettings
     {
         bool enabled = true;
@@ -118,11 +191,33 @@ namespace dooblrvocals::dsp
         bool formant = true;
         InputType input = InputType::tenor;
         QualityMode quality = QualityMode::live;
+        LatencyMode latency = LatencyMode::mix;
     };
+
+    inline ProcessMode processModeFor (const PitchSettings& s, bool nonRealtime) noexcept
+    {
+        if (nonRealtime || s.quality == QualityMode::hq)
+            return ProcessMode::hq;
+
+        return s.latency == LatencyMode::tracking ? ProcessMode::tracking : ProcessMode::mix;
+    }
+
+    /** The key / scale mask harmonies step through (also in chromatic correction mode). */
+    inline int harmonyMask (const PitchSettings& s) noexcept
+    {
+        if (s.scale == ScaleType::custom)
+        {
+            const auto m = s.customMask & 0x0fff;
+            return m == 0 ? 0x0fff : m;
+        }
+
+        return rotateMask (maskForScale (s.scale), s.key);
+    }
 
     struct VocalSettings
     {
         PitchSettings pitch;
+        HarmonySettings harmony;
         GateSettings gate;
         EqSettings eq;
         CompressorSettings compressor;

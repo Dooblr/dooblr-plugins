@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <vector>
 
@@ -86,14 +87,24 @@ namespace dooblrvocals::dsp
 
         void setDelayBuffers (const float* left, const float* right, int size) noexcept;
 
+        /** Harmony voices: pitch-marked epochs (each grain centred on the waveform's peak, so
+            large downward shifts read at the new pitch rather than as tremolo), a two-period
+            analysis window for formant-preserving downshifts, and silence (not the dry input)
+            where the grains do not cover the output. The lead keeps the default behaviour. */
+        void setHarmonyVoice (bool on) noexcept { harmonyVoice = on; }
+
         /** One wet sample for output time tOut (input sample number); newest is the last
-            input sample number written to the delay buffers. */
+            input sample number written to the delay buffers.
+            causal (Tracking, v0.2): grains are not shortened to fit the look-ahead; their
+            pitch-synchronous epochs step back whole periods into the past instead, so the
+            shifter works with a few samples of latency (voiced audio then lags by up to about
+            one period). Ratios are limited to 0.25 .. 4 (harmony voices use +/- 2 octaves). */
         void processSample (std::int64_t tOut, std::int64_t newest, float ratio, float period,
-                            bool voiced, bool formant, float& outL, float& outR) noexcept;
+                            bool voiced, bool formant, float& outL, float& outR, bool causal = false) noexcept;
 
     private:
         float readAbs (const float* buf, double t) const noexcept;
-        void addGrain (float period, float ratio, bool formant) noexcept;
+        void addGrain (float period, float ratio, bool formant, bool causal) noexcept;
 
         double sampleRate = 48000.0;
         const float* delayL = nullptr;
@@ -102,8 +113,46 @@ namespace dooblrvocals::dsp
         std::int64_t newestInput = 0, lastOut = -1;
         std::vector<float> olaL, olaR, olaW;
         int olaSize = 0, olaMask = 0, maxHalf = 0;
-        bool marking = false;
+        bool marking = false, harmonyVoice = false;
         double synthMark = 0.0, analysisEpoch = 0.0;
+    };
+
+    /**
+        v0.2 harmonizer: four extra PSOLA voices reading the pitch engine's delay buffers at
+        the same output time as the lead, so every voice has exactly the lead's latency
+        (only a voice's own Delay control moves it later, on purpose, for width).
+
+        Each voice's pitch is the lead's output pitch (the corrected note, or the sung pitch
+        when correction is off) moved by its interval: Scale mode counts steps through the
+        key / scale (a third above E in C major is G), Fixed mode adds semitones. The voice is
+        summed to mono and placed with an equal-power pan. Voices are gated with the detector's
+        voicing (no harmonies on breaths or consonants). process() does not allocate.
+    */
+    class Harmonizer
+    {
+    public:
+        void prepare (double sampleRate, int maxGrainHalf, const float* left, const float* right, int size);
+        void reset() noexcept;
+
+        /** Once per detector hop: new detected / lead pitch (Hz, 0 = unvoiced). */
+        void setPitch (float detectedHz, float leadHz, bool voiced, const HarmonySettings& h, int mask, float a4) noexcept;
+
+        /** Adds the harmony voices for output time tOut to outL / outR. */
+        void processSample (std::int64_t tOut, std::int64_t newest, float period, bool causal,
+                            const HarmonySettings& h, float& outL, float& outR) noexcept;
+
+        /** The interval (semitones) voice v uses for a lead note (rounded MIDI); for tests / UI. */
+        static int intervalFor (const HarmonyVoice& v, int leadMidi, int mask) noexcept;
+        float getVoiceRatio (int v) const noexcept { return ratios[(size_t) v]; }
+
+    private:
+        double sampleRate = 48000.0;
+        std::array<PitchShifter, numHarmonyVoices> shifters;
+        std::array<float, numHarmonyVoices> ratios {}, gains {}, panL {}, panR {}, delays {};
+        std::array<std::vector<float>, numHarmonyVoices> lines;
+        int lineSize = 0, linePos = 0;
+        float env = 0.0f;
+        bool voiced = false;
     };
 
     /**
@@ -121,13 +170,22 @@ namespace dooblrvocals::dsp
         int currentLatency() const noexcept { return latency; }
 
         void process (juce::AudioBuffer<float>& buffer, int numSamples, const PitchSettings& s,
-                      bool nonRealtime, PitchTap* tap) noexcept;
+                      bool nonRealtime, PitchTap* tap) noexcept
+        {
+            process (buffer, numSamples, s, HarmonySettings {}, nonRealtime, tap);
+        }
+
+        void process (juce::AudioBuffer<float>& buffer, int numSamples, const PitchSettings& s,
+                      const HarmonySettings& harmony, bool nonRealtime, PitchTap* tap) noexcept;
+
+        ProcessMode currentMode() const noexcept { return mode; }
+        const Harmonizer& getHarmonizer() const noexcept { return harmonizer; }
 
         PitchEstimate getLastEstimate() const noexcept { return lastEstimate; }
         float getLastCorrectedHz() const noexcept { return lastCorrectedHz; }
 
     private:
-        void analyseIfDue (const PitchSettings& s, bool hq) noexcept;
+        void analyseIfDue (const PitchSettings& s, const HarmonySettings& h) noexcept;
         float readDelay (const std::vector<float>& buf, int delay) const noexcept;
 
         double sampleRate = 48000.0;
@@ -142,11 +200,14 @@ namespace dooblrvocals::dsp
         PitchDetector detector;
         PitchCorrector corrector;
         PitchShifter shifter;
+        Harmonizer harmonizer;
+        ProcessMode mode = ProcessMode::mix;
 
         PitchEstimate lastEstimate;
         float lastCorrectedHz = 0.0f;
         float lastRatio = 1.0f;
         bool lastVoiced = false;
         float mixSmoothed = 1.0f;
+        int harmonyTail = 0;
     };
 }

@@ -25,13 +25,15 @@ namespace
 
     const char* pageName (int page)
     {
-        static const char* names[] { "Pitch", "Gate", "EQ", "Comp", "Limiter" };
+        static const char* names[] { "Pitch", "Harmony", "Gate", "EQ", "Comp", "Limiter" };
         return names[page];
     }
 
     juce::Colour pageColour (int page)
     {
-        return page == DooblrVocalsAudioProcessorEditor::pitchPage ? Palette::accent : Palette::dynamic;
+        return page == DooblrVocalsAudioProcessorEditor::pitchPage     ? Palette::accent
+             : page == DooblrVocalsAudioProcessorEditor::harmonyPage ? Palette::master
+                                                                     : Palette::dynamic;
     }
 
     using K = ControlPanel::Kind;
@@ -60,6 +62,14 @@ ProcessorPowerButton::ProcessorPowerButton (int stageIndex)
         return;
     }
 
+    if (stage == harmonyStage)
+    {
+        setComponentID ("power_harmony");
+        setTooltip ("Harmonizer on/off (4 voices, set on the Harmony page)");
+        setClickingTogglesState (true);
+        return;
+    }
+
     setComponentID (ids[stage]);
     setTooltip (juce::String (names[stage]) + " on/off");
     setClickingTogglesState (false);
@@ -68,8 +78,9 @@ ProcessorPowerButton::ProcessorPowerButton (int stageIndex)
 void ProcessorPowerButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
     const auto on = getToggleState();
-    const auto colour = pageColour (stage == pitchStage ? (int) DooblrVocalsAudioProcessorEditor::pitchPage
-                                                        : DooblrVocalsAudioProcessorEditor::pageForStage (stage));
+    const auto colour = pageColour (stage == pitchStage     ? (int) DooblrVocalsAudioProcessorEditor::pitchPage
+                                    : stage == harmonyStage ? (int) DooblrVocalsAudioProcessorEditor::harmonyPage
+                                                            : DooblrVocalsAudioProcessorEditor::pageForStage (stage));
     auto circle = getLocalBounds().toFloat().withSizeKeepingCentre ((float) size, (float) size).reduced (1.0f);
 
     if (down)
@@ -234,6 +245,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
       audioProcessor (processorToEdit),
       state (processorToEdit.getParameterState()),
       pitchDisplay (processorToEdit.getParameterState()),
+      harmonyDisplay (processorToEdit.getParameterState()),
       gateDisplay (processorToEdit.getParameterState()),
       eqDisplay (processorToEdit.getParameterState()),
       dynamicsDisplay (processorToEdit.getParameterState()),
@@ -310,6 +322,20 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
             pitchPower->onStateChange = [this] { pageButtons[(size_t) pitchPage].setProcessorOn (pitchPower->getToggleState()); };
         }
 
+        if (p == harmonyPage)
+        {
+            harmonyPower = std::make_unique<ProcessorPowerButton> (ProcessorPowerButton::harmonyStage);
+            button.setHasPowerToggle (true);
+            button.setTooltip ("Harmony - up to 4 voices after the correction, before the processing chain");
+            button.addAndMakeVisible (*harmonyPower);
+            harmonyPowerAttachment = std::make_unique<ButtonAttachment> (state, "harm_on", *harmonyPower);
+            harmonyPower->onStateChange = [this]
+            {
+                pageButtons[(size_t) harmonyPage].setProcessorOn (harmonyPower->getToggleState());
+                harmonyDisplay.refresh();
+            };
+        }
+
         if (p >= gatePage)
         {
             const auto stage = p - gatePage;
@@ -328,6 +354,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     shownOrder = chainOrderParameter();
 
     addChildComponent (pitchDisplay);
+    addChildComponent (harmonyDisplay);
     addChildComponent (gateDisplay);
     addChildComponent (eqDisplay);
     addChildComponent (eqDisplay.getPeakHoldButton());
@@ -342,7 +369,9 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
         { "retune_speed", "Retune", K::knob }, { "humanize", "Humanize", K::knob }, { "corr_amount", "Amount", K::knob } }));
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Detector", pageColour (pitchPage), Specs {
         { "input_type", "Range", K::combo }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle },
-        { "quality", "Quality", K::combo } }));
+        { "quality", "Quality", K::combo }, { "latency_mode", "Latency", K::combo, 112 } }));
+    pagePanels[harmonyPage].push_back (std::make_unique<ControlPanel> (state, "Harmony bus", pageColour (harmonyPage), Specs {
+        { "harm_level", "Level", K::knob }, { "harm_formant", "Formant", K::toggle } }));
     pagePanels[gatePage].push_back (std::make_unique<ControlPanel> (state, "Gate", pageColour (gatePage), Specs {
         { "gate_threshold", "Threshold", K::knob }, { "gate_attack", "Attack", K::knob }, { "gate_hold", "Hold", K::knob },
         { "gate_release", "Release", K::knob }, { "gate_range", "Range", K::knob } }));
@@ -359,6 +388,19 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     for (auto& panels : pagePanels)
         for (auto& panel : panels)
             addChildComponent (*panel);
+
+    // Latency readout after the Latency switch: the mode in use and what the host compensates.
+    styleLabel (latencyLabel, {}, 12.0f, Palette::textPrimary, juce::Justification::centredLeft);
+    latencyLabel.setComponentID ("latencyReadout");
+    latencyLabel.setTooltip ("Tracking: ~5 ms, for monitoring while recording (slightly rougher onsets).\n"
+                             "Mix: 43 ms look-ahead for clean grains, compensated by the host.\n"
+                             "HQ (Quality) overrides both and is always used for offline renders.");
+    pagePanels[pitchPage][1]->addExtra (latencyLabel, 130);
+    updateLatencyLabel();
+
+    if (auto* latencyBox = dynamic_cast<juce::ComboBox*> (pagePanels[pitchPage][1]->findControl ("latency_mode")))
+        latencyBox->setTooltip ("Latency: Tracking (near-zero, for live monitoring) or Mix (look-ahead, higher fidelity). "
+                                "Quality HQ overrides it.");
 
     if (auto* modeBox = dynamic_cast<juce::ComboBox*> (pagePanels[limiterPage].front()->findControl ("lim_mode")))
     {
@@ -402,6 +444,8 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
             panel->setVisible (p == selectedPage);
 
     pitchDisplay.setVisible (selectedPage == pitchPage);
+    harmonyDisplay.setVisible (selectedPage == harmonyPage);
+    harmonyDisplay.refresh();
     gateDisplay.setVisible (selectedPage == gatePage);
     eqDisplay.setVisible (selectedPage == eqPage);
     eqDisplay.getPeakHoldButton().setVisible (selectedPage == eqPage);
@@ -420,6 +464,22 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     updateEnablement();
     resized();
     repaint();
+}
+
+void DooblrVocalsAudioProcessorEditor::updateLatencyLabel()
+{
+    namespace dsp = dooblrvocals::dsp;
+    dsp::PitchSettings s;
+    s.quality = (dsp::QualityMode) juce::roundToInt (state.getRawParameterValue ("quality")->load());
+    s.latency = (dsp::LatencyMode) juce::roundToInt (state.getRawParameterValue ("latency_mode")->load());
+    const auto mode = dsp::processModeFor (s, false);
+    const auto rate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 48000.0;
+    const auto ms = 1000.0 * dsp::latencyForMode (mode, rate) / rate;
+    const auto text = juce::String (dsp::processModeName (mode)) + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
+                      + (ms < 10.0 ? juce::String (ms, 1) : juce::String (juce::roundToInt (ms))) + " ms";
+
+    if (latencyLabel.getText() != text)
+        latencyLabel.setText (text, juce::dontSendNotification);
 }
 
 void DooblrVocalsAudioProcessorEditor::setStatus (const juce::String& text)
@@ -442,9 +502,12 @@ void DooblrVocalsAudioProcessorEditor::updateEnablement()
                 control->setEnabled (enabled);
     };
 
+    // Key / scale also drive the harmony voices in Scale mode, so they stay live then.
     const auto chromatic = juce::roundToInt (value ("corr_mode")) != 0;
-    setEnabled (pitchPage, "corr_key", ! chromatic);
-    setEnabled (pitchPage, "corr_scale", ! chromatic);
+    const auto harmony = value ("harm_on") > 0.5f;
+    setEnabled (pitchPage, "corr_key", ! chromatic || harmony);
+    setEnabled (pitchPage, "corr_scale", ! chromatic || harmony);
+    setEnabled (pitchPage, "latency_mode", juce::roundToInt (value ("quality")) == 0);
 
     const auto limiter = juce::roundToInt (value ("lim_mode"));
     setEnabled (limiterPage, "lim_mode", limiter > 0);
@@ -525,6 +588,8 @@ void DooblrVocalsAudioProcessorEditor::refreshPowerButtonsNow()
 
     if (pitchPower != nullptr)
         pageButtons[(size_t) pitchPage].setProcessorOn (pitchPower->getToggleState());
+    if (harmonyPower != nullptr)
+        pageButtons[(size_t) harmonyPage].setProcessorOn (harmonyPower->getToggleState());
 }
 
 //==============================================================================
@@ -683,6 +748,12 @@ void DooblrVocalsAudioProcessorEditor::readMeters()
 
     while (audioProcessor.getPitchTap().pop (pitchFrameScratch.data(), (int) pitchFrameScratch.size()) > 0) {}
 
+    if (selectedPage == harmonyPage)
+    {
+        tap.discardAll();
+        return;
+    }
+
     if (selectedPage == eqPage)
     {
         tap.popFrames (meterFrameScratch.data(), (int) meterFrameScratch.size());
@@ -707,6 +778,9 @@ void DooblrVocalsAudioProcessorEditor::timerCallback()
     updateEnablement();
     refreshPowerButtonsNow();
     syncChainOrderNow();
+    updateLatencyLabel();
+    if (selectedPage == harmonyPage)
+        harmonyDisplay.refresh();
 
     if (presetBox.getText() != audioProcessor.getPresetName() && ! presetBox.isPopupActive())
         refreshPresetBox();
@@ -770,8 +844,9 @@ void DooblrVocalsAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText ("CORRECTION", correctionTitleArea, juce::Justification::centredLeft);
     g.drawText ("PROCESSING", fxTitleArea, juce::Justification::centredLeft);
 
-    g.setColour (selectedPage == pitchPage ? Palette::accent : Palette::dynamic);
+    g.setColour (pageColour (selectedPage));
     g.drawText (selectedPage == pitchPage ? "PITCH"
+                : selectedPage == harmonyPage ? "HARMONY"
                 : selectedPage == gatePage ? "GATE"
                 : selectedPage == eqPage ? "OUTPUT EQ"
                 : selectedPage == dynamicsPage ? "COMPRESSOR" : "LIMITER",
@@ -849,6 +924,8 @@ void DooblrVocalsAudioProcessorEditor::resized()
             button.setBounds (slot);
             if (p == pitchPage)
                 pitchPower->setBounds (button.getPowerArea());
+            if (p == harmonyPage)
+                harmonyPower->setBounds (button.getPowerArea());
         }
 
         layoutChainButtons();
@@ -880,6 +957,7 @@ void DooblrVocalsAudioProcessorEditor::resized()
         eqDisplay.getPeakHoldButton().setBounds (bar.withLeft (bar.getRight() - 96).reduced (0, 1));
         display.removeFromTop (4);
         pitchDisplay.setBounds (display);
+        harmonyDisplay.setBounds (display);
         gateDisplay.setBounds (display);
         eqDisplay.setBounds (display);
         dynamicsDisplay.setBounds (display);
