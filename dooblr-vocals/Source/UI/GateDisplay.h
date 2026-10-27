@@ -30,6 +30,11 @@ namespace dooblrvocals::ui
         juce::Rectangle<float> getTransferArea() const noexcept { return transfer; }
         juce::Rectangle<int> getHistoryArea() const noexcept { return history.getBounds(); }
         float getThresholdLineY() const;
+        juce::Point<int> getThresholdLinePoint() const
+        {
+            return { history.getBounds().getCentreX(), juce::roundToInt (getThresholdLineY()) };
+        }
+        bool isHovering() const noexcept { return hover != DragKind::none; }
         float getShownInputDb() const noexcept { return shownInDb; }
         float getShownGainReductionDb() const noexcept { return shownGrDb; }
         int getFramesReceived() const noexcept { return framesReceived; }
@@ -37,6 +42,7 @@ namespace dooblrvocals::ui
     private:
         enum class DragKind { none, thresholdLine, thresholdHandle };
         DragKind hitTestDrag (juce::Point<float> p) const;
+        void setHover (DragKind kind);
         float dbToTransferX (float db) const noexcept;
         float dbToTransferY (float db) const noexcept;
         juce::uint64 paramHash() const;

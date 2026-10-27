@@ -614,7 +614,12 @@ namespace dooblrvocals::ui
 
     void EqDisplay::mouseExit (const juce::MouseEvent&)
     {
-        if (dragBand < 0 && hoverBand >= 0)
+        if (dragBand >= 0)
+            return;
+
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+
+        if (hoverBand >= 0)
         {
             hoverBand = -1;
             readout.clear();
@@ -676,8 +681,9 @@ namespace dooblrvocals::ui
     {
         gesture.end();
         dragBand = -1;
-        hoverBand = hitBand (e.position);
+        hoverBand = getLocalBounds().toFloat().contains (e.position) ? hitBand (e.position) : -1;
         updateReadout (hoverBand);
+        setMouseCursor (hoverBand >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
         repaint();
     }
 
@@ -1001,7 +1007,12 @@ namespace dooblrvocals::ui
 
     void DynamicsDisplay::mouseExit (const juce::MouseEvent&)
     {
-        if (dragging == DragKind::none && hover != DragKind::none)
+        if (dragging != DragKind::none)
+            return;
+
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+
+        if (hover != DragKind::none)
         {
             hover = DragKind::none;
             repaint();
@@ -1069,7 +1080,11 @@ namespace dooblrvocals::ui
     {
         gesture.end();
         dragging = DragKind::none;
-        hover = hitTestDrag (e.position);
+        hover = DragKind::none; // let mouseMove pick the hover and its cursor afresh
+        if (getLocalBounds().toFloat().contains (e.position))
+            mouseMove (e);
+        else
+            setMouseCursor (juce::MouseCursor::NormalCursor);
         repaint();
     }
 
@@ -1269,7 +1284,12 @@ namespace dooblrvocals::ui
 
     void LimiterDisplay::mouseExit (const juce::MouseEvent&)
     {
-        if (! dragging && hover)
+        if (dragging)
+            return;
+
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+
+        if (hover)
         {
             hover = false;
             repaint (history.getBounds().expanded (2));
@@ -1312,7 +1332,10 @@ namespace dooblrvocals::ui
         gesture.end();
         dragging = false;
         hover = false;
-        mouseMove (e);
+        if (getLocalBounds().toFloat().contains (e.position))
+            mouseMove (e);
+        else
+            setMouseCursor (juce::MouseCursor::NormalCursor);
         repaint();
     }
 }

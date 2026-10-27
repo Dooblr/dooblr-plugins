@@ -287,6 +287,8 @@ namespace dooblrvocals::ui
 
     void PitchDisplay::mouseExit (const juce::MouseEvent&)
     {
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+
         if (hoverClass >= 0)
         {
             hoverClass = -1;

@@ -189,20 +189,28 @@ namespace dooblrvocals::ui
         const auto handle = juce::Point<float> (dbToTransferX (threshold), dbToTransferY (threshold));
         if (handle.getDistanceFrom (p) < 10.0f)
             return DragKind::thresholdHandle;
-        if (history.getBounds().toFloat().contains (p) && std::abs (p.y - history.dbToY (threshold)) < 7.0f)
+        // Slightly taller than the plot so the line stays grabbable at the -80 dB floor.
+        if (history.getBounds().toFloat().expanded (0.0f, 6.0f).contains (p) && std::abs (p.y - history.dbToY (threshold)) < 7.0f)
             return DragKind::thresholdLine;
         return DragKind::none;
     }
 
-    void GateDisplay::mouseMove (const juce::MouseEvent& e)
+    void GateDisplay::setHover (DragKind kind)
     {
-        const auto kind = dragging == DragKind::none ? hitTestDrag (e.position) : dragging;
+        // The cursor always follows the hover state, so it can never be left showing a resize
+        // arrow over empty plot after the mouse has left or a drag has ended elsewhere.
+        setMouseCursor (kind != DragKind::none ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+
         if (kind != hover)
         {
             hover = kind;
-            setMouseCursor (kind != DragKind::none ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
             repaint();
         }
+    }
+
+    void GateDisplay::mouseMove (const juce::MouseEvent& e)
+    {
+        setHover (dragging == DragKind::none ? hitTestDrag (e.position) : dragging);
     }
 
     void GateDisplay::mouseDown (const juce::MouseEvent& e)
@@ -229,21 +237,21 @@ namespace dooblrvocals::ui
         repaint();
     }
 
-    void GateDisplay::mouseUp (const juce::MouseEvent&)
+    void GateDisplay::mouseUp (const juce::MouseEvent& e)
     {
         if (dragging != DragKind::none)
         {
             gesture.end();
             dragging = DragKind::none;
         }
+
+        // Released over another section: drop the hover; released here: show what is under it.
+        setHover (getLocalBounds().toFloat().contains (e.position) ? hitTestDrag (e.position) : DragKind::none);
     }
 
     void GateDisplay::mouseExit (const juce::MouseEvent&)
     {
-        if (dragging == DragKind::none && hover != DragKind::none)
-        {
-            hover = DragKind::none;
-            repaint();
-        }
+        if (dragging == DragKind::none)
+            setHover (DragKind::none);
     }
 }

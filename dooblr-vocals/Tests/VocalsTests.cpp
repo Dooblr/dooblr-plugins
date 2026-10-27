@@ -19,6 +19,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <cstdlib>
 #include <functional>
@@ -27,6 +28,7 @@
 #include <map>
 #include <new>
 #include <set>
+#include <typeinfo>
 #include <sstream>
 #include <vector>
 
@@ -1093,6 +1095,474 @@ namespace
         check (true, "editor closed");
     }
 
+    //==============================================================================
+    // Real mouse input: the editor sits in a desktop window and every event goes through
+    // ComponentPeer::handleMouseEvent, the entry point the OS uses, so JUCE's own hover,
+    // enter / exit and drag routing run exactly as in a host.
+    struct GestureCounter final : juce::AudioProcessorParameter::Listener
+    {
+        explicit GestureCounter (juce::AudioProcessor& p) : processor (p)
+        {
+            for (auto* param : processor.getParameters())
+                param->addListener (this);
+        }
+
+        ~GestureCounter() override
+        {
+            for (auto* param : processor.getParameters())
+                param->removeListener (this);
+        }
+
+        void parameterValueChanged (int index, float) override { changed.insert (index); }
+        void parameterGestureChanged (int index, bool starting) override
+        {
+            open[index] += starting ? 1 : -1;
+            ++events;
+        }
+
+        bool balanced() const
+        {
+            for (const auto& [index, count] : open)
+                if (count != 0)
+                    return false;
+            return true;
+        }
+
+        juce::String changedNames() const
+        {
+            juce::StringArray names;
+            for (auto index : changed)
+                names.add (processor.getParameters()[index]->getName (32));
+            return names.joinIntoString (", ");
+        }
+
+        void clear() { changed.clear(); open.clear(); events = 0; }
+
+        juce::AudioProcessor& processor;
+        std::set<int> changed;
+        std::map<int, int> open;
+        int events = 0;
+    };
+
+    // Drives the editor either through the window's ComponentPeer (the OS entry point, used when
+    // the test window is front-most) or, when it is not, by routing events the way JUCE's
+    // MouseInputSource does: hit-test with getComponentAt, send exit / enter when the component
+    // under the mouse changes, keep sending drags to the pressed component, and re-hit-test after
+    // the release.
+    struct RoutedMouse
+    {
+        RoutedMouse (juce::Component& e, juce::ComponentPeer* p) : editor (e), peer (p) {}
+
+        bool usesPeer() const noexcept { return peer != nullptr; }
+
+        juce::MouseEvent eventFor (juce::Component& target, juce::Point<float> editorPos, bool buttonDown, bool wasDragged) const
+        {
+            using Source = juce::MouseInputSource;
+            const auto mods = buttonDown ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys();
+            const auto local = target.getLocalPoint (&editor, editorPos);
+            const auto down = target.getLocalPoint (&editor, downPos);
+            return { juce::Desktop::getInstance().getMainMouseSource(), local, mods,
+                     Source::defaultPressure, Source::defaultOrientation, Source::defaultRotation,
+                     Source::defaultTiltX, Source::defaultTiltY, &target, &target,
+                     juce::Time (time), down, juce::Time (downTime), 1, wasDragged };
+        }
+
+        void updateUnder (juce::Point<float> pos)
+        {
+            juce::Component* target = editor.getLocalBounds().toFloat().contains (pos)
+                                        ? editor.getComponentAt (pos.toInt()) : nullptr;
+            if (target != under.getComponent())
+            {
+                if (auto* old = under.getComponent())
+                    old->mouseExit (eventFor (*old, pos, false, false));
+                under = target;
+                if (target != nullptr)
+                    target->mouseEnter (eventFor (*target, pos, false, false));
+            }
+        }
+
+        void send (juce::Point<float> pos, bool buttonDown)
+        {
+            time += 7;
+
+            if (peer != nullptr)
+            {
+                const auto mods = buttonDown ? juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier) : juce::ModifierKeys();
+                juce::ModifierKeys::currentModifiers = mods;
+                peer->handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, pos, mods,
+                                        juce::MouseInputSource::defaultPressure, juce::MouseInputSource::defaultOrientation, time);
+                last = pos;
+                return;
+            }
+
+            const auto wasDown = isDown;
+            last = pos;
+
+            if (buttonDown && ! wasDown)
+            {
+                isDown = true;
+                downPos = pos;
+                downTime = time;
+                pressed = under;
+                if (auto* c = pressed.getComponent())
+                    c->mouseDown (eventFor (*c, pos, true, false));
+            }
+            else if (buttonDown)
+            {
+                if (pos != downPos)
+                    dragged = true;
+                if (auto* c = pressed.getComponent())
+                    c->mouseDrag (eventFor (*c, pos, true, dragged));
+            }
+            else if (wasDown)
+            {
+                isDown = false;
+                if (auto* c = pressed.getComponent())
+                    c->mouseUp (eventFor (*c, pos, false, dragged));
+                pressed = nullptr;
+                dragged = false;
+                updateUnder (pos);
+            }
+            else
+            {
+                updateUnder (pos);
+                if (auto* c = under.getComponent())
+                    c->mouseMove (eventFor (*c, pos, false, false));
+            }
+        }
+
+        void moveTo (juce::Point<float> to, int steps, bool buttonDown = false)
+        {
+            const auto from = last;
+            for (int i = 1; i <= steps; ++i)
+                send (from + (to - from) * ((float) i / (float) steps), buttonDown);
+        }
+
+        void press()   { time += 400; send (last, true); }
+        void release() { send (last, false); time += 400; }
+
+        void click (juce::Point<float> at)
+        {
+            moveTo (at, 4);
+            press();
+            release();
+        }
+
+        juce::Component& editor;
+        juce::ComponentPeer* peer;
+        juce::Component::SafePointer<juce::Component> under, pressed;
+        juce::Point<float> last, downPos;
+        bool isDown = false, dragged = false;
+        juce::int64 time = juce::Time::currentTimeMillis(), downTime = 0;
+    };
+
+    juce::Point<float> centreIn (juce::Component& c, juce::Component& editor)
+    {
+        return editor.getLocalPoint (&c, c.getLocalBounds().getCentre()).toFloat();
+    }
+
+    void testMouseAcrossSections()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "editor for mouse test");
+        if (editor == nullptr)
+            return;
+
+        editor->setSize (1080, 660);
+        editor->setTopLeftPosition (40, 40);
+        editor->setVisible (true);
+        editor->addToDesktop (juce::ComponentPeer::windowIsTemporary);
+        auto* peer = editor->getPeer();
+        check (peer != nullptr, "editor has a desktop peer");
+        if (peer == nullptr)
+            return;
+
+        juce::Process::makeForegroundProcess();
+        editor->setAlwaysOnTop (true);
+        editor->toFront (true);
+
+        // The OS only routes peer events to a window that is front-most at the point (another
+        // app such as the DAW may cover it), otherwise route the events in the test.
+        const auto front = peer->contains ({ editor->getWidth() / 2, editor->getHeight() / 2 }, true);
+        RoutedMouse mouse (*editor, front ? peer : nullptr);
+        note (front ? "events go through the window's ComponentPeer"
+                    : "test window is not front-most: events are routed in the test like MouseInputSource does");
+        GestureCounter gestures (*p);
+        const auto w = (float) editor->getWidth(), h = (float) editor->getHeight();
+
+        // Plain movement over every page, row by row and along the nav column across the
+        // CORRECTION / PROCESSING boundary, must not change or grab any parameter.
+        for (int page = 0; page < Editor::numPages; ++page)
+        {
+            editor->selectPage (page);
+            gestures.clear();
+            mouse.moveTo ({ 2.0f, 2.0f }, 1);
+            const auto start = std::chrono::steady_clock::now();
+            int moves = 0;
+
+            for (float y = 3.0f; y < h - 3.0f; y += 9.0f)
+            {
+                const auto rowStart = (int) (y / 9.0f) % 2 == 0;
+                mouse.moveTo ({ rowStart ? 3.0f : w - 3.0f, y }, 2);
+                mouse.moveTo ({ rowStart ? w - 3.0f : 3.0f, y }, 120);
+                moves += 122;
+            }
+
+            const auto& nav = editor->getPageButton (0);
+            const auto navX = centreIn (const_cast<NavButton&> (nav), *editor).x;
+            for (int pass = 0; pass < 4; ++pass)
+            {
+                mouse.moveTo ({ navX + (float) (pass * 12 - 18), 70.0f }, 10);
+                mouse.moveTo ({ navX + (float) (pass * 12 - 18), h - 4.0f }, 160);
+                moves += 170;
+            }
+
+            const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count();
+            note ("page " + std::to_string (page) + ": " + std::to_string (moves) + " mouse moves in "
+                  + std::to_string ((int) ms) + " ms");
+            check (gestures.changed.empty(), "page " + std::to_string (page) + ": moving the mouse changes no parameter (changed: "
+                                                 + gestures.changedNames().toStdString() + ")");
+            check (gestures.events == 0, "page " + std::to_string (page) + ": moving the mouse starts no gesture");
+            check (editor->getSelectedPage() == page, "page " + std::to_string (page) + ": moving the mouse does not switch pages");
+        }
+
+        // Clicking each nav button selects that page, including across the group gap. Buttons
+        // read the live mouse position, so this needs the real peer.
+        for (int page = Editor::numPages - 1; page >= 0 && mouse.usesPeer(); --page)
+        {
+            auto& button = editor->getPageButton (page);
+            auto at = centreIn (button, *editor);
+            at.x = (float) editor->getLocalPoint (&button, juce::Point<int> (button.getWidth() / 2 + 8, 0)).x;
+            mouse.click (at);
+            check (editor->getSelectedPage() == page, "clicking nav button " + std::to_string (page) + " selects its page");
+        }
+
+        // Every control must own its own area: a component from a neighbouring section that
+        // overlaps it would take the mouse when the pointer crosses the boundary.
+        for (int page = 0; page < Editor::numPages; ++page)
+        {
+            editor->selectPage (page);
+            std::vector<juce::Component*> controls;
+            std::function<void (juce::Component&)> collect = [&] (juce::Component& parent)
+            {
+                for (auto* child : parent.getChildren())
+                {
+                    if (! child->isShowing() || child->getWidth() < 8 || child->getHeight() < 8)
+                        continue;
+                    if (dynamic_cast<juce::Slider*> (child) != nullptr || dynamic_cast<juce::Button*> (child) != nullptr
+                        || child == &editor->getPitchDisplay() || child == &editor->getGateDisplay()
+                        || child == &editor->getEqDisplay())
+                        controls.push_back (child);
+                    else
+                        collect (*child);
+                }
+            };
+            collect (*editor);
+
+            int covered = 0;
+            juce::StringArray examples;
+            for (auto* control : controls)
+            {
+                const auto area = editor->getLocalArea (control, control->getLocalBounds()).reduced (3);
+                for (int iy = 0; iy < 3; ++iy)
+                    for (int ix = 0; ix < 3; ++ix)
+                    {
+                        const juce::Point<int> pt (area.getX() + area.getWidth() * ix / 2, area.getY() + area.getHeight() * iy / 2);
+                        auto* hit = editor->getComponentAt (pt);
+                        if (hit == control || (hit != nullptr && control->isParentOf (hit)))
+                            continue;
+                        // The control's own hitTest may legitimately decline (e.g. round buttons).
+                        if (! control->hitTest (control->getLocalPoint (editor, pt).x, control->getLocalPoint (editor, pt).y))
+                            continue;
+                        ++covered;
+                        if (examples.size() < 6)
+                            examples.add ((control->getComponentID().isNotEmpty() ? control->getComponentID() : control->getName())
+                                          + " covered by " + (hit == nullptr ? juce::String ("nothing")
+                                                              : hit->getComponentID().isNotEmpty() ? hit->getComponentID()
+                                                              : juce::String (typeid (*hit).name())));
+                    }
+            }
+            check (covered == 0, "page " + std::to_string (page) + ": no control is covered by another section ("
+                                     + std::to_string (controls.size()) + " controls; " + examples.joinIntoString ("; ").toStdString() + ")");
+        }
+
+        // Drags that start on one section and end on another keep gestures balanced, and
+        // movement after the release changes nothing.
+        struct DragCase { int page; juce::Component* target; juce::Point<float> offset; };
+        std::vector<DragCase> drags;
+
+        for (int page = 0; page < Editor::numPages; ++page)
+        {
+            editor->selectPage (page);
+            std::function<void (juce::Component&)> findSliders = [&] (juce::Component& parent)
+            {
+                for (auto* child : parent.getChildren())
+                {
+                    if (! child->isShowing())
+                        continue;
+                    if (auto* slider = dynamic_cast<juce::Slider*> (child); slider != nullptr && slider->isEnabled())
+                    {
+                        drags.push_back ({ page, slider, { 0.0f, -6.0f } });
+                        return;
+                    }
+                    findSliders (*child);
+                }
+            };
+            for (auto& panel : editor->getChildren())
+                if (panel->isShowing() && panel->getY() > editor->getHeight() / 2)
+                    findSliders (*panel);
+        }
+
+        drags.push_back ({ Editor::gatePage, &editor->getGateDisplay(), {} });
+
+        for (const auto& d : drags)
+        {
+            editor->selectPage (d.page);
+            gestures.clear();
+            auto from = centreIn (*d.target, *editor) + d.offset;
+
+            if (d.target == &editor->getGateDisplay())
+            {
+                // Grab the threshold line on the history plot.
+                const auto& gate = editor->getGateDisplay();
+                from = editor->getLocalPoint (&gate, gate.getThresholdLinePoint()).toFloat();
+            }
+
+            // Out of the section, over the nav column and the header, then back and off the window.
+            mouse.moveTo (from, 6);
+            mouse.press();
+            mouse.moveTo ({ from.x, from.y - 120.0f }, 20, true);
+            mouse.moveTo ({ 60.0f, 300.0f }, 30, true);
+            mouse.moveTo ({ w * 0.5f, 20.0f }, 30, true);
+            mouse.moveTo ({ w + 40.0f, h + 40.0f }, 30, true);
+            mouse.release();
+
+            const auto name = (d.target->getComponentID().isNotEmpty() ? d.target->getComponentID() : d.target->getName()).toStdString();
+            check (gestures.events > 0, "drag from " + name + " reaches the control");
+            check (gestures.balanced(), "drag from " + name + " across sections ends its gesture");
+
+            gestures.clear();
+            mouse.moveTo ({ w * 0.5f, h * 0.5f }, 40);
+            mouse.moveTo ({ 20.0f, h - 20.0f }, 40);
+            check (gestures.changed.empty() && gestures.events == 0,
+                   "after dragging " + name + ", moving the mouse changes nothing (changed: " + gestures.changedNames().toStdString() + ")");
+        }
+
+        // Hover state and cursors reset when the mouse leaves a display after a drag.
+        {
+            editor->selectPage (Editor::gatePage);
+            auto& gate = editor->getGateDisplay();
+            const auto line = editor->getLocalPoint (&gate, gate.getThresholdLinePoint()).toFloat();
+            mouse.moveTo (line, 6);
+            check (gate.isHovering() && gate.getMouseCursor() == juce::MouseCursor::UpDownResizeCursor,
+                   "gate display shows the resize cursor over the threshold line");
+            mouse.press();
+            mouse.moveTo (line + juce::Point<float> (0.0f, 30.0f), 10, true);
+            mouse.moveTo ({ 40.0f, 200.0f }, 30, true); // release over the nav column
+            mouse.release();
+            mouse.moveTo ({ 50.0f, 210.0f }, 4);
+            check (! gate.isHovering(), "gate display drops hover after a drag released outside it");
+            check (gate.getMouseCursor() == juce::MouseCursor::NormalCursor, "gate display cursor resets after a drag released outside it");
+            mouse.moveTo (editor->getLocalPoint (&gate, gate.getHistoryArea().getTopLeft() + juce::Point<int> (20, 4)).toFloat(), 20);
+            check (! gate.isHovering() && gate.getMouseCursor() == juce::MouseCursor::NormalCursor,
+                   "re-entering the gate display away from the line shows the normal cursor");
+        }
+
+        // Hover a handle on each display, then leave straight into another section: the display
+        // must hand back the normal cursor rather than keep the handle's.
+        {
+            struct Display { int page; juce::Component* c; };
+            const Display displays[] { { Editor::gatePage, &editor->getGateDisplay() }, { Editor::eqPage, &editor->getEqDisplay() },
+                                       { Editor::dynamicsPage, &editor->getDynamicsDisplay() }, { Editor::limiterPage, &editor->getLimiterDisplay() } };
+            for (const auto& d : displays)
+            {
+                editor->selectPage (d.page);
+                const auto area = editor->getLocalArea (d.c, d.c->getLocalBounds());
+                bool found = false;
+                mouse.moveTo ({ 40.0f, (float) area.getCentreY() }, 4);
+                for (int y = area.getY() + 2; y < area.getBottom() - 2 && ! found; y += 3)
+                    for (int x = area.getX() + 2; x < area.getRight() - 2 && ! found; x += 3)
+                    {
+                        mouse.send ({ (float) x, (float) y }, false);
+                        found = d.c->getMouseCursor() != juce::MouseCursor::NormalCursor;
+                    }
+                check (found, "page " + std::to_string (d.page) + ": a display handle shows a drag cursor");
+                mouse.moveTo ({ 40.0f, 200.0f }, 1); // one fast move out over the nav column
+                check (d.c->getMouseCursor() == juce::MouseCursor::NormalCursor,
+                       "page " + std::to_string (d.page) + ": leaving the display from a handle resets its cursor");
+            }
+        }
+
+        // Dragging a processing tab's handle across the other sections reorders the chain as one
+        // gesture and leaves every tab in a slot.
+        {
+            editor->selectPage (Editor::gatePage);
+            auto& gateTab = editor->getPageButton (Editor::gatePage);
+            auto& lastTab = editor->getPageButton (Editor::limiterPage);
+            const auto orderBefore = p->getParameterState().getRawParameterValue ("chain_order")->load();
+            const auto grab = editor->getLocalPoint (&gateTab, gateTab.getHandleArea().getCentre()).toFloat();
+            const auto bottom = editor->getLocalPoint (&lastTab, lastTab.getLocalBounds().getCentre()).toFloat();
+            gestures.clear();
+            mouse.moveTo (grab, 6);
+            mouse.press();
+            mouse.moveTo ({ grab.x, bottom.y + 40.0f }, 40, true);
+            mouse.moveTo ({ grab.x + 200.0f, bottom.y + 40.0f }, 20, true); // wander into the page area
+            mouse.release();
+            const auto orderAfter = p->getParameterState().getRawParameterValue ("chain_order")->load();
+            check (juce::roundToInt (orderAfter) != juce::roundToInt (orderBefore), "dragging the gate tab to the bottom reorders the chain");
+            check (gestures.balanced() && gestures.events == 2, "chain reorder is one balanced gesture");
+            check (gateTab.getBounds().getY() > lastTab.getBounds().getY(), "gate tab ends in the last slot");
+            check (! gateTab.isDraggingHandle(), "gate tab handle drag ends on release");
+
+            mouse.moveTo (editor->getLocalPoint (&gateTab, gateTab.getHandleArea().getCentre()).toFloat(), 10);
+            mouse.press();
+            mouse.moveTo ({ grab.x, 0.0f }, 40, true);
+            mouse.release();
+            check (juce::roundToInt (p->getParameterState().getRawParameterValue ("chain_order")->load()) == juce::roundToInt (orderBefore),
+                   "dragging it back to the top restores the original order");
+        }
+
+        // Repaint cost per page at Retina scale with full displays: the displays repaint every
+        // frame while audio runs, so a page that cannot paint inside a 60 Hz frame starves
+        // mouse handling in the host.
+        {
+            std::vector<dsp::PitchFrame> frames (4000);
+            for (size_t i = 0; i < frames.size(); ++i)
+                frames[i] = { 220.0f + 6.0f * std::sin ((float) i * 0.05f), 220.0f, 0.9f, (i / 300) % 4 != 3 };
+
+            for (int page = 0; page < Editor::numPages; ++page)
+            {
+                editor->selectPage (page);
+                if (page == Editor::pitchPage)
+                    editor->getPitchDisplay().update (frames.data(), (int) frames.size(), 0.1);
+
+                juce::Image image (juce::Image::ARGB, editor->getWidth() * 2, editor->getHeight() * 2, true);
+                const auto paintOnce = [&]
+                {
+                    juce::Graphics g (image);
+                    g.addTransform (juce::AffineTransform::scale (2.0f));
+                    editor->paintEntireComponent (g, true);
+                };
+
+                paintOnce();
+                const auto start = std::chrono::steady_clock::now();
+                constexpr int runs = 20;
+                for (int i = 0; i < runs; ++i)
+                    paintOnce();
+                const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count() / runs;
+                std::ostringstream text;
+                text << "page " << page << " full editor paint at 2x: " << std::fixed << std::setprecision (2) << ms << " ms";
+                note (text.str());
+            }
+        }
+
+        editor->removeFromDesktop();
+        p->editorBeingDeleted (editor);
+        base.reset();
+    }
+
     void testLayoutFit()
     {
         auto p = makeProcessor();
@@ -1380,6 +1850,7 @@ int main()
         { "keyed vs chromatic correction",  testKeyedVsChromaticCorrection },
         { "strict snapping (cents)",        testStrictSnapping },
         { "preset sanity",                  testPresetSanity },
+        { "mouse across sections",          testMouseAcrossSections },
         { "unvoiced passthrough",           testUnvoicedPassthrough },
         { "latency reporting",              testLatencyReporting },
         { "gate behaviour",                 testGateBehaviour },
