@@ -608,7 +608,7 @@ namespace dooblrvocals::dsp
     void PitchEngine::analyseIfDue (const PitchSettings& s, const HarmonySettings& h) noexcept
     {
         const auto hq = mode == ProcessMode::hq;
-        const auto range = rangeFor (s.input);
+        const auto range = detectorRangeFor (s);
         const auto minHz = range.minHz;
         const auto maxHz = range.maxHz;
         int window = 0;
@@ -700,6 +700,8 @@ namespace dooblrvocals::dsp
 
                 if (tap != nullptr)
                     tap->push ({ lastEstimate.hz, lastVoiced ? lastCorrectedHz : 0.0f, lastEstimate.confidence, lastVoiced });
+                if (learnTap != nullptr && s.learnRange)
+                    learnTap->push ({ lastEstimate.hz, 0.0f, lastEstimate.confidence, lastEstimate.voiced, (float) ((double) hop / sampleRate) });
             }
 
             mixSmoothed += (mixTarget - mixSmoothed) * mixCoeff;

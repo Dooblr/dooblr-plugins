@@ -151,7 +151,7 @@ namespace dooblrvocals::params
 
     juce::String noteName (int midiNote)
     {
-        return juce::MidiMessage::getMidiNoteName (midiNote, true, true, 3);
+        return juce::MidiMessage::getMidiNoteName (midiNote, true, true, 4); // scientific pitch: A4 = 440 Hz, middle C = C4
     }
 
     juce::String formatHz (float hz)
@@ -247,6 +247,61 @@ namespace dooblrvocals::params
             addFloat (layout, id ("delay"), name ("Delay"), range (0.0f, 30.0f, 8.0f), d.delayMs, msString(), "ms");
         }
 
+        //== v0.3: time FX (delay + reverb block) and the learned vocal range ===============
+        // Everything defaults to off / unchanged, so older sessions sound identical.
+        {
+            juce::StringArray notes, preSyncs;
+            for (int n = 0; n < dsp::numNoteValues; ++n) notes.add (dsp::noteValueName (n));
+            for (int n = 0; n < dsp::numPreDelaySyncs; ++n) preSyncs.add (dsp::preDelaySyncName (n));
+            const dsp::ReverbSettings r;
+            const dsp::DelaySettings d;
+            const auto pct150 = [] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + " %"; };
+            const auto secs = [] (float v, int) { return v < 10.0f ? juce::String (v, 2) + " s" : juce::String (v, 1) + " s"; };
+            const auto duck = [] (float v, int) { return v < 0.05f ? juce::String ("Off") : "-" + juce::String (v, 1) + " dB"; };
+
+            addBool (layout, "rev_on", "Reverb On", false);
+            addFloat (layout, "rev_predelay", "Reverb Pre-delay", range (0.0f, 250.0f, 40.0f), r.preDelayMs, msString(), "ms");
+            addChoice (layout, "rev_predelay_sync", "Reverb Pre-delay Sync", preSyncs, 0);
+            addFloat (layout, "rev_decay", "Reverb Decay", range (0.2f, 12.0f, 2.0f), r.decaySeconds, secs, "s");
+            addFloat (layout, "rev_size", "Reverb Size", range (0.0f, 1.0f), r.size, percentString());
+            addFloat (layout, "rev_damping", "Reverb HF Damping", range (0.0f, 1.0f), r.damping, percentString());
+            addFloat (layout, "rev_lowcut", "Reverb Low Cut", logRange (20.0f, 1000.0f), r.lowCutHz, hzString(), "Hz");
+            addFloat (layout, "rev_highcut", "Reverb High Cut", logRange (1000.0f, 20000.0f), r.highCutHz, hzString(), "Hz");
+            addFloat (layout, "rev_width", "Reverb Width", range (0.0f, 1.5f), r.width, pct150);
+            addFloat (layout, "rev_early", "Reverb Early / Late", range (0.0f, 1.0f), r.earlyLate,
+                      [] (float v, int) { return juce::String (juce::roundToInt ((1.0f - v) * 100.0f)) + "/" + juce::String (juce::roundToInt (v * 100.0f)); });
+            addFloat (layout, "rev_diffusion", "Reverb Diffusion", range (0.0f, 1.0f), r.diffusion, percentString());
+            addFloat (layout, "rev_mod", "Reverb Modulation", range (0.0f, 1.0f), r.modulation, percentString());
+            addFloat (layout, "rev_duck", "Reverb Ducking", range (0.0f, 24.0f), r.duckDb, duck, "dB");
+            addFloat (layout, "rev_duck_release", "Reverb Duck Release", range (20.0f, 2000.0f, 300.0f), r.duckReleaseMs, msString(), "ms");
+            addFloat (layout, "rev_mix", "Reverb Mix", range (0.0f, 1.0f), r.mix, percentString());
+
+            addBool (layout, "dly_on", "Delay On", false);
+            addChoice (layout, "dly_mode", "Delay Mode", { "Stereo", "Ping-Pong", "Dual L/R" }, d.mode);
+            addBool (layout, "dly_sync", "Delay Sync", d.sync);
+            addChoice (layout, "dly_note", "Delay Note (L)", notes, d.noteL);
+            addChoice (layout, "dly_note_r", "Delay Note R", notes, d.noteR);
+            addFloat (layout, "dly_time", "Delay Time (L)", range (1.0f, 2000.0f, 300.0f), d.timeLMs, msString(), "ms");
+            addFloat (layout, "dly_time_r", "Delay Time R", range (1.0f, 2000.0f, 300.0f), d.timeRMs, msString(), "ms");
+            addFloat (layout, "dly_feedback", "Delay Feedback", range (0.0f, dsp::VocalDelay::maxFeedback), d.feedback, percentString());
+            addFloat (layout, "dly_lowcut", "Delay Low Cut", logRange (20.0f, 2000.0f), d.lowCutHz, hzString(), "Hz");
+            addFloat (layout, "dly_highcut", "Delay High Cut", logRange (1000.0f, 20000.0f), d.highCutHz, hzString(), "Hz");
+            addFloat (layout, "dly_mod", "Delay Modulation", range (0.0f, 1.0f), d.modulation, percentString());
+            addFloat (layout, "dly_drive", "Delay Saturation", range (0.0f, 1.0f), d.drive, percentString());
+            addFloat (layout, "dly_duck", "Delay Ducking", range (0.0f, 24.0f), d.duckDb, duck, "dB");
+            addFloat (layout, "dly_duck_release", "Delay Duck Release", range (20.0f, 2000.0f, 300.0f), d.duckReleaseMs, msString(), "ms");
+            addFloat (layout, "dly_width", "Delay Width", range (0.0f, 1.5f), d.width, pct150);
+            addFloat (layout, "dly_mix", "Delay Mix", range (0.0f, 1.0f), d.mix, percentString());
+
+            addChoice (layout, "fx_routing", "FX Routing", { "Parallel", "Delay > Reverb", "Reverb > Delay" }, 0);
+
+            // Learned vocal range (the detector's search range when on).
+            const auto noteHz = [] (float hz, int) { return noteName (juce::roundToInt (69.0f + 12.0f * std::log2 (std::max (1.0f, hz) / 440.0f))); };
+            addBool (layout, "range_custom", "Learned Range On", false);
+            addFloat (layout, "range_low", "Learned Range Low", logRange (dsp::liveMinHz, 1400.0f), 130.0f, noteHz, "Hz");
+            addFloat (layout, "range_high", "Learned Range High", logRange (dsp::liveMinHz, 1400.0f), 530.0f, noteHz, "Hz");
+        }
+
         return layout;
     }
 
@@ -269,6 +324,19 @@ namespace dooblrvocals::params
         outputGain = getId ("output_gain"); chainOrder = getId ("chain_order");
         latencyMode = getId ("latency_mode");
         harmOn = getId ("harm_on"); harmLevel = getId ("harm_level"); harmFormant = getId ("harm_formant");
+
+        revOn = getId ("rev_on"); revPre = getId ("rev_predelay"); revPreSync = getId ("rev_predelay_sync");
+        revDecay = getId ("rev_decay"); revSize = getId ("rev_size"); revDamping = getId ("rev_damping");
+        revLowCut = getId ("rev_lowcut"); revHighCut = getId ("rev_highcut"); revWidth = getId ("rev_width");
+        revEarly = getId ("rev_early"); revDiffusion = getId ("rev_diffusion"); revMod = getId ("rev_mod");
+        revDuck = getId ("rev_duck"); revDuckRelease = getId ("rev_duck_release"); revMix = getId ("rev_mix");
+        dlyOn = getId ("dly_on"); dlyMode = getId ("dly_mode"); dlySync = getId ("dly_sync");
+        dlyNote = getId ("dly_note"); dlyNoteR = getId ("dly_note_r"); dlyTime = getId ("dly_time"); dlyTimeR = getId ("dly_time_r");
+        dlyFeedback = getId ("dly_feedback"); dlyLowCut = getId ("dly_lowcut"); dlyHighCut = getId ("dly_highcut");
+        dlyMod = getId ("dly_mod"); dlyDrive = getId ("dly_drive"); dlyDuck = getId ("dly_duck");
+        dlyDuckRelease = getId ("dly_duck_release"); dlyWidth = getId ("dly_width"); dlyMix = getId ("dly_mix");
+        fxRouting = getId ("fx_routing");
+        rangeCustom = getId ("range_custom"); rangeLow = getId ("range_low"); rangeHigh = getId ("range_high");
 
         for (int v = 0; v < dsp::numHarmonyVoices; ++v)
         {
@@ -326,6 +394,33 @@ namespace dooblrvocals::params
             voice.pan = f (h.pan);
             voice.detuneCents = f (h.detune);
             voice.delayMs = f (h.delay);
+        }
+
+        s.reverb = { b (revOn), f (revPre), i (revPreSync), f (revDecay), f (revSize), f (revDamping), f (revLowCut),
+                     f (revHighCut), f (revWidth), f (revEarly), f (revDiffusion), f (revMod), f (revDuck),
+                     f (revDuckRelease), f (revMix) };
+        s.delay.enabled = b (dlyOn);
+        s.delay.mode = juce::jlimit (0, 2, i (dlyMode));
+        s.delay.sync = b (dlySync);
+        s.delay.noteL = i (dlyNote);
+        s.delay.noteR = i (dlyNoteR);
+        s.delay.timeLMs = f (dlyTime);
+        s.delay.timeRMs = f (dlyTimeR);
+        s.delay.feedback = f (dlyFeedback);
+        s.delay.lowCutHz = f (dlyLowCut);
+        s.delay.highCutHz = f (dlyHighCut);
+        s.delay.modulation = f (dlyMod);
+        s.delay.drive = f (dlyDrive);
+        s.delay.duckDb = f (dlyDuck);
+        s.delay.duckReleaseMs = f (dlyDuckRelease);
+        s.delay.width = f (dlyWidth);
+        s.delay.mix = f (dlyMix);
+        s.fxRouting = (dsp::FxRouting) juce::jlimit (0, 2, i (fxRouting));
+
+        if (b (rangeCustom))
+        {
+            s.pitch.rangeLowHz = f (rangeLow);
+            s.pitch.rangeHighHz = f (rangeHigh);
         }
 
         return s;

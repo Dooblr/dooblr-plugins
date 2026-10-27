@@ -23,6 +23,7 @@ namespace dooblrvocals::dsp
         chains[0].prepare (sampleRate, maxBlock);
         chains[1].prepare (sampleRate, maxBlock);
         outputGain.prepare (sampleRate);
+        fx.prepare (sampleRate, maxBlock);
         reset();
     }
 
@@ -32,6 +33,7 @@ namespace dooblrvocals::dsp
         chains[0].reset();
         chains[1].reset();
         outputGain.reset();
+        fx.reset();
         activeChain = 0;
         activeOrder = 0;
         fadeRemaining = 0;
@@ -108,6 +110,12 @@ namespace dooblrvocals::dsp
         settings.limiter.mode = target.limiter.mode;
         settings.chainOrder = target.chainOrder;
         settings.nonRealtime = target.nonRealtime;
+        // The FX block glides its own delay / pre-delay times and ramps its mixes and on / off,
+        // so its settings snap (a mix of 0 must reach exactly 0 for a bit-transparent path).
+        settings.reverb = target.reverb;
+        settings.delay = target.delay;
+        settings.fxRouting = target.fxRouting;
+        settings.bpm = target.bpm;
 
         const auto coeff = 1.0f - std::exp (-(float) std::max (1, numSamples)
                                             / (smoothMs * 0.001f * (float) sampleRate));
@@ -188,6 +196,9 @@ namespace dooblrvocals::dsp
             }
 
             lastGrDb = chains[(size_t) (fadeRemaining > 0 ? activeChain ^ 1 : activeChain)].getLastGainReductionDb();
+
+            // Time-based FX (delay + reverb) after the chain: adds no latency.
+            fx.process (slice, chunk, settings.reverb, settings.delay, settings.fxRouting, settings.bpm);
 
             outputGain.process (slice, chunk, settings.limiter.outputDb);
 

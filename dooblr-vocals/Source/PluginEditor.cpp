@@ -1,6 +1,7 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Presets.h"
+#include "RangeLearner.h"
 
 #include <algorithm>
 #include <cmath>
@@ -25,7 +26,7 @@ namespace
 
     const char* pageName (int page)
     {
-        static const char* names[] { "Pitch", "Harmony", "Gate", "EQ", "Comp", "Limiter" };
+        static const char* names[] { "Pitch", "Harmony", "Gate", "EQ", "Comp", "Limiter", "Delay", "Reverb" };
         return names[page];
     }
 
@@ -33,6 +34,7 @@ namespace
     {
         return page == DooblrVocalsAudioProcessorEditor::pitchPage     ? Palette::accent
              : page == DooblrVocalsAudioProcessorEditor::harmonyPage ? Palette::master
+             : page >= DooblrVocalsAudioProcessorEditor::delayPage   ? Palette::fx
                                                                      : Palette::dynamic;
     }
 
@@ -70,6 +72,15 @@ ProcessorPowerButton::ProcessorPowerButton (int stageIndex)
         return;
     }
 
+    if (stage == delayStage || stage == reverbStage)
+    {
+        setComponentID (stage == delayStage ? "power_delay" : "power_reverb");
+        setTooltip (stage == delayStage ? "Delay on/off (after the processing chain, with the reverb)"
+                                        : "Reverb on/off (after the processing chain, with the delay)");
+        setClickingTogglesState (true);
+        return;
+    }
+
     setComponentID (ids[stage]);
     setTooltip (juce::String (names[stage]) + " on/off");
     setClickingTogglesState (false);
@@ -80,6 +91,8 @@ void ProcessorPowerButton::paintButton (juce::Graphics& g, bool highlighted, boo
     const auto on = getToggleState();
     const auto colour = pageColour (stage == pitchStage     ? (int) DooblrVocalsAudioProcessorEditor::pitchPage
                                     : stage == harmonyStage ? (int) DooblrVocalsAudioProcessorEditor::harmonyPage
+                                    : stage == delayStage   ? (int) DooblrVocalsAudioProcessorEditor::delayPage
+                                    : stage == reverbStage  ? (int) DooblrVocalsAudioProcessorEditor::reverbPage
                                                             : DooblrVocalsAudioProcessorEditor::pageForStage (stage));
     auto circle = getLocalBounds().toFloat().withSizeKeepingCentre ((float) size, (float) size).reduced (1.0f);
 
@@ -250,6 +263,10 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
       eqDisplay (processorToEdit.getParameterState()),
       dynamicsDisplay (processorToEdit.getParameterState()),
       limiterDisplay (processorToEdit.getParameterState()),
+      delayDisplay (processorToEdit.getParameterState()),
+      reverbDisplay (processorToEdit.getParameterState()),
+      delayRouting (processorToEdit.getParameterState()),
+      reverbRouting (processorToEdit.getParameterState()),
       outputMeter (&processorToEdit.getOutputPeakTap())
 {
     setLookAndFeel (&lookAndFeel);
@@ -336,7 +353,25 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
             };
         }
 
-        if (p >= gatePage)
+        if (p == delayPage || p == reverbPage)
+        {
+            const auto isDelay = p == delayPage;
+            auto& power = isDelay ? delayPower : reverbPower;
+            power = std::make_unique<ProcessorPowerButton> (isDelay ? ProcessorPowerButton::delayStage : ProcessorPowerButton::reverbStage);
+            button.setHasPowerToggle (true);
+            button.setTooltip (isDelay ? "Delay - tempo-synced or ms; with the reverb in parallel or in series (after the chain)"
+                                       : "Reverb - vocal plate / room / hall; with the delay in parallel or in series (after the chain)");
+            button.addAndMakeVisible (*power);
+            (isDelay ? delayPowerAttachment : reverbPowerAttachment) = std::make_unique<ButtonAttachment> (state, isDelay ? "dly_on" : "rev_on", *power);
+            power->onStateChange = [this, p]
+            {
+                auto* pw = (p == delayPage ? delayPower : reverbPower).get();
+                if (pw != nullptr)
+                    pageButtons[(size_t) p].setProcessorOn (pw->getToggleState());
+            };
+        }
+
+        if (p >= gatePage && p <= limiterPage)
         {
             const auto stage = p - gatePage;
             button.setTooltip (juce::String (pageName (p)) + " - drag the handle to move it in the processing chain");
@@ -360,6 +395,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     addChildComponent (eqDisplay.getPeakHoldButton());
     addChildComponent (dynamicsDisplay);
     addChildComponent (limiterDisplay);
+    addChildComponent (delayDisplay);
+    addChildComponent (reverbDisplay);
     meterSpectrumScratch.resize (1 << 15);
     meterFrameScratch.resize (1 << 11);
     pitchFrameScratch.resize (1 << 11);
@@ -368,8 +405,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
         { "corr_mode", "Mode", K::combo }, { "corr_key", "Key", K::combo }, { "corr_scale", "Scale", K::combo },
         { "retune_speed", "Retune", K::knob }, { "humanize", "Humanize", K::knob }, { "corr_amount", "Amount", K::knob } }));
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Detector", pageColour (pitchPage), Specs {
-        { "input_type", "Range", K::combo }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle },
-        { "quality", "Quality", K::combo }, { "latency_mode", "Latency", K::combo, 112 } }));
+        { "input_type", "Range", K::combo, 110 }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle, 88 },
+        { "quality", "Quality", K::combo, 104 }, { "latency_mode", "Latency", K::combo, 112 } }));
     pagePanels[harmonyPage].push_back (std::make_unique<ControlPanel> (state, "Harmony bus", pageColour (harmonyPage), Specs {
         { "harm_level", "Level", K::knob }, { "harm_formant", "Formant", K::toggle } }));
     pagePanels[gatePage].push_back (std::make_unique<ControlPanel> (state, "Gate", pageColour (gatePage), Specs {
@@ -385,6 +422,57 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     pagePanels[limiterPage].push_back (std::make_unique<ControlPanel> (state, "Limiter", pageColour (limiterPage), Specs {
         { "lim_mode", "Mode", K::combo, 0, 1 }, { "lim_ceiling", "Ceiling", K::knob }, { "lim_release", "Release", K::knob } }));
 
+    // v0.3 time FX: Delay and Reverb pages (each with its section presets and the shared routing).
+    pagePanels[delayPage].push_back (std::make_unique<ControlPanel> (state, "Delay", pageColour (delayPage), Specs {
+        { "dly_mode", "Mode", K::combo, 104 }, { "dly_sync", "Sync", K::toggle, 76 },
+        { "dly_note", "Time", K::combo, 84, 0, 0 }, { "dly_time", "Time", K::knob, 0, 0, 0 },
+        { "dly_note_r", "Time R", K::combo, 84, 0, 1 }, { "dly_time_r", "Time R", K::knob, 0, 0, 1 },
+        { "dly_feedback", "Feedback", K::knob }, { "dly_mod", "Mod", K::knob }, { "dly_drive", "Drive", K::knob } }));
+    pagePanels[delayPage].push_back (std::make_unique<ControlPanel> (state, "Tone, ducking and mix", pageColour (delayPage), Specs {
+        { "dly_lowcut", "Low cut", K::knob }, { "dly_highcut", "High cut", K::knob }, { "dly_duck", "Duck", K::knob },
+        { "dly_duck_release", "Duck rel", K::knob }, { "dly_width", "Width", K::knob }, { "dly_mix", "Mix", K::knob } }));
+    pagePanels[reverbPage].push_back (std::make_unique<ControlPanel> (state, "Reverb", pageColour (reverbPage), Specs {
+        { "rev_predelay", "Pre-delay", K::knob }, { "rev_predelay_sync", "Pre sync", K::combo, 84 },
+        { "rev_decay", "Decay", K::knob }, { "rev_size", "Size", K::knob }, { "rev_damping", "Damping", K::knob },
+        { "rev_diffusion", "Diffusion", K::knob }, { "rev_early", "Early/Late", K::knob }, { "rev_mod", "Mod", K::knob } }));
+    pagePanels[reverbPage].push_back (std::make_unique<ControlPanel> (state, "Tone, ducking and mix", pageColour (reverbPage), Specs {
+        { "rev_lowcut", "Low cut", K::knob }, { "rev_highcut", "High cut", K::knob }, { "rev_width", "Width", K::knob },
+        { "rev_duck", "Duck", K::knob }, { "rev_duck_release", "Duck rel", K::knob }, { "rev_mix", "Mix", K::knob } }));
+
+    for (auto [page, box] : { std::pair<int, juce::ComboBox*> { delayPage, &delayPresetBox }, { reverbPage, &reverbPresetBox } })
+    {
+        const auto& list = page == delayPage ? dooblrvocals::presets::getDelayPresets() : dooblrvocals::presets::getReverbPresets();
+        box->setComponentID (page == delayPage ? "delayPresets" : "reverbPresets");
+        box->setTextWhenNothingSelected ("Presets");
+        box->setTooltip (page == delayPage ? "Delay presets (load only the delay settings, one undo step)"
+                                           : "Reverb presets (load only the reverb settings, one undo step)");
+        for (int i = 0; i < (int) list.size(); ++i)
+            box->addItem (list[(size_t) i].name, i + 1);
+        box->onChange = [this, page] { sectionPresetChosen (page); };
+        pagePanels[(size_t) page].front()->addExtra (*box, 124, -1, page == delayPage ? "dly_mode" : "rev_predelay");
+        pagePanels[(size_t) page].back()->addExtra (page == delayPage ? (juce::Component&) delayRouting : (juce::Component&) reverbRouting,
+                                                    dooblrvocals::ui::FxRoutingView::preferredWidth, -1, {}, true);
+    }
+
+    // Learn Range (Detector panel) and the learned range readout (pitch page bar).
+    learnButton.setComponentID ("learnRange");
+    learnButton.setClickingTogglesState (false);
+    learnButton.setTooltip ("Learn Range: click, sing your lowest to highest notes, click again. Sets the detector "
+                            "range (faster, steadier tracking) and the Range type. One undo step.");
+    learnButton.onClick = [this] { toggleRangeLearn(); };
+    styleLabel (learnLabel, {}, 12.0f, Palette::textPrimary, juce::Justification::centredRight);
+    learnLabel.setComponentID ("learnedRange");
+    addChildComponent (learnLabel);
+    learnResetButton.setComponentID ("learnReset");
+    learnResetButton.setTooltip ("Back to the Range type's default detector range (one undo step)");
+    learnResetButton.onClick = [this]
+    {
+        audioProcessor.resetLearnedRange();
+        learnMessage = {};
+        updateLearnUi();
+    };
+    addChildComponent (learnResetButton);
+
     for (auto& panels : pagePanels)
         for (auto& panel : panels)
             addChildComponent (*panel);
@@ -395,7 +483,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     latencyLabel.setTooltip ("Tracking: ~5 ms, for monitoring while recording (slightly rougher onsets).\n"
                              "Mix: 43 ms look-ahead for clean grains, compensated by the host.\n"
                              "HQ (Quality) overrides both and is always used for offline renders.");
-    pagePanels[pitchPage][1]->addExtra (latencyLabel, 130);
+    pagePanels[pitchPage][1]->addExtra (latencyLabel, 118);
+    pagePanels[pitchPage][1]->addExtra (learnButton, 100);
     updateLatencyLabel();
 
     if (auto* latencyBox = dynamic_cast<juce::ComboBox*> (pagePanels[pitchPage][1]->findControl ("latency_mode")))
@@ -427,6 +516,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
 DooblrVocalsAudioProcessorEditor::~DooblrVocalsAudioProcessorEditor()
 {
     meterVBlank.reset();
+    if (audioProcessor.isLearningRange())
+        audioProcessor.cancelRangeLearn();
     audioProcessor.getUndoHistory().getUndoManager().removeChangeListener (this);
     for (auto& panels : pagePanels)
         panels.clear();
@@ -451,6 +542,10 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     eqDisplay.getPeakHoldButton().setVisible (selectedPage == eqPage);
     dynamicsDisplay.setVisible (selectedPage == dynamicsPage);
     limiterDisplay.setVisible (selectedPage == limiterPage);
+    delayDisplay.setVisible (selectedPage == delayPage);
+    reverbDisplay.setVisible (selectedPage == reverbPage);
+    learnLabel.setVisible (selectedPage == pitchPage);
+    updateLearnUi();
 
     audioProcessor.getMeterTap().discardAll();
     audioProcessor.getPitchTap().discardAll();
@@ -460,6 +555,8 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     if (selectedPage == eqPage) eqDisplay.reset();
     if (selectedPage == dynamicsPage) dynamicsDisplay.reset();
     if (selectedPage == limiterPage) limiterDisplay.reset();
+    if (selectedPage == delayPage) delayDisplay.refresh (audioProcessor.getDelayDuckDb(), audioProcessor.getHostBpm());
+    if (selectedPage == reverbPage) reverbDisplay.refresh (audioProcessor.getReverbDuckDb(), audioProcessor.getHostBpm());
 
     updateEnablement();
     resized();
@@ -513,6 +610,94 @@ void DooblrVocalsAudioProcessorEditor::updateEnablement()
     setEnabled (limiterPage, "lim_mode", limiter > 0);
     setEnabled (limiterPage, "lim_ceiling", limiter > 0);
     setEnabled (limiterPage, "lim_release", limiter == 2);
+
+    // Delay: synced note values or ms share their slots; the R time only in Dual L/R.
+    const auto sync = value ("dly_sync") > 0.5f;
+    const auto dual = juce::roundToInt (value ("dly_mode")) == (int) dooblrvocals::dsp::DelaySettings::dual;
+    auto& delayPanel = *pagePanels[delayPage].front();
+    auto changed = delayPanel.setShown ("dly_note", sync);
+    changed = delayPanel.setShown ("dly_time", ! sync) || changed;
+    changed = delayPanel.setShown ("dly_note_r", sync && dual) || changed;
+    changed = delayPanel.setShown ("dly_time_r", ! sync && dual) || changed;
+    if (changed)
+        delayPanel.resized();
+
+    setEnabled (reverbPage, "rev_predelay", juce::roundToInt (value ("rev_predelay_sync")) == 0);
+    setEnabled (reverbPage, "rev_duck_release", value ("rev_duck") > 0.05f);
+    setEnabled (delayPage, "dly_duck_release", value ("dly_duck") > 0.05f);
+}
+
+void DooblrVocalsAudioProcessorEditor::sectionPresetChosen (int page)
+{
+    auto& box = page == delayPage ? delayPresetBox : reverbPresetBox;
+    const auto& list = page == delayPage ? dooblrvocals::presets::getDelayPresets() : dooblrvocals::presets::getReverbPresets();
+    const auto index = box.getSelectedId() - 1;
+
+    if (index < 0 || index >= (int) list.size())
+        return;
+
+    namespace presets = dooblrvocals::presets;
+    presets::apply (state, presets::resolveSection (state, page == delayPage ? "dly_" : "rev_", list[(size_t) index].values), true);
+    setStatus ((page == delayPage ? "Delay: " : "Reverb: ") + list[(size_t) index].name);
+    updateEnablement();
+}
+
+void DooblrVocalsAudioProcessorEditor::toggleRangeLearn()
+{
+    if (! audioProcessor.isLearningRange())
+    {
+        audioProcessor.startRangeLearn();
+        learnMessage = {};
+    }
+    else
+    {
+        const auto result = audioProcessor.stopRangeLearn();
+        learnMessage = result.valid ? juce::String() : result.message;
+        if (result.valid)
+            setStatus ("Learned range " + dooblrvocals::RangeLearner::rangeText (result.lowHz, result.highHz)
+                       + " (" + juce::String (result.voicedSeconds, 1) + " s of voice)");
+    }
+
+    updateLearnUi();
+}
+
+void DooblrVocalsAudioProcessorEditor::updateLearnUi()
+{
+    const auto learning = audioProcessor.isLearningRange();
+    const auto& learner = audioProcessor.getRangeLearner();
+    juce::String buttonText = "Learn Range", labelText;
+
+    if (learning)
+    {
+        const auto hz = learner.getLastVoicedHz();
+        buttonText = "Stop" + (hz > 0.0f ? juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")) + params::noteName (juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0)))
+                                         : juce::String());
+        labelText = "Listening - sing low to high, then Stop (" + juce::String (learner.getVoicedSeconds(), 1) + " s voiced)";
+        // Pulse while armed.
+        const auto phase = 0.5f + 0.5f * std::sin ((float) juce::Time::getMillisecondCounterHiRes() * 0.006f);
+        learnButton.setColour (juce::TextButton::buttonColourId, Palette::frozen.withAlpha (0.35f + 0.45f * phase));
+        learnButton.setColour (juce::TextButton::textColourOffId, Palette::textPrimary);
+    }
+    else
+    {
+        learnButton.removeColour (juce::TextButton::buttonColourId);
+        learnButton.removeColour (juce::TextButton::textColourOffId);
+
+        if (learnMessage.isNotEmpty())
+            labelText = learnMessage;
+        else if (state.getRawParameterValue ("range_custom")->load() > 0.5f)
+            labelText = "Detector range " + dooblrvocals::RangeLearner::rangeText (state.getRawParameterValue ("range_low")->load(),
+                                                                                    state.getRawParameterValue ("range_high")->load())
+                        + " (learned)";
+    }
+
+    if (learnButton.getButtonText() != buttonText)
+        learnButton.setButtonText (buttonText);
+    learnButton.getProperties().set ("armed", learning);
+    if (learnLabel.getText() != labelText)
+        learnLabel.setText (labelText, juce::dontSendNotification);
+    learnLabel.setColour (juce::Label::textColourId, learnMessage.isNotEmpty() && ! learning ? Palette::dynamic : Palette::textPrimary);
+    learnResetButton.setVisible (selectedPage == pitchPage && ! learning && state.getRawParameterValue ("range_custom")->load() > 0.5f);
 }
 
 //==============================================================================
@@ -748,7 +933,7 @@ void DooblrVocalsAudioProcessorEditor::readMeters()
 
     while (audioProcessor.getPitchTap().pop (pitchFrameScratch.data(), (int) pitchFrameScratch.size()) > 0) {}
 
-    if (selectedPage == harmonyPage)
+    if (selectedPage == harmonyPage || selectedPage >= delayPage)
     {
         tap.discardAll();
         return;
@@ -781,6 +966,14 @@ void DooblrVocalsAudioProcessorEditor::timerCallback()
     updateLatencyLabel();
     if (selectedPage == harmonyPage)
         harmonyDisplay.refresh();
+    if (selectedPage == delayPage)
+        delayDisplay.refresh (audioProcessor.getDelayDuckDb(), audioProcessor.getHostBpm());
+    if (selectedPage == reverbPage)
+        reverbDisplay.refresh (audioProcessor.getReverbDuckDb(), audioProcessor.getHostBpm());
+
+    if (audioProcessor.isLearningRange())
+        audioProcessor.pollRangeLearn();
+    updateLearnUi();
 
     if (presetBox.getText() != audioProcessor.getPresetName() && ! presetBox.isPopupActive())
         refreshPresetBox();
@@ -843,13 +1036,16 @@ void DooblrVocalsAudioProcessorEditor::paint (juce::Graphics& g)
     g.setColour (Palette::textMuted);
     g.drawText ("CORRECTION", correctionTitleArea, juce::Justification::centredLeft);
     g.drawText ("PROCESSING", fxTitleArea, juce::Justification::centredLeft);
+    g.drawText ("TIME FX", timeFxTitleArea, juce::Justification::centredLeft);
 
     g.setColour (pageColour (selectedPage));
     g.drawText (selectedPage == pitchPage ? "PITCH"
                 : selectedPage == harmonyPage ? "HARMONY"
                 : selectedPage == gatePage ? "GATE"
                 : selectedPage == eqPage ? "OUTPUT EQ"
-                : selectedPage == dynamicsPage ? "COMPRESSOR" : "LIMITER",
+                : selectedPage == dynamicsPage ? "COMPRESSOR"
+                : selectedPage == limiterPage ? "LIMITER"
+                : selectedPage == delayPage ? "DELAY" : "REVERB",
                 graphTitleArea, juce::Justification::centredLeft);
 }
 
@@ -900,7 +1096,7 @@ void DooblrVocalsAudioProcessorEditor::resized()
     {
         auto nav = navArea.reduced (12, 12);
         constexpr int titleHeight = 20, groupGap = 10;
-        const auto pitch = juce::jmax (28, (nav.getHeight() - 2 * titleHeight - groupGap) / numPages);
+        const auto pitch = juce::jmax (28, (nav.getHeight() - 3 * titleHeight - 2 * groupGap) / numPages);
         const auto gap = juce::jlimit (2, 4, pitch / 14);
         correctionTitleArea = nav.removeFromTop (titleHeight);
 
@@ -912,9 +1108,15 @@ void DooblrVocalsAudioProcessorEditor::resized()
                 fxTitleArea = nav.removeFromTop (titleHeight);
             }
 
+            if (p == delayPage)
+            {
+                nav.removeFromTop (groupGap);
+                timeFxTitleArea = nav.removeFromTop (titleHeight);
+            }
+
             const auto slot = nav.removeFromTop (pitch).reduced (0, gap);
 
-            if (p >= gatePage)
+            if (p >= gatePage && p <= limiterPage)
             {
                 chainSlotBounds[(size_t) (p - gatePage)] = slot;
                 continue;
@@ -926,6 +1128,10 @@ void DooblrVocalsAudioProcessorEditor::resized()
                 pitchPower->setBounds (button.getPowerArea());
             if (p == harmonyPage)
                 harmonyPower->setBounds (button.getPowerArea());
+            if (p == delayPage)
+                delayPower->setBounds (button.getPowerArea());
+            if (p == reverbPage)
+                reverbPower->setBounds (button.getPowerArea());
         }
 
         layoutChainButtons();
@@ -954,6 +1160,15 @@ void DooblrVocalsAudioProcessorEditor::resized()
         auto bar = display.removeFromTop (24);
         graphTitleArea = bar.removeFromLeft (180);
         statusLabel.setBounds (bar.removeFromRight (juce::jmin (280, bar.getWidth())).reduced (0, 2));
+        if (selectedPage == pitchPage)
+        {
+            // The learned range (or the learn message) and its reset, between the title and the status.
+            learnResetButton.setBounds (bar.removeFromRight (54).reduced (0, 1));
+            bar.removeFromRight (6);
+            learnLabel.setBounds (bar.reduced (0, 2));
+            if (audioProcessor.isLearningRange() || learnMessage.isNotEmpty())
+                statusLabel.setBounds (statusLabel.getBounds().withWidth (0));
+        }
         eqDisplay.getPeakHoldButton().setBounds (bar.withLeft (bar.getRight() - 96).reduced (0, 1));
         display.removeFromTop (4);
         pitchDisplay.setBounds (display);
@@ -962,6 +1177,8 @@ void DooblrVocalsAudioProcessorEditor::resized()
         eqDisplay.setBounds (display);
         dynamicsDisplay.setBounds (display);
         limiterDisplay.setBounds (display);
+        delayDisplay.setBounds (display);
+        reverbDisplay.setBounds (display);
     }
 }
 

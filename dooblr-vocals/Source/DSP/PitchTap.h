@@ -15,6 +15,7 @@ namespace dooblrvocals::dsp
         float correctedHz = 0.0f;
         float confidence = 0.0f;
         bool voiced = false;
+        float seconds = 0.0f;   // duration this reading covers (one hop)
     };
 
     /**

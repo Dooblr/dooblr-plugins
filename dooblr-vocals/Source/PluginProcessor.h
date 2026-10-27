@@ -9,6 +9,7 @@
 #include "DSP/PitchTap.h"
 #include "DSP/VocalEngine.h"
 #include "Parameters.h"
+#include "RangeLearner.h"
 #include "UndoHistory.h"
 
 class DooblrVocalsAudioProcessor final : public juce::AudioProcessor
@@ -32,7 +33,7 @@ public:
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.1; }
+    double getTailLengthSeconds() const override;
 
     int getNumPrograms() override;
     int getCurrentProgram() override { return currentProgram; }
@@ -61,6 +62,24 @@ public:
     dooblrvocals::dsp::PitchTap& getPitchTap() noexcept { return pitchTap; }
     dooblrvocals::dsp::OutputPeakTap& getOutputPeakTap() noexcept { return outputPeakTap; }
 
+    float getReverbDuckDb() const noexcept { return reverbDuckDb.load(); }
+    float getDelayDuckDb() const noexcept { return delayDuckDb.load(); }
+    double getHostBpm() const noexcept { return hostBpm.load(); }
+
+    //== Learn Range (message thread). The armed flag is plain state, not a parameter. ========
+    void startRangeLearn();
+    /** Drains the audio thread's readings into the learner; call from a timer while learning. */
+    void pollRangeLearn();
+    /** Stops, computes and (if there was enough voice) applies the range as one undo step. */
+    dooblrvocals::LearnedRange stopRangeLearn();
+    void cancelRangeLearn();
+    bool isLearningRange() const noexcept { return learnArmed.load(); }
+    const dooblrvocals::RangeLearner& getRangeLearner() const noexcept { return rangeLearner; }
+    /** Applies a learned range (search range, Range type) as one gesture / undo step. */
+    void applyLearnedRange (const dooblrvocals::LearnedRange& range);
+    void resetLearnedRange();
+    dooblrvocals::dsp::PitchTap& getLearnTap() noexcept { return learnTap; }
+
 private:
     juce::ValueTree createStateTree();
     void updateLatency (const dooblrvocals::dsp::VocalSettings& s);
@@ -71,6 +90,12 @@ private:
     dooblrvocals::dsp::MeterTap meterTap;
     dooblrvocals::dsp::PitchTap pitchTap;
     dooblrvocals::dsp::OutputPeakTap outputPeakTap;
+    dooblrvocals::dsp::PitchTap learnTap;
+    dooblrvocals::RangeLearner rangeLearner;
+    std::vector<dooblrvocals::dsp::PitchFrame> learnScratch = std::vector<dooblrvocals::dsp::PitchFrame> (512);
+    std::atomic<bool> learnArmed { false };
+    std::atomic<float> reverbDuckDb { 0.0f }, delayDuckDb { 0.0f };
+    std::atomic<double> hostBpm { 120.0 };
     dooblrvocals::dsp::VocalEngine engine;
 
     std::atomic<float> gainReductionDb { 0.0f };

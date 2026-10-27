@@ -15,6 +15,9 @@
 #include "DSP/ProcessingChain.h"
 #include "DSP/VocalEngine.h"
 #include "DSP/VocalSettings.h"
+#include "DSP/TimeFx.h"
+#include "RangeLearner.h"
+#include "UI/FxDisplays.h"
 #include "UI/Theme.h"
 
 #include <algorithm>
@@ -1165,6 +1168,11 @@ namespace
         reachable.insert ("comp_on");
         reachable.insert ("lim_mode");
         reachable.insert ("harm_on");
+        reachable.insert ("rev_on");       // Reverb tab power
+        reachable.insert ("dly_on");       // Delay tab power
+        reachable.insert ("range_custom"); // Learn Range (button + reset)
+        reachable.insert ("range_low");
+        reachable.insert ("range_high");
 
         juce::StringArray missing;
         for (const auto& id : allParameterIds (*p))
@@ -2290,6 +2298,913 @@ namespace
             }
     }
 
+    //==============================================================================
+    // v0.3: reverb, delay, routing and Learn Range.
+    struct StereoBuf
+    {
+        std::vector<float> l, r;
+        explicit StereoBuf (int n) : l ((size_t) n, 0.0f), r ((size_t) n, 0.0f) {}
+    };
+
+    dsp::ReverbSettings plainReverb()
+    {
+        dsp::ReverbSettings s;
+        s.enabled = true;
+        s.preDelayMs = 0.0f;
+        s.lowCutHz = 20.0f;
+        s.highCutHz = 20000.0f;
+        s.damping = 0.0f;
+        s.modulation = 0.0f;
+        s.earlyLate = 1.0f;
+        s.duckDb = 0.0f;
+        s.width = 1.0f;
+        s.mix = 0.5f;
+        return s;
+    }
+
+    dsp::DelaySettings plainDelay()
+    {
+        dsp::DelaySettings s;
+        s.enabled = true;
+        s.mode = dsp::DelaySettings::stereo;
+        s.sync = false;
+        s.timeLMs = s.timeRMs = 250.0f;
+        s.feedback = 0.0f;
+        s.lowCutHz = 20.0f;
+        s.highCutHz = 20000.0f;
+        s.modulation = 0.0f;
+        s.drive = 0.0f;
+        s.duckDb = 0.0f;
+        s.width = 1.0f;
+        s.mix = 0.5f;
+        return s;
+    }
+
+    /** Renders a reverb's wet signal (L + R) for an input. */
+    std::vector<float> reverbWet (const dsp::ReverbSettings& s, const std::function<float (int)>& in, int n, double bpm = 120.0)
+    {
+        dsp::VocalReverb rev;
+        rev.prepare (sampleRate, blockSize);
+        std::vector<float> out ((size_t) n);
+        std::vector<float> x ((size_t) blockSize), wl ((size_t) blockSize), wr ((size_t) blockSize);
+        for (int pos = 0; pos < n; pos += blockSize)
+        {
+            const auto m = std::min (blockSize, n - pos);
+            for (int i = 0; i < m; ++i) x[(size_t) i] = in (pos + i);
+            rev.renderWet (x.data(), x.data(), wl.data(), wr.data(), m, x.data(), x.data(), s, bpm);
+            for (int i = 0; i < m; ++i) out[(size_t) (pos + i)] = 0.5f * (wl[(size_t) i] + wr[(size_t) i]);
+        }
+        return out;
+    }
+
+    /** RT60 (s) from the Schroeder backward-integrated energy, fitted between -5 and -25 dB. */
+    double measureRt60 (const std::vector<float>& ir, double rate)
+    {
+        std::vector<double> edc (ir.size() + 1, 0.0);
+        for (size_t i = ir.size(); i-- > 0;)
+            edc[i] = edc[i + 1] + (double) ir[i] * (double) ir[i];
+        const auto total = std::max (1.0e-30, edc[0]);
+        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        int count = 0;
+        for (size_t i = 0; i < ir.size(); ++i)
+        {
+            const auto db = 10.0 * std::log10 (std::max (1.0e-30, edc[i] / total));
+            if (db <= -5.0 && db >= -25.0)
+            {
+                const auto t = (double) i / rate;
+                sx += t; sy += db; sxx += t * t; sxy += t * db; ++count;
+            }
+        }
+        if (count < 10)
+            return 0.0;
+        const auto slope = (count * sxy - sx * sy) / std::max (1.0e-30, count * sxx - sx * sx);
+        return slope < 0.0 ? -60.0 / slope : 0.0;
+    }
+
+    double rmsRange (const std::vector<float>& v, int from, int to)
+    {
+        double e = 0.0;
+        to = std::min (to, (int) v.size());
+        for (int i = from; i < to; ++i)
+            e += (double) v[(size_t) i] * v[(size_t) i];
+        return std::sqrt (e / std::max (1, to - from));
+    }
+
+    /** Removes every PARAM-like child whose id starts with one of the prefixes (a v0.2 session). */
+    void stripParameters (juce::XmlElement& xml, const juce::StringArray& prefixes)
+    {
+        for (int i = xml.getNumChildElements(); --i >= 0;)
+        {
+            auto* child = xml.getChildElement (i);
+            const auto id = child->getStringAttribute ("id");
+            bool strip = false;
+            for (const auto& prefix : prefixes)
+                strip = strip || (id.isNotEmpty() && id.startsWith (prefix));
+            if (strip)
+                xml.removeChildElement (child, true);
+            else
+                stripParameters (*child, prefixes);
+        }
+    }
+
+    juce::MemoryBlock legacyState (Processor& source)
+    {
+        juce::MemoryBlock blob;
+        source.getStateInformation (blob);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+        juce::MemoryBlock out;
+        if (xml != nullptr)
+        {
+            stripParameters (*xml, { "rev_", "dly_", "fx_routing", "range_" });
+            juce::AudioProcessor::copyXmlToBinary (*xml, out);
+        }
+        return out;
+    }
+
+    // Visible all the way up to the editor (isShowing() needs a desktop peer, which tests don't have).
+    bool visibleChain (const juce::Component& c)
+    {
+        // The editor itself is never put on screen here, so stop below the top level.
+        for (auto* comp = &c; comp != nullptr && comp->getParentComponent() != nullptr; comp = comp->getParentComponent())
+            if (! comp->isVisible())
+                return false;
+        return true;
+    }
+
+    void testReverb()
+    {
+        // Stability: the longest, biggest, most diffuse, most modulated setting on noise + impulses.
+        {
+            auto s = plainReverb();
+            s.decaySeconds = 12.0f; s.size = 1.0f; s.diffusion = 1.0f; s.modulation = 1.0f; s.earlyLate = 0.5f;
+            s.preDelayMs = 250.0f;
+            juce::Random rng (7);
+            const auto n = (int) (12.0 * sampleRate);
+            const auto wet = reverbWet (s, [&] (int i) { return i < (int) (2.0 * sampleRate) ? (rng.nextFloat() * 2.0f - 1.0f) * 0.5f
+                                                                                          : (i % 48000 == 0 ? 1.0f : 0.0f); }, n);
+            float peak = 0.0f;
+            bool finite = true;
+            for (auto v : wet) { finite = finite && std::isfinite (v); peak = std::max (peak, std::abs (v)); }
+            note ("reverb 12 s / size 100 % / mod 100 % on noise + impulses: peak " + format (peak, 3));
+            check (finite && peak < 4.0f, "reverb is stable and finite at its extremes (peak " + format (peak, 3) + ")");
+        }
+
+        // RT60 vs the Decay setting (late only, no damping, full band).
+        for (const auto decay : { 0.6f, 1.5f, 3.0f, 6.0f })
+        {
+            for (const auto size : { 0.2f, 0.8f })
+            {
+                auto s = plainReverb();
+                s.decaySeconds = decay;
+                s.size = size;
+                const auto n = (int) ((decay * 1.6 + 0.6) * sampleRate);
+                const auto ir = reverbWet (s, [] (int i) { return i == 0 ? 1.0f : 0.0f; }, n);
+                const auto rt = measureRt60 (ir, sampleRate);
+                note ("reverb Decay " + format (decay, 1) + " s, size " + format (size, 1) + ": measured RT60 " + format (rt, 2) + " s ("
+                      + format (100.0 * (rt / decay - 1.0), 1) + " %)");
+                check (std::abs (rt / decay - 1.0) < 0.2, "RT60 within 20 % of Decay " + format (decay, 1) + " s (size " + format (size, 1)
+                                                            + "; measured " + format (rt, 2) + " s)");
+            }
+        }
+
+        // Damping: highs decay faster than the mids.
+        {
+            auto s = plainReverb();
+            s.decaySeconds = 2.0f;
+            s.damping = 0.8f;
+            const auto n = (int) (3.0 * sampleRate);
+            const auto ir = reverbWet (s, [] (int i) { return i == 0 ? 1.0f : 0.0f; }, n);
+            std::vector<float> hp (ir.size());
+            float prev = 0.0f;
+            for (size_t i = 0; i < ir.size(); ++i) { hp[i] = ir[i] - prev; prev = ir[i]; } // first difference: HF weighted
+            const auto rtMid = measureRt60 (ir, sampleRate), rtHigh = measureRt60 (hp, sampleRate);
+            note ("reverb Damping 80 %: broadband RT60 " + format (rtMid, 2) + " s, HF-weighted " + format (rtHigh, 2) + " s");
+            check (rtHigh < rtMid * 0.85, "damping makes the highs decay faster");
+        }
+
+        // Pre-delay: the wet starts after it (ms and synced).
+        {
+            auto s = plainReverb();
+            s.preDelayMs = 80.0f;
+            s.earlyLate = 0.0f;
+            const auto ir = reverbWet (s, [] (int i) { return i == 0 ? 1.0f : 0.0f; }, 9600);
+            int first = -1;
+            for (int i = 0; i < (int) ir.size() && first < 0; ++i)
+                if (std::abs (ir[(size_t) i]) > 1.0e-4f) first = i;
+            note ("reverb pre-delay 80 ms: first wet sample at " + std::to_string (first) + " (" + format (first / 48.0, 1) + " ms)");
+            check (first >= 3840 && first < 3840 + 960, "wet starts after the 80 ms pre-delay");
+            s.preDelaySync = 6; // 1/8 at 120 BPM = 250 ms
+            check (std::abs (dsp::VocalReverb::preDelayMsFor (s, 120.0) - 250.0) < 0.01, "synced pre-delay 1/8 at 120 BPM is 250 ms");
+            check (std::abs (dsp::VocalReverb::preDelayMsFor (s, 60.0) - 500.0) < 0.01, "synced pre-delay is clamped to 500 ms");
+        }
+
+        // Ducking: the wet drops while the vocal sings and comes back after.
+        {
+            auto s = plainReverb();
+            s.decaySeconds = 3.0f;
+            const auto n = (int) (2.0 * sampleRate);
+            auto sing = [] (int i) { return sineAt (220.0, i, sampleRate, 0.4f); };
+            const auto open = reverbWet (s, sing, n);
+            s.duckDb = 18.0f;
+            const auto ducked = reverbWet (s, sing, n);
+            const auto a = rmsRange (open, n / 2, n), b = rmsRange (ducked, n / 2, n);
+            const auto drop = 20.0 * std::log10 (std::max (1.0e-12, b) / std::max (1.0e-12, a));
+            note ("reverb ducking 18 dB on a held note: wet " + format (drop, 1) + " dB");
+            check (drop < -10.0, "ducking reduces the wet while the vocal is present (" + format (drop, 1) + " dB)");
+        }
+
+        // Mix 0 (reverb and delay on) is bit-identical to both off, through the whole plug-in.
+        {
+            auto fill = [] (int i) { return sawAt (196.0, i, sampleRate, 0.3f) * (i % 24000 < 16000 ? 1.0f : 0.0f); };
+            auto setup = [] (Processor& p)
+            {
+                setParam (p, "pitch_on", 1.0f);
+                setParam (p, "comp_on", 1.0f);
+            };
+            auto a = makeProcessor();
+            setup (*a);
+            const auto ref = render (*a, fill, 48000);
+            auto b = makeProcessor();
+            setup (*b);
+            setParam (*b, "rev_on", 1.0f);
+            setParam (*b, "rev_mix", 0.0f);
+            setParam (*b, "dly_on", 1.0f);
+            setParam (*b, "dly_mix", 0.0f);
+            setParam (*b, "rev_decay", 8.0f);
+            setParam (*b, "dly_feedback", 0.9f);
+            const auto out = render (*b, fill, 48000);
+            int diffs = 0;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < 48000; ++i)
+                    diffs += juce::exactlyEqual (ref.getSample (ch, i), out.getSample (ch, i)) ? 0 : 1;
+            note ("reverb + delay on at mix 0 vs off: " + std::to_string (diffs) + " differing samples of 96000");
+            check (diffs == 0, "mix 0 is bit-transparent (" + std::to_string (diffs) + " samples differ)");
+            check (b->getLatencySamples() == a->getLatencySamples(), "reverb and delay add no latency ("
+                       + std::to_string (b->getLatencySamples()) + " vs " + std::to_string (a->getLatencySamples()) + ")");
+            check (b->getTailLengthSeconds() > 5.0, "tail length reports the reverb / delay tail (" + format (b->getTailLengthSeconds(), 1) + " s)");
+            check (a->getTailLengthSeconds() <= 0.11, "no FX: short tail (" + format (a->getTailLengthSeconds(), 2) + " s)");
+        }
+
+        // Section presets: at least 12, each loads only rev_* (one undo step) and renders finite.
+        {
+            const auto& list = dooblrvocals::presets::getReverbPresets();
+            check (list.size() >= 12, "at least 12 reverb presets (" + std::to_string (list.size()) + ")");
+            auto p = makeProcessor();
+            setParam (*p, "eq_mid_gain", 2.5f);
+            setParam (*p, "dly_on", 1.0f);
+            for (const auto& preset : list)
+            {
+                auto& undo = p->getUndoHistory();
+                undo.clear();
+                dooblrvocals::presets::apply (p->getParameterState(),
+                                              dooblrvocals::presets::resolveSection (p->getParameterState(), "rev_", preset.values), true);
+                bool onlyReverb = true;
+                for (const auto& [id, v] : preset.values)
+                    onlyReverb = onlyReverb && id.startsWith ("rev_");
+                check (onlyReverb && getPlain (*p, "rev_on") > 0.5f && std::abs (getPlain (*p, "eq_mid_gain") - 2.5f) < 0.05f
+                           && getPlain (*p, "dly_on") > 0.5f && undo.getNumUndoableSteps() == 1,
+                       "reverb preset " + preset.name.toStdString() + " loads only the reverb, one undo step");
+                const auto out = render (*p, [] (int i) { return sineAt (220.0, i, sampleRate, 0.3f); }, 9600);
+                check (allFinite (out), "reverb preset " + preset.name.toStdString() + " is finite");
+            }
+        }
+
+        // Old (v0.2) sessions load with the new modules off.
+        {
+            auto src = makeProcessor();
+            setParam (*src, "corr_key", 3.0f);
+            setParam (*src, "comp_ratio", 5.0f);
+            const auto blob = legacyState (*src);
+            auto q = makeProcessor();
+            setParam (*q, "rev_on", 1.0f);
+            setParam (*q, "dly_on", 1.0f);
+            setParam (*q, "fx_routing", 2.0f);
+            setParam (*q, "range_custom", 1.0f);
+            q->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (blob.getSize() > 32, "legacy state built");
+            check (getPlain (*q, "rev_on") < 0.5f && getPlain (*q, "dly_on") < 0.5f && getPlain (*q, "fx_routing") < 0.5f
+                       && getPlain (*q, "range_custom") < 0.5f,
+                   "a v0.2 session loads with reverb, delay, routing and learned range at their defaults");
+            check (std::abs (getPlain (*q, "corr_key") - 3.0f) < 0.1f && std::abs (getPlain (*q, "comp_ratio") - 5.0f) < 0.1f,
+                   "a v0.2 session keeps its own settings");
+            const auto out = render (*q, [] (int i) { return sineAt (220.0, i, sampleRate, 0.3f); }, 9600);
+            check (allFinite (out), "legacy session renders");
+        }
+    }
+
+    /** Runs an FxBlock on a mono input; returns L and R (and the probes when asked). */
+    StereoBuf runFx (const dsp::ReverbSettings& rs, const dsp::DelaySettings& ds, dsp::FxRouting routing,
+                     const std::function<float (int)>& in, int n, double bpm = 120.0, dsp::FxBlock::Probe* probe = nullptr)
+    {
+        dsp::FxBlock fx;
+        fx.prepare (sampleRate, blockSize);
+        fx.setProbe (probe);
+        StereoBuf out (n);
+        juce::AudioBuffer<float> buf (2, blockSize);
+        for (int pos = 0; pos < n; pos += blockSize)
+        {
+            const auto m = std::min (blockSize, n - pos);
+            for (int i = 0; i < m; ++i)
+            {
+                buf.setSample (0, i, in (pos + i));
+                buf.setSample (1, i, in (pos + i));
+            }
+            fx.process (buf, m, rs, ds, routing, bpm);
+            for (int i = 0; i < m; ++i)
+            {
+                out.l[(size_t) (pos + i)] = buf.getSample (0, i);
+                out.r[(size_t) (pos + i)] = buf.getSample (1, i);
+            }
+        }
+        return out;
+    }
+
+    int peakIndex (const std::vector<float>& v, int from, int to)
+    {
+        int best = from;
+        for (int i = from; i < std::min (to, (int) v.size()); ++i)
+            if (std::abs (v[(size_t) i]) > std::abs (v[(size_t) best])) best = i;
+        return best;
+    }
+
+    void testDelay()
+    {
+        dsp::ReverbSettings off;
+        off.enabled = false;
+        auto impulse = [] (int i) { return i == 0 ? 1.0f : 0.0f; };
+
+        // Times: ms and synced (straight, dotted, triplet), measured from the first echo.
+        {
+            auto d = plainDelay();
+            d.timeLMs = d.timeRMs = 250.0f;
+            const auto out = runFx (off, d, dsp::FxRouting::parallel, impulse, 24000);
+            const auto at = peakIndex (out.l, 200, 24000);
+            note ("delay 250 ms: first echo at sample " + std::to_string (at) + " (expected 12000)");
+            check (std::abs (at - 12000) <= 2, "250 ms delay echoes at 12000 samples (got " + std::to_string (at) + ")");
+
+            struct Case { int note; double bpm; double expected; const char* name; };
+            for (const auto& c : { Case { 10, 120.0, 24000.0, "1/4 at 120" }, Case { 8, 120.0, 18000.0, "1/8D at 120" },
+                                   Case { 6, 120.0, 8000.0, "1/8T at 120" }, Case { 7, 90.0, 16000.0, "1/8 at 90" } })
+            {
+                auto s = plainDelay();
+                s.sync = true;
+                s.noteL = s.noteR = c.note;
+                const auto want = dsp::VocalDelay::delaySamplesFor (s, 0, c.bpm, sampleRate);
+                const auto o = runFx (off, s, dsp::FxRouting::parallel, impulse, (int) c.expected + 4000, c.bpm);
+                const auto got = peakIndex (o.l, 200, (int) c.expected + 4000);
+                note (std::string ("delay synced ") + c.name + " BPM: " + format (want, 1) + " samples, echo at " + std::to_string (got));
+                check (std::abs (want - c.expected) < 0.5 && std::abs (got - (int) c.expected) <= 2,
+                       std::string ("synced ") + c.name + " echoes at " + format (c.expected, 0) + " samples (got " + std::to_string (got) + ")");
+            }
+        }
+
+        // Ping-pong alternates L, R, L; Dual L/R uses its own R time.
+        {
+            auto d = plainDelay();
+            d.mode = dsp::DelaySettings::pingPong;
+            d.feedback = 0.6f;
+            d.timeLMs = 100.0f;
+            const auto o = runFx (off, d, dsp::FxRouting::parallel, impulse, 20000);
+            auto side = [&] (int centre) { return std::abs (o.l[(size_t) peakIndex (o.l, centre - 20, centre + 20)])
+                                                - std::abs (o.r[(size_t) peakIndex (o.r, centre - 20, centre + 20)]); };
+            check (side (4800) > 0.05f && side (9600) < -0.05f && side (14400) > 0.02f, "ping-pong alternates L, R, L");
+
+            auto dual = plainDelay();
+            dual.mode = dsp::DelaySettings::dual;
+            dual.timeLMs = 100.0f;
+            dual.timeRMs = 175.0f;
+            const auto q = runFx (off, dual, dsp::FxRouting::parallel, impulse, 12000);
+            const auto l = peakIndex (q.l, 200, 12000), r = peakIndex (q.r, 200, 12000);
+            note ("delay Dual 100 / 175 ms: L echo " + std::to_string (l) + ", R echo " + std::to_string (r));
+            check (std::abs (l - 4800) <= 2 && std::abs (r - 8400) <= 2, "dual L/R times are independent");
+        }
+
+        // Max feedback (95 %) with drive and modulation: stable, finite and still decaying.
+        for (const auto mode : { 0, 1, 2 })
+        {
+            auto d = plainDelay();
+            d.mode = mode;
+            d.feedback = dsp::VocalDelay::maxFeedback;
+            d.drive = 1.0f;
+            d.modulation = 1.0f;
+            d.timeLMs = 180.0f;
+            d.timeRMs = 240.0f;
+            d.mix = 1.0f;
+            juce::Random rng (3);
+            const auto n = (int) (25.0 * sampleRate);
+            const auto o = runFx (off, d, dsp::FxRouting::parallel,
+                                  [&] (int i) { return i < 48000 ? (rng.nextFloat() * 2.0f - 1.0f) * 0.9f : 0.0f; }, n);
+            bool finite = true;
+            float peak = 0.0f;
+            for (int i = 0; i < n; ++i)
+            {
+                finite = finite && std::isfinite (o.l[(size_t) i]) && std::isfinite (o.r[(size_t) i]);
+                peak = std::max ({ peak, std::abs (o.l[(size_t) i]), std::abs (o.r[(size_t) i]) });
+            }
+            const auto early = rmsRange (o.l, 48000, 96000) + rmsRange (o.r, 48000, 96000);
+            const auto late = rmsRange (o.l, n - 48000, n) + rmsRange (o.r, n - 48000, n);
+            const auto decayDb = 20.0 * std::log10 (std::max (1.0e-12, late) / std::max (1.0e-12, early));
+            note (std::string ("delay ") + (mode == 0 ? "Stereo" : mode == 1 ? "Ping-Pong" : "Dual") + " at 95 % feedback + drive + mod: peak "
+                  + format (peak, 2) + ", level after 23 s " + format (decayDb, 1) + " dB");
+            check (finite && peak < 2.0f && decayDb < -20.0, "max feedback is stable and decays (mode " + std::to_string (mode) + ")");
+        }
+
+        // Ducking reduces the delay wet under a held note.
+        {
+            auto d = plainDelay();
+            d.feedback = 0.5f;
+            auto sing = [] (int i) { return sineAt (220.0, i, sampleRate, 0.4f); };
+            const auto n = 96000;
+            auto wetOnly = [&] (dsp::DelaySettings s)
+            {
+                s.mix = 1.0f;
+                const auto o = runFx (off, s, dsp::FxRouting::parallel, sing, n);
+                return rmsRange (o.l, n / 2, n);
+            };
+            const auto open = wetOnly (d);
+            d.duckDb = 18.0f;
+            const auto ducked = wetOnly (d);
+            const auto drop = 20.0 * std::log10 (std::max (1.0e-12, ducked) / std::max (1.0e-12, open));
+            note ("delay ducking 18 dB on a held note: wet " + format (drop, 1) + " dB");
+            check (drop < -10.0, "delay ducking reduces the wet (" + format (drop, 1) + " dB)");
+        }
+
+        // Delay presets: the six asked for, all finite; loading touches only dly_*.
+        {
+            const auto& list = dooblrvocals::presets::getDelayPresets();
+            juce::StringArray names;
+            for (const auto& preset : list)
+                names.add (preset.name);
+            for (const auto* want : { "Slapback", "1/4 Ping-Pong", "Dotted 1/8", "Dark Tape", "Throw", "Wide Doubler" })
+                check (names.contains (want), std::string ("delay preset ") + want);
+            auto p = makeProcessor();
+            setParam (*p, "rev_on", 1.0f);
+            setParam (*p, "rev_decay", 4.0f);
+            for (const auto& preset : list)
+            {
+                dooblrvocals::presets::apply (p->getParameterState(),
+                                              dooblrvocals::presets::resolveSection (p->getParameterState(), "dly_", preset.values), true);
+                const auto out = render (*p, [] (int i) { return sineAt (220.0, i, sampleRate, 0.3f) * (i < 4800 ? 1.0f : 0.0f); }, 48000);
+                check (allFinite (out) && getPlain (*p, "dly_on") > 0.5f && std::abs (getPlain (*p, "rev_decay") - 4.0f) < 0.05f,
+                       "delay preset " + preset.name.toStdString() + " loads (reverb untouched) and is finite");
+            }
+        }
+    }
+
+    void testFxRouting()
+    {
+        auto rs = plainReverb();
+        rs.decaySeconds = 1.2f;
+        auto ds = plainDelay();
+        ds.timeLMs = ds.timeRMs = 100.0f; // 4800 samples
+        ds.feedback = 0.0f;
+        const auto n = 14400;
+        auto impulse = [] (int i) { return i == 0 ? 1.0f : 0.0f; };
+
+        std::vector<float> revIn ((size_t) n), dlyIn ((size_t) n);
+        auto probeRun = [&] (dsp::FxRouting routing)
+        {
+            std::fill (revIn.begin(), revIn.end(), 0.0f);
+            std::fill (dlyIn.begin(), dlyIn.end(), 0.0f);
+            dsp::FxBlock::Probe probe { revIn.data(), dlyIn.data(), n, 0 };
+            return runFx (rs, ds, routing, impulse, n, 120.0, &probe);
+        };
+        const auto energy = [] (const std::vector<float>& v, int from, int to) { return rmsRange (v, from, to); };
+
+        // Parallel: both modules see the vocal (an impulse), nothing else.
+        const auto par = probeRun (dsp::FxRouting::parallel);
+        const auto parRevLate = energy (revIn, 100, n), parDlyLate = energy (dlyIn, 100, n);
+        check (std::abs (revIn[0] - 1.0f) < 1.0e-6f && std::abs (dlyIn[0] - 1.0f) < 1.0e-6f && parRevLate < 1.0e-9 && parDlyLate < 1.0e-9,
+               "parallel: delay and reverb are both fed only the dry vocal");
+
+        // Delay > Reverb: the reverb input carries the echo at 100 ms.
+        probeRun (dsp::FxRouting::delayToReverb);
+        const auto echoIntoReverb = std::abs (revIn[(size_t) peakIndex (revIn, 4700, 4900)]);
+        const auto d2rDly = energy (dlyIn, 100, n);
+        note ("Delay > Reverb: reverb input echo at 4800 = " + format (echoIntoReverb, 3) + ", delay input after the dry = " + format (d2rDly, 6));
+        check (echoIntoReverb > 0.2f && d2rDly < 1.0e-9, "delay > reverb: the reverb is fed the delay's output");
+
+        // Reverb > Delay: the delay input carries the reverb tail.
+        probeRun (dsp::FxRouting::reverbToDelay);
+        const auto tailIntoDelay = energy (dlyIn, 200, 4800), r2dRev = energy (revIn, 100, n);
+        note ("Reverb > Delay: delay input reverb-tail RMS = " + format (tailIntoDelay, 5) + ", reverb input after the dry = " + format (r2dRev, 6));
+        check (tailIntoDelay > 1.0e-3 && r2dRev < 1.0e-9, "reverb > delay: the delay is fed the reverb's output");
+
+        // Parallel = dry + delay wet + reverb wet (each alone, mixes at 50 % keep the dry at unity).
+        {
+            dsp::ReverbSettings rOff; rOff.enabled = false;
+            dsp::DelaySettings dOff; dOff.enabled = false;
+            juce::Random rng (11);
+            std::vector<float> src ((size_t) n);
+            for (auto& v : src) v = (rng.nextFloat() * 2.0f - 1.0f) * 0.3f;
+            auto in = [&] (int i) { return src[(size_t) i]; };
+            const auto both = runFx (rs, ds, dsp::FxRouting::parallel, in, n);
+            const auto dOnly = runFx (rOff, ds, dsp::FxRouting::parallel, in, n);
+            const auto rOnly = runFx (rs, dOff, dsp::FxRouting::parallel, in, n);
+            double err = 0.0, ref = 0.0;
+            for (int i = 2000; i < n; ++i)
+            {
+                const auto predicted = dOnly.l[(size_t) i] + rOnly.l[(size_t) i] - src[(size_t) i];
+                err = std::max (err, (double) std::abs (both.l[(size_t) i] - predicted));
+                ref = std::max (ref, (double) std::abs (both.l[(size_t) i]));
+            }
+            note ("parallel sum check: max |both - (delay + reverb - dry)| = " + format (err, 7) + " (peak " + format (ref, 3) + ")");
+            check (err < 1.0e-4, "parallel routing is the sum of the two modules");
+
+            // Series orders differ from parallel (the second module processes the first's output).
+            const auto d2r = runFx (rs, ds, dsp::FxRouting::delayToReverb, in, n);
+            double diff = 0.0;
+            for (int i = 2000; i < n; ++i)
+                diff = std::max (diff, (double) std::abs (d2r.l[(size_t) i] - both.l[(size_t) i]));
+            check (diff > 1.0e-3, "series routing differs from parallel");
+        }
+        juce::ignoreUnused (par);
+
+        // Through the plug-in: switching routing, delay > reverb at full mix is finite, latency unchanged.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 0.0f);
+            const auto lat = p->getLatencySamples();
+            setParam (*p, "rev_on", 1.0f);
+            setParam (*p, "dly_on", 1.0f);
+            for (const auto routing : { 0.0f, 1.0f, 2.0f })
+            {
+                setParam (*p, "fx_routing", routing);
+                const auto out = render (*p, [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f) * (i < 9600 ? 1.0f : 0.0f); }, 48000);
+                check (allFinite (out) && peakOf (out, 24000, 48000) > 1.0e-4f, "routing " + format (routing, 0) + " renders a tail");
+            }
+            check (p->getLatencySamples() == lat, "routing adds no latency");
+        }
+
+        // The UI switch: one click is one undo step and both pages show the same routing.
+        {
+            auto p = makeProcessor();
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            check (editor != nullptr, "editor for routing");
+            if (editor == nullptr)
+                return;
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::delayPage);
+            auto& view = editor->getRoutingView (Editor::delayPage);
+            check (visibleChain (view) && view.getWidth() > 100, "routing switch is visible on the Delay page");
+            auto& undo = p->getUndoHistory();
+            undo.clear();
+            const auto seg = view.getSegmentArea (1).getCentre().toFloat();
+            view.mouseDown (makeMouseEvent (view, seg, seg, 1, false));
+            view.mouseUp (makeMouseEvent (view, seg, seg, 1, false));
+            check (std::abs (getPlain (*p, "fx_routing") - 1.0f) < 0.01f && view.getRouting() == 1, "clicking Delay > Reverb sets fx_routing");
+            check (undo.getNumUndoableSteps() == 1, "routing click is one undo step");
+            editor->selectPage (Editor::reverbPage);
+            auto& view2 = editor->getRoutingView (Editor::reverbPage);
+            view2.repaint();
+            check (visibleChain (view2) && view2.getRouting() == 1, "the Reverb page shows the same routing");
+            p->editorBeingDeleted (editor);
+            base.reset();
+        }
+    }
+
+    /** Synthetic singer: holds the ends of the range a little, glides through the middle. */
+    std::vector<dsp::PitchFrame> syntheticSinging (float lowHz, float highHz, double seconds, juce::Random& rng,
+                                                   double noiseFraction, double octaveErrorFraction)
+    {
+        const auto hop = 256.0 / sampleRate;
+        const auto frames = (int) (seconds / hop);
+        std::vector<dsp::PitchFrame> out;
+        const auto lowNote = 69.0 + 12.0 * std::log2 (lowHz / 440.0), highNote = 69.0 + 12.0 * std::log2 (highHz / 440.0);
+        for (int i = 0; i < frames; ++i)
+        {
+            dsp::PitchFrame f;
+            f.seconds = (float) hop;
+            const auto u = rng.nextDouble();
+            if (u < noiseFraction)
+            {
+                // Breaths / noise: unvoiced or low confidence at random pitches.
+                f.voiced = rng.nextBool();
+                f.confidence = 0.2f * rng.nextFloat();
+                f.detectedHz = 60.0f + 1400.0f * rng.nextFloat();
+            }
+            else
+            {
+                const auto phase = std::fmod ((double) i / (double) frames * 6.0, 1.0); // six slow sweeps
+                double noteNum = phase < 0.12 ? lowNote : phase > 0.88 ? highNote
+                                                        : lowNote + (highNote - lowNote) * (phase - 0.12) / 0.76;
+                noteNum += 0.15 * std::sin ((double) i * 0.21); // vibrato
+                auto hz = (float) (440.0 * std::pow (2.0, (noteNum - 69.0) / 12.0));
+                if (rng.nextDouble() < octaveErrorFraction)
+                    hz *= rng.nextBool() ? 2.0f : 0.5f;
+                f.voiced = true;
+                f.confidence = 0.8f + 0.2f * rng.nextFloat();
+                f.detectedHz = hz;
+            }
+            out.push_back (f);
+        }
+        return out;
+    }
+
+    double semis (double a, double b) { return 12.0 * std::log2 (a / b); }
+
+    void testRangeLearn()
+    {
+        using dooblrvocals::RangeLearner;
+
+        // Synthetic A2 - E4 with 15 % noise and 3 % octave errors: learned within about a semitone.
+        {
+            juce::Random rng (42);
+            const auto frames = syntheticSinging (110.0f, 329.63f, 12.0, rng, 0.15, 0.03);
+            RangeLearner learner;
+            learner.clear();
+            for (size_t i = 0; i < frames.size(); i += 64)
+                learner.add (frames.data() + i, (int) std::min<size_t> (64, frames.size() - i));
+            const auto r = learner.compute();
+            note ("learned A2-E4 (noise 15 %, octave errors 3 %): " + RangeLearner::rangeText (r.lowHz, r.highHz).toStdString()
+                  + " = " + format (r.lowHz, 1) + " - " + format (r.highHz, 1) + " Hz (errors " + format (semis (r.lowHz, 110.0), 2) + " / "
+                  + format (semis (r.highHz, 329.63), 2) + " semitones), detector " + format (r.searchLowHz, 1) + " - " + format (r.searchHighHz, 1)
+                  + " Hz, " + format (r.voicedSeconds, 1) + " s voiced, type " + std::to_string ((int) r.type));
+            check (r.valid, "A2-E4 learn is valid");
+            check (std::abs (semis (r.lowHz, 110.0)) <= 1.0 && std::abs (semis (r.highHz, 329.63)) <= 1.0,
+                   "A2-E4 learned within a semitone (" + format (semis (r.lowHz, 110.0), 2) + ", " + format (semis (r.highHz, 329.63), 2) + ")");
+            check (r.searchLowHz < r.lowHz && r.searchHighHz > r.highHz, "detector range has a margin around the sung range");
+            check (r.type == dsp::InputType::baritone || r.type == dsp::InputType::tenor, "A2-E4 maps to a baritone / tenor range");
+            check (RangeLearner::rangeText (110.0f, 329.63f) == juce::String (juce::CharPointer_UTF8 ("A2\xe2\x80\x93" "E4")), "range text A2-E4");
+        }
+
+        // A soprano register too.
+        {
+            juce::Random rng (5);
+            const auto frames = syntheticSinging (261.63f, 880.0f, 8.0, rng, 0.1, 0.02);
+            RangeLearner learner;
+            learner.add (frames.data(), (int) frames.size());
+            const auto r = learner.compute();
+            note ("learned C4-A5: " + RangeLearner::rangeText (r.lowHz, r.highHz).toStdString() + ", type " + std::to_string ((int) r.type));
+            check (r.valid && std::abs (semis (r.lowHz, 261.63)) <= 1.0 && std::abs (semis (r.highHz, 880.0)) <= 1.0
+                       && (r.type == dsp::InputType::soprano || r.type == dsp::InputType::alto), "C4-A5 learned as a high voice");
+        }
+
+        // Too little voice: invalid, message, nothing applied.
+        {
+            juce::Random rng (9);
+            auto frames = syntheticSinging (110.0f, 329.63f, 1.0, rng, 0.0, 0.0);
+            RangeLearner learner;
+            learner.add (frames.data(), (int) frames.size());
+            const auto r = learner.compute();
+            check (! r.valid && r.message.containsIgnoreCase ("not enough voice"), "1 s of voice is not enough (" + r.message.toStdString() + ")");
+
+            // Silence / noise only through the plug-in.
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 1.0f);
+            const auto lowBefore = getPlain (*p, "range_low"), typeBefore = getPlain (*p, "input_type");
+            p->getUndoHistory().clear();
+            p->startRangeLearn();
+            check (p->isLearningRange(), "learn arms");
+            juce::Random noise (1);
+            for (int chunk = 0; chunk < 12; ++chunk)
+            {
+                render (*p, [&] (int) { return (noise.nextFloat() * 2.0f - 1.0f) * 0.01f; }, 4096);
+                p->pollRangeLearn();
+            }
+            const auto res = p->stopRangeLearn();
+            note ("learn on 1 s of quiet noise: " + res.message.toStdString());
+            check (! res.valid && ! p->isLearningRange(), "noise only: not enough voice, learning stops");
+            check (getPlain (*p, "range_custom") < 0.5f && std::abs (getPlain (*p, "range_low") - lowBefore) < 0.01f
+                       && std::abs (getPlain (*p, "input_type") - typeBefore) < 0.01f && p->getUndoHistory().getNumUndoableSteps() == 0,
+                   "not enough voice changes nothing");
+        }
+
+        // End to end: sing A2 - E4 into the plug-in, poll like the editor, stop.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 1.0f);
+            setParam (*p, "input_type", 0.0f); // soprano before learning
+            auto& undo = p->getUndoHistory();
+            undo.clear();
+            p->startRangeLearn();
+            const auto total = (int) (10.0 * sampleRate);
+            double phase = 0.0;
+            const auto lowNote = 45.0, highNote = 64.0;
+            int pos = 0;
+            juce::Random rng (3);
+            auto voice = [&] (int i)
+            {
+                const auto t = (double) (pos + i) / (double) total;
+                const auto ph = std::fmod (t * 4.0, 1.0);
+                const auto noteNum = ph < 0.15 ? lowNote : ph > 0.85 ? highNote : lowNote + (highNote - lowNote) * (ph - 0.15) / 0.7;
+                const auto hz = 440.0 * std::pow (2.0, (noteNum - 69.0) / 12.0);
+                phase += hz / sampleRate;
+                phase -= std::floor (phase);
+                // Saw + some breath noise; a short gap every second.
+                const auto gap = std::fmod (t * 10.0, 1.0) > 0.92;
+                return gap ? (rng.nextFloat() - 0.5f) * 0.01f : (float) (0.3 * (2.0 * phase - 1.0)) + (rng.nextFloat() - 0.5f) * 0.01f;
+            };
+            for (pos = 0; pos < total; pos += 4096)
+            {
+                render (*p, voice, std::min (4096, total - pos));
+                p->pollRangeLearn();
+            }
+            const auto r = p->stopRangeLearn();
+            note ("plug-in learn of a sung A2-E4: " + r.message.toStdString() + " -> detector " + format (getPlain (*p, "range_low"), 1)
+                  + " - " + format (getPlain (*p, "range_high"), 1) + " Hz, type " + format (getPlain (*p, "input_type"), 0));
+            check (r.valid && std::abs (semis (r.lowHz, 110.0)) <= 1.0 && std::abs (semis (r.highHz, 329.63)) <= 1.0,
+                   "plug-in learns A2-E4 within a semitone (" + format (semis (r.lowHz, 110.0), 2) + ", " + format (semis (r.highHz, 329.63), 2) + ")");
+            check (getPlain (*p, "range_custom") > 0.5f && std::abs (semis (getPlain (*p, "range_low"), r.searchLowHz)) < 0.1
+                       && std::abs (semis (getPlain (*p, "range_high"), r.searchHighHz)) < 0.1,
+                   "learned range is applied to the detector");
+            check (std::abs (getPlain (*p, "input_type") - (float) (int) r.type) < 0.01f && getPlain (*p, "input_type") > 0.5f,
+                   "voice type follows the learned range");
+            check (undo.getNumUndoableSteps() == 1, "applying a learned range is one undo step (" + std::to_string (undo.getNumUndoableSteps()) + ")");
+
+            // Saved with the session.
+            juce::MemoryBlock blob;
+            p->getStateInformation (blob);
+            auto q = makeProcessor();
+            q->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (getPlain (*q, "range_custom") > 0.5f && std::abs (getPlain (*q, "range_low") - getPlain (*p, "range_low")) < 0.5f
+                       && std::abs (getPlain (*q, "range_high") - getPlain (*p, "range_high")) < 1.0f,
+                   "learned range round-trips through the session state");
+
+            // Factory presets keep it (it describes the singer); not host-automatable state otherwise.
+            q->loadFactoryPreset (1, false);
+            check (getPlain (*q, "range_custom") > 0.5f, "factory preset loads keep the learned range");
+            check (! dooblrvocals::presets::isSessionOnlyParameter ("rev_mix") && dooblrvocals::presets::isSessionOnlyParameter ("range_low"),
+                   "only range_* are session-only");
+
+            undo.undo();
+            check (getPlain (*p, "range_custom") < 0.5f && getPlain (*p, "input_type") < 0.5f, "undo restores the previous range in one step");
+            undo.redo();
+            p->resetLearnedRange();
+            check (getPlain (*p, "range_custom") < 0.5f, "reset clears the learned range");
+
+            const auto out = render (*q, [] (int i) { return sawAt (146.83, i, sampleRate, 0.3f); }, 24000);
+            check (allFinite (out), "learned-range session renders");
+        }
+
+        // Editor: click to arm (pulsing, live note), click again to stop; reset.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 1.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            check (editor != nullptr, "editor for learn");
+            if (editor == nullptr)
+                return;
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::pitchPage);
+            auto& button = editor->getLearnButton();
+            check (findById (*editor, "learnRange") == &button && visibleChain (button), "Learn Range button is on the pitch page");
+            button.onClick();
+        editor->refreshEnablementNow();
+            check (p->isLearningRange() && button.getButtonText().startsWith ("Stop"), "first click arms learning");
+            // Not enough voice: message shown, nothing changes.
+            button.onClick();
+        editor->refreshEnablementNow();
+            editor->refreshLearnUiNow();
+            check (! p->isLearningRange() && editor->getLearnLabel().getText().containsIgnoreCase ("not enough voice")
+                       && getPlain (*p, "range_custom") < 0.5f,
+                   "second click with no voice shows the message (" + editor->getLearnLabel().getText().toStdString() + ")");
+
+            // A real take: arm, sing (the editor timer polls; here the test polls like it), stop.
+            button.onClick();
+        editor->refreshEnablementNow();
+            double ph = 0.0;
+            const auto total = (int) (4.0 * sampleRate);
+            int pos = 0;
+            auto sing = [&] (int i)
+            {
+                const auto t = (double) (pos + i) / (double) total;
+                const auto noteNum = 50.0 + 17.0 * (0.5 - 0.5 * std::cos (juce::MathConstants<double>::twoPi * t * 2.0));
+                ph += 440.0 * std::pow (2.0, (noteNum - 69.0) / 12.0) / sampleRate;
+                ph -= std::floor (ph);
+                return (float) (0.3 * (2.0 * ph - 1.0));
+            };
+            for (pos = 0; pos < total; pos += 4096)
+            {
+                render (*p, sing, std::min (4096, total - pos));
+                p->pollRangeLearn();
+                if (pos == 4096 * 20)
+                {
+                    editor->refreshLearnUiNow();
+                    saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learning");
+                    check (button.getButtonText().contains (juce::CharPointer_UTF8 ("\xc2\xb7")), "armed button shows the live note ("
+                               + button.getButtonText().toStdString() + ")");
+                }
+            }
+            button.onClick();
+        editor->refreshEnablementNow();
+            editor->refreshLearnUiNow();
+            const auto text = editor->getLearnLabel().getText();
+            note ("learned-range readout: " + text.toStdString());
+            check (getPlain (*p, "range_custom") > 0.5f && text.contains ("learned") && editor->getLearnResetButton().isVisible(),
+                   "after a take the readout shows the learned range with a reset");
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learned");
+            editor->setSize (940, 600);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learned-940x600");
+            editor->getLearnResetButton().onClick();
+        editor->refreshEnablementNow();
+            check (getPlain (*p, "range_custom") < 0.5f && ! editor->getLearnResetButton().isVisible(), "Reset clears the learned range");
+
+            // The learn state itself is not a parameter (not automatable).
+            for (auto* param : p->getParameters())
+                if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (param))
+                    check (! ranged->getParameterID().containsIgnoreCase ("learn"), "no automatable learn parameter");
+
+            button.onClick(); // closing the editor while armed cancels it
+        editor->refreshEnablementNow();
+            p->editorBeingDeleted (editor);
+            base.reset();
+            check (! p->isLearningRange(), "closing the editor cancels an armed learn");
+        }
+    }
+
+    void testFxPages()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "editor for FX pages");
+        if (editor == nullptr)
+            return;
+
+        check (findById (*editor, "power_delay") != nullptr && findById (*editor, "power_reverb") != nullptr, "delay / reverb power toggles");
+        auto& revPower = editor->getFxPowerButton (Editor::reverbPage);
+        p->getUndoHistory().clear();
+        revPower.setToggleState (true, juce::sendNotificationSync);
+        editor->refreshEnablementNow();
+        check (getPlain (*p, "rev_on") > 0.5f && p->getUndoHistory().getNumUndoableSteps() == 1, "reverb tab power turns it on (one undo step)");
+        setParam (*p, "dly_on", 1.0f);
+
+        for (const auto& [w, h] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+        {
+            editor->setSize (w, h);
+            for (const auto page : { (int) Editor::pitchPage, (int) Editor::delayPage, (int) Editor::reverbPage })
+            {
+                editor->selectPage (page);
+                std::function<void (juce::Component&)> checkClip = [&] (juce::Component& parent)
+                {
+                    for (auto* child : parent.getChildren())
+                        if (child->isVisible())
+                        {
+                            if (child->getComponentID().isNotEmpty() && child->getWidth() > 0 && child->getHeight() > 0)
+                                check (parent.getLocalBounds().expanded (1).contains (child->getBounds()),
+                                       std::to_string (w) + "x" + std::to_string (h) + " page " + std::to_string (page) + ": "
+                                           + child->getComponentID().toStdString() + " is not clipped");
+                            checkClip (*child);
+                        }
+                };
+                checkClip (*editor);
+                for (const auto& panel : editor->getPanels (page))
+                    check (panel->getHeight() > 0 && panel->getBottom() <= editor->getHeight(), "FX page panel fits at " + std::to_string (w));
+            }
+        }
+
+        // Sync swaps the note / ms controls; Dual shows the R time.
+        editor->setSize (1080, 660);
+        editor->selectPage (Editor::delayPage);
+        auto shown = [&] (const juce::String& id) { auto* c = findById (*editor, id); return c != nullptr && visibleChain (*c); };
+        setParam (*p, "dly_sync", 1.0f);
+        setParam (*p, "dly_mode", 0.0f);
+        editor->refreshEnablementNow();
+        check (shown ("dly_note") && ! shown ("dly_time") && ! shown ("dly_note_r"), "synced stereo shows the note value only");
+        setParam (*p, "dly_sync", 0.0f);
+        setParam (*p, "dly_mode", 2.0f);
+        editor->refreshEnablementNow();
+        check (shown ("dly_time") && shown ("dly_time_r") && ! shown ("dly_note"), "ms dual shows both times");
+
+        // Section preset menus.
+        auto& revBox = editor->getSectionPresetBox (Editor::reverbPage);
+        check (revBox.getNumItems() >= 12, "reverb preset menu lists " + std::to_string (revBox.getNumItems()));
+        p->getUndoHistory().clear();
+        revBox.setSelectedId (6, juce::sendNotificationSync); // Large Hall
+        check (getPlain (*p, "rev_decay") > 2.5f && p->getUndoHistory().getNumUndoableSteps() == 1, "reverb menu loads a preset in one undo step");
+        auto& dlyBox = editor->getSectionPresetBox (Editor::delayPage);
+        check (dlyBox.getNumItems() == 6, "delay preset menu lists the six presets");
+        dlyBox.setSelectedId (2, juce::sendNotificationSync); // 1/4 Ping-Pong
+        check (juce::roundToInt (getPlain (*p, "dly_mode")) == 1 && getPlain (*p, "dly_sync") > 0.5f, "delay menu loads 1/4 Ping-Pong");
+
+        // Snapshots with sound through the displays.
+        {
+            setParam (*p, "pitch_on", 0.0f);
+            render (*p, [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f); }, 24000);
+            editor->selectPage (Editor::delayPage);
+            editor->getDelayDisplay().refresh (p->getDelayDuckDb(), p->getHostBpm());
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-delay");
+            editor->selectPage (Editor::reverbPage);
+            setParam (*p, "rev_duck", 6.0f);
+            setParam (*p, "fx_routing", 1.0f);
+            render (*p, [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f); }, 24000);
+            editor->getReverbDisplay().refresh (p->getReverbDuckDb(), p->getHostBpm());
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-reverb");
+            editor->setSize (940, 600);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-reverb-940x600");
+            editor->selectPage (Editor::delayPage);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-delay-940x600");
+            editor->setSize (1080, 660);
+        }
+
+        check (dsp::VocalReverb::earlyTapMs (0, 0.5f) > 0.0 && dooblrvocals::ui::ReverbDisplay::spanSeconds (2.0, 40.0) > 2.0, "display helpers");
+        p->editorBeingDeleted (editor);
+        base.reset();
+    }
+
     struct TestCase
     {
         const char* name;
@@ -2325,6 +3240,11 @@ int main()
         { "editor",                         testEditor },
         { "layout fit 940x600 .. 2400x1400", testLayoutFit },
         { "processor on / off toggles",     testProcessorTabToggles },
+        { "reverb",                         testReverb },
+        { "delay",                          testDelay },
+        { "fx routing",                     testFxRouting },
+        { "learn range",                    testRangeLearn },
+        { "fx pages",                       testFxPages },
     };
 
     int failedTests = 0;

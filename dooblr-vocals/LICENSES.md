@@ -26,3 +26,18 @@ Pitch detection follows the YIN algorithm (de Cheveigné & Kawahara, 2002). The
 implementation here is original C++ and is not a copy of any particular library.
 The shifter is a TD-PSOLA / resampled-grain implementation written for this
 plug-in.
+
+## Reverb, delay and Learn Range (v0.3)
+
+The vocal reverb is an original implementation written for this plug-in: an input
+diffuser of four Schroeder allpasses, twelve early-reflection taps and an
+eight-line feedback delay network mixed by a Householder matrix (the general FDN
+technique is described in the public literature, e.g. Jot & Chaigne, 1991, and
+J. O. Smith's "Physical Audio Signal Processing"). No code from Freeverb, any
+other reverb library or any commercial product is used. The line lengths, tap
+times, gains and presets are original.
+
+The delay (stereo, ping-pong, dual L/R with filtered, saturated and modulated
+feedback) and the Learn Range histogram / percentile analysis are original code.
+The second-order filters use the standard bilinear-transform Butterworth design
+(public domain mathematics).

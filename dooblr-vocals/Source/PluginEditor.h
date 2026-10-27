@@ -10,6 +10,7 @@
 
 #include "Parameters.h"
 #include "UI/ControlPanel.h"
+#include "UI/FxDisplays.h"
 #include "UI/GateDisplay.h"
 #include "UI/HarmonyDisplay.h"
 #include "UI/OutputMeter.h"
@@ -28,7 +29,7 @@ public:
     int getStage() const noexcept { return stage; }
 
     static constexpr int size = 20;
-    static constexpr int pitchStage = -1, harmonyStage = -2;
+    static constexpr int pitchStage = -1, harmonyStage = -2, delayStage = -3, reverbStage = -4;
 
 private:
     int stage;
@@ -71,7 +72,7 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
 
-    enum Page { pitchPage = 0, harmonyPage, gatePage, eqPage, dynamicsPage, limiterPage, numPages };
+    enum Page { pitchPage = 0, harmonyPage, gatePage, eqPage, dynamicsPage, limiterPage, delayPage, reverbPage, numPages };
     static int pageForStage (int stage) noexcept { return gatePage + stage; }
     void selectPage (int page);
     int getSelectedPage() const noexcept { return selectedPage; }
@@ -88,6 +89,17 @@ public:
     dooblrvocals::ui::GateDisplay& getGateDisplay() noexcept { return gateDisplay; }
     dooblrvocals::ui::PitchDisplay& getPitchDisplay() noexcept { return pitchDisplay; }
     dooblrvocals::ui::HarmonyDisplay& getHarmonyDisplay() noexcept { return harmonyDisplay; }
+    dooblrvocals::ui::ReverbDisplay& getReverbDisplay() noexcept { return reverbDisplay; }
+    dooblrvocals::ui::DelayDisplay& getDelayDisplay() noexcept { return delayDisplay; }
+    dooblrvocals::ui::FxRoutingView& getRoutingView (int page) noexcept { return page == delayPage ? delayRouting : reverbRouting; }
+    juce::ComboBox& getSectionPresetBox (int page) noexcept { return page == delayPage ? delayPresetBox : reverbPresetBox; }
+    juce::TextButton& getLearnButton() noexcept { return learnButton; }
+    juce::Label& getLearnLabel() noexcept { return learnLabel; }
+    juce::TextButton& getLearnResetButton() noexcept { return learnResetButton; }
+    /** The Learn Range button: start, or stop and apply. */
+    void toggleRangeLearn();
+    void refreshLearnUiNow() { updateLearnUi(); }
+    void refreshEnablementNow() { updateEnablement(); updateLearnUi(); }
     juce::Label& getLatencyLabel() noexcept { return latencyLabel; }
     void refreshLatencyLabelNow() { updateLatencyLabel(); }
     dooblrvocals::ui::OutputMeter& getOutputMeter() noexcept { return outputMeter; }
@@ -99,6 +111,7 @@ public:
     ProcessorPowerButton& getPowerButton (int stage) noexcept { return *powerButtons[(size_t) stage]; }
     ProcessorPowerButton& getPitchPowerButton() noexcept { return *pitchPower; }
     ProcessorPowerButton& getHarmonyPowerButton() noexcept { return *harmonyPower; }
+    ProcessorPowerButton& getFxPowerButton (int page) noexcept { return page == delayPage ? *delayPower : *reverbPower; }
 
     bool isStageOn (int stage) const;
     void setStageOn (int stage, bool on);
@@ -125,6 +138,8 @@ private:
     void chainHandleUp (int stage, const juce::MouseEvent&);
     void setStatus (const juce::String& text);
     void updateLatencyLabel();
+    void updateLearnUi();
+    void sectionPresetChosen (int page);
 
     DooblrVocalsAudioProcessor& audioProcessor;
     juce::AudioProcessorValueTreeState& state;
@@ -132,7 +147,7 @@ private:
     juce::TooltipWindow tooltipWindow { this, 600 };
 
     juce::Rectangle<int> headerArea, navArea, displayArea, controlsArea;
-    juce::Rectangle<int> correctionTitleArea, fxTitleArea, graphTitleArea;
+    juce::Rectangle<int> correctionTitleArea, fxTitleArea, timeFxTitleArea, graphTitleArea;
 
     juce::Label titleLabel, subtitleLabel, outputCaption, statusLabel, latencyLabel;
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
@@ -145,7 +160,7 @@ private:
     dooblrvocals::dsp::ChainOrder shownOrder { 0, 1, 2, 3 };
     int draggingStage = -1, dragGrabOffset = 0, dragY = 0;
     std::array<std::unique_ptr<ProcessorPowerButton>, dooblrvocals::dsp::numChainStages> powerButtons;
-    std::unique_ptr<ProcessorPowerButton> pitchPower, harmonyPower;
+    std::unique_ptr<ProcessorPowerButton> pitchPower, harmonyPower, delayPower, reverbPower;
 
     dooblrvocals::ui::PitchDisplay pitchDisplay;
     dooblrvocals::ui::HarmonyDisplay harmonyDisplay;
@@ -153,6 +168,13 @@ private:
     dooblrvocals::ui::EqDisplay eqDisplay;
     dooblrvocals::ui::DynamicsDisplay dynamicsDisplay;
     dooblrvocals::ui::LimiterDisplay limiterDisplay;
+    dooblrvocals::ui::DelayDisplay delayDisplay;
+    dooblrvocals::ui::ReverbDisplay reverbDisplay;
+    dooblrvocals::ui::FxRoutingView delayRouting, reverbRouting;
+    juce::ComboBox delayPresetBox, reverbPresetBox;
+    juce::TextButton learnButton { "Learn Range" }, learnResetButton { "Reset" };
+    juce::Label learnLabel;
+    juce::String learnMessage;
     dooblrvocals::ui::OutputMeter outputMeter;
     std::vector<float> meterSpectrumScratch;
     std::vector<dooblrvocals::dsp::MeterFrame> meterFrameScratch;
@@ -170,7 +192,7 @@ private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment> outputAttachment;
-    std::unique_ptr<ButtonAttachment> pitchPowerAttachment, harmonyPowerAttachment;
+    std::unique_ptr<ButtonAttachment> pitchPowerAttachment, harmonyPowerAttachment, delayPowerAttachment, reverbPowerAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrVocalsAudioProcessorEditor)
 };

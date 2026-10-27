@@ -5,6 +5,7 @@
 #include <cmath>
 
 #include "Effects.h"
+#include "TimeFx.h"
 
 namespace dooblrvocals::dsp
 {
@@ -192,7 +193,20 @@ namespace dooblrvocals::dsp
         InputType input = InputType::tenor;
         QualityMode quality = QualityMode::live;
         LatencyMode latency = LatencyMode::mix;
+        float rangeLowHz = 0.0f;     // learned range (0 = use the Range / voice type)
+        float rangeHighHz = 0.0f;
+        bool learnRange = false;     // while learning, the detector searches its widest range
     };
+
+    /** The detector's search range: the widest while learning, else the learned range, else the type. */
+    inline PitchRange detectorRangeFor (const PitchSettings& s) noexcept
+    {
+        if (s.learnRange)
+            return { liveMinHz, 1100.0f };
+        if (s.rangeLowHz > 0.0f && s.rangeHighHz > s.rangeLowHz * 1.2f)
+            return { std::max (liveMinHz, s.rangeLowHz), std::min (1400.0f, s.rangeHighHz) };
+        return rangeFor (s.input);
+    }
 
     inline ProcessMode processModeFor (const PitchSettings& s, bool nonRealtime) noexcept
     {
@@ -224,5 +238,9 @@ namespace dooblrvocals::dsp
         LimiterSettings limiter;
         int chainOrder = 0;
         bool nonRealtime = false;
+        ReverbSettings reverb;
+        DelaySettings delay;
+        FxRouting fxRouting = FxRouting::parallel;
+        double bpm = 120.0;           // host tempo (for synced delay / pre-delay)
     };
 }

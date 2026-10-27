@@ -184,6 +184,9 @@ namespace dooblrvocals::dsp
         PitchEstimate getLastEstimate() const noexcept { return lastEstimate; }
         float getLastCorrectedHz() const noexcept { return lastCorrectedHz; }
 
+        /** Range learning: voiced / unvoiced readings while PitchSettings::learnRange is set. */
+        void setLearnTap (PitchTap* t) noexcept { learnTap = t; }
+
     private:
         void analyseIfDue (const PitchSettings& s, const HarmonySettings& h) noexcept;
         float readDelay (const std::vector<float>& buf, int delay) const noexcept;
@@ -193,6 +196,7 @@ namespace dooblrvocals::dsp
         int latency = 2048;
         int delaySize = 0, writePos = 0;
         int hop = 64, hopCounter = 0;
+        PitchTap* learnTap = nullptr;
         std::vector<float> delayL, delayR, monoScratch;
         std::int64_t inputCount = 0; // input samples written so far (absolute time line)
         float voiceEnv = 0.0f;

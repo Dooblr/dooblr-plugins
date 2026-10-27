@@ -47,6 +47,13 @@ namespace dooblrvocals::params
         Value compOn = nullptr, compThreshold = nullptr, compRatio = nullptr, compAttack = nullptr, compRelease = nullptr, compMakeup = nullptr;
         Value limMode = nullptr, limCeiling = nullptr, limRelease = nullptr, outputGain = nullptr, chainOrder = nullptr;
         Value latencyMode = nullptr, harmOn = nullptr, harmLevel = nullptr, harmFormant = nullptr;
+        Value revOn = nullptr, revPre = nullptr, revPreSync = nullptr, revDecay = nullptr, revSize = nullptr, revDamping = nullptr;
+        Value revLowCut = nullptr, revHighCut = nullptr, revWidth = nullptr, revEarly = nullptr, revDiffusion = nullptr;
+        Value revMod = nullptr, revDuck = nullptr, revDuckRelease = nullptr, revMix = nullptr;
+        Value dlyOn = nullptr, dlyMode = nullptr, dlySync = nullptr, dlyNote = nullptr, dlyNoteR = nullptr, dlyTime = nullptr;
+        Value dlyTimeR = nullptr, dlyFeedback = nullptr, dlyLowCut = nullptr, dlyHighCut = nullptr, dlyMod = nullptr;
+        Value dlyDrive = nullptr, dlyDuck = nullptr, dlyDuckRelease = nullptr, dlyWidth = nullptr, dlyMix = nullptr;
+        Value fxRouting = nullptr, rangeCustom = nullptr, rangeLow = nullptr, rangeHigh = nullptr;
 
         struct VoiceValues { Value on = nullptr, mode = nullptr, degree = nullptr, semis = nullptr, level = nullptr,
                              pan = nullptr, detune = nullptr, delay = nullptr; };

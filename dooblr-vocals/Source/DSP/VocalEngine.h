@@ -41,10 +41,13 @@ namespace dooblrvocals::dsp
 
         ProcessMode getProcessMode() const noexcept { return pitch.currentMode(); }
         float getGainReductionDb() const noexcept { return lastGrDb; }
+        float getReverbDuckDb() const noexcept { return fx.getReverbDuckDb(); }
+        float getDelayDuckDb() const noexcept { return fx.getDelayDuckDb(); }
         PitchEstimate getLastPitch() const noexcept { return pitch.getLastEstimate(); }
 
         void setMeterTap (MeterTap* tap) noexcept { meterTap = tap; }
         void setPitchTap (PitchTap* tap) noexcept { pitchTap = tap; }
+        void setLearnTap (PitchTap* tap) noexcept { pitch.setLearnTap (tap); }
 
     private:
         void smoothTowardsTarget (int numSamples) noexcept;
@@ -58,6 +61,7 @@ namespace dooblrvocals::dsp
         PitchEngine pitch;
         std::array<ProcessingChain, 2> chains;
         OutputGain outputGain;
+        FxBlock fx;
 
         int activeChain = 0, activeOrder = 0, fadeOrder = 0, fadeRemaining = 0, fadeLength = 1;
         juce::AudioBuffer<float> fadeBuffer;

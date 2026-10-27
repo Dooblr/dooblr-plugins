@@ -59,10 +59,12 @@ target_sources(DooblrVocals
         Source/DSP/PitchEngine.cpp
         Source/DSP/ProcessingChain.cpp
         Source/DSP/SpectrumAnalyzer.cpp
+        Source/DSP/TimeFx.cpp
         Source/DSP/VocalEngine.cpp
         Source/Parameters.cpp
         Source/Presets.cpp
         Source/UndoHistory.cpp
+        Source/RangeLearner.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/UI/Theme.cpp
@@ -72,6 +74,7 @@ target_sources(DooblrVocals
         Source/UI/PitchDisplay.cpp
         Source/UI/GateDisplay.cpp
         Source/UI/HarmonyDisplay.cpp
+        Source/UI/FxDisplays.cpp
         Source/UI/Switches.cpp)
 
 target_include_directories(DooblrVocals PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")

@@ -32,6 +32,7 @@ void DooblrVocalsAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     meterTap.prepare (sampleRate);
     engine.setMeterTap (&meterTap);
     engine.setPitchTap (&pitchTap);
+    engine.setLearnTap (&learnTap);
     engine.prepare (sampleRate, juce::jmax (1, samplesPerBlock));
     auto settings = getCurrentSettings();
     settings.nonRealtime = isNonRealtime();
@@ -83,15 +84,108 @@ void DooblrVocalsAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     auto settings = getCurrentSettings();
     settings.nonRealtime = isNonRealtime();
+    settings.pitch.learnRange = learnArmed.load (std::memory_order_relaxed);
+
+    // Host tempo for synced delay / pre-delay (120 BPM when the host gives none).
+    if (auto* playHead = getPlayHead())
+        if (const auto position = playHead->getPosition())
+            if (const auto bpm = position->getBpm(); bpm.hasValue() && *bpm > 1.0)
+                hostBpm.store (*bpm, std::memory_order_relaxed);
+    settings.bpm = hostBpm.load (std::memory_order_relaxed);
+
     updateLatency (settings);
     engine.setSettings (settings);
     engine.process (buffer, buffer.getNumSamples());
     gainReductionDb.store (engine.getGainReductionDb());
+    reverbDuckDb.store (engine.getReverbDuckDb());
+    delayDuckDb.store (engine.getDelayDuckDb());
 
     const auto n = buffer.getNumSamples();
     if (n > 0 && buffer.getNumChannels() > 0)
         outputPeakTap.push (buffer.getMagnitude (0, 0, n),
                             buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : buffer.getMagnitude (0, 0, n));
+}
+
+double DooblrVocalsAudioProcessor::getTailLengthSeconds() const
+{
+    // The reverb and delay tails (only when they are on); otherwise the short pitch-engine tail.
+    const auto s = settingsReader.read();
+    auto tail = 0.1;
+
+    if (s.reverb.enabled)
+        tail = std::max (tail, (double) s.reverb.decaySeconds * 1.2 + 0.25 + (double) s.reverb.preDelayMs * 0.001);
+
+    if (s.delay.enabled)
+    {
+        const auto bpm = hostBpm.load();
+        const auto longest = std::max (dooblrvocals::dsp::VocalDelay::delaySamplesFor (s.delay, 0, bpm, 48000.0),
+                                       dooblrvocals::dsp::VocalDelay::delaySamplesFor (s.delay, 1, bpm, 48000.0)) / 48000.0;
+        const auto fb = std::clamp ((double) s.delay.feedback, 0.0, (double) dooblrvocals::dsp::VocalDelay::maxFeedback);
+        const auto repeats = fb > 0.001 ? std::log (0.001) / std::log (fb) : 1.0; // until -60 dB
+        tail = std::max (tail, std::min (30.0, longest * (1.0 + repeats)));
+    }
+
+    return tail;
+}
+
+//==============================================================================
+void DooblrVocalsAudioProcessor::startRangeLearn()
+{
+    rangeLearner.clear();
+    learnTap.discardAll();
+    learnArmed.store (true);
+}
+
+void DooblrVocalsAudioProcessor::pollRangeLearn()
+{
+    for (;;)
+    {
+        const auto n = learnTap.pop (learnScratch.data(), (int) learnScratch.size());
+        if (n <= 0)
+            break;
+        if (learnArmed.load())
+            rangeLearner.add (learnScratch.data(), n);
+    }
+}
+
+dooblrvocals::LearnedRange DooblrVocalsAudioProcessor::stopRangeLearn()
+{
+    pollRangeLearn();
+    learnArmed.store (false);
+    learnTap.discardAll();
+    const auto result = rangeLearner.compute();
+
+    if (result.valid)
+        applyLearnedRange (result);
+
+    return result;
+}
+
+void DooblrVocalsAudioProcessor::cancelRangeLearn()
+{
+    learnArmed.store (false);
+    learnTap.discardAll();
+    rangeLearner.clear();
+}
+
+void DooblrVocalsAudioProcessor::applyLearnedRange (const dooblrvocals::LearnedRange& range)
+{
+    if (! range.valid)
+        return;
+
+    presets::apply (parameters, { { "range_custom", 1.0f },
+                                  { "range_low", range.searchLowHz },
+                                  { "range_high", range.searchHighHz },
+                                  { "input_type", (float) (int) range.type } }, true);
+}
+
+void DooblrVocalsAudioProcessor::resetLearnedRange()
+{
+    presets::ValueList values;
+    for (const auto* id : { "range_custom", "range_low", "range_high" })
+        if (auto* p = parameters.getParameter (id))
+            values.emplace_back (id, p->convertFrom0to1 (p->getDefaultValue()));
+    presets::apply (parameters, values, true);
 }
 
 //==============================================================================
