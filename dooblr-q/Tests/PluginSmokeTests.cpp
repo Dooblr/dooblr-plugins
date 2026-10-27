@@ -4869,7 +4869,12 @@ namespace
                 path.push_back (t + juce::Point<float> (0.0f, 2.0f * (float) i));
             simulatePathDrag (ring, path);
         }
-        check (std::abs (getParameter (processor, rangeId) - 8.0f) < 0.1f, "cut band: ring drag down 20 px lowers Range 12 -> 8 dB");
+        // 0.9.2: down = downward compression for every type; for a cut that is more closing,
+        // i.e. a larger positive Range.
+        check (std::abs (getParameter (processor, rangeId) - 16.0f) < 0.1f,
+               "cut band (0.9.2): ring drag down 20 px = 4 dB more downward compression, Range 12 -> 16 dB (closes more)");
+        dooblrEditor->selectBand (bell);
+        check (ring.getTooltip().contains ("(downward compression)"), "cut band, +Range: the tooltip calls it downward compression");
 
         processor.editorBeingDeleted (editor.get());
     }
@@ -5264,6 +5269,256 @@ namespace
         processor.editorBeingDeleted (editor.get());
     }
 
+    //==============================================================================
+    // 0.9.2: hover ring (dynamic Range on the graph) and the blue S.
+    void testHoverRing()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        using T = dsp::FilterType;
+        constexpr double pi = juce::MathConstants<double>::pi;
+
+        DooblrQAudioProcessor processor;
+        configureBell (processor, 0, 1000.0f, 0.0f, 1.0f);
+        configureBell (processor, 1, 1250.0f, 0.0f, 1.0f);
+        for (int b = 2; b < params::numBands; ++b)
+            setBand (processor, b, params::band::enabled, 0.0f);
+        setBand (processor, 0, params::band::threshold, -40.0f);
+        setBand (processor, 0, params::band::attack, 1.0f);
+        setBand (processor, 0, params::band::release, 100.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        check (dooblrEditor != nullptr, "editor exists");
+        if (dooblrEditor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+        auto* curve = dynamic_cast<Curve*> (findById (*editor, "responseCurve"));
+        check (curve != nullptr && curve->getWidth() > 0, "response curve found");
+        if (curve == nullptr)
+            return;
+
+        auto& history = processor.getUndoHistory();
+        const auto rangeOf = [&] (int b) { return processor.getBandSettings (b).rangeDb; };
+        const auto dynOn = [&] (int b) { return processor.getBandSettings (b).dynamicsEnabled; };
+        const auto soloOn = [&] (int b) { return getParameter (processor, params::bandId (b, params::band::solo)) >= 0.5f; };
+        const juce::Point<float> far { 5.0f, 5.0f };
+
+        auto h0 = curve->handlePosition (0);
+        const auto h1 = curve->handlePosition (1);
+        note ("handles 1 / 2 are " + format (h0.getDistanceFrom (h1), 1) + " px apart");
+        check (h0.getDistanceFrom (h1) < Curve::hoverRingOuterHit && h0.getDistanceFrom (h1) > 2.0f * Curve::handleHitRadius,
+               "test setup: band 2's handle sits inside band 1's ring zone");
+
+        // --- Proximity fade: ~100 ms ease-out in, ~150 ms out, nearest band only.
+        check (curve->getHoverBand() < 0 && curve->getHoverAlpha (0) == 0.0f, "no ring before hovering");
+        curve->updateHover (h0.translated (0.0f, 30.0f));
+        check (curve->getHoverBand() == 0, "30 px below band 1's handle shows its ring");
+        curve->advanceHoverAnimation (0.05);
+        const auto half = curve->getHoverAlpha (0);
+        note ("fade in: alpha " + format (half, 3) + " after 50 ms");
+        check (half > 0.6f && half < 0.95f, "fade in is eased-out: well past half way at 50 ms, not yet full");
+        check (curve->getHoverAlpha (1) == 0.0f, "only the nearest band's ring fades in");
+        curve->advanceHoverAnimation (0.05);
+        check (curve->getHoverAlpha (0) > 0.999f, "fully in after 100 ms");
+        curve->updateHover (far);
+        check (curve->getHoverBand() < 0, "leaving the proximity hides the ring");
+        curve->advanceHoverAnimation (0.075);
+        const auto out = curve->getHoverAlpha (0);
+        check (out > 0.4f && out < 0.6f, "fade out: about half at 75 ms (linear, 150 ms)");
+        curve->advanceHoverAnimation (0.075);
+        check (curve->getHoverAlpha (0) < 0.001f, "fully out after 150 ms");
+        curve->updateHover (h0.translated (0.0f, Curve::hoverProximity + 4.0f));
+        check (curve->getHoverBand() < 0, "beyond 40 px: no ring");
+        curve->updateHover (h0 + (h1 - h0) * 0.6f);
+        check (curve->getHoverBand() == 1, "between two handles the nearer one wins");
+
+        // --- Hit tests: the annulus never takes the handle's own clicks or a neighbour's.
+        int hitBand = -1;
+        check (curve->hitAt (h0, &hitBand) == Curve::Hit::handle && hitBand == 0, "handle centre -> handle");
+        check (curve->hitAt (h0.translated (0.0f, 10.0f), &hitBand) == Curve::Hit::handle && hitBand == 0,
+               "inside the handle's 14 px radius -> handle, not ring");
+        check (curve->hitAt (h0.translated (0.0f, 25.0f), &hitBand) == Curve::Hit::rangeRing && hitBand == 0,
+               "25 px below -> band 1's ring");
+        check (curve->hitAt (h0.translated (-25.0f, 0.0f), &hitBand) == Curve::Hit::rangeRing && hitBand == 0,
+               "25 px left -> band 1's ring");
+        const auto neighbour = h1 + (h0 - h1) / h0.getDistanceFrom (h1) * 12.0f;
+        check (neighbour.getDistanceFrom (h0) >= Curve::hoverRingInnerHit && neighbour.getDistanceFrom (h0) <= Curve::hoverRingOuterHit,
+               "test setup: the point lies in band 1's annulus");
+        check (curve->hitAt (neighbour, &hitBand) == Curve::Hit::handle && hitBand == 1,
+               "band 2's handle inside band 1's ring zone still takes the click");
+        check (curve->hitAt (h0.translated (0.0f, Curve::hoverRingOuterHit + 3.0f)) != Curve::Hit::rangeRing, "outside the annulus -> no ring");
+        setBand (processor, 0, params::band::type, (float) T::notch);
+        {
+            const auto n = curve->handlePosition (0);
+            curve->updateHover (n.translated (0.0f, 25.0f));
+            check (curve->hitAt (n.translated (0.0f, 25.0f)) != Curve::Hit::rangeRing && ! curve->hoverRingAvailable (0),
+                   "Notch (no dynamics): no ring");
+        }
+        setBand (processor, 0, params::band::type, (float) T::bell);
+
+        // --- Ring drags. Band 2 off so only band 1 is near.
+        setBand (processor, 1, params::band::enabled, 0.0f);
+        h0 = curve->handlePosition (0);
+        const auto r = Curve::hoverRingRadius;
+        const auto arcPath = [&] (double toDegrees)
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 12; ++i)
+            {
+                const auto a = toDegrees * pi / 180.0 * i / 12.0;
+                path.push_back (h0 + juce::Point<float> ((float) (r * std::sin (a)), (float) (-r * std::cos (a))));
+            }
+            return path;
+        };
+        const auto measureCopy = [&] (double frequency)
+        {
+            juce::MemoryBlock state;
+            processor.getStateInformation (state);
+            DooblrQAudioProcessor copy;
+            copy.setStateInformation (state.getData(), (int) state.getSize());
+            prepare (copy, juce::AudioChannelSet::stereo(), 48000.0, 512);
+            return measureSineGainDb (copy, frequency, 0.5f, 48000.0, 1.0);
+        };
+
+        check (! dynOn (0) && rangeOf (0) == 0.0f, "bell starts static, Range 0");
+        const auto bellStatic = measureCopy (1000.0);
+        history.clear();
+        curve->updateHover (h0.translated (0.0f, -r));
+        simulatePathDrag (*curve, arcPath (-45.0));
+        note ("bell: CCW 45 deg -> Range " + format (rangeOf (0), 2) + " dB");
+        check (std::abs (rangeOf (0) + 8.0f) < 0.3f, "bell: counter-clockwise 45 deg = 8 dB downward compression (Range -8)");
+        check (dynOn (0), "moving the ring off 0 switches Dynamic on");
+        check (history.getNumUndoableSteps() == 1, "Dynamic on + Range change are one undo step");
+        const auto bellCcw = measureCopy (1000.0);
+        history.undo();
+        check (! dynOn (0) && std::abs (rangeOf (0)) < 0.01f, "one undo restores Dynamic off and Range 0");
+        history.redo();
+        check (dynOn (0) && std::abs (rangeOf (0) + 8.0f) < 0.3f, "redo brings both back");
+
+        simulateDoubleClick (*curve, h0.translated (0.0f, -r));
+        check (std::abs (rangeOf (0)) < 0.01f && dynOn (0), "double-click on the ring resets Range to 0 (Dynamic stays on)");
+
+        history.clear();
+        simulatePathDrag (*curve, arcPath (45.0));
+        check (std::abs (rangeOf (0) - 8.0f) < 0.3f, "bell: clockwise 45 deg = 8 dB upward expansion (Range +8)");
+        const auto bellCw = measureCopy (1000.0);
+        note ("bell 1 kHz, -9 dBFS sine: static " + format (bellStatic, 2) + " dB, CCW " + format (bellCcw, 2)
+              + " dB, CW " + format (bellCw, 2) + " dB");
+        check (bellCcw < bellStatic - 5.0 && bellCw > bellStatic + 5.0,
+               "bell DSP: CCW turns a loud signal down (compression), CW turns it up (expansion)");
+        curve->advanceHoverAnimation (0.2); // no vblank in the headless test
+        check (curve->getHoverBand() == 0 && curve->getHoverAlpha (0) > 0.999f, "the ring stays after the drag (pointer still on it)");
+
+        // Vertical fallback: up = upward.
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 10; ++i)
+                path.push_back (h0.translated (0.0f, -r - 2.0f * (float) i));
+            simulatePathDrag (*curve, path);
+        }
+        check (std::abs (rangeOf (0) - 12.0f) < 0.3f, "vertical drag up 20 px on the ring = +4 dB upward (8 -> 12)");
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 10; ++i)
+                path.push_back (h0.translated (0.0f, -r + 30.0f * (float) i));
+            simulatePathDrag (*curve, path);
+        }
+        check (std::abs (rangeOf (0) + 24.0f) < 0.01f, "dragging far down clamps at 24 dB downward");
+
+        // Lock: while the ring is held, moving away keeps it.
+        curve->mouseDown (makeMouseEvent (*curve, h0.translated (0.0f, -r), h0.translated (0.0f, -r), 1, false));
+        curve->updateHover (far);
+        curve->clearHover();
+        check (curve->isRingDragging() && curve->getHoverBand() == 0, "the ring stays while it is being dragged, even off the display");
+        curve->mouseUp (makeMouseEvent (*curve, far, h0.translated (0.0f, -r), 1, true));
+        check (! curve->isRingDragging() && curve->getHoverBand() < 0, "released away from it: the ring fades out");
+
+        // Low Cut: CCW closes the filter (downward), CW opens it (upward).
+        configureDynamicCut (processor, 0, T::lowCut, 1000.0f, dsp::Slope::db24, 0.0f, false);
+        h0 = curve->handlePosition (0);
+        const auto cutStatic = measureCopy (1000.0);
+        history.clear();
+        curve->updateHover (h0.translated (0.0f, -r));
+        simulatePathDrag (*curve, arcPath (-45.0));
+        check (std::abs (rangeOf (0) - 8.0f) < 0.3f && dynOn (0),
+               "Low Cut: counter-clockwise = downward compression = Range +8 (closes), Dynamic switched on");
+        check (history.getNumUndoableSteps() == 1, "Low Cut: one undo step");
+        const auto cutCcw = measureCopy (1000.0);
+        simulateDoubleClick (*curve, h0.translated (0.0f, -r));
+        simulatePathDrag (*curve, arcPath (45.0));
+        check (std::abs (rangeOf (0) + 8.0f) < 0.3f, "Low Cut: clockwise = upward expansion = Range -8 (opens)");
+        const auto cutCw = measureCopy (1000.0);
+        note ("Low Cut 1 kHz 24 dB/oct, -9 dBFS sine at 1 kHz: static " + format (cutStatic, 2) + " dB, CCW " + format (cutCcw, 2)
+              + " dB, CW " + format (cutCw, 2) + " dB");
+        check (cutCcw < cutStatic - 6.0 && cutCw > cutStatic + 1.5,
+               "Low Cut DSP: CCW closes on a loud signal (less level), CW opens (more level)");
+
+        // --- The blue S.
+        configureBell (processor, 0, 1000.0f, 0.0f, 1.0f);
+        setBand (processor, 0, params::band::dynamicsEnabled, 0.0f);
+        setBand (processor, 0, params::band::range, 0.0f);
+        setBand (processor, 1, params::band::enabled, 1.0f);
+        h0 = curve->handlePosition (0);
+        curve->updateHover (h0.translated (0.0f, 25.0f));
+        const auto badge = curve->soloBadgeBounds (0);
+        note ("blue S: " + format (badge.getWidth(), 1) + " px, centre " + format (badge.getCentre().getDistanceFrom (h0), 1) + " px from the handle");
+        check (curve->soloBadgeVisible (0) && badge.getWidth() >= 18.0f && badge.getHeight() >= 18.0f,
+               "hovering shows an 18+ px S on the ring");
+        check (badge.getCentreX() > h0.x && badge.getCentreY() < h0.y && curve->getLocalBounds().toFloat().contains (badge),
+               "the S sits top-right of the ring, on screen");
+        check (! badge.intersects (juce::Rectangle<float> (2.0f * Curve::handleHitRadius, 2.0f * Curve::handleHitRadius).withCentre (h0)),
+               "the S is clear of the handle's own hit area");
+        check (curve->hitAt (badge.getCentre(), &hitBand) == Curve::Hit::soloBadge && hitBand == 0, "clicking the S hits the S");
+        check (! curve->soloBadgeVisible (2), "no S for a disabled band");
+
+        const auto click = [&] (juce::Point<float> p, bool alt)
+        {
+            const auto mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier
+                                                  | (alt ? juce::ModifierKeys::altModifier : 0));
+            curve->mouseDown (makeMouseEventWithMods (*curve, p, p, 1, false, mods));
+            curve->mouseUp (makeMouseEventWithMods (*curve, p, p, 1, false, mods));
+        };
+        click (badge.getCentre(), false);
+        check (soloOn (0) && ! soloOn (1), "the S solos the band");
+        curve->updateHover (far);
+        curve->advanceHoverAnimation (1.0);
+        check (curve->getHoverBand() < 0 && curve->soloBadgeVisible (0), "a soloed band's S stays without hover");
+        check (curve->hitAt (badge.getCentre(), &hitBand) == Curve::Hit::soloBadge && hitBand == 0, "and stays clickable");
+        click (badge.getCentre(), false);
+        check (! soloOn (0) && ! curve->soloBadgeVisible (0), "clicking it again un-solos (and the S goes)");
+
+        setBand (processor, 1, params::band::solo, 1.0f);
+        history.clear();
+        curve->updateHover (h0.translated (0.0f, 25.0f));
+        click (badge.getCentre(), true);
+        check (soloOn (0) && ! soloOn (1), "alt-click on the S: exclusive solo");
+        check (history.getNumUndoableSteps() == 1, "exclusive solo from the S is one undo step");
+        check (processor.getBandSettings (0).rangeDb == 0.0f && ! dynOn (0), "the S click leaves the ring's Range alone");
+        click (badge.getCentre(), false);
+        check (! soloOn (0), "plain click un-solos");
+
+        // Snapshot: a bell's ring held mid-drag (downward compression), with its blue S.
+        configureBell (processor, 0, 900.0f, 3.0f, 1.2f);
+        configureBell (processor, 2, 5000.0f, -2.0f, 1.5f);
+        setBand (processor, 1, params::band::enabled, 0.0f);
+        setBand (processor, 0, params::band::range, -4.0f);
+        dooblrEditor->selectBand (0);
+        h0 = curve->handlePosition (0);
+        curve->updateHover (h0.translated (0.0f, -r));
+        curve->advanceHoverAnimation (0.2);
+        {
+            const auto path = arcPath (-45.0);
+            curve->mouseDown (makeMouseEvent (*curve, path.front(), path.front(), 1, false));
+            for (size_t i = 1; i < path.size(); ++i)
+                curve->mouseDrag (makeMouseEvent (*curve, path[i], path.front(), 1, true));
+            check (curve->isRingDragging() && std::abs (rangeOf (0) + 12.0f) < 0.3f, "snapshot: ring held at 12 dB downward");
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.9.2-hover");
+            curve->mouseUp (makeMouseEvent (*curve, path.back(), path.front(), 1, true));
+        }
+        processor.editorBeingDeleted (editor.get());
+    }
+
 }
 
 int main()
@@ -5316,6 +5571,7 @@ int main()
         { "band Solo regions (0.9.1)",               testSoloRegions },
         { "band Solo audio (0.9.1)",                 testSoloAudio },
         { "band Solo editor (0.9.1)",                testSoloEditor },
+        { "hover Range ring and blue S (0.9.2)",     testHoverRing },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

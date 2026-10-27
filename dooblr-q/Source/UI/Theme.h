@@ -17,6 +17,9 @@ namespace dooblrq::ui
         inline const juce::Colour dynamic     { 0xffd9a35b };
         inline const juce::Colour spectrum    { 0xff9fb4c8 };
         inline const juce::Colour frozen      { 0xffe58fc0 };
+        inline const juce::Colour compression { 0xffe58a4e }; // 0.9.2: downward (CCW) Range
+        inline const juce::Colour expansion   { 0xff7ccf72 }; // 0.9.2: upward (CW) Range
+        inline const juce::Colour solo        { 0xff3e8ef7 }; // 0.9.2: the blue S on the graph
     }
 
     /** Colour used to identify a band in the display and band selector. */

@@ -168,6 +168,8 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
 
     responseCurve.setComponentID ("responseCurve");
     responseCurve.onBandSelected = [this] (int bandIndex) { selectBand (bandIndex); };
+    // 0.9.2: the graph's blue S solos like the band's S button (alt = exclusive).
+    responseCurve.onSoloClicked = [this] (int bandIndex, bool exclusive) { toggleSolo (bandIndex, exclusive); };
     addAndMakeVisible (responseCurve);
 
     for (int b = 0; b < params::numBands; ++b)

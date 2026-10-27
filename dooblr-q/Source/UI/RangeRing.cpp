@@ -144,8 +144,11 @@ namespace dooblrq::ui
                    + juce::String (std::abs (rangeDb), 1) + " dB";
         }
 
-        setTooltip ("Dynamic Range " + amount + ": " + effect + ". Drag up/down or around the ring; "
-                    "Shift = fine, double-click = 0 dB.");
+        const auto upward = rangeDb * upwardSign();
+        const auto kind = juce::approximatelyEqual (upward, 0.0) ? juce::String ("off")
+                                                                  : juce::String (upward > 0.0 ? "upward expansion" : "downward compression");
+        setTooltip ("Dynamic Range " + amount + " (" + kind + "): " + effect + ". Drag up / clockwise = upward expansion, "
+                    "down / counter-clockwise = downward compression; Shift = fine, double-click = 0 dB.");
     }
 
     //==============================================================================
@@ -368,7 +371,10 @@ namespace dooblrq::ui
         }
 
         lastPosition = event.position;
-        setRangeFromUi (dragValue + delta);
+        // 0.9.2: the gesture is in "upward amount" (up / clockwise = upward expansion, down /
+        // counter-clockwise = downward compression), the same as the graph's hover ring. For
+        // cuts positive Range closes the filter (downward), so the direction flips there.
+        setRangeFromUi (dragValue + delta * upwardSign());
     }
 
     void RangeRing::setRangeFromUi (double newRangeDb)

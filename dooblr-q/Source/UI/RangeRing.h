@@ -20,8 +20,10 @@ namespace dooblrq::ui
         amount.
 
         Mouse: only the ring (an annulus) takes clicks; the inner knob behaves as before.
-        A drag that starts mostly up/down edits vertically (up = more range); one that
-        moves around the ring edits by rotation (clockwise = more range). Shift = fine,
+        A drag that starts mostly up/down edits vertically; one that moves around the ring
+        edits by rotation. Since 0.9.2 up / clockwise = upward expansion and down /
+        counter-clockwise = downward compression for every type (for gain types that is
+        +/- Range, for cuts -/+ Range, since positive Range closes a cut). Shift = fine,
         double-click = 0 dB, one undo step per drag. Disabled (dimmed) when the band's
         dynamics are off or its type has none.
     */
@@ -54,6 +56,10 @@ namespace dooblrq::ui
         void setMovesCutoff (bool movesCutoff, bool isHighCut);
 
         double getRangeDb() const noexcept { return rangeDb; }
+
+        /** 0.9.2: +1 for gain types, -1 for cuts (see DynamicEQBand::upwardSign): drags move the
+            "upward amount" = Range * upwardSign(), so up / clockwise is upward expansion for every type. */
+        double upwardSign() const noexcept { return cutoff ? -1.0 : 1.0; }
 
         //==============================================================================
         enum class DragMode { undecided, vertical, rotary };

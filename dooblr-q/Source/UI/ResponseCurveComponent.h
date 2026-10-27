@@ -3,6 +3,7 @@
 #include <array>
 #include <atomic>
 #include <functional>
+#include <memory>
 #include <utility>
 #include <vector>
 
@@ -31,6 +32,18 @@ namespace dooblrq::ui
         (horizontal) and, vertically, gain for bell, shelf and tilt types or Q for the
         gainless cut and notch types (up = higher Q). Dragging a disabled band enables it;
         double-click a handle to toggle its band on or off.
+
+        0.9.2 hover ring: moving the pointer within hoverProximity of an enabled band's handle
+        fades in (100 ms ease-out, display-refresh driven) a ring around the nearest such
+        handle; it fades out (150 ms) when the pointer leaves, unless the ring is being dragged.
+        The ring edits the band's dynamic Range in "upward amount" (see
+        dsp::DynamicEQBand::upwardSign): counter-clockwise = downward compression, clockwise =
+        upward expansion, +/-24 dB at +/-135 degrees from 12 o'clock; vertical drags (up =
+        upward) work too, with the panel ring's direction lock. Moving it off 0 switches the
+        band's Dynamic on in the same undo step; double-click resets to 0. The ring annulus
+        starts outside the handle's own hit radius, and handles (any band) win over rings.
+        A blue S badge on the ring's top-right edge toggles the band's Solo (alt = exclusive);
+        it stays visible while the band is soloed.
     */
     class ResponseCurveComponent final : public juce::Component,
                                          private juce::AudioProcessorParameter::Listener,
@@ -51,6 +64,52 @@ namespace dooblrq::ui
         void mouseMove (const juce::MouseEvent& event) override;
         void mouseExit (const juce::MouseEvent& event) override;
         void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+
+        //==============================================================================
+        // 0.9.2: hover ring and blue S (public for the tests).
+        static constexpr float hoverProximity = 40.0f;      // px from a handle that shows its ring
+        static constexpr float handleHitRadius = 14.4f;     // the handle's own click radius
+        static constexpr float hoverRingRadius = 25.0f;     // centre line of the ring stroke
+        static constexpr float hoverRingWidth = 5.0f;
+        static constexpr float hoverRingInnerHit = 15.0f;   // annulus that takes clicks
+        static constexpr float hoverRingOuterHit = 34.0f;
+        static constexpr float soloBadgeSize = 19.0f;       // the blue S (square, px)
+        static constexpr float soloBadgeDistance = 35.0f;   // from the handle centre, at 45 degrees
+        static constexpr double hoverFadeInSeconds = 0.1, hoverFadeOutSeconds = 0.15;
+        static constexpr double hoverSweepRadians = 0.75 * juce::MathConstants<double>::pi; // +/-24 dB at +/-135 degrees
+
+        enum class Hit { none, widthHandle, handle, soloBadge, rangeRing };
+
+        /** What a click at this position would grab, and for which band. */
+        Hit hitAt (juce::Point<float> position, int* bandOut = nullptr) const;
+
+        /** The band whose ring the pointer at this position would show (-1 none). */
+        int hoverBandAt (juce::Point<float> position) const;
+
+        /** Updates the hover target from a pointer position (what mouseMove does). */
+        void updateHover (juce::Point<float> position);
+        /** The pointer left the display: fade out unless a ring drag is in progress. */
+        void clearHover();
+
+        int getHoverBand() const noexcept { return hoverBand; }
+        float getHoverAlpha (int bandIndex) const noexcept;
+        bool isRingDragging() const noexcept { return ringBand >= 0; }
+
+        /** Advances the fades (called from the display's vblank; public so tests can drive it). */
+        void advanceHoverAnimation (double dtSeconds);
+
+        /** A band can show the ring when it is on and its type has dynamics (not Notch). */
+        bool hoverRingAvailable (int bandIndex) const;
+        /** The blue S shows while hovered (enabled bands) or while the band is soloed. */
+        bool soloBadgeVisible (int bandIndex) const;
+        juce::Rectangle<float> soloBadgeBounds (int bandIndex) const;
+
+        /** Ring angle (radians clockwise from 12 o'clock) for an upward amount (dB) and back. */
+        static double angleForUpwardAmount (double upwardDb) noexcept;
+
+        /** Called when the blue S is clicked: (band, exclusive). The editor routes this to its
+            Solo toggle, so the graph and the S buttons share one behaviour. */
+        std::function<void (int, bool)> onSoloClicked;
 
         static constexpr float displayRangeDb = 24.0f;
 
@@ -158,6 +217,10 @@ namespace dooblrq::ui
 
     private:
         void timerCallback() override;
+        void onVBlank();
+        void endRingDrag();
+        void drawHoverRing (juce::Graphics& g, int bandIndex, float alpha);
+        void drawSoloBadge (juce::Graphics& g, int bandIndex, float alpha);
         void parameterValueChanged (int parameterIndex, float newValue) override;
         void parameterGestureChanged (int, bool) override {}
 
@@ -214,6 +277,19 @@ namespace dooblrq::ui
         const char* dragVerticalSuffix = params::band::gain; // gain, or q for cut/notch handles
 
         std::atomic<bool> repaintPending { true };
+
+        // 0.9.2 hover ring state.
+        int hoverBand = -1;
+        std::array<float, params::numBands> hoverPhase {};   // 0..1 progress of the current fade
+        std::array<bool, params::numBands> hoverRising {};
+        int ringBand = -1;                                  // band whose ring is being dragged
+        int ringDragMode = 0;                               // 0 undecided, 1 vertical, 2 rotary
+        juce::Point<float> ringDownPosition, ringLastPosition;
+        double ringAmount = 0.0;                            // upward amount (dB) while dragging
+        bool ringGesture = false, ringEngagedDynamics = false;
+        bool soloClickPending = false;                      // a press on the S: no drag follows
+        double lastVBlankTime = 0.0;
+        std::unique_ptr<juce::VBlankAttachment> vblank;
 
         analysis::SpectrumDisplay liveDisplay, overlayDisplay;
         bool overlayPrimed = false;

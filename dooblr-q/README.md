@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.9.1:** six-band dynamic EQ with per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.9.2:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle, per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -17,7 +17,7 @@ moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-ba
 **Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt. 0.7.1 extends
 Slope to Bell and Notch, so it applies to every band type. 0.8.0 adds the per-band Model,
 Stepped, Drive and Atten controls; see [Models](#models-080). 0.9.0 adds dynamics to Low /
-High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091).)
+High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091). 0.9.2 adds the hover ring and blue S on the graph; see [Hover ring and blue S](#hover-ring-and-blue-s-092).)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -117,6 +117,29 @@ band was a cut, shelf or tilt.
   impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
   the ringing is pre- and post-).
 
+## Hover ring and blue S (0.9.2)
+
+On the graph, moving the pointer within about **40 px** of an enabled band's handle fades in
+(100 ms, eased out; 150 ms to fade out) a ring around the **nearest** handle. No new
+parameters: it edits the band's existing Range (`bN_dyn_range`).
+
+- **Counter-clockwise = downward compression** (orange arc): a louder signal turns a bell /
+  shelf / tilt down, or closes a Low / High Cut (moves its cutoff into the passband).
+  **Clockwise = upward expansion** (green arc): a louder signal turns the band up, or opens a
+  cut. 0 is at 12 o'clock; ±135° = ±24 dB. In Range terms: gain types CCW = negative Range,
+  CW = positive; cuts CCW = positive Range, CW = negative.
+- Drag **around** the ring or **up/down** (up = upward, 0.2 dB per pixel), with the panel
+  ring's direction lock (the first ~4 px choose); **Shift** = fine, **double-click** = 0 dB.
+  The amount ("Downward 6.0 dB" / "Upward 6.0 dB") shows only while dragging; a dot marks
+  the live dynamic amount.
+- Moving it off 0 **switches the band's Dynamic on**, in the same undo step as the Range
+  change. Going back to 0 leaves Dynamic on.
+- Only the ring's annulus (about 15–34 px from the handle) takes clicks, and every handle
+  (any band's) wins over a ring, so dragging handles works as before. Notch has no ring.
+- A **blue S** (19 px) on the ring's top-right edge toggles the band's Solo, the same as the
+  band's S buttons (**Alt/Option-click** = exclusive). A soloed band's S stays visible, filled
+  blue, without hovering; it is the graph's only Solo indicator.
+
 ## Band Solo (0.9.1)
 
 Every band has an **S** button: on its band tab (top right) and next to the band's on/off
@@ -138,8 +161,8 @@ passband):
 Solo runs after the EQ (all phase modes, all Models) with no added latency, a 20 ms fade on
 every on / off / switch, and a 10 ms glide when a soloed band's frequency or Q moves. With no
 band soloed it is an exact pass-through. The display dims everything, lights the soloed
-regions in the band colour (with a dashed outline), fades the other bands' handles and puts an
-amber S on soloed handles. Parameters "Band N Solo" (IDs `b1_solo` … `b6_solo`) are appended
+regions in the band colour (with a dashed outline), fades the other bands' handles and shows
+a filled blue S on soloed handles (since 0.9.2; it was a small amber badge in 0.9.1). Parameters "Band N Solo" (IDs `b1_solo` … `b6_solo`) are appended
 after all older parameters, so existing sessions load unchanged.
 
 ## Dynamic cuts and the Range ring (0.9.0)
@@ -160,7 +183,10 @@ parameter IDs, order and `stateVersion` are unchanged, and sessions load as befo
   0 dB Range and a white dot for the live position while the band is moving.
 - Only the ring (an annulus about 14 px wide) takes clicks; the knob inside works as before.
 - Drag **up/down** (0.2 dB per pixel, 240 px = full ±24 dB span) or **around the ring**
-  (clockwise = more; the knob's full sweep = 48 dB). The first ~4 px of a drag pick the mode:
+  (the knob's full sweep = 48 dB). Since 0.9.2 the direction is the same for every type:
+  **up / clockwise = upward expansion, down / counter-clockwise = downward compression**
+  (for gain types that is +/- Range; for cuts it is -/+ Range, since positive Range closes a
+  cut). The first ~4 px of a drag pick the mode:
   mostly vertical or radial movement = up/down, movement along the ring = rotation.
   **Shift** = fine (×0.1), **double-click** = 0 dB, hover highlight, tooltip. Each drag (or
   reset) is one undo step.

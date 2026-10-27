@@ -1,6 +1,7 @@
 #include "ResponseCurveComponent.h"
 
 #include "../PluginProcessor.h"
+#include "RangeRing.h"
 #include "Theme.h"
 
 namespace dooblrq::ui
@@ -52,10 +53,14 @@ namespace dooblrq::ui
             parameter->addListener (this);
 
         startTimerHz (60);
+
+        // 0.9.2: the hover fades run on the display refresh.
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { onVBlank(); });
     }
 
     ResponseCurveComponent::~ResponseCurveComponent()
     {
+        vblank.reset();
         stopTimer();
 
         for (auto* parameter : processor.getParameters())
@@ -364,22 +369,209 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::updateCursor (juce::Point<float> position)
     {
-        if (widthHandleAt (position) != 0)
-            setMouseCursor (juce::MouseCursor::LeftRightResizeCursor);
-        else if (bandAt (position) >= 0)
-            setMouseCursor (juce::MouseCursor::PointingHandCursor);
-        else
-            setMouseCursor (juce::MouseCursor::NormalCursor);
+        switch (hitAt (position))
+        {
+            case Hit::widthHandle: setMouseCursor (juce::MouseCursor::LeftRightResizeCursor); break;
+            case Hit::handle:
+            case Hit::soloBadge:
+            case Hit::rangeRing:   setMouseCursor (juce::MouseCursor::PointingHandCursor); break;
+            case Hit::none:        setMouseCursor (juce::MouseCursor::NormalCursor); break;
+        }
     }
 
     void ResponseCurveComponent::mouseMove (const juce::MouseEvent& event)
     {
+        updateHover (event.position);
         updateCursor (event.position);
     }
 
     void ResponseCurveComponent::mouseExit (const juce::MouseEvent&)
     {
+        clearHover();
         setMouseCursor (juce::MouseCursor::NormalCursor);
+    }
+
+    //==============================================================================
+    // 0.9.2: hover ring and blue S.
+    bool ResponseCurveComponent::hoverRingAvailable (int b) const
+    {
+        if (b < 0 || b >= params::numBands)
+            return false;
+
+        const auto s = processor.getBandSettings (b);
+        return s.enabled && dsp::supportsDynamics (s.type);
+    }
+
+    bool ResponseCurveComponent::soloBadgeVisible (int b) const
+    {
+        if (b < 0 || b >= params::numBands)
+            return false;
+
+        return processor.isBandSoloed (b) || (b == hoverBand && processor.getBandSettings (b).enabled);
+    }
+
+    juce::Rectangle<float> ResponseCurveComponent::soloBadgeBounds (int b) const
+    {
+        // On the ring's outer edge at the top right; flipped below / to the left near the plot's
+        // top / right edges so it always stays on screen.
+        const auto handle = handlePosition (b);
+        const auto offset = soloBadgeDistance * std::sqrt (0.5f);
+        const auto area = plotArea();
+        auto dx = offset, dy = -offset;
+
+        if (handle.y + dy - soloBadgeSize * 0.5f < area.getY())
+            dy = offset;
+        if (handle.x + dx + soloBadgeSize * 0.5f > area.getRight())
+            dx = -offset;
+
+        return juce::Rectangle<float> (soloBadgeSize, soloBadgeSize).withCentre (handle.translated (dx, dy));
+    }
+
+    double ResponseCurveComponent::angleForUpwardAmount (double upwardDb) noexcept
+    {
+        return juce::jlimit (-1.0, 1.0, upwardDb / RangeRing::maxRangeDb) * hoverSweepRadians;
+    }
+
+    int ResponseCurveComponent::hoverBandAt (juce::Point<float> position) const
+    {
+        if (ringBand >= 0)
+            return ringBand;
+
+        // Staying on the current band's S keeps its ring (the S sits at the zone's edge).
+        if (hoverBand >= 0 && soloBadgeBounds (hoverBand).expanded (2.0f).contains (position)
+            && bandAt (position) < 0)
+            return hoverBand;
+
+        auto best = -1;
+        auto bestDistance = hoverProximity;
+
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            if (! processor.getBandSettings (b).enabled)
+                continue;
+
+            const auto distance = handlePosition (b).getDistanceFrom (position);
+
+            if (distance < bestDistance)
+            {
+                best = b;
+                bestDistance = distance;
+            }
+        }
+
+        return best;
+    }
+
+    void ResponseCurveComponent::updateHover (juce::Point<float> position)
+    {
+        const auto band = hoverBandAt (position);
+
+        if (band == hoverBand)
+            return;
+
+        // Keep each band's fade continuous when it changes direction.
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            const auto rising = b == band;
+
+            if (rising != hoverRising[(size_t) b])
+            {
+                const auto alpha = getHoverAlpha (b);
+                hoverPhase[(size_t) b] = rising ? 1.0f - std::sqrt (std::max (0.0f, 1.0f - alpha)) : alpha;
+                hoverRising[(size_t) b] = rising;
+            }
+        }
+
+        hoverBand = band;
+        repaint();
+    }
+
+    void ResponseCurveComponent::clearHover()
+    {
+        if (ringBand >= 0)
+            return;
+
+        updateHover ({ -1.0e6f, -1.0e6f });
+    }
+
+    float ResponseCurveComponent::getHoverAlpha (int b) const noexcept
+    {
+        if (b < 0 || b >= params::numBands)
+            return 0.0f;
+
+        const auto p = juce::jlimit (0.0f, 1.0f, hoverPhase[(size_t) b]);
+        // Fade in: quadratic ease-out (fast start, gentle landing). Fade out: linear.
+        return hoverRising[(size_t) b] ? 1.0f - (1.0f - p) * (1.0f - p) : p;
+    }
+
+    void ResponseCurveComponent::advanceHoverAnimation (double dt)
+    {
+        if (! (dt > 0.0))
+            return;
+
+        auto changed = false;
+
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            auto& phase = hoverPhase[(size_t) b];
+            const auto before = phase;
+
+            if (hoverRising[(size_t) b])
+                phase = std::min (1.0f, phase + (float) (dt / hoverFadeInSeconds));
+            else
+                phase = std::max (0.0f, phase - (float) (dt / hoverFadeOutSeconds));
+
+            changed = changed || std::abs (phase - before) > 0.0f;
+        }
+
+        if (changed)
+            repaint();
+    }
+
+    void ResponseCurveComponent::onVBlank()
+    {
+        const auto now = juce::Time::getMillisecondCounterHiRes() * 0.001;
+        const auto dt = lastVBlankTime > 0.0 ? juce::jlimit (0.0, 0.05, now - lastVBlankTime) : 1.0 / 60.0;
+        lastVBlankTime = now;
+        advanceHoverAnimation (dt);
+    }
+
+    ResponseCurveComponent::Hit ResponseCurveComponent::hitAt (juce::Point<float> position, int* bandOut) const
+    {
+        const auto result = [bandOut] (Hit hit, int band)
+        {
+            if (bandOut != nullptr)
+                *bandOut = band;
+            return hit;
+        };
+
+        // Handles first (any band), so neither a ring nor an S ever steals a handle's clicks.
+        if (widthHandleAt (position) != 0)
+            return result (Hit::widthHandle, selectedBand);
+
+        if (const auto band = bandAt (position); band >= 0)
+            return result (Hit::handle, band);
+
+        // The S: the hovered band's first, then any soloed band's (always visible).
+        const auto hover = hoverBandAt (position);
+
+        if (hover >= 0 && soloBadgeVisible (hover) && soloBadgeBounds (hover).expanded (1.0f).contains (position))
+            return result (Hit::soloBadge, hover);
+
+        for (int b = 0; b < params::numBands; ++b)
+            if (processor.isBandSoloed (b) && soloBadgeBounds (b).expanded (1.0f).contains (position))
+                return result (Hit::soloBadge, b);
+
+        // The ring belongs to the nearest band only.
+        if (hover >= 0 && hoverRingAvailable (hover))
+        {
+            const auto distance = handlePosition (hover).getDistanceFrom (position);
+
+            if (distance >= hoverRingInnerHit && distance <= hoverRingOuterHit)
+                return result (Hit::rangeRing, hover);
+        }
+
+        return result (Hit::none, -1);
     }
 
     void ResponseCurveComponent::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
@@ -679,6 +871,106 @@ namespace dooblrq::ui
         return marker;
     }
 
+    void ResponseCurveComponent::drawHoverRing (juce::Graphics& g, int b, float alpha)
+    {
+        const auto centre = handlePosition (b);
+        const auto s = processor.getBandSettings (b);
+        const auto sign = dsp::DynamicEQBand::upwardSign (s.type);
+        const auto amount = sign * (double) s.rangeDb;
+        const auto sweep = (float) hoverSweepRadians;
+        const auto active = s.dynamicsEnabled;
+
+        const auto arc = [&] (float from, float to)
+        {
+            juce::Path p;
+            p.addCentredArc (centre.x, centre.y, hoverRingRadius, hoverRingRadius, 0.0f, from, to, true);
+            return p;
+        };
+        const juce::PathStrokeType stroke (hoverRingWidth, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+
+        // Dark backing so the ring reads over the analyser, then the +/-135 degree track.
+        g.setColour (Palette::background.withAlpha (0.6f * alpha));
+        g.strokePath (arc (-sweep, sweep), juce::PathStrokeType (hoverRingWidth + 3.0f, juce::PathStrokeType::curved,
+                                                                  juce::PathStrokeType::rounded));
+        g.setColour (Palette::textMuted.withAlpha ((active ? 0.45f : 0.28f) * alpha));
+        g.strokePath (arc (-sweep, sweep), stroke);
+
+        // Zero at 12 o'clock.
+        g.setColour (Palette::textPrimary.withAlpha (0.7f * alpha));
+        g.drawLine (centre.x, centre.y - hoverRingRadius - hoverRingWidth * 0.5f - 1.5f,
+                    centre.x, centre.y - hoverRingRadius + hoverRingWidth * 0.5f + 1.5f, 1.2f);
+
+        // The excursion: counter-clockwise = downward compression, clockwise = upward expansion.
+        const auto angle = (float) angleForUpwardAmount (amount);
+
+        if (std::abs (amount) > 0.05)
+        {
+            const auto colour = amount < 0.0 ? Palette::compression : Palette::expansion;
+            g.setColour (colour.withAlpha ((active ? 1.0f : 0.45f) * alpha));
+            g.strokePath (arc (std::min (0.0f, angle), std::max (0.0f, angle)), stroke);
+
+            const auto tip = centre.getPointOnCircumference (hoverRingRadius, angle);
+            g.setColour (Palette::textPrimary.withAlpha ((active ? 1.0f : 0.6f) * alpha));
+            g.fillEllipse (juce::Rectangle<float> (4.0f, 4.0f).withCentre (tip));
+        }
+
+        // What the band is doing right now (dynamics on).
+        if (active)
+        {
+            const auto live = sign * (double) processor.getBandDynamicGainDb (b);
+
+            if (std::abs (live) > 0.05)
+            {
+                const auto dot = centre.getPointOnCircumference (hoverRingRadius, (float) angleForUpwardAmount (live));
+                g.setColour (bandColour (b).brighter (0.4f).withAlpha (alpha));
+                g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (dot));
+                g.setColour (Palette::background.withAlpha (alpha));
+                g.drawEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (dot), 1.0f);
+            }
+        }
+
+        // The amount, only while it is being dragged.
+        if (ringBand == b && ringDragMode != 0)
+        {
+            const auto text = std::abs (amount) < 0.05 ? juce::String ("Range 0.0 dB")
+                                                        : juce::String (amount < 0.0 ? "Downward " : "Upward ")
+                                                              + juce::String (std::abs (amount), 1) + " dB";
+            auto box = juce::Rectangle<float> (128.0f, 18.0f).withCentre (centre.translated (0.0f, hoverRingOuterHit + 12.0f));
+
+            if (box.getBottom() > plotArea().getBottom())
+                box = box.withCentre (centre.translated (0.0f, -hoverRingOuterHit - 12.0f));
+
+            g.setColour (Palette::panelRaised.withAlpha (0.92f));
+            g.fillRoundedRectangle (box, 4.0f);
+            g.setColour (amount < -0.05 ? Palette::compression : (amount > 0.05 ? Palette::expansion : Palette::textPrimary));
+            g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
+            g.drawText (text, box, juce::Justification::centred);
+        }
+    }
+
+    void ResponseCurveComponent::drawSoloBadge (juce::Graphics& g, int b, float alpha)
+    {
+        const auto badge = soloBadgeBounds (b);
+        const auto soloed = processor.isBandSoloed (b);
+
+        if (soloed)
+        {
+            g.setColour (Palette::solo.withAlpha (alpha));
+            g.fillRoundedRectangle (badge, 4.5f);
+            g.setColour (juce::Colours::white.withAlpha (alpha));
+        }
+        else
+        {
+            g.setColour (Palette::background.withAlpha (0.85f * alpha));
+            g.fillRoundedRectangle (badge, 4.5f);
+            g.setColour (Palette::solo.withAlpha (alpha));
+            g.drawRoundedRectangle (badge.reduced (0.75f), 4.0f, 1.5f);
+        }
+
+        g.setFont (juce::FontOptions (12.5f, juce::Font::bold));
+        g.drawText ("S", badge, juce::Justification::centred);
+    }
+
     void ResponseCurveComponent::paint (juce::Graphics& g)
     {
         repaintPending.store (false);
@@ -846,6 +1138,11 @@ namespace dooblrq::ui
 
         g.restoreState();
 
+        // 0.9.2: hover rings sit under the handles.
+        for (int b = 0; b < params::numBands; ++b)
+            if (const auto alpha = getHoverAlpha (b); alpha > 0.005f && hoverRingAvailable (b))
+                drawHoverRing (g, b, alpha);
+
         for (int b = 0; b < params::numBands; ++b)
         {
             const auto s = processor.getBandSettings (b);
@@ -897,19 +1194,15 @@ namespace dooblrq::ui
 
             if (dimmed (b))
                 g.endTransparencyLayer();
+        }
 
-            // Soloed band: an 'S' badge on the handle's upper right.
-            if (processor.isBandSoloed (b))
-            {
-                const auto badge = juce::Rectangle<float> (12.0f, 11.0f)
-                                       .withCentre ({ circle.getRight() + 1.0f, circle.getY() - 1.0f });
-                g.setColour (Palette::dynamic);
-                g.fillRoundedRectangle (badge, 2.5f);
-                g.setColour (Palette::background);
-                g.drawRoundedRectangle (badge, 2.5f, 1.0f);
-                g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
-                g.drawText ("S", badge, juce::Justification::centred);
-            }
+        // 0.9.2: the blue S (Solo) on top: always for soloed bands, fading with the ring on hover.
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            const auto alpha = processor.isBandSoloed (b) ? 1.0f
+                                                          : (processor.getBandSettings (b).enabled ? getHoverAlpha (b) : 0.0f);
+            if (alpha > 0.005f)
+                drawSoloBadge (g, b, alpha);
         }
 
         // Bandwidth handles of the selected band, and a readout while they are dragged.
@@ -1053,6 +1346,53 @@ namespace dooblrq::ui
             return;
         }
 
+        // 0.9.2: the blue S and the hover ring (handles keep priority, see hitAt).
+        updateHover (event.position);
+        ringBand = -1;
+        soloClickPending = false;
+
+        {
+            int band = -1;
+            const auto hit = hitAt (event.position, &band);
+
+            if (hit == Hit::soloBadge || hit == Hit::rangeRing)
+            {
+                draggingBand = -1;
+                widthDragSide = 0;
+                qDrag = false;
+
+                if (hit == Hit::soloBadge)
+                {
+                    soloClickPending = true;
+
+                    if (onSoloClicked != nullptr)
+                        onSoloClicked (band, event.mods.isAltDown());
+                    else if (auto* solo = bandParameter (band, params::band::solo))
+                    {
+                        solo->beginChangeGesture();
+                        solo->setValueNotifyingHost (solo->getValue() >= 0.5f ? 0.0f : 1.0f);
+                        solo->endChangeGesture();
+                    }
+                }
+                else
+                {
+                    const auto s = processor.getBandSettings (band);
+                    ringBand = band;
+                    ringDragMode = 0;
+                    ringDownPosition = ringLastPosition = event.position;
+                    ringAmount = dsp::DynamicEQBand::upwardSign (s.type) * (double) s.rangeDb;
+                    ringGesture = false;
+                    ringEngagedDynamics = false;
+
+                    if (onBandSelected != nullptr)
+                        onBandSelected (band);
+                }
+
+                repaint();
+                return;
+            }
+        }
+
         widthDragSide = widthHandleAt (event.position);
         qDrag = false;
 
@@ -1106,6 +1446,59 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::mouseDrag (const juce::MouseEvent& event)
     {
+        if (ringBand >= 0)
+        {
+            const auto centre = handlePosition (ringBand);
+
+            if (ringDragMode == 0)
+            {
+                const auto mode = RangeRing::chooseDragMode (centre, ringDownPosition, event.position);
+
+                if (mode == RangeRing::DragMode::undecided)
+                    return;
+
+                ringDragMode = mode == RangeRing::DragMode::vertical ? 1 : 2;
+                ringLastPosition = ringDownPosition; // the first few pixels count too
+
+                if (auto* range = bandParameter (ringBand, params::band::range))
+                {
+                    range->beginChangeGesture();
+                    ringGesture = true;
+                }
+            }
+
+            const auto fine = event.mods.isShiftDown();
+            const auto delta = ringDragMode == 1
+                                   ? RangeRing::verticalDeltaDb ((double) (event.position.y - ringLastPosition.y), fine)
+                                   : RangeRing::rotaryDeltaDb (RangeRing::clockwiseAngle (centre, ringLastPosition, event.position),
+                                                               2.0 * hoverSweepRadians, fine);
+            ringLastPosition = event.position;
+            ringAmount = juce::jlimit (RangeRing::minRangeDb, RangeRing::maxRangeDb, ringAmount + delta);
+
+            const auto s = processor.getBandSettings (ringBand);
+            const auto rangeDb = dsp::DynamicEQBand::upwardSign (s.type) * ringAmount;
+
+            // Off 0 switches Dynamic on; its gesture stays open until mouse-up, so the switch and
+            // the Range change undo together. Back at 0 it stays on.
+            if (! s.dynamicsEnabled && ! ringEngagedDynamics && std::abs (rangeDb) > 1.0e-3)
+            {
+                if (auto* dynamics = bandParameter (ringBand, params::band::dynamicsEnabled))
+                {
+                    dynamics->beginChangeGesture();
+                    dynamics->setValueNotifyingHost (1.0f);
+                    ringEngagedDynamics = true;
+                }
+            }
+
+            setBandParameter (ringBand, params::band::range, (float) rangeDb);
+
+            if (onBandSelected != nullptr)
+                onBandSelected (ringBand);
+
+            repaint();
+            return;
+        }
+
         if (draggingBand < 0 || ! event.mouseWasDraggedSinceMouseDown())
             return;
 
@@ -1182,8 +1575,39 @@ namespace dooblrq::ui
         repaint();
     }
 
+    void ResponseCurveComponent::endRingDrag()
+    {
+        if (ringBand < 0)
+            return;
+
+        // Dynamic's gesture opened inside the Range one: close it first, then the Range one,
+        // so the outermost end commits the single undo step.
+        if (ringEngagedDynamics)
+            if (auto* dynamics = bandParameter (ringBand, params::band::dynamicsEnabled))
+                dynamics->endChangeGesture();
+
+        if (ringGesture)
+            if (auto* range = bandParameter (ringBand, params::band::range))
+                range->endChangeGesture();
+
+        ringBand = -1;
+        ringDragMode = 0;
+        ringGesture = ringEngagedDynamics = false;
+    }
+
     void ResponseCurveComponent::mouseUp (const juce::MouseEvent& event)
     {
+        soloClickPending = false;
+
+        if (ringBand >= 0)
+        {
+            endRingDrag();
+            updateHover (event.position);
+            updateCursor (event.position);
+            repaint();
+            return;
+        }
+
         if (draggingBand < 0)
             return;
 
@@ -1209,6 +1633,25 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::mouseDoubleClick (const juce::MouseEvent& event)
     {
+        // 0.9.2: double-click on the ring resets its band's Range to 0 (Dynamic stays as it is).
+        if (int ring = -1; hitAt (event.position, &ring) == Hit::rangeRing)
+        {
+            endRingDrag();
+
+            if (auto* range = bandParameter (ring, params::band::range))
+            {
+                range->beginChangeGesture();
+                range->setValueNotifyingHost (range->convertTo0to1 (0.0f));
+                range->endChangeGesture();
+            }
+
+            if (onBandSelected != nullptr)
+                onBandSelected (ring);
+
+            repaint();
+            return;
+        }
+
         const auto band = bandAt (event.position);
 
         if (band < 0)

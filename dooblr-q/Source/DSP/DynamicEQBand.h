@@ -79,6 +79,17 @@ namespace dooblrq::dsp
             Other types return the frequency unchanged. */
         static double dynamicCutFrequency (FilterType type, double frequency, double dynamicDb) noexcept;
 
+        /** 0.9.2: which way a positive Range pushes the band, as "upward" (+1) or "downward" (-1).
+            For gain types (bell, shelves, tilt) positive Range makes a louder signal raise the
+            band's gain: upward expansion (+1). For Low / High Cut positive Range moves the cutoff
+            into the passband, closing the filter: downward compression (-1). The UI controls work
+            in "upward amount" = upwardSign * Range, so counter-clockwise (negative amount) is
+            always downward compression and clockwise (positive) always upward expansion. */
+        static constexpr double upwardSign (FilterType type) noexcept
+        {
+            return type == FilterType::lowCut || type == FilterType::highCut ? -1.0 : 1.0;
+        }
+
         /** Maps a detector level to the dynamic gain offset in dB. */
         static float computeDynamicGainDb (float levelDb, float thresholdDb, float rangeDb) noexcept;
 
