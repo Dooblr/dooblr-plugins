@@ -74,6 +74,7 @@ namespace dooblrkick::dsp
         const auto sensitivity = std::clamp (s.play.velocitySensitivity, 0.0f, 1.0f);
         velocityGain = (1.0f - sensitivity) + sensitivity * std::clamp (velocity, 0.0f, 1.0f);
         sampleKeyRatio = std::exp2 ((double) (newNote - s.play.keyNote) / 12.0);
+        keyOffsetSt = (float) (newNote - s.play.keyNote);
 
         releaseGain = 1.0f;
         releaseStep = 0.0f;
@@ -173,7 +174,9 @@ namespace dooblrkick::dsp
 
         const auto x = tMs / lengthMs;
         const auto taper = 1.0f - x;
-        const auto ratio = std::exp2 (c.pitchSt / 12.0f); // synth click: never follows the MIDI note
+        auto ratio = std::exp2 (c.pitchSt / 12.0f); // synth click: follows the note only with Key Track (0.3.5)
+        if (c.keyTrack)
+            ratio *= (float) sampleKeyRatio;
         const auto nyquistGuard = 0.45 * sampleRate;
         auto v = 0.0f;
 
@@ -256,7 +259,9 @@ namespace dooblrkick::dsp
             return applyDrive (readers[(size_t) bodyLayer].read (b.sample.data, sampleStep (b.sample, ratio)), b.drive) * amplitude;
         }
 
-        const auto log2Hz = b.pitch.evaluate (tMs) + b.tuneSt / 12.0f; // independent of the MIDI note
+        auto log2Hz = b.pitch.evaluate (tMs) + b.tuneSt / 12.0f; // the MIDI note only with Key Track (0.3.5)
+        if (b.keyTrack)
+            log2Hz += keyOffsetSt / 12.0f;
         const auto frequency = std::clamp ((double) std::exp2 (log2Hz), 1.0, 0.45 * sampleRate);
 
         auto v = waveValue (b.wave, bodyPhase);
@@ -285,7 +290,9 @@ namespace dooblrkick::dsp
             return 0.0f;
 
         const auto amplitude = sub.amp.evaluate (tMs);
-        const auto baseNote = (float) s.play.keyNote + sub.tuneSt + sub.fineCents / 100.0f; // independent of the MIDI note
+        auto baseNote = (float) s.play.keyNote + sub.tuneSt + sub.fineCents / 100.0f; // the MIDI note only with Key Track (0.3.5)
+        if (sub.keyTrack)
+            baseNote += keyOffsetSt;
         auto frequency = (double) midiNoteToHz (baseNote);
 
         if (sub.envAmount > 1.0e-4f)
@@ -313,7 +320,7 @@ namespace dooblrkick::dsp
             return;
         }
 
-        const auto frequency = (double) midiNoteToHz (keyNote + t.tuneSt); // independent of the MIDI note
+        const auto frequency = (double) midiNoteToHz (keyNote + t.tuneSt + (t.keyTrack ? keyOffsetSt : 0.0f)); // the note only with Key Track (0.3.5)
         const auto spread = std::exp2 ((double) t.spreadCents / 2400.0);
         const auto wave = std::clamp (t.wave, 0, (int) saturatedWave);
 
@@ -334,7 +341,7 @@ namespace dooblrkick::dsp
 
         if (n.sample.enabled)
         {
-            left = right = readers[(size_t) noiseLayer].read (n.sample.data, sampleStep (n.sample, sampleRatio (false, n.tuneSt))) * amplitude;
+            left = right = readers[(size_t) noiseLayer].read (n.sample.data, sampleStep (n.sample, sampleRatio (n.keyTrack, n.tuneSt))) * amplitude;
             return;
         }
 

@@ -31,6 +31,7 @@ namespace dooblrkick::ui
           a manual zoom / pan suspends that until the ruler is double-clicked.
         - v0.3.4: a playhead line sweeps across the graph while a hit plays (from the
           processor's lock-free PlayheadTap), with a short trail and a dot on the curve.
+        - v0.3.5: the playhead (line, trail, dot, glow) dims with the level it plays.
         Every edit is wrapped in parameter gestures, so it is one undo step and the host sees it.
         The master envelope draws dimmed while it is switched off (still editable).
 
@@ -43,8 +44,33 @@ namespace dooblrkick::ui
     public:
         EnvelopeEditor (juce::AudioProcessorValueTreeState& state, params::Envelope envelope);
 
+        /** Binds the graph to the Body pitch / amp envelope or the master envelope. */
         void setEnvelope (params::Envelope envelope);
         params::Envelope getEnvelope() const noexcept { return envelope; }
+
+        /** v0.3.5: what the graph draws and edits. points: a multi-point envelope (Body pitch /
+            amp, master). ahd: a layer's Attack / Hold / Decay / Curve (Sub, Tail, Noise) drawn
+            as 4 points: the 3 times drag, the decay's diamond is the Curve. click: the Click's
+            amplitude over its Length (the end point drags the Length). */
+        enum class Shape { points, ahd, click };
+        /** Binds the graph to a layer's own amplitude envelope (Click, Sub, Tail, Noise; the
+            Body uses setEnvelope). */
+        void setLayerEnvelope (int layer);
+        Shape getShape() const noexcept { return shape; }
+
+        /** v0.3.5: call before switching what the graph shows: the old picture is captured and
+            fades out (with a slight slide) over crossfadeMs while the new one is drawn under it. */
+        void startCrossfade();
+        float getCrossfadeAmount() const noexcept { return crossfadeAmount; } // 1 at the start .. 0 done
+        void advanceCrossfade (double nowMs);
+        static constexpr double crossfadeMs = 200.0;
+        /** The layer whose envelope is shown (0..4), or -1 for the master envelope. */
+        int getLayer() const noexcept { return layer; }
+        /** The parameters the graph draws / edits; for tests. */
+        juce::StringArray getBoundParameterIds() const;
+        /** Points and curve diamonds that can be dragged in the current shape. */
+        bool isNodeEditable (int node) const;
+        bool isHandleEditable (int segment) const;
 
         void paint (juce::Graphics& g) override;
         void resized() override;
@@ -65,7 +91,7 @@ namespace dooblrkick::ui
 
         // Time view (v0.3.3).
         static constexpr float minViewMs = 20.0f;
-        float getMaxTimeMs() const noexcept { return params::maxNodeTimeFor (envelope); }
+        float getMaxTimeMs() const;
         float getViewStartMs() const noexcept { return viewStartMs; }
         float getViewSpanMs() const noexcept { return viewMs; }
         /** True after a manual zoom or pan (auto-fit is suspended until resetView()). */
@@ -109,6 +135,17 @@ namespace dooblrkick::ui
         /** Graph time for a hit position: samples / rate in ms, minus the Body Start on the Body
             graphs. The master curve is drawn after Time Scale, so real time maps directly. */
         static float playheadTimeFor (std::int64_t samples, double sampleRate, float offsetMs) noexcept;
+        /** v0.3.5: the playhead's brightness follows the level it's playing. Gain (linear) to
+            alpha, in dB: -60 dB .. 0 dB maps to playheadAlphaFloor .. 1 (monotonic). */
+        static constexpr float playheadAlphaFloor = 0.1f, playheadFloorDb = -60.0f;
+        static float playheadAlphaForGain (float gain) noexcept;
+        /** The level gain that drives the playhead at a graph time: the effective master
+            envelope (Time Scale + Depth) on the master graph, 1 while the master is switched
+            off; the Body amp envelope on both Body graphs (pitch isn't a level); a layer's own
+            AHD / Click amplitude on the other layers' graphs. */
+        float getPlayheadLevelGainAt (float ms) const;
+        /** playheadAlphaForGain at the playhead (before the end-of-hit fade). */
+        float getPlayheadLevelAlpha() const { return playheadAlphaForGain (getPlayheadLevelGainAt (playheadMs)); }
         /** The playhead's x, or nothing while it's hidden or outside the view. */
         std::optional<float> getPlayheadX() const noexcept;
         /** Whether a drag starting here zooms (empty plot space, clear of nodes, handles and the curve). */
@@ -119,6 +156,9 @@ namespace dooblrkick::ui
         juce::Rectangle<float> getRulerArea() const noexcept { return plot.withY (plot.getBottom()).withHeight (18.0f); }
         /** The master envelope is switched off (drawn dimmed). */
         bool isBypassedLook() const noexcept;
+        /** The curve colour: Body pitch orange, Body amp green, master blue, other layers their
+            band colour. */
+        juce::Colour getCurveColour() const;
 
         /** v0.3.3: the selected point (the Envelope page's point knobs follow it). Clicking a point
             selects it; clicking a curve diamond selects the point that segment leads to. */
@@ -144,6 +184,7 @@ namespace dooblrkick::ui
         struct NodeValues { float time, value, curve; };
 
         void tick();
+        void rebind();
         void refit (bool animate);
         void animateTo (float start, float span);
         void setManualView (float start, float span);
@@ -153,6 +194,11 @@ namespace dooblrkick::ui
         juce::uint64 computeHash() const noexcept;
         void rebuildCache();
         NodeValues readNode (int node) const;
+        NodeValues readNodeOf (params::Envelope e, int node) const;
+        float clickLevelAt (float ms) const;
+        float ahdParam (int which) const; // 0 attack, 1 hold, 2 decay, 3 curve (current layer)
+        /** The level envelope that drives the playhead (see getPlayheadLevelGainAt). */
+        dsp::MultiPointEnvelope getPlayheadLevelEnvelope() const;
         juce::RangedAudioParameter* param (const juce::String& id) const;
 
         float timeToX (float ms) const noexcept;
@@ -183,7 +229,14 @@ namespace dooblrkick::ui
         double animStartMs = -1.0; // < 0: starts on the next advance
 
         const dsp::PlayheadTap* playheadTap = nullptr;
-        std::atomic<float>* bodyStart = nullptr;
+        Shape shape = Shape::points;
+        juce::Image crossfadeImage;
+        double crossfadeStartMs = -1.0;
+        float crossfadeAmount = 0.0f;
+        int layer = 1;
+        std::array<std::atomic<float>*, 5> layerStart {};
+        struct LayerRaw { std::array<std::atomic<float>*, 4> ahd {}; std::atomic<float>* length = nullptr, * type = nullptr, * source = nullptr; float maxMs = 1000.0f; };
+        std::array<LayerRaw, 5> layerRaw;
         std::uint32_t playheadHit = 0;
         bool playheadSeen = false, playheadActive = false;
         double playheadEndedAt = 0.0;

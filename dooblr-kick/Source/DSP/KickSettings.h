@@ -39,7 +39,7 @@ namespace dooblrkick::dsp
         float pitchSt = 0.0f;
         float lengthMs = 12.0f;
         float tone = 0.0f; // -1 low-pass ... +1 high-pass
-        bool keyTrack = false; // Sample source only: follow the MIDI note relative to the Key
+        bool keyTrack = false; // follow the MIDI note relative to the Key (synth and sample, 0.3.5)
         SampleSource sample;
     };
 
@@ -53,8 +53,8 @@ namespace dooblrkick::dsp
         float tuneSt = 0.0f;
         float phaseDeg = 0.0f;
         float drive = 0.0f;     // 0..1
-        bool keyTrack = false;    // Sample source only: follow the MIDI note relative to the Key
-        MultiPointEnvelope pitch; // values in log2(Hz); the synth body ignores the MIDI note
+        bool keyTrack = false;    // follow the MIDI note relative to the Key (synth and sample, 0.3.5)
+        MultiPointEnvelope pitch; // values in log2(Hz); the synth body follows the note only with keyTrack
         MultiPointEnvelope amp;   // values 0..1
         SampleSource sample;
         float sampleEnvAmount = 0.0f; // 0..1: how much the pitch envelope bends a Body sample
@@ -65,6 +65,7 @@ namespace dooblrkick::dsp
         LayerCommon common;
         float tuneSt = 0.0f, fineCents = 0.0f, phaseDeg = 0.0f;
         float envAmount = 0.0f; // 0..1: how much of the Body pitch sweep the sub follows
+        bool keyTrack = false;  // 0.3.5: follow the MIDI note relative to the Key
         AhdEnvelope amp { 2.0f, 50.0f, 400.0f, 0.4f };
     };
 
@@ -74,7 +75,7 @@ namespace dooblrkick::dsp
         int wave = sineWave; // sine / triangle / saturated
         float tuneSt = 0.0f, spreadCents = 0.0f, phaseDeg = 0.0f, drive = 0.0f;
         AhdEnvelope amp { 20.0f, 50.0f, 700.0f, 0.5f };
-        bool keyTrack = false; // Sample source only: follow the MIDI note relative to the Key
+        bool keyTrack = false; // follow the MIDI note relative to the Key (synth and sample, 0.3.5)
         SampleSource sample;
     };
 
@@ -86,6 +87,7 @@ namespace dooblrkick::dsp
         int colour = white;
         float width = 0.5f;
         float tuneSt = 0.0f; // Sample source only (the synth noise has no pitch)
+        bool keyTrack = false; // 0.3.5: Sample source only (no pitch to track on the synth noise)
         AhdEnvelope amp { 0.5f, 5.0f, 120.0f, 0.6f };
         SampleSource sample;
     };
@@ -96,7 +98,7 @@ namespace dooblrkick::dsp
     struct PlaySettings
     {
         // The kick's own key: the base pitch of the Sub and the synth Tail, and the reference
-        // note for sample key tracking. The MIDI note never changes the synthesised layers.
+        // note for key tracking. The MIDI note changes a layer only with its Key Track on (0.3.5).
         // (Note names use middle C = C3, as Ableton does; 29 = F0, 43.7 Hz.)
         int keyNote = 29;
         float velocitySensitivity = 0.5f;

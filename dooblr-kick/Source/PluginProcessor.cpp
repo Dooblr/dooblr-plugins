@@ -11,12 +11,14 @@ namespace
     const juce::Identifier stateType ("DooblrKick");
     const juce::Identifier stateVersionProperty ("stateVersion");
     const juce::Identifier presetNameProperty ("presetName");
+    const juce::Identifier envelopeSplitProperty ("envelopeSplit"), exportFolderProperty ("exportFolder");
     // 1: v0.1.0. 2: v0.1.1, where the MIDI note no longer changes the synthesised layers and
     //    the click/body/tail "Key Track" switches became sample-only (default off).
     // 3: v0.1.1 sample list. 4: v0.3.0 added the master envelope (menv_*), dry / wet (mix_drywet)
     //    and the chain order (chain_order). Older states have none of them, so they load at their
     //    defaults (flat 100 % envelope, 100 % wet, the v0.2.0 order), which render bit-identically.
-    constexpr int stateVersion = 5;
+    // 6: v0.3.5, where Key Track works in Synth mode too; see migrateState.
+    constexpr int stateVersion = 6;
 
     /** Brings an older saved state / preset tree up to the current stateVersion, in place. */
     void migrateState (juce::ValueTree& state)
@@ -51,6 +53,21 @@ namespace
 
                 if (choice.isValid() && juce::roundToInt ((float) choice.getProperty ("value")) >= params::legacyUserSampleChoice)
                     choice.setProperty ("value", (float) params::userSampleChoice, nullptr);
+            }
+        }
+
+        if (version < 6)
+        {
+            // Before 0.3.5 the Click / Body / Tail Key Track switch only acted on a sample. A
+            // synth layer saved with it on ignored it, so clear it there: the state sounds as it
+            // was saved. Sampled layers keep their setting (and still follow the note).
+            for (const auto layer : { dsp::clickLayer, dsp::bodyLayer, dsp::tailLayer })
+            {
+                const auto source = state.getChildWithProperty ("id", params::layerId (layer, "source"));
+                auto keyTrack = state.getChildWithProperty ("id", params::layerId (layer, "keytrack"));
+
+                if (keyTrack.isValid() && (! source.isValid() || (float) source.getProperty ("value") < 0.5f))
+                    keyTrack.setProperty ("value", 0.0f, nullptr);
             }
         }
 
@@ -192,6 +209,42 @@ std::function<juce::AudioBuffer<float>()> DooblrKickAudioProcessor::makePreviewJ
 juce::File DooblrKickAudioProcessor::getDefaultExportFolder()
 {
     return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("dooblr-kick");
+}
+
+juce::File DooblrKickAudioProcessor::exportDestinationFor (const juce::File& chosen)
+{
+    if (chosen == juce::File() || chosen.getFileName().isEmpty())
+        return {};
+
+    return chosen.hasFileExtension ("wav") ? chosen : chosen.getSiblingFile (chosen.getFileName() + ".wav");
+}
+
+juce::File DooblrKickAudioProcessor::getExportStartFile() const
+{
+    const auto folder = lastExportFolder.isDirectory() ? lastExportFolder : getDefaultExportFolder();
+    return folder.getChildFile (defaultExportFileName);
+}
+
+bool DooblrKickAudioProcessor::exportTo (const juce::File& chosen, double sampleRate, juce::File& written, juce::String& error)
+{
+    written = exportDestinationFor (chosen);
+
+    if (written == juce::File())
+    {
+        error = "no file chosen";
+        return false;
+    }
+
+    if (! exportWav (written, sampleRate, error))
+        return false;
+
+    lastExportFolder = written.getParentDirectory();
+    return true;
+}
+
+void DooblrKickAudioProcessor::setEnvelopeSplit (float ratio) noexcept
+{
+    envelopeSplit = std::isfinite (ratio) ? juce::jlimit (minEnvelopeSplit, maxEnvelopeSplit, ratio) : defaultEnvelopeSplit;
 }
 
 bool DooblrKickAudioProcessor::exportWav (const juce::File& file, double sampleRate, juce::String& error) const
@@ -432,6 +485,11 @@ juce::ValueTree DooblrKickAudioProcessor::createStateTree()
         if (params::layerHasSample (layer))
             state.setProperty (userSampleProperty (layer), userSlots[(size_t) layer].path, nullptr);
 
+    // v0.3.5 UI-only values (not parameters).
+    state.setProperty (envelopeSplitProperty, envelopeSplit, nullptr);
+    if (lastExportFolder != juce::File())
+        state.setProperty (exportFolderProperty, lastExportFolder.getFullPathName(), nullptr);
+
     return state;
 }
 
@@ -478,6 +536,9 @@ void DooblrKickAudioProcessor::setStateInformation (const void* data, int sizeIn
 
     restoreUserSamples (state);
     presetName = state.getProperty (presetNameProperty, "Init").toString();
+    setEnvelopeSplit ((float) state.getProperty (envelopeSplitProperty, defaultEnvelopeSplit));
+    if (const auto folder = state.getProperty (exportFolderProperty).toString(); juce::File::isAbsolutePath (folder))
+        lastExportFolder = juce::File (folder);
     parameters.replaceState (state);
     undoHistory.clear();
     ++changeCount;

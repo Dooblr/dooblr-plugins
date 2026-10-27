@@ -75,6 +75,15 @@ namespace dooblrkick::params
     /** "F1", "C#3": note names with middle C (60) = C3. */
     juce::String noteName (int midiNote);
 
+    /** v0.3.5: the layer Level taper, like a console fader. Piecewise linear in dB through
+        (travel, dB): (0, -inf = -60), (0.10, -48), (0.25, -24), (0.78, 0), (1, +12), so the top
+        75 % of travel covers -24 .. +12 dB and 0 dB sits at 78 %. The parameter's
+        NormalisableRange uses it, so the host's automation has the same feel. */
+    constexpr float minLevelDb = -60.0f, maxLevelDb = 12.0f;
+    float levelDbToTravel (float db) noexcept;
+    float travelToLevelDb (float travel) noexcept;
+    juce::NormalisableRange<float> levelRange();
+
     /** Formats a frequency as "48.0 Hz" / "1.25 kHz". */
     juce::String formatHz (float hz);
 
@@ -106,6 +115,7 @@ namespace dooblrkick::params
         Value bodyWave, bodyHarmonics, bodyTune, bodyPhase, bodyDrive, bodyKeyTrack, bodySampleEnv;
         Value pitchCount, ampCount;
         std::array<Value, maxNodes> pitchTime {}, pitchFreq {}, pitchCurve {}, ampTime {}, ampLevel {}, ampCurve {};
+        Value subKeyTrack, noiseKeyTrack;
         Value subTune, subFine, subPhase, subEnvAmount, subAttack, subHold, subDecay, subCurve;
         Value tailWave, tailTune, tailSpread, tailPhase, tailAttack, tailHold, tailDecay, tailCurve, tailDrive, tailKeyTrack;
         Value noiseColour, noiseWidth, noiseAttack, noiseHold, noiseDecay, noiseCurve, noiseTune;

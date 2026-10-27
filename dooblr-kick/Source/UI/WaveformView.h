@@ -43,6 +43,7 @@ namespace dooblrkick::ui
         std::function<void()> onClick;
 
         void setStatus (const juce::String& text);
+        const juce::String& getStatus() const noexcept { return status; }
 
         /** Renders synchronously on the calling (message) thread, e.g. when the editor opens. */
         void refreshNow();

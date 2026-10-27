@@ -387,6 +387,7 @@ namespace dooblrkick::ui
         slider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, width, 18);
         slider.setColour (juce::Slider::trackColourId, colour);
         slider.setColour (juce::Slider::rotarySliderFillColourId, colour);
+        slider.getProperties().set ("faderScale", true); // v0.3.5: labelled taper marks
 
         if (auto* parameter = state.getParameter (parameterId))
         {

@@ -73,7 +73,7 @@ namespace
     {
         switch (layer)
         {
-            case dooblrkick::dsp::clickLayer: return { slotB, "click_keytrack" };
+            case dooblrkick::dsp::clickLayer: return { slotB, "click_pitch" };
             case dooblrkick::dsp::bodyLayer:  return { slotD, "body_tune" };
             case dooblrkick::dsp::tailLayer:  return { slotC, "tail_tune" };
             default:                          return { slotC, "noise_attack" };
@@ -87,12 +87,11 @@ namespace
             case dooblrkick::dsp::clickLayer:
                 return { { "click_type", "Type", K::combo, 0, 0, slotA }, { "click_sample", "Sample", K::combo, 0, 0, slotA },
                          /* slot B: Load file (sample) */
-                         { "click_keytrack", "Smp key track", K::toggle, 0, 0, slotC },
                          { "click_pitch", "Pitch", K::knob }, { "click_length", "Length", K::knob }, { "click_tone", "Tone", K::knob } };
             case dooblrkick::dsp::bodyLayer:
                 return { { "body_wave", "Wave", K::combo, 0, 0, slotA }, { "body_sample", "Sample", K::combo, 0, 0, slotA },
                          { "body_harm", "Harmonics", K::knob, 0, 0, slotB }, { "body_smp_penv", "Smp pitch env", K::knob, 0, 0, slotB },
-                         { "body_phase", "Start phase", K::knob, 0, 0, slotC }, { "body_keytrack", "Smp key track", K::toggle, 0, 0, slotC },
+                         { "body_phase", "Start phase", K::knob, 0, 0, slotC },
                          /* slot D: Load file (sample) */
                          { "body_tune", "Tune", K::knob }, { "body_drive", "Drive", K::knob } };
             case dooblrkick::dsp::subLayer:
@@ -101,7 +100,7 @@ namespace
                          { "sub_decay", "Decay", K::knob }, { "sub_curve", "Curve", K::knob } };
             case dooblrkick::dsp::tailLayer:
                 return { { "tail_wave", "Wave", K::combo, 0, 0, slotA }, { "tail_sample", "Sample", K::combo, 0, 0, slotA },
-                         { "tail_spread", "Spread", K::knob, 0, 0, slotB }, { "tail_keytrack", "Smp key track", K::toggle, 0, 0, slotB },
+                         { "tail_spread", "Spread", K::knob, 0, 0, slotB },
                          { "tail_phase", "Start phase", K::knob, 0, 0, slotC }, /* + Load file (sample) */
                          { "tail_tune", "Tune", K::knob }, { "tail_attack", "Attack", K::knob }, { "tail_hold", "Hold", K::knob },
                          { "tail_decay", "Decay", K::knob }, { "tail_curve", "Curve", K::knob }, { "tail_drive", "Drive", K::knob } };
@@ -123,10 +122,10 @@ namespace
     {
         switch (layer)
         {
-            case dooblrkick::dsp::clickLayer: return { { "click_type" }, { "click_sample", "click_keytrack" } };
+            case dooblrkick::dsp::clickLayer: return { { "click_type" }, { "click_sample" } };
             case dooblrkick::dsp::bodyLayer:  return { { "body_wave", "body_harm", "body_phase" },
-                                                       { "body_sample", "body_smp_penv", "body_keytrack" } };
-            case dooblrkick::dsp::tailLayer:  return { { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_keytrack" } };
+                                                       { "body_sample", "body_smp_penv" } };
+            case dooblrkick::dsp::tailLayer:  return { { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample" } };
             case dooblrkick::dsp::noiseLayer: return { { "noise_color", "noise_width" }, { "noise_sample", "noise_tune" } };
             default: return {};
         }
@@ -470,10 +469,10 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
         refreshPresetBox();
     };
     exportButton.setComponentID ("exportWav");
-    exportButton.setTooltip ("Render one hit at the Key to a 24-bit WAV in ~/Music/dooblr-kick");
+    exportButton.setTooltip ("Render one hit at the Key to a 24-bit WAV; choose where to save it");
     exportButton.onClick = [this] { exportWav(); };
     playButton.setComponentID ("play");
-    playButton.setTooltip ("Audition one hit at the Key");
+    playButton.setTooltip ("Play");
     playButton.onClick = [this] { audioProcessor.triggerAudition(); };
 
     outputSlider.setComponentID ("output_gain");
@@ -540,19 +539,27 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
     shownOrder = chainOrderParameter();
 
     // Envelope editor (Body pitch / amp) and the rendered waveform.
-    for (auto* b : { &pitchEnvButton, &ampEnvButton })
+    // v0.3.5: one sliding switch for the Body's Pitch / Amp view; the graph cross-fades.
+    envelopeToggle.setComponentID ("envelopeView");
+    envelopeToggle.setTooltip ("Show the Body pitch or amp envelope");
+    envelopeToggle.onChange = [this]
     {
-        b->setRadioGroupId (2002);
-        b->setClickingTogglesState (true);
-        addAndMakeVisible (b);
-    }
-
-    pitchEnvButton.setComponentID ("showPitchEnv");
-    ampEnvButton.setComponentID ("showAmpEnv");
-    pitchEnvButton.onClick = [this] { if (pitchEnvButton.getToggleState()) showEnvelope (params::Envelope::pitch); };
-    ampEnvButton.onClick = [this] { if (ampEnvButton.getToggleState()) showEnvelope (params::Envelope::amp); };
-    pitchEnvButton.setToggleState (true, juce::dontSendNotification);
+        envelopeEditor.startCrossfade();
+        showEnvelope (envelopeToggle.isRight() ? params::Envelope::amp : params::Envelope::pitch);
+    };
+    addAndMakeVisible (envelopeToggle);
     addAndMakeVisible (envelopeEditor);
+
+    // v0.3.5: the envelope / waveform divider.
+    splitter.setComponentID ("splitter");
+    splitter.onDragStart = [this] { splitDragStartWidth = envelopeEditor.getWidth(); };
+    splitter.onDrag = [this] (int dx)
+    {
+        const auto displayWidth = juce::jmax (1, displayArea.getWidth());
+        setEnvelopeSplit ((float) envelopeWidthFor (displayWidth, (float) (splitDragStartWidth + dx) / (float) displayWidth) / (float) displayWidth);
+    };
+    splitter.onReset = [this] { setEnvelopeSplit (DooblrKickAudioProcessor::defaultEnvelopeSplit); };
+    addAndMakeVisible (splitter);
     envelopeEditor.setPlayheadTap (&audioProcessor.getPlayheadTap());
     masterEditor.setPlayheadTap (&audioProcessor.getPlayheadTap());
 
@@ -646,6 +653,18 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
     {
         levelFaders[(size_t) layer] = std::make_unique<dooblrkick::ui::LevelFader> (state, lid (layer, "level"), pageColour (layer));
         addChildComponent (*levelFaders[(size_t) layer]);
+
+        // v0.3.5: Key Track, a vertical switch under the fader, the same on every layer and in
+        // both sources (it replaces the sample-only toggle; same parameter IDs).
+        auto& key = keyTrackSwitches[(size_t) layer];
+        key = std::make_unique<dooblrkick::ui::KeyTrackSwitch> (pageColour (layer));
+        key->setComponentID (lid (layer, "keytrack"));
+        key->setTitle (juce::String (params::layerNames[(size_t) layer]) + " Key Track");
+        key->setTooltip (layer == dooblrkick::dsp::noiseLayer
+                             ? "Key track: the MIDI note transposes the noise sample relative to the Key (the synth noise has no pitch)"
+                             : "Key track: the MIDI note transposes this layer relative to the Key (off: every note plays the same pitch)");
+        addChildComponent (*key);
+        keyTrackAttachments[(size_t) layer] = std::make_unique<ButtonAttachment> (state, lid (layer, "keytrack"), *key);
     }
 
     // The Limiter panel's mode box offers Clipper / Limiter; Off is the Limiter tab's toggle.
@@ -689,6 +708,8 @@ DooblrKickAudioProcessorEditor::~DooblrKickAudioProcessorEditor()
         panels.clear();
     for (auto& fader : levelFaders)
         fader.reset();
+    for (auto& a : keyTrackAttachments)
+        a.reset();
     masterEditor.onSelectedNodeChange = nullptr;
     envelopePointKnobs.reset();
 
@@ -706,12 +727,16 @@ void DooblrKickAudioProcessorEditor::selectPage (int page)
             panel->setVisible (p == selectedPage);
 
     for (int layer = 0; layer < params::numLayers; ++layer)
+    {
         levelFaders[(size_t) layer]->setVisible (layer == selectedPage);
+        keyTrackSwitches[(size_t) layer]->setVisible (layer == selectedPage);
+    }
 
     const auto visual = showsVisual();
     envelopeEditor.setVisible (! visual);
-    pitchEnvButton.setVisible (! visual);
-    ampEnvButton.setVisible (! visual);
+    // Only the Body has a pitch envelope: the switch is offered there alone.
+    envelopeToggle.setVisible (selectedPage == dooblrkick::dsp::bodyLayer);
+    bindEnvelopeToPage();
     masterEditor.setVisible (selectedPage == envelopePage);
     mixDisplay.setVisible (selectedPage == envelopePage);
     driveDisplay.setVisible (selectedPage == drivePage);
@@ -740,9 +765,43 @@ void DooblrKickAudioProcessorEditor::selectPage (int page)
 
 void DooblrKickAudioProcessorEditor::showEnvelope (params::Envelope envelope)
 {
-    envelopeEditor.setEnvelope (envelope);
-    (envelope == params::Envelope::pitch ? pitchEnvButton : ampEnvButton).setToggleState (true, juce::dontSendNotification);
+    // The Body's view choice (remembered while other pages are shown).
+    if (envelope == params::Envelope::master)
+        return;
+
+    bodyEnvelope = envelope;
+    if (envelopeToggle.isRight() != (envelope == params::Envelope::amp)) // leave a running slide alone
+        envelopeToggle.setRight (envelope == params::Envelope::amp, false, envelopeToggle.isShowing());
+    bindEnvelopeToPage();
     repaint();
+}
+
+void DooblrKickAudioProcessorEditor::bindEnvelopeToPage()
+{
+    // v0.3.5 fix: the one graph used to stay bound to the Body pitch / amp envelope on every
+    // layer page. Each layer page now shows its own envelope: Body pitch / amp (the switch),
+    // the Click's Length shape, and Sub / Tail / Noise Attack-Hold-Decay-Curve.
+    if (selectedPage == dooblrkick::dsp::bodyLayer)
+    {
+        if (envelopeEditor.getLayer() != dooblrkick::dsp::bodyLayer || envelopeEditor.getShape() != dooblrkick::ui::EnvelopeEditor::Shape::points
+            || envelopeEditor.getEnvelope() != bodyEnvelope)
+            envelopeEditor.setEnvelope (bodyEnvelope);
+    }
+    else if (selectedPage < params::numLayers && envelopeEditor.getLayer() != selectedPage)
+    {
+        envelopeEditor.setLayerEnvelope (selectedPage);
+    }
+}
+
+juce::String DooblrKickAudioProcessorEditor::getEnvelopeTitle() const
+{
+    if (selectedPage == dooblrkick::dsp::bodyLayer)
+        return bodyEnvelope == params::Envelope::pitch ? "BODY PITCH ENVELOPE" : "BODY AMP ENVELOPE";
+    if (selectedPage == dooblrkick::dsp::clickLayer)
+        return "CLICK AMP (LENGTH)";
+    if (selectedPage < params::numLayers)
+        return juce::String (params::layerNames[(size_t) selectedPage]).toUpperCase() + " AMP ENVELOPE";
+    return {};
 }
 
 void DooblrKickAudioProcessorEditor::updateSampleFileLabel()
@@ -785,6 +844,10 @@ void DooblrKickAudioProcessorEditor::updateEnablement()
 
     for (int layer = 0; layer < params::numLayers; ++layer)
     {
+        // Noise Key Track only acts on a noise sample (the synth noise has no pitch).
+        if (layer == dooblrkick::dsp::noiseLayer)
+            keyTrackSwitches[(size_t) layer]->setEnabled (value (lid (layer, "source")) > 0.5f);
+
         const auto filterOn = value (lid (layer, "ftype")) > 0.5f;
         setEnabled (layer, lid (layer, "cutoff"), filterOn);
         setEnabled (layer, lid (layer, "reso"), filterOn);
@@ -1075,25 +1138,62 @@ void DooblrKickAudioProcessorEditor::loadSampleFile (int layer)
 
 bool DooblrKickAudioProcessorEditor::exportCurrentKick (juce::File& writtenFile, juce::String& error)
 {
+    // A timestamped file in the default folder (no dialog; for tests / scripted use).
     const auto folder = DooblrKickAudioProcessor::getDefaultExportFolder();
     writtenFile = folder.getNonexistentChildFile (safeFileName (audioProcessor.getPresetName()) + "_" + timestamp(), ".wav", false);
     const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 48000.0;
     return audioProcessor.exportWav (writtenFile, sampleRate, error);
 }
 
+bool DooblrKickAudioProcessorEditor::exportToFile (const juce::File& chosen, juce::File& written, juce::String& error)
+{
+    const auto sampleRate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 48000.0;
+    const auto ok = audioProcessor.exportTo (chosen, sampleRate, written, error);
+    waveform.setStatus (ok ? "Exported " + written.getFullPathName() : "Export failed: " + error);
+    return ok;
+}
+
 void DooblrKickAudioProcessorEditor::exportWav()
 {
-    juce::File file;
-    juce::String error;
+    // v0.3.5: Export asks where to save (an async native dialog; a plugin must never block).
+    exportChooser = std::make_unique<juce::FileChooser> ("Export the kick as a WAV", audioProcessor.getExportStartFile(), "*.wav");
+    juce::Component::SafePointer<DooblrKickAudioProcessorEditor> safeThis (this);
 
-    if (exportCurrentKick (file, error))
+    exportChooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles
+                                  | juce::FileBrowserComponent::warnAboutOverwriting,
+                              [safeThis] (const juce::FileChooser& chooser)
+                              {
+                                  if (safeThis == nullptr || chooser.getResult() == juce::File())
+                                      return; // cancelled
+
+                                  juce::File written;
+                                  juce::String error;
+                                  safeThis->exportToFile (chooser.getResult(), written, error);
+                              });
+}
+
+int DooblrKickAudioProcessorEditor::envelopeWidthFor (int displayWidth, float ratio) noexcept
+{
+    const auto available = displayWidth - dooblrkick::ui::SplitterBar::width;
+    const auto r = std::isfinite (ratio) ? juce::jlimit (DooblrKickAudioProcessor::minEnvelopeSplit, DooblrKickAudioProcessor::maxEnvelopeSplit, ratio)
+                                         : DooblrKickAudioProcessor::defaultEnvelopeSplit;
+    const auto wanted = juce::roundToInt ((float) displayWidth * r);
+
+    if (available < minEnvelopeWidth + minWaveformWidth)
+        return juce::jmax (0, juce::roundToInt ((float) available * r)); // too small for both minimums: share
+
+    return juce::jlimit (minEnvelopeWidth, available - minWaveformWidth, wanted);
+}
+
+void DooblrKickAudioProcessorEditor::setEnvelopeSplit (float ratio)
+{
+    const auto before = audioProcessor.getEnvelopeSplit();
+    audioProcessor.setEnvelopeSplit (ratio);
+
+    if (! juce::approximatelyEqual (before, audioProcessor.getEnvelopeSplit()))
     {
-        waveform.setStatus ("Exported " + file.getFullPathName());
-        file.revealToUser();
-    }
-    else
-    {
-        waveform.setStatus ("Export failed: " + error);
+        resized();
+        repaint (displayArea);
     }
 }
 
@@ -1225,9 +1325,8 @@ void DooblrKickAudioProcessorEditor::paint (juce::Graphics& g)
     }
     else
     {
-        g.setColour (envelopeEditor.getEnvelope() == params::Envelope::pitch ? Palette::dynamic : Palette::accent);
-        g.drawText (envelopeEditor.getEnvelope() == params::Envelope::pitch ? "BODY PITCH ENVELOPE" : "BODY AMP ENVELOPE",
-                    envelopeTitleArea, juce::Justification::centredLeft);
+        g.setColour (envelopeEditor.getCurveColour());
+        g.drawText (getEnvelopeTitle(), envelopeTitleArea, juce::Justification::centredLeft);
     }
 }
 
@@ -1273,9 +1372,9 @@ void DooblrKickAudioProcessorEditor::resized()
 
         outputMeter.setBounds (header.removeFromRight (meterWidth));
         header.removeFromRight (10);
-        playButton.setBounds (header.removeFromRight (48).withSizeKeepingCentre (48, 24));
+        playButton.setBounds (header.removeFromRight (30).withSizeKeepingCentre (30, 24));
         header.removeFromRight (4);
-        exportButton.setBounds (header.removeFromRight (82).withSizeKeepingCentre (82, 24));
+        exportButton.setBounds (header.removeFromRight (64).withSizeKeepingCentre (64, 24));
         header.removeFromRight (12);
         outputSlider.setBounds (header.removeFromRight (sliderWidth).withSizeKeepingCentre (sliderWidth, 24));
         outputCaption.setBounds (header.removeFromRight (52));
@@ -1341,8 +1440,11 @@ void DooblrKickAudioProcessorEditor::resized()
         if (isLayer)
         {
             auto column = controls.removeFromLeft (faderColumn);
-            levelFaders[(size_t) selectedPage]->setBounds (column.withWidth (dooblrkick::ui::LevelFader::width)
-                                                                 .withTrimmedBottom (juce::jmax (0, column.getHeight() - panelsHeight + 10)));
+            column = column.withWidth (dooblrkick::ui::LevelFader::width).withTrimmedBottom (juce::jmax (0, column.getHeight() - panelsHeight + 10));
+            // v0.3.5: the Key Track switch under the fader.
+            keyTrackSwitches[(size_t) selectedPage]->setBounds (column.removeFromBottom (dooblrkick::ui::KeyTrackSwitch::height));
+            column.removeFromBottom (4);
+            levelFaders[(size_t) selectedPage]->setBounds (column);
         }
 
         for (auto& panel : pagePanels[(size_t) selectedPage])
@@ -1355,15 +1457,15 @@ void DooblrKickAudioProcessorEditor::resized()
     displayArea = content.reduced (16, 10);
     {
         auto display = displayArea;
-        auto envelopeArea = display.removeFromLeft (display.getWidth() * 3 / 5);
-        display.removeFromLeft (12);
+        // v0.3.5: the envelope / waveform split is the user's (the divider), clamped so neither clips.
+        auto envelopeArea = display.removeFromLeft (envelopeWidthFor (display.getWidth(), audioProcessor.getEnvelopeSplit()));
+        splitter.setBounds (display.removeFromLeft (dooblrkick::ui::SplitterBar::width));
 
         auto bar = envelopeArea.removeFromTop (24);
         envelopeTitleArea = bar.removeFromLeft (180);
         eqDisplay.getPeakHoldButton().setBounds (bar.withLeft (bar.getRight() - 96).reduced (0, 1));
-        ampEnvButton.setBounds (bar.removeFromRight (74).reduced (0, 1));
-        bar.removeFromRight (4);
-        pitchEnvButton.setBounds (bar.removeFromRight (74).reduced (0, 1));
+        envelopeToggle.setBounds (bar.removeFromRight (dooblrkick::ui::SlideToggle::preferredWidth)
+                                      .withSizeKeepingCentre (dooblrkick::ui::SlideToggle::preferredWidth, dooblrkick::ui::SlideToggle::preferredHeight));
         envelopeArea.removeFromTop (4);
         envelopeEditor.setBounds (envelopeArea);
         driveDisplay.setBounds (envelopeArea);

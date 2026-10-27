@@ -179,6 +179,44 @@ namespace dooblrkick::params
         return juce::MidiMessage::getMidiNoteName (midiNote, true, true, 3);
     }
 
+    namespace
+    {
+        constexpr std::array<std::pair<float, float>, 5> levelTaper { { { 0.0f, minLevelDb }, { 0.10f, -48.0f }, { 0.25f, -24.0f },
+                                                                        { 0.78f, 0.0f }, { 1.0f, maxLevelDb } } };
+    }
+
+    float levelDbToTravel (float db) noexcept
+    {
+        if (! (db > minLevelDb)) return 0.0f;
+        if (db >= maxLevelDb) return 1.0f;
+
+        for (size_t i = 1; i < levelTaper.size(); ++i)
+            if (db <= levelTaper[i].second)
+                return juce::jmap (db, levelTaper[i - 1].second, levelTaper[i].second, levelTaper[i - 1].first, levelTaper[i].first);
+
+        return 1.0f;
+    }
+
+    float travelToLevelDb (float travel) noexcept
+    {
+        if (! (travel > 0.0f)) return minLevelDb;
+        if (travel >= 1.0f) return maxLevelDb;
+
+        for (size_t i = 1; i < levelTaper.size(); ++i)
+            if (travel <= levelTaper[i].first)
+                return juce::jmap (travel, levelTaper[i - 1].first, levelTaper[i].first, levelTaper[i - 1].second, levelTaper[i].second);
+
+        return maxLevelDb;
+    }
+
+    juce::NormalisableRange<float> levelRange()
+    {
+        return { minLevelDb, maxLevelDb,
+                 [] (float, float, float travel) { return travelToLevelDb (travel); },
+                 [] (float, float, float db) { return levelDbToTravel (db); },
+                 [] (float lo, float hi, float db) { return juce::jlimit (lo, hi, db); } };
+    }
+
     juce::String formatHz (float hz)
     {
         if (hz >= 1000.0f)
@@ -238,7 +276,7 @@ namespace dooblrkick::params
             const juce::String name (layerNames[(size_t) layer]);
             addBool (layout, layerId (layer, "on"), name + " On", defaultOn[(size_t) layer]);
             addBool (layout, layerId (layer, "solo"), name + " Solo", false);
-            addFloat (layout, layerId (layer, "level"), name + " Level", range (-60.0f, 12.0f), defaultLevel[(size_t) layer], dbString(), "dB");
+            addFloat (layout, layerId (layer, "level"), name + " Level", levelRange(), defaultLevel[(size_t) layer], dbString(), "dB");
             addFloat (layout, layerId (layer, "pan"), name + " Pan", range (-1.0f, 1.0f), 0.0f, panString());
             addFloat (layout, layerId (layer, "start"), name + " Start", range (0.0f, 100.0f, 10.0f), 0.0f, msString(), "ms");
             addFloat (layout, layerId (layer, "send"), name + " Drive Send", range (0.0f, 1.0f), 1.0f, percentString());
@@ -260,7 +298,7 @@ namespace dooblrkick::params
         addTune (layout, "click_pitch", "Click Pitch");
         addFloat (layout, "click_length", "Click Length", range (1.0f, 200.0f, 20.0f), 12.0f, msString(), "ms");
         addFloat (layout, "click_tone", "Click Tone", range (-1.0f, 1.0f), 0.0f, bipolarPercent());
-        addBool (layout, "click_keytrack", "Click Sample Key Track", false);
+        addBool (layout, "click_keytrack", "Click Key Track", false);
 
         //== Body ============================================================================
         addChoice (layout, "body_wave", "Body Wave", { "Sine", "Triangle", "Saturated", "Square" }, 0);
@@ -268,7 +306,7 @@ namespace dooblrkick::params
         addTune (layout, "body_tune", "Body Tune");
         addFloat (layout, "body_phase", "Body Start Phase", range (0.0f, 360.0f), 0.0f, suffixed (juce::String (juce::CharPointer_UTF8 ("\xc2\xb0")), 0));
         addFloat (layout, "body_drive", "Body Drive", range (0.0f, 1.0f), 0.0f, percentString());
-        addBool (layout, "body_keytrack", "Body Sample Key Track", false);
+        addBool (layout, "body_keytrack", "Body Key Track", false);
         addFloat (layout, "body_smp_penv", "Body Sample Pitch Env", range (0.0f, 1.0f), 0.0f, percentString());
 
         //== Envelopes =======================================================================
@@ -319,7 +357,7 @@ namespace dooblrkick::params
         addFloat (layout, "tail_decay", "Tail Decay", range (1.0f, 5000.0f, 600.0f), 900.0f, msString(), "ms");
         addFloat (layout, "tail_curve", "Tail Decay Curve", range (-1.0f, 1.0f), 0.5f, curveString());
         addFloat (layout, "tail_drive", "Tail Drive", range (0.0f, 1.0f), 0.3f, percentString());
-        addBool (layout, "tail_keytrack", "Tail Sample Key Track", false);
+        addBool (layout, "tail_keytrack", "Tail Key Track", false);
 
         //== Noise ===========================================================================
         addChoice (layout, "noise_color", "Noise Colour", { "White", "Pink", "Brown" }, 0);
@@ -411,6 +449,11 @@ namespace dooblrkick::params
         addFloat (layout, "menv_tscale", "Master Env Time Scale", logRange (minMasterTimeScale, maxMasterTimeScale), 1.0f, percentString());
         addFloat (layout, "menv_depth", "Master Env Depth", range (0.0f, 1.0f), 1.0f, percentString());
 
+        // 0.3.5: key tracking on every layer (appended; Click / Body / Tail reuse their old
+        // sample key-track switches, which now also apply in Synth mode).
+        addBool (layout, "sub_keytrack", "Sub Key Track", false);
+        addBool (layout, "noise_keytrack", "Noise Key Track", false);
+
         return layout;
     }
 
@@ -460,7 +503,8 @@ namespace dooblrkick::params
 
         noiseColour = get ("noise_color"); noiseWidth = get ("noise_width"); noiseAttack = get ("noise_attack");
         noiseHold = get ("noise_hold"); noiseDecay = get ("noise_decay"); noiseCurve = get ("noise_curve");
-        noiseTune = get ("noise_tune");
+        noiseTune = get ("noise_tune"); noiseKeyTrack = get ("noise_keytrack");
+        subKeyTrack = get ("sub_keytrack");
 
         keyNote = get ("root_note");
         velocitySensitivity = get ("vel_sens"); gate = get ("gate"); release = get ("release");
@@ -589,6 +633,7 @@ namespace dooblrkick::params
         s.sub.fineCents = f (subFine);
         s.sub.phaseDeg = f (subPhase);
         s.sub.envAmount = f (subEnvAmount);
+        s.sub.keyTrack = b (subKeyTrack);
         s.sub.amp = { f (subAttack), f (subHold), f (subDecay), f (subCurve) };
 
         s.tail.wave = i (tailWave);
@@ -602,6 +647,7 @@ namespace dooblrkick::params
         s.noise.colour = i (noiseColour);
         s.noise.width = f (noiseWidth);
         s.noise.tuneSt = f (noiseTune);
+        s.noise.keyTrack = b (noiseKeyTrack);
         s.noise.amp = { f (noiseAttack), f (noiseHold), f (noiseDecay), f (noiseCurve) };
 
         s.play.keyNote = i (keyNote);

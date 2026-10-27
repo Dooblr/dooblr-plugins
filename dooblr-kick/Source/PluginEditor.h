@@ -14,6 +14,7 @@
 #include "UI/OutputMeter.h"
 #include "UI/OutputVisuals.h"
 #include "UI/ProcessingVisuals.h"
+#include "UI/Switches.h"
 #include "UI/Theme.h"
 #include "UI/WaveformView.h"
 
@@ -131,6 +132,24 @@ public:
     dooblrkick::ui::EnvelopeEditor& getMasterEnvelopeEditor() noexcept { return masterEditor; }
     dooblrkick::ui::OutputMeter& getOutputMeter() noexcept { return outputMeter; }
     juce::Rectangle<int> getHeaderArea() const noexcept { return headerArea; }
+
+    // v0.3.5
+    dooblrkick::ui::SlideToggle& getEnvelopeToggle() noexcept { return envelopeToggle; }
+    dooblrkick::ui::KeyTrackSwitch& getKeyTrackSwitch (int layer) noexcept { return *keyTrackSwitches[(size_t) layer]; }
+    dooblrkick::ui::SplitterBar& getSplitter() noexcept { return splitter; }
+    juce::Button& getPlayButton() noexcept { return playButton; }
+    juce::Button& getExportButton() noexcept { return exportButton; }
+    /** The title over the envelope graph (names the layer and envelope shown). */
+    juce::String getEnvelopeTitle() const;
+    /** The envelope section's width for a display width and split ratio, clamped so the
+        title bar / Pitch-Amp switch and the waveform both keep a minimum width. */
+    static int envelopeWidthFor (int displayWidth, float ratio) noexcept;
+    static constexpr int minEnvelopeWidth = 340, minWaveformWidth = 200;
+    /** Sets the split (clamped, stored in the plugin state) and lays out again. */
+    void setEnvelopeSplit (float ratio);
+    /** The Export dialog's result: renders and writes the hit there (.wav added if missing),
+        reports success / failure in the status line (never a modal box). */
+    bool exportToFile (const juce::File& chosen, juce::File& written, juce::String& error);
     static constexpr int meterWidth = 20;
     dooblrkick::ui::MixDisplay& getMixDisplay() noexcept { return mixDisplay; }
     dooblrkick::ui::DriveDisplay& getDriveDisplay() noexcept { return driveDisplay; }
@@ -192,7 +211,8 @@ private:
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
     juce::ComboBox presetBox;
     juce::TextButton saveButton { "Save" }, loadButton { "Load" }, randomButton { "Random" },
-                     exportButton { "Export WAV" }, playButton { "Play" };
+                     exportButton { "Export" };
+    dooblrkick::ui::PlayIconButton playButton;
     juce::Slider outputSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
 
     std::array<NavButton, numPages> pageButtons;
@@ -216,7 +236,13 @@ private:
     std::array<std::unique_ptr<dooblrkick::ui::LevelFader>, dooblrkick::params::numLayers> levelFaders;
     std::unique_ptr<dooblrkick::ui::EnvelopePointKnobs> envelopePointKnobs;
 
-    juce::TextButton pitchEnvButton { "Pitch env" }, ampEnvButton { "Amp env" };
+    // v0.3.5: the Body Pitch / Amp view switch, per-layer Key Track switches, the splitter.
+    dooblrkick::ui::SlideToggle envelopeToggle { "PITCH", "AMP", dooblrkick::ui::Palette::dynamic, dooblrkick::ui::Palette::accent };
+    std::array<std::unique_ptr<dooblrkick::ui::KeyTrackSwitch>, dooblrkick::params::numLayers> keyTrackSwitches;
+    dooblrkick::ui::SplitterBar splitter;
+    int splitDragStartWidth = 0;
+    dooblrkick::params::Envelope bodyEnvelope = dooblrkick::params::Envelope::pitch;
+    void bindEnvelopeToPage();
     dooblrkick::ui::EnvelopeEditor envelopeEditor;
     dooblrkick::ui::WaveformView waveform;
 
@@ -241,13 +267,14 @@ private:
 
     int selectedPage = 1;
     std::unique_ptr<juce::FileChooser> fileChooser;
+    std::unique_ptr<juce::FileChooser> exportChooser; // v0.3.5: Export's async save dialog
     std::vector<juce::File> userPresetFiles;
     bool updatingPresetBox = false;
 
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment> outputAttachment;
-    std::array<std::unique_ptr<ButtonAttachment>, dooblrkick::params::numLayers> layerSwitchAttachments, soloAttachments;
+    std::array<std::unique_ptr<ButtonAttachment>, dooblrkick::params::numLayers> layerSwitchAttachments, soloAttachments, keyTrackAttachments;
     std::unique_ptr<ButtonAttachment> envelopePowerAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrKickAudioProcessorEditor)

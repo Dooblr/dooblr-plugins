@@ -67,6 +67,24 @@ public:
     bool exportWav (const juce::File& file, double sampleRate, juce::String& error) const;
     static juce::File getDefaultExportFolder(); // ~/Music/dooblr-kick
 
+    /** v0.3.5 Export: the file a chosen save path writes to (".wav" appended when the name
+        has no .wav extension; an empty choice stays empty). */
+    static juce::File exportDestinationFor (const juce::File& chosen);
+    static constexpr const char* defaultExportFileName = "dooblr-kick.wav";
+    /** Where the Export dialog starts: dooblr-kick.wav in the last folder exported to (kept in
+        the plugin state), else in the default folder. */
+    juce::File getExportStartFile() const;
+    juce::File getLastExportFolder() const { return lastExportFolder; }
+    /** Renders the hit and writes it to the chosen path (see exportDestinationFor); on success
+        the folder becomes the last-used one. Same format as before (24-bit, given rate). */
+    bool exportTo (const juce::File& chosen, double sampleRate, juce::File& written, juce::String& error);
+
+    /** v0.3.5: the editor's envelope / waveform split (the envelope's share of the display
+        width), UI-only, kept in the plugin state; not a parameter, not undoable. */
+    static constexpr float defaultEnvelopeSplit = 0.6f, minEnvelopeSplit = 0.3f, maxEnvelopeSplit = 0.8f;
+    float getEnvelopeSplit() const noexcept { return envelopeSplit; }
+    void setEnvelopeSplit (float ratio) noexcept;
+
     /** Factory presets (with gestures they are one undo step). */
     void loadFactoryPreset (int index, bool asGesture);
     void randomise (juce::Random& random);
@@ -143,6 +161,8 @@ private:
 
     int currentProgram = 0;
     juce::String presetName { "Init" };
+    juce::File lastExportFolder;
+    float envelopeSplit = defaultEnvelopeSplit;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrKickAudioProcessor)
 };

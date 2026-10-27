@@ -465,7 +465,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.4", "version 0.3.4");
+        check (juce::String (JucePlugin_VersionString) == "0.3.5", "version 0.3.5");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -578,14 +578,14 @@ namespace
         }
 
         {
-            // Key tracking only works for samples: a synth layer with the (sample) key track
-            // switch on still ignores the note.
+            // v0.3.5: Key Track is an opt-in exception (tested in testKeyTrackSwitches); with
+            // every switch off (the default) all synth layers together ignore the note.
             auto p = makeProcessor();
             setParam (*p, "tail_on", 1.0f);
             setParam (*p, "noise_on", 1.0f);
-            for (const auto* id : { "click_keytrack", "body_keytrack", "tail_keytrack" })
-                setParam (*p, id, 1.0f);
-            compareNotes (*p, "all synth layers, key track switches on");
+            for (int l = 0; l < params::numLayers; ++l)
+                setParam (*p, params::layerId (l, "keytrack"), 0.0f);
+            compareNotes (*p, "all synth layers, key track switches off");
         }
 
         check (identical == compared, "synth output is sample-identical across MIDI notes 0..127 ("
@@ -793,7 +793,7 @@ namespace
         auto tree = juce::ValueTree::fromXml (*xml);
         check (tree.hasProperty ("stateVersion") || tree.hasProperty ("version"), "state carries a version");
         const auto versionKey = tree.hasProperty ("stateVersion") ? "stateVersion" : "version";
-        check ((int) tree.getProperty (versionKey) == 5, "state version is 5");
+        check ((int) tree.getProperty (versionKey) == 6, "state version is 6");
         tree.setProperty (versionKey, 1, nullptr);
 
         auto setStored = [&] (const juce::String& id, float value)
@@ -1106,7 +1106,7 @@ namespace
         const juce::StringArray bodyIds { "body_on", "body_level", "body_pan", "body_start", "body_send", "body_source",
                                           "body_sample", "body_wave", "body_harm", "body_drive", "body_phase", "body_tune",
                                           "body_smp_penv", "body_ftype", "body_cutoff", "body_reso" };
-        const juce::StringArray untouched { "click_keytrack", "body_keytrack", "click_solo", "body_solo", "output_gain",
+        const juce::StringArray untouched { "click_keytrack", "body_keytrack", "sub_keytrack", "tail_keytrack", "noise_keytrack", "click_solo", "body_solo", "output_gain",
                                             "root_note", "lim_mode", "lim_ceiling", "eq_on", "comp_on", "shape_on" };
 
         // The value lists: every id exists, every value is inside its range (no snapping needed),
@@ -1784,7 +1784,7 @@ namespace
             if (id == "dist_bits" || id == "dist_rate") return { { "dist_type", 4 } };
             for (const auto* layer : { "click", "body", "tail" })
                 if (id == juce::String (layer) + "_keytrack") return { { juce::String (layer) + "_source", 1 } };
-            if (id == "noise_tune") return { { "noise_source", 1 } };
+            if (id == "noise_tune" || id == "noise_keytrack") return { { "noise_source", 1 } };
             if (id == "release") return { { "gate", 1 } };
             if (id == "lim_release") return { { "comp_on", 0 }, { "lim_ceiling", -12 } };
             if (id == "noise_hold" || id == "noise_attack") return { { "noise_level", 0 } };
@@ -2770,7 +2770,7 @@ namespace
         juce::MemoryBlock resaved;
         q->getStateInformation (resaved);
         auto resavedXml = juce::AudioProcessor::getXmlFromBinary (resaved.getData(), (int) resaved.getSize());
-        check (resavedXml != nullptr && resavedXml->getIntAttribute ("stateVersion") == 5, "states are written as version 5");
+        check (resavedXml != nullptr && resavedXml->getIntAttribute ("stateVersion") == 6, "states are written as version 6");
     }
 
     void testMasterEnvelopeShapes()
@@ -3716,6 +3716,680 @@ namespace
     }
 
     //==============================================================================
+    // v0.3.5: the playhead dims with the level it plays.
+    //==============================================================================
+    // v0.3.5: Key Track on every layer, in Synth and Sample mode.
+    void testKeyTrackSwitches()
+    {
+        const auto ratio = [] (double a, double b) { return b > 0.0 ? a / b : 0.0; };
+        const auto semitone = std::pow (2.0, 1.0 / 12.0);
+        // Each compared hit starts from a quiet engine, so the previous hit's choke fade does not overlap it.
+        const auto fresh = [] (Processor& proc, int n, double secs) { proc.releaseResources(); return renderNote (proc, n, 1.0f, secs); };
+
+        // Names, defaults.
+        {
+            auto p = makeProcessor();
+            bool named = true, off = true;
+            for (int l = 0; l < params::numLayers; ++l)
+            {
+                auto* param = getParam (*p, params::layerId (l, "keytrack"));
+                named = named && param != nullptr && param->getName (64) == juce::String (params::layerNames[(size_t) l]) + " Key Track";
+                off = off && param != nullptr && param->getValue() < 0.5f;
+            }
+            check (named && off, "each layer has an automatable \"<Layer> Key Track\" parameter, off by default");
+        }
+
+        // Body synth: on tracks by the semitone relative to the Key (29); off ignores the note.
+        {
+            auto p = makeProcessor();
+            isolateLayer (*p, dsp::bodyLayer);
+            flatBody (*p, 43.65f, 3000.0f);
+            setParam (*p, "body_level", 0.0f);
+            const auto offRoot = fresh (*p, 29, 0.6), offUp = fresh (*p, 41, 0.6);
+            check (maxDifference (offRoot, offUp) == 0.0f, "Body synth, Key Track off: note +12 renders bit-identically");
+            setParam (*p, "body_keytrack", 1.0f);
+            const auto root = measureFrequency (renderNote (*p, 29, 1.0f, 0.6), 48000.0, 0.1, 0.5);
+            const auto up = measureFrequency (renderNote (*p, 41, 1.0f, 0.6), 48000.0, 0.1, 0.5);
+            const auto one = measureFrequency (renderNote (*p, 30, 1.0f, 0.6), 48000.0, 0.1, 0.5);
+            const auto down = measureFrequency (renderNote (*p, 22, 1.0f, 0.6), 48000.0, 0.1, 0.5);
+            check (std::abs (root - 43.65) < 0.5 && std::abs (ratio (up, root) - 2.0) < 0.01 && std::abs (ratio (one, root) - semitone) < 0.004
+                       && std::abs (ratio (down, root) - std::pow (2.0, -7.0 / 12.0)) < 0.005,
+                   "Body synth, Key Track on: Key " + format (root, 2) + " Hz, +1 st " + format (one, 2) + ", +12 st " + format (up, 2) + ", -7 st " + format (down, 2));
+        }
+
+        // Sub and Tail synth.
+        for (const auto layer : { dsp::subLayer, dsp::tailLayer })
+        {
+            auto p = makeProcessor();
+            isolateLayer (*p, layer);
+            const auto id = [&] (const char* s) { return params::layerId (layer, s); };
+            setParam (*p, id ("level"), 0.0f);
+            setParam (*p, id ("attack"), 0.0f);
+            setParam (*p, id ("hold"), 600.0f);
+            setParam (*p, id ("decay"), 1000.0f);
+            if (layer == dsp::subLayer)
+                setParam (*p, "sub_envamt", 0.0f);
+            else
+            {
+                setParam (*p, "tail_wave", 0.0f);
+                setParam (*p, "tail_spread", 0.0f);
+            }
+            const auto name = std::string (params::layerNames[(size_t) layer]);
+            check (maxDifference (fresh (*p, 29, 0.5), fresh (*p, 36, 0.5)) == 0.0f, name + " synth, Key Track off: the note is ignored");
+            setParam (*p, id ("keytrack"), 1.0f);
+            const auto root = measureFrequency (renderNote (*p, 29, 1.0f, 0.6), 48000.0, 0.1, 0.5);
+            const auto up = measureFrequency (renderNote (*p, 36, 1.0f, 0.6), 48000.0, 0.1, 0.5);
+            check (root > 10.0 && std::abs (ratio (up, root) - std::pow (2.0, 7.0 / 12.0)) < 0.01,
+                   name + " synth, Key Track on: +7 st plays " + format (ratio (up, root), 4) + "x (" + format (root, 2) + " -> " + format (up, 2) + " Hz)");
+        }
+
+        // Click synth: on changes the sound with the note, off doesn't.
+        {
+            auto p = makeProcessor();
+            isolateLayer (*p, dsp::clickLayer);
+            setParam (*p, "click_level", 0.0f);
+            check (maxDifference (fresh (*p, 29, 0.2), fresh (*p, 41, 0.2)) == 0.0f, "Click synth, Key Track off: the note is ignored");
+            setParam (*p, "click_keytrack", 1.0f);
+            check (maxDifference (renderNote (*p, 29, 1.0f, 0.2), renderNote (*p, 41, 1.0f, 0.2)) > 0.01f, "Click synth, Key Track on: the note changes the click");
+        }
+
+        // Noise: no pitch in Synth mode; the sample follows the note in Sample mode.
+        {
+            auto p = makeProcessor();
+            isolateLayer (*p, dsp::noiseLayer);
+            setParam (*p, "noise_level", 0.0f);
+            setParam (*p, "noise_keytrack", 1.0f);
+            const auto a = renderNote (*p, 29, 1.0f, 0.3), b = renderNote (*p, 41, 1.0f, 0.3);
+            check (rmsOf (a) > 1.0e-3f && std::abs (rmsOf (a) / rmsOf (b) - 1.0f) < 0.1f, "Noise synth: the note doesn't change the level (the synth noise has no pitch)");
+            setParam (*p, "noise_source", 1.0f);
+            setParam (*p, "noise_keytrack", 0.0f);
+            check (maxDifference (fresh (*p, 29, 0.3), fresh (*p, 41, 0.3)) == 0.0f, "Noise sample, Key Track off: the note is ignored");
+            setParam (*p, "noise_keytrack", 1.0f);
+            const auto rootLength = lastAudible (renderNote (*p, 29, 1.0f, 1.0)), upLength = lastAudible (renderNote (*p, 41, 1.0f, 1.0));
+            check (maxDifference (renderNote (*p, 29, 1.0f, 0.3), renderNote (*p, 41, 1.0f, 0.3)) > 0.01f && upLength < rootLength,
+                   "Noise sample, Key Track on: the note re-pitches the sample (" + std::to_string (rootLength) + " -> " + std::to_string (upLength) + " samples)");
+        }
+
+        // The editor: a vertical switch under each layer's fader, bound, undoable, and the Noise one disabled in Synth mode.
+        EditorHolder h;
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        editor.setSize (1080, 660);
+
+        for (int l = 0; l < params::numLayers; ++l)
+        {
+            editor.selectPage (l);
+            auto& key = editor.getKeyTrackSwitch (l);
+            const auto name = std::string (params::layerNames[(size_t) l]);
+            const auto b = key.getBounds();
+            check (key.isVisible() && b.getHeight() > b.getWidth() && key.getHeight() >= 50,
+                   name + ": the Key switch is shown, vertical, medium sized (" + b.toString().toStdString() + ")");
+
+            p.getUndoHistory().clear();
+            key.setToggleState (true, juce::sendNotificationSync);
+            const auto on = getPlain (p, params::layerId (l, "keytrack")) > 0.5f;
+            p.getUndoHistory().undo();
+            check (on && getPlain (p, params::layerId (l, "keytrack")) < 0.5f && ! key.getToggleState(),
+                   name + ": the switch sets Key Track and undo clears it");
+        }
+
+        setParam (p, "noise_source", 0.0f);
+        editor.selectPage (dsp::noiseLayer);
+        const auto synthDisabled = ! editor.getKeyTrackSwitch (dsp::noiseLayer).isEnabled();
+        setParam (p, "noise_source", 1.0f);
+        editor.selectPage (dsp::noiseLayer);
+        check (synthDisabled && editor.getKeyTrackSwitch (dsp::noiseLayer).isEnabled(), "Noise Key switch: disabled in Synth mode, enabled in Sample mode");
+        setParam (p, "noise_source", 0.0f);
+
+        auto& key = editor.getKeyTrackSwitch (dsp::bodyLayer);
+        editor.selectPage (dsp::bodyLayer);
+        setParam (p, "body_keytrack", 1.0f);
+        for (int i = 0; i < 40; ++i)
+            key.advanceAnimation (1000.0 + i * 10.0);
+        check (key.getThumbPosition() > 0.99f, "the Key switch thumb moves up when on");
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-keytrack");
+        setParam (p, "body_keytrack", 0.0f);
+        for (int i = 0; i < 40; ++i)
+            key.advanceAnimation (2000.0 + i * 10.0);
+        check (key.getThumbPosition() < 0.01f, "and back down when off");
+    }
+
+    //==============================================================================
+    // v0.3.5 fix: each layer page shows its own envelope.
+    void testLayerEnvelopes()
+    {
+        EditorHolder h;
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        auto& env = editor.getEnvelopeEditor();
+        editor.setSize (1080, 660);
+        using Shape = dooblrkick::ui::EnvelopeEditor::Shape;
+
+        setValues (p, { { "sub_attack", 3 }, { "sub_hold", 80 }, { "sub_decay", 420 }, { "tail_attack", 12 }, { "tail_hold", 30 }, { "tail_decay", 900 },
+                        { "noise_attack", 1 }, { "noise_hold", 5 }, { "noise_decay", 150 }, { "click_length", 18 } });
+
+        const auto expectedTimes = [&] (int layer) -> std::vector<float>
+        {
+            if (layer == dsp::clickLayer)
+                return { 0.0f, std::max (0.5f, getPlain (p, "click_length")) };
+            const auto a = getPlain (p, params::layerId (layer, "attack")), hh = getPlain (p, params::layerId (layer, "hold")),
+                       d = getPlain (p, params::layerId (layer, "decay"));
+            return { 0.0f, a, a + hh, a + hh + d };
+        };
+
+        std::vector<int> order { 0, 1, 2, 3, 4 };
+        int orders = 0, wrong = 0;
+        do
+        {
+            for (const auto page : order)
+            {
+                editor.selectPage (page);
+                bool ok = env.getLayer() == page && editor.getEnvelopeToggle().isVisible() == (page == dsp::bodyLayer);
+                const auto ids = env.getBoundParameterIds();
+
+                if (page == dsp::bodyLayer)
+                {
+                    const auto e = env.getEnvelope();
+                    ok = ok && env.getShape() == Shape::points && (e == params::Envelope::pitch || e == params::Envelope::amp)
+                         && ids.contains (params::nodeTimeId (e, 1)) && ! ids.contains ("sub_decay");
+                }
+                else
+                {
+                    ok = ok && env.getShape() == (page == dsp::clickLayer ? Shape::click : Shape::ahd);
+                    const auto times = expectedTimes (page);
+                    ok = ok && env.getNumNodes() == (int) times.size();
+                    for (int n = 1; ok && n < (int) times.size(); ++n)
+                        ok = std::abs (env.getNodePosition (n).x - env.getNodePosition (0).x
+                                       - (env.getPlotArea().getWidth() * (times[(size_t) n] - env.getViewStartMs()) / env.getViewSpanMs())) < 1.5f;
+                    ok = ok && (page == dsp::clickLayer ? ids.contains ("click_length") : ids.contains (params::layerId (page, "decay")))
+                         && ! ids.contains (params::nodeTimeId (params::Envelope::amp, 1));
+                    ok = ok && editor.getEnvelopeTitle().containsIgnoreCase (params::layerNames[(size_t) page]);
+                }
+                if (! ok)
+                {
+                    ++wrong;
+                    if (wrong < 4)
+                        note ("  page " + std::to_string (page) + " shows layer " + std::to_string (env.getLayer()));
+                }
+            }
+            ++orders;
+        } while (std::next_permutation (order.begin(), order.end()));
+        check (orders == 120 && wrong == 0, "every page shows its own envelope in all " + std::to_string (orders) + " tab orders");
+
+        // The Body keeps its pitch / amp choice across pages.
+        editor.selectPage (dsp::bodyLayer);
+        editor.showEnvelope (params::Envelope::amp);
+        editor.selectPage (dsp::subLayer);
+        editor.selectPage (dsp::bodyLayer);
+        check (env.getEnvelope() == params::Envelope::amp && editor.getEnvelopeToggle().isRight(), "the Body page remembers Amp after visiting Sub");
+        editor.showEnvelope (params::Envelope::pitch);
+
+        // Editing on the Sub page edits the Sub: drag its decay end right.
+        editor.selectPage (dsp::subLayer);
+        const auto bodyAmp = getPlain (p, params::nodeTimeId (params::Envelope::amp, 1));
+        const auto decayBefore = getPlain (p, "sub_decay");
+        p.getUndoHistory().clear();
+        const auto end = env.getNodePosition (3);
+        env.checkForChanges();
+        const auto fitBefore = env.getFitSpanMs();
+        simulateDrag (env, end, end + juce::Point<float> (40.0f, 0.0f));
+        const auto decayAfter = getPlain (p, "sub_decay");
+        check (decayAfter > decayBefore + 1.0f && std::abs (getPlain (p, params::nodeTimeId (params::Envelope::amp, 1)) - bodyAmp) < 1.0e-4f,
+               "dragging the Sub decay point edits sub_decay (" + format (decayBefore, 0) + " -> " + format (decayAfter, 0) + " ms), not the Body");
+        // The graph auto-fits to the envelope (v0.3.4), so the dragged end stays near the right edge;
+        // what must follow is the fitted span, which tracks the Sub's own length.
+        env.checkForChanges();
+        const auto fitAfter = env.getFitSpanMs();
+        check (fitAfter > fitBefore, "the graph follows the drag (fit span " + format (fitBefore, 0) + " -> " + format (fitAfter, 0) + " ms)");
+        p.getUndoHistory().undo();
+        check (std::abs (getPlain (p, "sub_decay") - decayBefore) < 0.5f, "undo restores the Sub decay");
+        env.checkForChanges();
+        check (std::abs (env.getFitSpanMs() - fitBefore) < 1.0f, "the graph follows the undo (fit span " + format (env.getFitSpanMs(), 0) + " ms)");
+        check (! env.isNodeEditable (0) && env.isNodeEditable (3) && ! env.isHandleEditable (0) && env.isHandleEditable (2),
+               "AHD: only the attack / hold / decay points and the decay curve are editable");
+
+        // A preset load rebinds without a page switch.
+        p.loadFactoryPreset (1, false);
+        const auto afterPreset = expectedTimes (dsp::subLayer);
+        check (env.getLayer() == dsp::subLayer && std::abs (env.getPlayheadLevelGainAt (afterPreset[1] + 0.5f * (afterPreset[2] - afterPreset[1])) - 1.0f) < 1.0e-3f,
+               "after a preset load the Sub graph's playhead level is the Sub's own hold (1)");
+        check (env.getPlayheadLevelGainAt (afterPreset[3] + 1.0f) < 1.0e-3f, "and silent after its decay");
+
+        setValues (p, { { "sub_attack", 3 }, { "sub_hold", 80 }, { "sub_decay", 420 }, { "sub_on", 1 }, { "tail_on", 1 } });
+        editor.selectPage (dsp::subLayer);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-layer-envs-a");
+        editor.selectPage (dsp::clickLayer);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-layer-envs-b");
+        check (env.getShape() == Shape::click && ! editor.getEnvelopeToggle().isVisible(), "the Click page: its own Length shape, no Pitch / Amp switch");
+    }
+
+    //==============================================================================
+    // v0.3.5: the Pitch / Amp sliding switch.
+    void testEnvelopeToggle()
+    {
+        EditorHolder h;
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& env = editor.getEnvelopeEditor();
+        auto& toggle = editor.getEnvelopeToggle();
+
+        for (const auto [w, hgt] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+        {
+            editor.setSize (w, hgt);
+            editor.selectPage (dsp::bodyLayer);
+            const auto tb = editor.getLocalArea (toggle.getParentComponent(), toggle.getBounds());
+            const auto eb = editor.getLocalArea (env.getParentComponent(), env.getBounds());
+            check (toggle.isVisible() && tb.getWidth() >= 100 && tb.getHeight() >= 18 && editor.getLocalBounds().contains (tb) && ! tb.intersects (eb)
+                       && tb.getRight() <= eb.getRight() + 1 && tb.getBottom() <= eb.getY(),
+                   std::to_string (w) + "x" + std::to_string (hgt) + ": the switch fits above the graph (" + tb.toString().toStdString() + " graph " + eb.toString().toStdString() + ")");
+        }
+
+        editor.setSize (1080, 660);
+        editor.selectPage (dsp::bodyLayer);
+        toggle.setRight (false, true, false);
+        check (! toggle.isRight() && env.getEnvelope() == params::Envelope::pitch && toggle.getThumbPosition() < 0.01f, "starts on Pitch");
+
+        // Hit areas: the thumb sits in its half of the track.
+        const auto track = toggle.getTrackBounds(), thumb = toggle.getThumbBounds();
+        check (track.contains (thumb) && thumb.getCentreX() < track.getCentreX(), "the thumb is inside the track, on the Pitch side");
+
+        // Click: toggles, the thumb eases over ~180 ms, the graph cross-fades over ~200 ms.
+        const auto centre = toggle.getLocalBounds().getCentre().toFloat();
+        toggle.mouseDown (makeMouseEvent (toggle, centre, centre, 1, false));
+        toggle.mouseUp (makeMouseEvent (toggle, centre, centre, 1, false));
+        check (toggle.isRight() && env.getEnvelope() == params::Envelope::amp && toggle.isAnimating() && env.getCrossfadeAmount() > 0.99f,
+               "a click switches to Amp and starts the slide + cross-fade (right " + std::to_string (toggle.isRight()) + ", animating " + std::to_string (toggle.isAnimating()) + ", fade " + format (env.getCrossfadeAmount(), 2) + ")");
+        std::vector<float> positions;
+        for (double t = 0.0; t <= 240.0; t += 15.0)
+        {
+            toggle.advanceAnimation (5000.0 + t);
+            env.advanceCrossfade (5000.0 + t);
+            positions.push_back (toggle.getThumbPosition());
+            if (std::abs (t - 90.0) < 1.0)
+            {
+                check (positions.back() > 0.2f && positions.back() < 0.99f && env.getCrossfadeAmount() > 0.05f && env.getCrossfadeAmount() < 0.95f,
+                       "mid-way (90 ms): thumb " + format (positions.back(), 2) + ", cross-fade " + format (env.getCrossfadeAmount(), 2));
+                saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-envtoggle");
+            }
+        }
+        check (std::is_sorted (positions.begin(), positions.end()) && positions.back() > 0.999f && ! toggle.isAnimating() && env.getCrossfadeAmount() == 0.0f,
+               "the thumb rises monotonically to Amp and the cross-fade finishes by 240 ms");
+
+        // Drag the thumb back to the left.
+        const auto right = toggle.getThumbBounds().getCentre();
+        simulateDrag (toggle, right, { toggle.getTrackBounds().getX() + 4.0f, right.y });
+        for (double t = 0.0; t <= 300.0; t += 30.0)
+            toggle.advanceAnimation (8000.0 + t);
+        check (! toggle.isRight() && env.getEnvelope() == params::Envelope::pitch && toggle.getThumbPosition() < 0.01f, "dragging the thumb left selects Pitch");
+
+        // Keys.
+        toggle.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        const auto byRight = toggle.isRight();
+        toggle.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+        check (byRight && ! toggle.isRight() && env.getEnvelope() == params::Envelope::pitch, "Right arrow selects Amp, Space toggles back");
+
+        // Accessibility.
+        auto handler = toggle.createAccessibilityHandler();
+        check (handler != nullptr && handler->getRole() == juce::AccessibilityRole::toggleButton && handler->getActions().contains (juce::AccessibilityActionType::toggle),
+               "accessible as a toggle button");
+
+        // Not a parameter (a view choice): nothing in the undo history.
+        h.processor->getUndoHistory().clear();
+        toggle.setRight (true, true, false);
+        check (! h.processor->getUndoHistory().canUndo(), "switching the view adds no undo step");
+    }
+
+    //==============================================================================
+    // v0.3.5: the envelope / waveform divider.
+    void testSplitter()
+    {
+        using E = Editor;
+        bool clamped = true;
+        for (const auto w : { 500, 700, 900, 1500, 2300 })
+            for (const auto r : { 0.0f, 0.3f, 0.6f, 0.8f, 1.0f, std::numeric_limits<float>::quiet_NaN() })
+            {
+                const auto ew = E::envelopeWidthFor (w, r);
+                const auto ww = w - dooblrkick::ui::SplitterBar::width - ew;
+                clamped = clamped && ew >= 0 && ww >= 0
+                          && (w - dooblrkick::ui::SplitterBar::width < E::minEnvelopeWidth + E::minWaveformWidth || (ew >= E::minEnvelopeWidth && ww >= E::minWaveformWidth));
+            }
+        check (clamped, "envelopeWidthFor keeps both sides at least their minimum widths at every ratio");
+        check (E::envelopeWidthFor (1500, std::numeric_limits<float>::quiet_NaN()) == E::envelopeWidthFor (1500, 0.6f), "a bad ratio falls back to 0.6");
+
+        EditorHolder h;
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        auto& split = editor.getSplitter();
+        auto& env = editor.getEnvelopeEditor();
+        auto& wave = editor.getWaveformView();
+        editor.selectPage (dsp::bodyLayer);
+
+        for (const auto [w, hgt] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+            for (const auto r : { DooblrKickAudioProcessor::minEnvelopeSplit, DooblrKickAudioProcessor::maxEnvelopeSplit })
+            {
+                editor.setSize (w, hgt);
+                editor.setEnvelopeSplit (r);
+                const auto in = [&] (juce::Component& c) { return editor.getLocalArea (c.getParentComponent(), c.getBounds()); };
+                const auto eb = in (env), sb = in (split), wb = in (wave), tb = in (editor.getEnvelopeToggle());
+                check (! eb.intersects (sb) && ! sb.intersects (wb) && ! eb.intersects (wb) && eb.getRight() <= sb.getX() && sb.getRight() <= wb.getX()
+                           && editor.getLocalBounds().contains (wb) && wb.getWidth() >= E::minWaveformWidth && eb.getWidth() >= E::minEnvelopeWidth
+                           && tb.getX() >= eb.getX() && tb.getRight() <= eb.getRight() && sb.getHeight() > 100,
+                       std::to_string (w) + "x" + std::to_string (hgt) + " ratio " + format (r, 1) + ": graph " + std::to_string (eb.getWidth()) + " | bar | waveform "
+                           + std::to_string (wb.getWidth()) + ", no overlaps");
+            }
+
+        // Drag: the divider follows the mouse; clamped at the ends.
+        editor.setSize (1080, 660);
+        editor.setEnvelopeSplit (0.6f);
+        const auto before = env.getWidth();
+        const auto mid = split.getLocalBounds().getCentre().toFloat();
+        simulateDrag (split, mid, mid + juce::Point<float> (-80.0f, 0.0f));
+        check (std::abs (env.getWidth() - (before - 80)) <= 2 && p.getEnvelopeSplit() < 0.6f,
+               "dragging the bar 80 px left narrows the graph (" + std::to_string (before) + " -> " + std::to_string (env.getWidth()) + " px)");
+        simulateDrag (split, mid, mid + juce::Point<float> (2000.0f, 0.0f));
+        check (wave.getWidth() >= E::minWaveformWidth && p.getEnvelopeSplit() <= DooblrKickAudioProcessor::maxEnvelopeSplit + 1.0e-4f, "dragging far right stops at the waveform's minimum");
+        simulateDrag (split, mid, mid + juce::Point<float> (-2000.0f, 0.0f));
+        check (env.getWidth() >= E::minEnvelopeWidth && p.getEnvelopeSplit() >= DooblrKickAudioProcessor::minEnvelopeSplit - 1.0e-4f, "dragging far left stops at the graph's minimum");
+
+        // Window resizes keep the ratio.
+        editor.setEnvelopeSplit (0.7f);
+        const auto ratioAt = [&] { return (float) env.getWidth() / (float) (env.getWidth() + split.getWidth() + wave.getWidth()); };
+        const auto r1 = ratioAt();
+        editor.setSize (1600, 1000);
+        const auto r2 = ratioAt();
+        check (std::abs (r1 - r2) < 0.02f && std::abs (p.getEnvelopeSplit() - 0.7f) < 1.0e-4f, "a bigger window keeps the split (" + format (r1, 3) + " vs " + format (r2, 3) + ")");
+
+        // Double-click resets; hover highlights; the cursor says resize.
+        simulateDoubleClick (split, mid);
+        check (std::abs (p.getEnvelopeSplit() - 0.6f) < 1.0e-4f, "double-click resets the split to 0.6");
+        check (split.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::LeftRightResizeCursor), "the bar shows a left-right resize cursor");
+        split.mouseEnter (makeMouseEvent (split, mid, mid, 0, false));
+        check (split.isHot(), "the grip highlights on hover");
+
+        // Persisted in the state; not a parameter, not undoable.
+        p.getUndoHistory().clear();
+        editor.setEnvelopeSplit (0.45f);
+        check (! p.getUndoHistory().canUndo(), "resizing adds no undo step");
+        bool isParam = false;
+        for (const auto& id : allParameterIds (p))
+            isParam = isParam || id.containsIgnoreCase ("split");
+        check (! isParam, "the split is not a host parameter");
+        juce::MemoryBlock state;
+        p.getStateInformation (state);
+        auto q = makeProcessor();
+        q->setStateInformation (state.getData(), (int) state.getSize());
+        check (std::abs (q->getEnvelopeSplit() - 0.45f) < 1.0e-4f, "the split survives the plugin state");
+        q->setEnvelopeSplit (5.0f);
+        check (std::abs (q->getEnvelopeSplit() - DooblrKickAudioProcessor::maxEnvelopeSplit) < 1.0e-4f, "an out-of-range split is clamped");
+
+        editor.setSize (1080, 660);
+        editor.setEnvelopeSplit (0.5f);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-splitter");
+        split.mouseExit (makeMouseEvent (split, mid, mid, 0, false));
+    }
+
+    //==============================================================================
+    // v0.3.5: Export asks where to save; Play is an icon.
+    void testExportAndPlayButtons()
+    {
+        using P = DooblrKickAudioProcessor;
+        check (P::exportDestinationFor (juce::File ("/tmp/kick")) == juce::File ("/tmp/kick.wav"), "\"kick\" gets .wav");
+        check (P::exportDestinationFor (juce::File ("/tmp/kick.WAV")) == juce::File ("/tmp/kick.WAV"), "\"kick.WAV\" is kept");
+        check (P::exportDestinationFor (juce::File ("/tmp/kick.v2")) == juce::File ("/tmp/kick.v2.wav"), "\"kick.v2\" gets .wav");
+        check (P::exportDestinationFor (juce::File()) == juce::File(), "no file (cancel) stays no file");
+
+        auto p = makeProcessor();
+        check (p->getExportStartFile() == P::getDefaultExportFolder().getChildFile ("dooblr-kick.wav"), "the dialog starts at ~/Music/dooblr-kick/dooblr-kick.wav");
+
+        const auto folder = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("dk-export-test-" + juce::String (juce::Random::getSystemRandom().nextInt()));
+        folder.createDirectory();
+        juce::File written;
+        juce::String error;
+        check (p->exportTo (folder.getChildFile ("my kick"), 48000.0, written, error) && written == folder.getChildFile ("my kick.wav") && written.existsAsFile()
+                   && written.getSize() > 1000,
+               "exporting to \"my kick\" writes \"my kick.wav\" in the chosen folder (" + error.toStdString() + ")");
+        check (p->getLastExportFolder() == folder && p->getExportStartFile() == folder.getChildFile ("dooblr-kick.wav"), "the next dialog opens in that folder");
+        juce::MemoryBlock state;
+        p->getStateInformation (state);
+        auto q = makeProcessor();
+        q->setStateInformation (state.getData(), (int) state.getSize());
+        check (q->getLastExportFolder() == folder, "the last folder is kept in the state");
+        check (! p->exportTo (juce::File(), 48000.0, written, error) && error.isNotEmpty(), "no file: nothing written, an error");
+        check (! p->exportTo (juce::File ("/nonexistent-dir-xyz/sub/k"), 48000.0, written, error) && error.isNotEmpty(), "an unwritable place fails with a message");
+
+        EditorHolder h;
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        editor.setSize (1080, 660);
+        auto& exportButton = editor.getExportButton();
+        auto& play = editor.getPlayButton();
+        check (exportButton.getButtonText() == "Export" && exportButton.isVisible(), "the export button reads \"Export\"");
+        check (play.getButtonText().isEmpty() && play.getTooltip() == "Play" && play.isVisible() && std::abs (play.getWidth() - play.getHeight()) <= 8,
+               "Play is an icon (no text, tooltip Play, about square: " + play.getBounds().toString().toStdString() + ")");
+        check (! exportButton.getBounds().intersects (play.getBounds()), "Export and Play don't overlap");
+
+        // The icon: bright pixels in the middle, none at the corners; centred.
+        const auto image = play.createComponentSnapshot (play.getLocalBounds(), true, 1.0f);
+        const auto bright = [&] (int x, int y) { return image.getPixelAt (x, y).getPerceivedBrightness() > 0.6f; };
+        int lit = 0, litLeft = 0, litRight = 0;
+        for (int y = 0; y < image.getHeight(); ++y)
+            for (int x = 0; x < image.getWidth(); ++x)
+                if (bright (x, y))
+                {
+                    ++lit;
+                    (x < image.getWidth() / 2 ? litLeft : litRight)++;
+                }
+        const auto icon = dooblrkick::ui::PlayIconButton::makeIcon (play.getLocalBounds().toFloat()).getBounds();
+        check (lit > 20 && bright (image.getWidth() / 2, image.getHeight() / 2) && ! bright (1, 1) && litLeft > litRight
+                   && std::abs (icon.getCentreX() - play.getWidth() * 0.5f) < 2.0f && std::abs (icon.getCentreY() - play.getHeight() * 0.5f) < 1.0f,
+               "a centred right-pointing triangle is drawn (" + std::to_string (lit) + " px lit, wider on the left)");
+
+        // Writing through the editor reports in the status line.
+        juce::File out;
+        check (editor.exportToFile (folder.getChildFile ("from editor"), out, error) && out.existsAsFile()
+                   && editor.getWaveformView().getStatus().startsWith ("Exported"),
+               "the editor's export writes the chosen file and says so");
+        check (! editor.exportToFile (juce::File ("/nonexistent-dir-xyz/sub/k"), out, error) && editor.getWaveformView().getStatus().startsWith ("Export failed"),
+               "a write error shows a short message (no modal)");
+
+        saveSnapshot (editor.createComponentSnapshot (editor.getHeaderArea()), "-v0.3.5-buttons");
+        folder.deleteRecursively();
+    }
+
+    //==============================================================================
+    // v0.3.5: the layer Level faders use a console taper.
+    void testLevelTaper()
+    {
+        bool monotonic = true, roundTrip = true;
+        float previous = -1000.0f;
+        for (int i = 0; i <= 1000; ++i)
+        {
+            const auto x = (float) i / 1000.0f;
+            const auto db = params::travelToLevelDb (x);
+            monotonic = monotonic && db > previous - 1.0e-6f && (i == 0 || db > previous);
+            roundTrip = roundTrip && std::abs (params::levelDbToTravel (db) - x) < 1.0e-4f;
+            previous = db;
+        }
+        check (monotonic && roundTrip, "the taper is strictly increasing and round-trips (1001 points)");
+        check (params::travelToLevelDb (0.0f) == params::minLevelDb && params::travelToLevelDb (1.0f) == params::maxLevelDb, "the ends are -inf (-60) and +12 dB");
+        const auto zero = params::levelDbToTravel (0.0f);
+        check (zero >= 0.75f && zero <= 0.80f, "0 dB sits at " + format (zero * 100.0, 1) + " % of travel");
+        const auto above24 = 1.0f - params::levelDbToTravel (-24.0f);
+        check (above24 >= 0.70f, format (above24 * 100.0, 1) + " % of travel is above -24 dB");
+        const auto band = params::levelDbToTravel (-24.0f) - params::levelDbToTravel (-48.0f);
+        check (band > 0.1f && band < 0.2f, "-48 .. -24 dB takes " + format (band * 100.0, 1) + " %");
+
+        // The parameters themselves carry the taper (so host automation feels the same).
+        auto p = makeProcessor();
+        bool same = true;
+        for (int l = 0; l < params::numLayers; ++l)
+        {
+            auto* param = getParam (*p, params::layerId (l, "level"));
+            for (const auto db : { -60.0f, -48.0f, -24.0f, -6.0f, 0.0f, 6.0f, 12.0f })
+                same = same && param != nullptr && std::abs (param->convertTo0to1 (db) - params::levelDbToTravel (db)) < 1.0e-5f
+                       && std::abs (param->convertFrom0to1 (params::levelDbToTravel (db)) - db) < 1.0e-3f;
+        }
+        check (same, "all five Level parameters use the taper");
+
+        // The fader: travel follows the taper; double-click and fine drag still work.
+        EditorHolder h;
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        editor.setSize (1080, 660);
+        editor.selectPage (dsp::bodyLayer);
+        auto& slider = editor.getLevelFader (dsp::bodyLayer).getSlider();
+        check (std::abs ((float) slider.valueToProportionOfLength (0.0) - zero) < 1.0e-4f, "the fader puts 0 dB at the taper's position");
+        check ((bool) slider.getProperties()["faderScale"], "the fader draws its dB marks");
+
+        setParam (*h.processor, "body_level", -30.0f);
+        const auto pos = juce::Point<float> ((float) slider.getWidth() * 0.5f, slider.getPositionOfValue (slider.getValue()) - (float) slider.getY());
+        simulateDoubleClick (slider, pos);
+        check (std::abs (getPlain (*h.processor, "body_level") - 0.0f) < 0.01f, "double-click resets Body Level to its default (0 dB)");
+
+        // Fine drag: Shift turns on the slow velocity mode.
+        check (slider.getVelocityModeIsSwappable() && slider.getVelocitySensitivity() < 0.5, "Shift + drag is a fine adjustment");
+
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-levelfader");
+    }
+
+    void testPlayheadLevel()
+    {
+        using EE = dooblrkick::ui::EnvelopeEditor;
+        using dooblrkick::params::Envelope;
+        using dooblrkick::dsp::PlayheadTap;
+        namespace params = dooblrkick::params;
+
+        // The mapping: monotonic in gain, floor at / below -60 dB, 1 at 0 dB.
+        {
+            bool monotonic = true;
+            auto previous = EE::playheadAlphaForGain (0.0f);
+            for (int i = 0; i <= 400; ++i)
+            {
+                const auto gain = std::pow (10.0f, -6.0f + 6.5f * (float) i / 400.0f); // -120 dB .. +10 dB
+                const auto a = EE::playheadAlphaForGain (gain);
+                monotonic = monotonic && a >= previous && a >= EE::playheadAlphaFloor && a <= 1.0f;
+                previous = a;
+            }
+            check (monotonic, "playhead alpha is monotonic in gain and stays in floor .. 1");
+            check (std::abs (EE::playheadAlphaForGain (1.0f) - 1.0f) < 1.0e-6f
+                       && std::abs (EE::playheadAlphaForGain (0.0f) - EE::playheadAlphaFloor) < 1.0e-6f
+                       && std::abs (EE::playheadAlphaForGain (0.001f) - EE::playheadAlphaFloor) < 1.0e-4f
+                       && std::abs (EE::playheadAlphaForGain (std::nanf ("")) - EE::playheadAlphaFloor) < 1.0e-6f,
+                   "0 dB -> 1, -60 dB / silence / NaN -> the floor");
+            const auto mid = EE::playheadAlphaForGain (0.1f); // -20 dB
+            check (std::abs (mid - (EE::playheadAlphaFloor + (1.0f - EE::playheadAlphaFloor) * (40.0f / 60.0f))) < 1.0e-4f,
+                   "linear in dB: -20 dB is 2/3 of the way up (" + format (mid, 3) + ")");
+            check (EE::playheadAlphaFloor >= 0.08f && EE::playheadAlphaFloor <= 0.12f, "floor is about 0.1");
+        }
+
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        editor.setSize (1080, 660);
+        setValues (p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                        { params::nodeValueId (Envelope::master, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::master, 1), 60.0f }, { params::nodeValueId (Envelope::master, 1), 0.8f },
+                        { params::nodeTimeId (Envelope::master, 2), 250.0f }, { params::nodeValueId (Envelope::master, 2), 0.4f },
+                        { params::nodeTimeId (Envelope::master, 3), 700.0f }, { params::nodeValueId (Envelope::master, 3), 0.0f },
+                        { "menv_on", 1.0f }, { "menv_tscale", 1.0f }, { "menv_depth", 1.0f } });
+        editor.selectPage (Editor::envelopePage);
+        auto& env = editor.getMasterEnvelopeEditor();
+        env.checkForChanges();
+        env.resetView();
+
+        PlayheadTap local;
+        local.setSampleRate (48000.0);
+        env.setPlayheadTap (&local);
+        env.updatePlayhead (0.0);
+        const auto at = [&] (EE& e, std::uint32_t hit, float ms)
+        {
+            local.publish (hit, true, (std::int64_t) std::llround (ms * 48.0));
+            e.updatePlayhead (1000.0 + hit);
+            return e.getPlayheadLevelAlpha();
+        };
+
+        const auto peak = at (env, 1, 0.0f), early = at (env, 2, 60.0f), late = at (env, 3, 640.0f), end = at (env, 4, 700.0f);
+        check (peak > 0.99f, "at the peak the playhead is at full brightness (" + format (peak, 3) + ")");
+        check (late < peak && early < peak && late < early, "decaying: peak " + format (peak, 3) + " > 60 ms " + format (early, 3)
+                                                                 + " > 640 ms " + format (late, 3));
+        check (late > EE::playheadAlphaFloor + 0.05f && late < 0.8f, "late in the decay it is dim but still there (" + format (late, 3) + ")");
+        check (std::abs (end - EE::playheadAlphaFloor) < 1.0e-4f && env.getPlayheadAlpha() == 1.0f,
+               "at silence it sits on the floor; the end-of-hit fade is separate (still 1)");
+        check (std::abs (env.getPlayheadLevelGainAt (250.0f) - 0.4f) < 1.0e-3f, "the gain is the curve's value (250 ms: 40 %)");
+
+        // A rising segment brightens it again.
+        setValues (p, { { params::nodeValueId (Envelope::master, 2), 0.95f } });
+        env.checkForChanges();
+        check (at (env, 5, 250.0f) > at (env, 6, 60.0f), "rising from 80 % to 95 %: brighter at the higher point");
+        setValues (p, { { params::nodeValueId (Envelope::master, 2), 0.4f } });
+
+        // The effective envelope: Time Scale and Depth.
+        const auto g320 = env.getPlayheadLevelGainAt (320.0f);
+        setValues (p, { { "menv_tscale", 2.0f } });
+        env.checkForChanges();
+        check (std::abs (env.getPlayheadLevelGainAt (640.0f) - g320) < 0.01f,
+               "Time Scale 200 %: 640 ms plays what 320 ms did at 100 %");
+        setValues (p, { { "menv_tscale", 1.0f }, { "menv_depth", 0.5f } });
+        env.checkForChanges();
+        check (env.getPlayheadLevelGainAt (640.0f) > 0.4f && env.getPlayheadLevelGainAt (640.0f) > g320 * 0.5f,
+               "Depth 50 %: the decay is shallower, so it stays brighter (" + format (env.getPlayheadLevelGainAt (640.0f), 3) + ")");
+        check (std::abs (env.getPlayheadLevelGainAt (640.0f) - env.getEffectiveEnvelope().evaluate (640.0f)) < 1.0e-6f,
+               "the gain is the effective envelope the DSP plays");
+        setValues (p, { { "menv_depth", 1.0f }, { "menv_on", 0.0f } });
+        env.checkForChanges();
+        check (env.getPlayheadLevelGainAt (640.0f) == 1.0f && std::abs (at (env, 7, 640.0f) - 1.0f) < 1.0e-6f,
+               "master envelope off: unity gain, full brightness");
+        setValues (p, { { "menv_on", 1.0f } });
+        env.checkForChanges();
+
+        // Body graphs: both follow the Body amp envelope.
+        setValues (p, { { params::envelopeCountId (Envelope::amp), 3.0f },
+                        { params::nodeValueId (Envelope::amp, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::amp, 1), 100.0f }, { params::nodeValueId (Envelope::amp, 1), 0.5f },
+                        { params::nodeTimeId (Envelope::amp, 2), 400.0f }, { params::nodeValueId (Envelope::amp, 2), 0.0f },
+                        { params::layerId (1, "start"), 0.0f } });
+        editor.selectPage (1);
+        editor.showEnvelope (Envelope::amp);
+        auto& body = editor.getEnvelopeEditor();
+        body.checkForChanges();
+        body.setPlayheadTap (&local);
+        const auto ampEarly = at (body, 8, 5.0f), ampLate = at (body, 9, 350.0f);
+        const auto ampGain = body.getPlayheadLevelGainAt (100.0f);
+        check (ampEarly > ampLate && std::abs (ampGain - 0.5f) < 1.0e-3f, "Body amp graph: dims with the amp envelope");
+        editor.showEnvelope (Envelope::pitch);
+        auto& pitch = editor.getEnvelopeEditor();
+        pitch.checkForChanges();
+        pitch.setPlayheadTap (&local);
+        check (std::abs (pitch.getPlayheadLevelGainAt (100.0f) - 0.5f) < 1.0e-3f && at (pitch, 10, 5.0f) > at (pitch, 11, 350.0f),
+               "Body pitch graph: dims with the Body amp envelope too");
+        pitch.setPlayheadTap (&p.getPlayheadTap());
+
+        // Snapshots: near the peak and late in the decay.
+        editor.selectPage (Editor::envelopePage);
+        env.checkForChanges();
+        env.resetView();
+        at (env, 12, 20.0f);
+        check (env.getPlayheadX().has_value(), "snapshot: playhead at 20 ms in view");
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-playhead-peak");
+        at (env, 13, 620.0f);
+        check (env.getPlayheadX().has_value(), "snapshot: playhead at 620 ms in view");
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-playhead-decay");
+        env.setPlayheadTap (&p.getPlayheadTap());
+    }
+
+    //==============================================================================
     // v0.3.4: the playhead.
     void testPlayhead()
     {
@@ -3919,8 +4593,8 @@ namespace
         auto& editor = *h.editor;
 
         auto* version = dynamic_cast<juce::Label*> (editor.findChildWithID ("version"));
-        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.4",
-               "header subtitle is the build version (v0.3.4)");
+        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.5",
+               "header subtitle is the build version (v0.3.5)");
         juce::StringArray texts;
         collectLabels (editor, texts);
         bool tagLine = false;
@@ -4531,14 +5205,14 @@ namespace
 
         struct Expect { int layer; juce::StringArray synthOnly, sampleOnly, shared; };
         const std::vector<Expect> layers {
-            { dsp::clickLayer, { "click_type" }, { "click_sample", "click_keytrack", "click_loadSample", "click_sampleFile" },
-              { "click_pitch", "click_length", "click_tone" } },
+            { dsp::clickLayer, { "click_type" }, { "click_sample", "click_loadSample", "click_sampleFile" },
+              { "click_pitch", "click_length", "click_tone", "click_keytrack" } },
             { dsp::bodyLayer, { "body_wave", "body_harm", "body_phase" },
-              { "body_sample", "body_smp_penv", "body_keytrack", "body_loadSample", "body_sampleFile" }, { "body_tune", "body_drive" } },
-            { dsp::tailLayer, { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_keytrack", "tail_loadSample", "tail_sampleFile" },
-              { "tail_tune", "tail_attack", "tail_hold", "tail_decay", "tail_curve", "tail_drive" } },
+              { "body_sample", "body_smp_penv", "body_loadSample", "body_sampleFile" }, { "body_tune", "body_drive", "body_keytrack" } },
+            { dsp::tailLayer, { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_loadSample", "tail_sampleFile" },
+              { "tail_keytrack", "tail_tune", "tail_attack", "tail_hold", "tail_decay", "tail_curve", "tail_drive" } },
             { dsp::noiseLayer, { "noise_color", "noise_width" }, { "noise_sample", "noise_tune", "noise_loadSample", "noise_sampleFile" },
-              { "noise_attack", "noise_hold", "noise_decay", "noise_curve" } },
+              { "noise_attack", "noise_hold", "noise_decay", "noise_curve", "noise_keytrack" } },
         };
 
         // Hidden values are kept: give the other source's controls distinctive values first.
@@ -4593,7 +5267,7 @@ namespace
                         for (const auto& panel : editor.getPanels (e.layer))
                             if (panel->isParentOf (c))
                                 return true;
-                        return editor.getLevelFader (e.layer).isParentOf (c);
+                        return editor.getLevelFader (e.layer).isParentOf (c) || c == &editor.getKeyTrackSwitch (e.layer);
                     };
                     for (const auto& [id, c] : visible)
                         if (id.startsWith (prefix) && ! id.endsWith ("_fader") && inPage (c))
@@ -4633,15 +5307,18 @@ namespace
                     for (const auto& panel : panels)
                         panelsLeft = std::min (panelsLeft, inEditor (*panel).getX());
                     for (const auto& [id, b] : placed)
-                        if (! id.endsWith ("_level"))
+                        if (! id.endsWith ("_level") && ! id.endsWith ("_keytrack"))
                             panelsLeft = std::min (panelsLeft, b.getX());
+                    // v0.3.5: the Key Track switch sits under the fader; together they span the panels.
+                    const auto keyBounds = inEditor (editor.getKeyTrackSwitch (e.layer));
                     const auto slider = fader.getSlider().getSliderStyle() == juce::Slider::LinearVertical;
                     if (! (fader.isVisible() && slider && faderBounds.getRight() <= panelsLeft))
                         note ("  " + name + ": panels start at x " + std::to_string (panelsLeft));
                     check (fader.isVisible() && slider && visible.count (params::layerId (e.layer, "level")) == 1 && faderBounds.getRight() <= panelsLeft
-                               && faderBounds.getHeight() >= 3 * faderBounds.getWidth()
-                               && std::abs (faderBounds.getY() - inEditor (*panels.front()).getY()) <= 2 && std::abs (faderBounds.getBottom() - inEditor (*panels.back()).getBottom()) <= 2,
-                           name + ": the Level fader is vertical, left of the panels, and spans them (" + faderBounds.toString().toStdString() + ")");
+                               && faderBounds.getHeight() * 2 >= 5 * faderBounds.getWidth()
+                               && std::abs (faderBounds.getY() - inEditor (*panels.front()).getY()) <= 2 && std::abs (keyBounds.getBottom() - inEditor (*panels.back()).getBottom()) <= 2
+                               && keyBounds.getY() >= faderBounds.getBottom() && keyBounds.getRight() <= panelsLeft && editor.getKeyTrackSwitch (e.layer).isVisible(),
+                           name + ": the Level fader + Key switch column is vertical, left of the panels, and spans them (" + faderBounds.toString().toStdString() + ")");
 
                     if (sample)
                     {
@@ -5005,6 +5682,13 @@ int main()
         { "no info text on the envelopes (v0.3.4)", testEnvelopeInfoTextRemoved },
         { "envelope pan / axis lock / animated fit (v0.3.4)", testEnvelopePanAndFit },
         { "envelope playhead (v0.3.4)", testPlayhead },
+        { "playhead dims with the level (v0.3.5)", testPlayheadLevel },
+        { "key track on every layer (v0.3.5)", testKeyTrackSwitches },
+        { "each layer page shows its own envelope (v0.3.5)", testLayerEnvelopes },
+        { "pitch / amp sliding switch (v0.3.5)", testEnvelopeToggle },
+        { "envelope / waveform divider (v0.3.5)", testSplitter },
+        { "Export dialog and Play icon (v0.3.5)", testExportAndPlayButtons },
+        { "console taper for the layer faders (v0.3.5)", testLevelTaper },
         { "header output meter + version (v0.3.4)", testHeaderMeterAndVersion },
         { "output graph (anti-aliased)",            testOutputGraph },
     };

@@ -14,9 +14,10 @@ namespace dooblrkick::dsp
         One kick hit: Click, Body, Sub, Tail and Noise layers rendered sample by sample, each
         with its own start offset, envelope, filter, level, pan and Drive send. Allocation free.
 
-        The MIDI note never changes the synthesised layers: every note plays the same kick,
-        pitched by the Key, the Tune controls and the pitch envelope. Only a layer playing a
-        sample with its "Sample key track" switch on follows the note (relative to the Key).
+        By default the MIDI note never changes a layer: every note plays the same kick, pitched
+        by the Key, the Tune controls and the pitch envelope. A layer with its Key Track switch
+        on (0.3.5: synth or sample; the synth Noise has no pitch) follows the note relative to
+        the Key, on top of its tune and pitch envelope.
     */
     class KickVoice
     {
@@ -67,7 +68,8 @@ namespace dooblrkick::dsp
         int note = 60;
         float velocityGain = 1.0f;
         std::int64_t samplesElapsed = 0;
-        double sampleKeyRatio = 1.0; // 2^((note - Key) / 12): only for key-tracked sample layers
+        double sampleKeyRatio = 1.0; // 2^((note - Key) / 12): only for key-tracked layers
+        float keyOffsetSt = 0.0f;    // note - Key in semitones (key-tracked synth layers, 0.3.5)
         float releaseGain = 1.0f, releaseStep = 0.0f;
         bool held = true;
 

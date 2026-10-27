@@ -96,14 +96,42 @@ namespace dooblrkick::ui
         }
 
         const auto area = juce::Rectangle<int> (x, y, width, height).toFloat();
-        const auto cx = area.getCentreX();
+        const auto faderScaleShift = (bool) slider.getProperties().getWithDefault ("faderScale", false) ? 5.0f : 0.0f;
+        const auto cx = area.getCentreX() + faderScaleShift; // room for the dB labels on the left
         const auto fill = slider.findColour (juce::Slider::trackColourId);
         const auto top = area.getY(), bottom = area.getBottom();
 
-        // Scale ticks (every 12 dB for a dB range), drawn left and right of the groove.
         const auto range = slider.getRange();
+        const auto faderScale = (bool) slider.getProperties().getWithDefault ("faderScale", false);
+        auto capWidth = juce::jmin (30.0f, area.getWidth() - 4.0f);
+
+        if (faderScale)
+        {
+            // v0.3.5 layer fader: labelled dB marks for the console taper, labels left of the
+            // groove, ticks both sides; 0 dB longer and brighter.
+            capWidth = juce::jmin (22.0f, area.getWidth() - 4.0f);
+            g.setFont (juce::FontOptions (9.0f));
+            for (const auto v : { 12.0, 6.0, 0.0, -6.0, -12.0, -24.0, -48.0, range.getStart() })
+            {
+                if (v > range.getEnd() + 1.0e-6 || v < range.getStart() - 1.0e-6)
+                    continue;
+                const auto ty = juce::jmap ((float) slider.valueToProportionOfLength (v), 0.0f, 1.0f, bottom, top);
+                const auto zero = std::abs (v) < 1.0e-6;
+                const auto len = zero ? 7.0f : 4.0f;
+                g.setColour (zero ? Palette::textMuted : Palette::divider.brighter (0.2f));
+                g.fillRect (juce::Rectangle<float> (cx - capWidth * 0.5f - len + 2.0f, ty - 0.5f, len, 1.0f));
+                g.fillRect (juce::Rectangle<float> (cx + capWidth * 0.5f - 2.0f, ty - 0.5f, len, 1.0f));
+                const auto text = v <= range.getStart() + 1.0e-6 ? juce::String (juce::CharPointer_UTF8 ("-\xe2\x88\x9e"))
+                                                                  : (v > 0.0 ? "+" : "") + juce::String ((int) v);
+                g.setColour (zero ? Palette::textPrimary : Palette::textMuted);
+                g.drawText (text, juce::Rectangle<float> (area.getX(), ty - 6.0f, cx - capWidth * 0.5f - len - area.getX(), 12.0f),
+                            juce::Justification::centredRight, false);
+            }
+        }
+
+        // Scale ticks (every 12 dB for a dB range), drawn left and right of the groove.
         g.setColour (Palette::divider);
-        for (auto v = std::ceil (range.getStart() / 12.0) * 12.0; v <= range.getEnd() + 1.0e-6; v += 12.0)
+        for (auto v = std::ceil (range.getStart() / 12.0) * 12.0; ! faderScale && v <= range.getEnd() + 1.0e-6; v += 12.0)
         {
             const auto ty = juce::jmap ((float) slider.valueToProportionOfLength (v), 0.0f, 1.0f, bottom, top);
             const auto len = std::abs (v) < 1.0e-6 ? 9.0f : 5.0f;
@@ -121,7 +149,7 @@ namespace dooblrkick::ui
             g.fillRoundedRectangle (groove.withTop (sliderPos), 2.5f);
         }
 
-        const auto cap = juce::Rectangle<float> (juce::jmin (30.0f, area.getWidth() - 4.0f), 12.0f).withCentre ({ cx, sliderPos });
+        const auto cap = juce::Rectangle<float> (capWidth, 12.0f).withCentre ({ cx, sliderPos });
         g.setColour (Palette::panelRaised);
         g.fillRoundedRectangle (cap, 3.0f);
         g.setColour (slider.isMouseOverOrDragging() ? fill : Palette::divider.brighter (0.4f));

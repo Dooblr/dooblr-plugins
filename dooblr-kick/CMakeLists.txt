@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-kick VERSION 0.3.4 LANGUAGES C CXX)
+project(dooblr-kick VERSION 0.3.5 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -73,7 +73,8 @@ target_sources(DooblrKick
         Source/UI/OutputMeter.cpp
         Source/UI/WaveformView.cpp
         Source/UI/OutputVisuals.cpp
-        Source/UI/ProcessingVisuals.cpp)
+        Source/UI/ProcessingVisuals.cpp
+        Source/UI/Switches.cpp)
 
 # Factory samples (CC0, see Resources/Samples/LICENSES.md), embedded in the binary.
 file(GLOB dooblrkick_sample_files CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/Resources/Samples/*.wav")

@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.4 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.5 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -112,8 +112,34 @@ Version 0.3.4 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   of the time, Sub 60 %, Tail and Noise 30 %), keeps a soloed layer on, and always leaves at
   least one layer on; a layer heard on its own gets at least -9 dB. It leaves key tracking, solo, the Key, the output gain, EQ, Dynamics,
   the Limiter and the Envelope page as they are.
-- **Export WAV.** It renders the current kick as 24-bit stereo at 48 kHz into
-  `~/Music/dooblr-kick`.
+- **Export (0.3.5).** The header's Export button opens a save dialog (default name
+  `dooblr-kick.wav`, in the last folder you exported to, which the plugin state remembers)
+  and renders one hit at the Key as 24-bit stereo at 48 kHz. `.wav` is added if you leave it
+  off; Cancel does nothing; a failure shows in the waveform view's status line. The Play
+  button is a triangle icon (tooltip "Play").
+- **Playhead follows the level (0.3.5).** The playhead line, dot and trail dim with the
+  layer's effective amplitude at that moment (Depth and Time Scale included): -60 dB .. 0 dB
+  maps to 10 % .. full brightness, with the end-of-hit fade on top. On the Body pitch graph it
+  follows the Body amp envelope; on the master graph the master envelope (full brightness when
+  the master envelope is off).
+- **Each layer page shows its own envelope (0.3.5).** Click shows its length shape, Sub,
+  Tail and Noise their attack / hold / decay (drag the points; the decay diamond sets the
+  curve), Body its pitch or amp envelope. Previously one graph stayed bound to the Body on
+  every page.
+- **Pitch / Amp switch (0.3.5).** On the Body page a sliding switch above the graph picks
+  the envelope: the thumb eases over about 180 ms and the graph cross-fades over about 200 ms.
+  Click, drag the thumb, or use Space / Left / Right; it changes only the view.
+- **Key Track switch per layer (0.3.5).** A vertical "KEY" switch under each layer's Level
+  fader (off by default, automatable as "<Layer> Key Track", not touched by Random). On, the
+  layer follows the played note relative to the Key, in Synth and Sample mode. Noise in Synth
+  mode has no pitch, so its switch is disabled there.
+- **Resizable envelope / waveform split (0.3.5).** Drag the bar between the envelope and the
+  waveform view sideways; double-click it to go back to 60 / 40. The split is kept as a ratio
+  when the window resizes and is saved in the plugin state (not automatable, not an undo step).
+- **Console-style layer faders (0.3.5).** The five Level faders use a fader taper: the top
+  75 % of travel covers -24 .. +12 dB (0 dB at 78 %), the next 15 % -48 .. -24 dB, and the
+  bottom 10 % -48 dB .. off. dB ticks are drawn along the fader. Shift-drag is fine
+  adjustment; double-click resets.
 - **Undo/redo** (Cmd-Z / Cmd-Shift-Z) keeps 50 steps. One drag or preset load is one step.
 - **Resizable UI** from 940×600 upward.
 - **Real-time-safe audio.** The audio thread does not allocate. Samples are swapped in

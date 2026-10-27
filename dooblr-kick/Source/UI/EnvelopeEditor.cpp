@@ -49,7 +49,36 @@ namespace dooblrkick::ui
         }
 
         diamond.addQuadrilateral (0.0f, -4.0f, 4.0f, 0.0f, 0.0f, 4.0f, -4.0f, 0.0f);
-        bodyStart = state.getRawParameterValue (params::layerId (1, "start"));
+        for (int l = 0; l < 5; ++l)
+        {
+            layerStart[(size_t) l] = state.getRawParameterValue (params::layerId (l, "start"));
+            auto& lr = layerRaw[(size_t) l];
+            auto maxMs = 0.0f;
+
+            if (l == 0)
+            {
+                lr.length = state.getRawParameterValue ("click_length");
+                lr.type = state.getRawParameterValue ("click_type");
+                lr.source = state.getRawParameterValue (params::layerId (0, "source"));
+                if (auto* p = state.getParameter ("click_length"))
+                    maxMs = p->getNormalisableRange().end;
+            }
+            else if (l >= 2)
+            {
+                const char* names[] { "attack", "hold", "decay", "curve" };
+                for (int k = 0; k < 4; ++k)
+                {
+                    lr.ahd[(size_t) k] = state.getRawParameterValue (params::layerId (l, names[k]));
+                    if (k < 3)
+                        if (auto* p = state.getParameter (params::layerId (l, names[k])))
+                            maxMs += p->getNormalisableRange().end;
+                }
+            }
+
+            lr.maxMs = juce::jmax (50.0f, maxMs);
+        }
+
+        layer = envelope == params::Envelope::master ? -1 : 1;
         updateViewRange();
         vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { tick(); });
     }
@@ -57,6 +86,37 @@ namespace dooblrkick::ui
     void EnvelopeEditor::setEnvelope (params::Envelope newEnvelope)
     {
         envelope = newEnvelope;
+        shape = Shape::points;
+        layer = envelope == params::Envelope::master ? -1 : 1;
+        rebind();
+    }
+
+    void EnvelopeEditor::setLayerEnvelope (int newLayer)
+    {
+        if (newLayer == 1)
+        {
+            setEnvelope (envelope == params::Envelope::master ? params::Envelope::amp : envelope);
+            return;
+        }
+
+        envelope = params::Envelope::amp; // a 0..1 level graph
+        layer = juce::jlimit (0, 4, newLayer);
+        shape = layer == 0 ? Shape::click : Shape::ahd;
+        rebind();
+    }
+
+    void EnvelopeEditor::rebind()
+    {
+        // A different envelope: drop everything cached for the old one (geometry, hover /
+        // drag state, the change hash, the playhead's offset) and fit the new one.
+        endGesture();
+        cacheHash = 0;
+        lastHash = computeHash();
+        curvePath.clear();
+        selectedNode = juce::jmin (selectedNode, getNumNodes() - 1);
+        playheadSeen = false;
+        playheadActive = false;
+        playheadAlpha = 0.0f;
         hover = drag = {};
         userZoom = false;
         animating = false;
@@ -71,12 +131,137 @@ namespace dooblrkick::ui
 
     int EnvelopeEditor::getNumNodes() const
     {
+        if (shape == Shape::ahd)
+            return 4;
+        if (shape == Shape::click)
+            return 2;
+
         return juce::jlimit (2, params::maxNodes, juce::roundToInt (raw[(size_t) envelope].count->load()));
     }
 
     EnvelopeEditor::NodeValues EnvelopeEditor::readNode (int node) const
     {
-        const auto& r = raw[(size_t) envelope];
+        if (shape == Shape::ahd)
+        {
+            // Attack (linear) / hold / curved decay as 4 points; the decay segment uses the same
+            // curve law as AhdEnvelope (1 - applyCurve), which is the multi-point segment rule.
+            const auto a = ahdParam (0), h = ahdParam (1), d = ahdParam (2), c = ahdParam (3);
+            switch (juce::jlimit (0, 3, node))
+            {
+                case 0:  return { 0.0f, 0.0f, 0.0f };
+                case 1:  return { a, 1.0f, 0.0f };
+                case 2:  return { a + h, 1.0f, c };
+                default: return { a + h + d, 0.0f, 0.0f };
+            }
+        }
+
+        if (shape == Shape::click)
+        {
+            const auto* length = layerRaw[0].length;
+            return node <= 0 ? NodeValues { 0.0f, 1.0f, 0.0f }
+                             : NodeValues { juce::jmax (0.5f, length != nullptr ? length->load() : 12.0f), 0.0f, 0.0f };
+        }
+
+        return readNodeOf (envelope, node);
+    }
+
+    float EnvelopeEditor::ahdParam (int which) const
+    {
+        const auto* p = layer >= 0 ? layerRaw[(size_t) layer].ahd[(size_t) juce::jlimit (0, 3, which)] : nullptr;
+        return p != nullptr ? p->load() : 0.0f;
+    }
+
+    float EnvelopeEditor::clickLevelAt (float ms) const
+    {
+        // The Click's amplitude shape over its Length, as KickVoice::renderClick makes it
+        // (normalised; the oscillator / noise itself is not drawn).
+        const auto& lr = layerRaw[0];
+        const auto lengthMs = juce::jmax (0.5f, lr.length != nullptr ? lr.length->load() : 12.0f);
+
+        if (ms < 0.0f || ms >= lengthMs)
+            return 0.0f;
+
+        const auto x = ms / lengthMs;
+
+        if (lr.source != nullptr && lr.source->load() > 0.5f)
+            return x < 0.6f ? 1.0f : 0.5f + 0.5f * std::cos (juce::MathConstants<float>::pi * (x - 0.6f) / 0.4f);
+
+        const auto taper = 1.0f - x;
+        switch (lr.type != nullptr ? juce::roundToInt (lr.type->load()) : 0)
+        {
+            case 1:  return std::exp (-5.0f * x) * taper;                                // noise burst
+            case 2:  return std::exp (-7.0f * x) * taper;                                // snap
+            case 3:  return juce::jmin (1.0f, ms / 0.1f) * std::exp (-8.0f * x) * taper; // tick
+            case 4:  return juce::jmin (1.0f, ms / 0.5f) * std::exp (-3.0f * x) * taper; // knock
+            default: return std::exp (-4.0f * x) * taper;                                // chirp
+        }
+    }
+
+    juce::Colour EnvelopeEditor::getCurveColour() const
+    {
+        if (shape != Shape::points && layer >= 0)
+            return bandColour (layer);
+
+        return envelope == params::Envelope::pitch ? Palette::dynamic
+             : envelope == params::Envelope::master ? Palette::master : Palette::accent;
+    }
+
+    float EnvelopeEditor::getMaxTimeMs() const
+    {
+        if (shape != Shape::points && layer >= 0)
+            return layerRaw[(size_t) layer].maxMs;
+
+        return params::maxNodeTimeFor (envelope);
+    }
+
+    bool EnvelopeEditor::isNodeEditable (int node) const
+    {
+        if (shape == Shape::ahd)
+            return node >= 1 && node <= 3;
+        if (shape == Shape::click)
+            return node == 1;
+        return node >= 0 && node < getNumNodes();
+    }
+
+    bool EnvelopeEditor::isHandleEditable (int segment) const
+    {
+        if (shape == Shape::ahd)
+            return segment == 2;
+        if (shape == Shape::click)
+            return false;
+        return segment >= 0 && segment < getNumNodes() - 1;
+    }
+
+    juce::StringArray EnvelopeEditor::getBoundParameterIds() const
+    {
+        juce::StringArray ids;
+
+        if (shape == Shape::ahd)
+        {
+            for (const auto* name : { "attack", "hold", "decay", "curve" })
+                ids.add (params::layerId (layer, name));
+        }
+        else if (shape == Shape::click)
+        {
+            ids.addArray ({ "click_length", "click_type", params::layerId (0, "source") });
+        }
+        else
+        {
+            ids.add (params::envelopeCountId (envelope));
+            for (int n = 0; n < getNumNodes(); ++n)
+            {
+                if (n > 0) ids.add (params::nodeTimeId (envelope, n));
+                ids.add (params::nodeValueId (envelope, n));
+                if (n < getNumNodes() - 1) ids.add (params::nodeCurveId (envelope, n));
+            }
+        }
+
+        return ids;
+    }
+
+    EnvelopeEditor::NodeValues EnvelopeEditor::readNodeOf (params::Envelope e, int node) const
+    {
+        const auto& r = raw[(size_t) e];
         const auto n = (size_t) juce::jlimit (0, params::maxNodes - 1, node);
         return { r.time[n] != nullptr ? r.time[n]->load() : 0.0f,
                  r.value[n]->load(),
@@ -303,6 +488,9 @@ namespace dooblrkick::ui
     {
         const auto count = getNumNodes();
 
+        if (shape == Shape::click && ms > 0.0f)
+            return valueToY (clickLevelAt (ms));
+
         if (ms <= 0.0f)
             return valueToY (readNode (0).value);
 
@@ -373,11 +561,11 @@ namespace dooblrkick::ui
         const auto count = getNumNodes();
 
         for (int n = count; --n >= 0;)
-            if (getNodePosition (n).getDistanceFrom (p) <= hitRadius)
+            if (isNodeEditable (n) && getNodePosition (n).getDistanceFrom (p) <= hitRadius)
                 return { HitKind::node, n };
 
         for (int s = 0; s < count - 1; ++s)
-            if (getCurveHandlePosition (s).getDistanceFrom (p) <= hitRadius)
+            if (isHandleEditable (s) && getCurveHandlePosition (s).getDistanceFrom (p) <= hitRadius)
                 return { HitKind::handle, s };
 
         if (! plot.contains (p))
@@ -453,7 +641,16 @@ namespace dooblrkick::ui
         else if (drag.kind == HitKind::handle)
             setSelectedNode (drag.index + 1);
 
-        if (drag.kind == HitKind::node)
+        if (drag.kind == HitKind::node && shape == Shape::ahd)
+        {
+            const char* names[] { "attack", "hold", "decay" };
+            beginGesture ({ params::layerId (layer, names[juce::jlimit (1, 3, drag.index) - 1]) });
+        }
+        else if (drag.kind == HitKind::node && shape == Shape::click)
+        {
+            beginGesture ({ "click_length" });
+        }
+        else if (drag.kind == HitKind::node)
         {
             if (drag.index > 0)
                 beginGesture ({ params::nodeTimeId (envelope, drag.index), params::nodeValueId (envelope, drag.index) });
@@ -463,7 +660,7 @@ namespace dooblrkick::ui
         else if (drag.kind == HitKind::handle)
         {
             dragStartCurve = readNode (drag.index).curve;
-            beginGesture ({ params::nodeCurveId (envelope, drag.index) });
+            beginGesture ({ shape == Shape::ahd ? params::layerId (layer, "curve") : params::nodeCurveId (envelope, drag.index) });
         }
         else if (drag.kind == HitKind::zoom)
         {
@@ -484,7 +681,24 @@ namespace dooblrkick::ui
 
     void EnvelopeEditor::mouseDrag (const juce::MouseEvent& e)
     {
-        if (drag.kind == HitKind::node)
+        if (drag.kind == HitKind::node && shape != Shape::points)
+        {
+            // AHD / Click: points move in time only; each sets its own segment's length.
+            const auto n = drag.index;
+            const auto previous = readNode (n - 1).time;
+            const auto t = juce::jlimit (previous, getMaxTimeMs(), xToTime (e.position.x));
+
+            if (shape == Shape::click)
+                setParam ("click_length", t);
+            else
+            {
+                const char* names[] { "attack", "hold", "decay" };
+                setParam (params::layerId (layer, names[juce::jlimit (1, 3, n) - 1]), t - previous);
+            }
+
+            keepTimeVisible (readNode (n).time);
+        }
+        else if (drag.kind == HitKind::node)
         {
             const auto n = drag.index;
             setParam (params::nodeValueId (envelope, n), yToValue (e.position.y));
@@ -503,7 +717,8 @@ namespace dooblrkick::ui
             // Dragging the handle towards the next node's value makes the segment move there faster.
             const auto towardsEnd = b.value < a.value ? 1.0f : -1.0f;
             const auto delta = (e.position.y - dragStart.y) / 120.0f * towardsEnd;
-            setParam (params::nodeCurveId (envelope, drag.index), juce::jlimit (-1.0f, 1.0f, dragStartCurve + delta));
+            setParam (shape == Shape::ahd ? params::layerId (layer, "curve") : params::nodeCurveId (envelope, drag.index),
+                      juce::jlimit (-1.0f, 1.0f, dragStartCurve + delta));
         }
         else if (drag.kind == HitKind::zoom)
         {
@@ -628,7 +843,8 @@ namespace dooblrkick::ui
 
         if (snap.active)
         {
-            const auto offset = envelope == params::Envelope::master || bodyStart == nullptr ? 0.0f : bodyStart->load();
+            const auto* start = layer >= 0 ? layerStart[(size_t) layer] : nullptr;
+            const auto offset = start == nullptr ? 0.0f : start->load(); // the layer's own Start offset
             playheadMs = playheadTimeFor (snap.samples, playheadTap->getSampleRate(), offset);
             playheadActive = true;
             playheadAlpha = 1.0f;
@@ -646,6 +862,50 @@ namespace dooblrkick::ui
             repaint(); // only while it is visible or fading
     }
 
+    float EnvelopeEditor::playheadAlphaForGain (float gain) noexcept
+    {
+        if (! (gain > 0.0f)) // also NaN
+            return playheadAlphaFloor;
+
+        const auto db = 20.0f * std::log10 (gain);
+        const auto norm = juce::jlimit (0.0f, 1.0f, (db - playheadFloorDb) / -playheadFloorDb);
+        return playheadAlphaFloor + (1.0f - playheadAlphaFloor) * norm;
+    }
+
+    dsp::MultiPointEnvelope EnvelopeEditor::getPlayheadLevelEnvelope() const
+    {
+        if (envelope == params::Envelope::master)
+            return getEffectiveEnvelope();
+
+        // Body graphs: the Body amp envelope (as drawn; it has no macros).
+        constexpr auto amp = params::Envelope::amp;
+        dsp::MultiPointEnvelope env;
+        env.numNodes = juce::jlimit (2, params::maxNodes, juce::roundToInt (raw[(size_t) amp].count->load()));
+
+        for (int n = 0; n < params::maxNodes; ++n)
+        {
+            const auto v = readNodeOf (amp, n);
+            env.nodes[(size_t) n] = { v.time, v.value, v.curve };
+        }
+
+        env.sanitise();
+        return env;
+    }
+
+    float EnvelopeEditor::getPlayheadLevelGainAt (float ms) const
+    {
+        if (envelope == params::Envelope::master && isBypassedLook())
+            return 1.0f; // envelope off: unity gain, so the playhead stays at full brightness
+
+        if (shape == Shape::ahd)
+            return dsp::AhdEnvelope { ahdParam (0), ahdParam (1), ahdParam (2), ahdParam (3) }.evaluate (juce::jmax (0.0f, ms));
+
+        if (shape == Shape::click)
+            return clickLevelAt (juce::jmax (0.0f, ms));
+
+        return getPlayheadLevelEnvelope().evaluate (juce::jmax (0.0f, ms));
+    }
+
     std::optional<float> EnvelopeEditor::getPlayheadX() const noexcept
     {
         if (playheadAlpha <= 0.0f || playheadMs < viewStartMs || playheadMs > viewStartMs + viewMs)
@@ -659,7 +919,40 @@ namespace dooblrkick::ui
         const auto now = juce::Time::getMillisecondCounterHiRes();
         checkForChanges();
         advanceViewAnimation (now);
+        advanceCrossfade (now);
         updatePlayhead (now);
+    }
+
+    void EnvelopeEditor::startCrossfade()
+    {
+        if (getWidth() <= 0 || getHeight() <= 0)
+            return;
+
+        crossfadeAmount = 0.0f; // capture without an older fade on top
+        crossfadeImage = createComponentSnapshot (getLocalBounds(), true, juce::Component::getApproximateScaleFactorForComponent (this));
+        crossfadeAmount = 1.0f;
+        crossfadeStartMs = -1.0;
+        repaint();
+    }
+
+    void EnvelopeEditor::advanceCrossfade (double nowMs)
+    {
+        if (crossfadeAmount <= 0.0f)
+            return;
+
+        if (crossfadeStartMs < 0.0)
+            crossfadeStartMs = nowMs;
+
+        const auto t = juce::jlimit (0.0, 1.0, (nowMs - crossfadeStartMs) / crossfadeMs);
+        crossfadeAmount = (float) (1.0 - t * t * (3.0 - 2.0 * t)); // smoothstep out
+
+        if (t >= 1.0)
+        {
+            crossfadeAmount = 0.0f;
+            crossfadeImage = {};
+        }
+
+        repaint();
     }
 
     void EnvelopeEditor::mouseDoubleClick (const juce::MouseEvent& e)
@@ -668,7 +961,7 @@ namespace dooblrkick::ui
 
         if (hit.kind == HitKind::node)
             removeNode (hit.index);
-        else if ((hit.kind == HitKind::zoom || hit.kind == HitKind::line) && plot.contains (e.position))
+        else if ((hit.kind == HitKind::zoom || hit.kind == HitKind::line) && plot.contains (e.position) && shape == Shape::points)
             addNodeAt (e.position);
         else if (hit.kind == HitKind::none && getRulerArea().contains (e.position))
             resetView(); // double-click the time ruler: fit the envelope again
@@ -678,7 +971,7 @@ namespace dooblrkick::ui
     {
         const auto count = getNumNodes();
 
-        if (count >= params::maxNodes)
+        if (count >= params::maxNodes || shape != Shape::points)
             return false;
 
         const auto time = juce::jlimit (0.0f, getMaxTimeMs(), xToTime (position.x));
@@ -725,7 +1018,7 @@ namespace dooblrkick::ui
     {
         const auto count = getNumNodes();
 
-        if (count <= 2 || node <= 0 || node >= count)
+        if (count <= 2 || node <= 0 || node >= count || shape != Shape::points)
             return false;
 
         std::vector<NodeValues> nodes;
@@ -756,6 +1049,11 @@ namespace dooblrkick::ui
     juce::uint64 EnvelopeEditor::computeHash() const noexcept
     {
         juce::uint64 hash = (juce::uint64) getNumNodes() * 31u + (juce::uint64) envelope;
+        hash = hash * 1000003u ^ (juce::uint64) ((int) shape * 16 + layer + 1);
+
+        if (shape == Shape::click)
+            for (const auto* p : { layerRaw[0].type, layerRaw[0].source })
+                hash = hash * 1000003u ^ (juce::uint64) (juce::int64) juce::roundToInt (p != nullptr ? p->load() * 10.0f : 0.0f);
         hash = hash * 1000003u ^ (isBypassedLook() ? 7u : 3u);
 
         if (const auto& r = raw[(size_t) envelope]; r.timeScale != nullptr)
@@ -897,9 +1195,7 @@ namespace dooblrkick::ui
     void EnvelopeEditor::paint (juce::Graphics& g)
     {
         const auto bypassed = isBypassedLook();
-        const auto colour = (envelope == params::Envelope::pitch ? Palette::dynamic
-                           : envelope == params::Envelope::master ? Palette::master : Palette::accent)
-                                .withMultipliedAlpha (bypassed ? 0.4f : 1.0f);
+        const auto colour = getCurveColour().withMultipliedAlpha (bypassed ? 0.4f : 1.0f);
 
         // Rebuild the cached geometry only when something it depends on changed.
         auto hash = computeHash();
@@ -960,6 +1256,9 @@ namespace dooblrkick::ui
         // Curve handles and nodes.
         for (int s = 0; s < count - 1; ++s)
         {
+            if (! isHandleEditable (s))
+                continue;
+
             const auto p = getCurveHandlePosition (s);
             const auto active = (hover.kind == HitKind::handle && hover.index == s) || (drag.kind == HitKind::handle && drag.index == s);
             g.setColour (active ? Palette::textPrimary : Palette::textMuted.withAlpha (0.7f));
@@ -994,6 +1293,14 @@ namespace dooblrkick::ui
             }
         }
 
+        if (crossfadeAmount > 0.0f && crossfadeImage.isValid())
+        {
+            // The previous view fades out, sliding a little to the side it came from.
+            const auto slide = (1.0f - crossfadeAmount) * 10.0f;
+            g.setOpacity (crossfadeAmount);
+            g.drawImage (crossfadeImage, getLocalBounds().toFloat().translated (-slide, 0.0f));
+            g.setOpacity (1.0f);
+        }
     }
 
     void EnvelopeEditor::paintPlayhead (juce::Graphics& g) const
@@ -1006,7 +1313,11 @@ namespace dooblrkick::ui
 
         juce::Graphics::ScopedSaveState save (g);
         g.reduceClipRegion (plot.toNearestInt());
-        const auto alpha = playheadAlpha;
+        // v0.3.5: brightness follows the level being played (computed here from the envelope
+        // shape; the envelopes are fixed-size values, so nothing allocates).
+        const auto alphaAt = [this] (float ms) { return playheadAlphaForGain (getPlayheadLevelGainAt (ms)); };
+        const auto fadeAlpha = playheadAlpha;
+        const auto alpha = fadeAlpha * alphaAt (playheadMs);
         const auto head = Palette::textPrimary;
 
         // Faint played region.
@@ -1014,15 +1325,18 @@ namespace dooblrkick::ui
         g.setColour (head.withAlpha (0.035f * alpha));
         g.fillRect (juce::Rectangle<float>::leftTopRightBottom (left, plot.getY(), *x, plot.getBottom()));
 
-        // Soft trail: alpha strips behind the line (a ColourGradient would allocate).
+        // Soft trail: alpha strips behind the line (a ColourGradient would allocate). Each strip
+        // takes the level at its own time, so the trail fades along the curve.
         constexpr int strips = 12;
         constexpr float stripWidth = 2.0f;
 
         for (int i = 0; i < strips; ++i)
         {
+            const auto stripX = *x - stripWidth * (float) (i + 1);
             const auto fade = 1.0f - (float) i / (float) strips;
-            g.setColour (head.withAlpha (0.09f * fade * fade * alpha));
-            g.fillRect (juce::Rectangle<float> (*x - stripWidth * (float) (i + 1), plot.getY(), stripWidth, plot.getHeight()));
+            const auto stripAlpha = fadeAlpha * alphaAt (xToTime (stripX + stripWidth * 0.5f));
+            g.setColour (head.withAlpha (0.09f * fade * fade * stripAlpha));
+            g.fillRect (juce::Rectangle<float> (stripX, plot.getY(), stripWidth, plot.getHeight()));
         }
 
         g.setColour (head.withAlpha (0.85f * alpha));
@@ -1037,8 +1351,7 @@ namespace dooblrkick::ui
         else
             y = curveYAt (playheadMs);
 
-        const auto colour = envelope == params::Envelope::pitch ? Palette::dynamic
-                          : envelope == params::Envelope::master ? Palette::master : Palette::accent;
+        const auto colour = getCurveColour();
         g.setColour (colour.withAlpha (0.25f * alpha));
         g.fillEllipse (juce::Rectangle<float> (14.0f, 14.0f).withCentre ({ *x, y }));
         g.setColour (head.withAlpha (alpha));
