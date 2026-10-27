@@ -1155,6 +1155,213 @@ namespace
         check (dsp::effectiveMask (dsp::CorrectionMode::chromatic, dsp::ScaleType::major, 0, 0) == 0x0fff, "chromatic is all notes");
     }
 
+    //==============================================================================
+    // Strict snapping: the full processor (pitch only; gate, EQ, comp, limiter off) at fast
+    // retune must land every measured window within a few cents of the target note.
+    float detectHzAt (const juce::AudioBuffer<float>& b, double rate, int start, int window,
+                      float minHz = 70.0f, float maxHz = 1100.0f)
+    {
+        dsp::PitchDetector detector;
+        detector.prepare (rate, 16384);
+        window = std::min (window, b.getNumSamples() - start);
+        if (window < 64 || start < 0)
+            return 0.0f;
+
+        std::vector<float> mono ((size_t) window);
+        for (int i = 0; i < window; ++i)
+            mono[(size_t) i] = 0.5f * (b.getSample (0, start + i) + b.getSample (1, start + i));
+
+        const auto est = detector.analyse (mono.data(), window, minHz, maxHz, 0.15f, true);
+        return est.voiced ? est.hz : 0.0f;
+    }
+
+    double centsBetween (double hz, double reference)
+    {
+        return hz > 0.0 && reference > 0.0 ? 1200.0 * std::log2 (hz / reference) : 1.0e4;
+    }
+
+    double midiHz (double midi) { return 440.0 * std::exp2 ((midi - 69.0) / 12.0); }
+
+    struct SnapSignal
+    {
+        const char* name;
+        std::function<double (double)> f0;   // instantaneous input F0 at time t (s)
+        bool sawtooth = false;
+        std::function<double (double)> targetChromatic, targetKeyed; // expected output Hz at input time t (0: skip)
+    };
+
+    std::vector<float> synthesise (const SnapSignal& s, double rate, int numSamples)
+    {
+        std::vector<float> x ((size_t) numSamples);
+        double phase = 0.0;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto t = (double) i / rate;
+            const auto value = s.sawtooth ? 2.0 * phase - 1.0 : std::sin (2.0 * juce::MathConstants<double>::pi * phase);
+            x[(size_t) i] = (float) ((s.sawtooth ? 0.3 : 0.45) * value);
+            phase += s.f0 (t) / rate;
+            phase -= std::floor (phase);
+        }
+
+        return x;
+    }
+
+    double nearestSemitoneHz (double hz) { return midiHz (std::round (69.0 + 12.0 * std::log2 (hz / 440.0))); }
+
+    std::vector<SnapSignal> snapSignals()
+    {
+        constexpr double twoPi = 2.0 * juce::MathConstants<double>::pi;
+        const auto a3 = midiHz (57), c4 = midiHz (60), e3 = midiHz (52), bb3 = midiHz (58);
+        std::vector<SnapSignal> signals;
+
+        signals.push_back ({ "sine A3 +35c", [=] (double) { return a3 * std::exp2 (35.0 / 1200.0); }, false,
+                             [=] (double) { return a3; }, [=] (double) { return a3; } });
+        signals.push_back ({ "sine C4 -40c", [=] (double) { return c4 * std::exp2 (-40.0 / 1200.0); }, false,
+                             [=] (double) { return c4; }, [=] (double) { return c4; } });
+        // Not in C major: chromatic keeps Bb, keyed goes to A.
+        signals.push_back ({ "sine Bb3 -30c", [=] (double) { return bb3 * std::exp2 (-30.0 / 1200.0); }, false,
+                             [=] (double) { return bb3; }, [=] (double) { return a3; } });
+        // Harmonic-rich voice-like source with vibrato (+30 c centre, +/-15 c at 5.5 Hz).
+        signals.push_back ({ "saw E3 +30c vibrato", [=] (double t) { return e3 * std::exp2 ((30.0 + 15.0 * std::sin (twoPi * 5.5 * t)) / 1200.0); }, true,
+                             [=] (double) { return e3; }, [=] (double) { return e3; } });
+        // 220 -> 233 Hz glide over 2 s (log). Chromatic: A3 then Bb3 (skip near the 50 c boundary).
+        // Keyed C major: A3 throughout (skip the very top, where A and B are almost equidistant).
+        const auto glide = [=] (double t) { return 220.0 * std::pow (233.0 / 220.0, std::clamp ((t - 0.3) / 2.0, 0.0, 1.0)); };
+        signals.push_back ({ "sine glide 220-233 Hz", glide, false,
+                             [=] (double t)
+                             {
+                                 const auto hz = glide (t);
+                                 const auto off = std::abs (std::fmod (1200.0 * std::log2 (hz / a3) + 1250.0, 100.0) - 50.0);
+                                 return off < 20.0 ? 0.0 : nearestSemitoneHz (hz);
+                             },
+                             [=] (double t) { return glide (t) < 230.0 ? a3 : 0.0; } });
+        return signals;
+    }
+
+    struct SnapResult { double maxAbs = 0.0, mean = 0.0; int windows = 0, unvoiced = 0; };
+
+    SnapResult measureSnap (double rate, bool hq, bool chromatic, bool formant, const SnapSignal& signal,
+                            float retuneMs = 0.0f, float humanize = 0.0f)
+    {
+        auto p = makeProcessor (rate, 512);
+        setParam (*p, "pitch_on", 1.0f);
+        setParam (*p, "corr_mode", chromatic ? 1.0f : 0.0f);
+        setParam (*p, "corr_key", 0.0f);
+        setParam (*p, "corr_scale", 0.0f);
+        setParam (*p, "retune_speed", retuneMs);
+        setParam (*p, "humanize", humanize);
+        setParam (*p, "corr_amount", 1.0f);
+        setParam (*p, "formant", formant ? 1.0f : 0.0f);
+        setParam (*p, "input_type", 2.0f);
+        setParam (*p, "quality", hq ? 1.0f : 0.0f);
+        setParam (*p, "lim_mode", 0.0f);
+        setParam (*p, "gate_on", 0.0f);
+        setParam (*p, "eq_on", 0.0f);
+        setParam (*p, "comp_on", 0.0f);
+        p->prepareToPlay (rate, 512); // latency follows quality
+
+        const auto lat = p->getLatencySamples();
+        const auto total = (int) (2.8 * rate) + lat;
+        const auto input = synthesise (signal, rate, total);
+        const auto out = render (*p, [&] (int i) { return input[(size_t) i]; }, total, 512);
+
+        SnapResult r;
+        const auto window = (int) (rate * 0.03); // 30 ms windows
+        const auto stepSamples = (int) (rate * 0.015);
+        const auto& target = chromatic ? signal.targetChromatic : signal.targetKeyed;
+        double sum = 0.0;
+
+        for (int start = lat + (int) (0.35 * rate); start + window <= total; start += stepSamples)
+        {
+            const auto inputTime = (double) (start + window / 2 - lat) / rate;
+            const auto want = target (inputTime);
+            // Glide: skip windows whose span crosses a skipped region.
+            if (want <= 0.0 || std::abs (target (inputTime - 0.02) - want) > 1.0e-6 || std::abs (target (inputTime + 0.02) - want) > 1.0e-6)
+                continue;
+
+            const auto hz = detectHzAt (out, rate, start, window, 70.0f, 1000.0f);
+            if (hz <= 0.0f)
+            {
+                ++r.unvoiced;
+                continue;
+            }
+
+            const auto c = centsBetween (hz, want);
+            r.maxAbs = std::max (r.maxAbs, std::abs (c));
+            sum += std::abs (c);
+            ++r.windows;
+        }
+
+        r.mean = r.windows > 0 ? sum / r.windows : 0.0;
+        return r;
+    }
+
+    void testStrictSnapping()
+    {
+        // The measuring detector itself: a clean input tone reads within 1 cent.
+        for (const auto rate : { 44100.0, 48000.0 })
+        {
+            const SnapSignal ref { "ref", [] (double) { return 224.5; }, false, {}, {} };
+            const auto x = synthesise (ref, rate, (int) rate);
+            juce::AudioBuffer<float> b (2, (int) x.size());
+            for (int i = 0; i < (int) x.size(); ++i)
+                b.setSample (0, i, x[(size_t) i]), b.setSample (1, i, x[(size_t) i]);
+            const auto hz = detectHzAt (b, rate, 4000, (int) (rate * 0.03));
+            check (std::abs (centsBetween (hz, 224.5)) < 1.0, "measuring detector reads 224.5 Hz within 1 cent at "
+                                                                   + format (rate, 0) + " (" + format (hz, 3) + ")");
+        }
+
+        const auto signals = snapSignals();
+        double worst = 0.0;
+
+        for (const auto rate : { 44100.0, 48000.0 })
+            for (const auto hq : { false, true })
+                for (const auto chromatic : { true, false })
+                    for (const auto formant : { true, false })
+                        for (const auto& signal : signals)
+                        {
+                            const auto r = measureSnap (rate, hq, chromatic, formant, signal);
+                            const auto vibrato = signal.sawtooth;
+                            const auto tolerance = vibrato ? 8.0 : 5.0;
+                            const auto label = std::string (signal.name) + " @" + format (rate / 1000.0, 1) + "k "
+                                             + (hq ? "HQ " : "Live ") + (chromatic ? "chromatic " : "keyed C ")
+                                             + (formant ? "formant on" : "formant off");
+                            note ("snap " + label + ": max " + format (r.maxAbs, 1) + " c, mean " + format (r.mean, 1)
+                                  + " c over " + std::to_string (r.windows) + " windows (" + std::to_string (r.unvoiced) + " unvoiced)");
+                            check (r.windows >= 20 && r.unvoiced <= r.windows / 20 && r.maxAbs <= tolerance
+                                       && r.mean <= (vibrato ? 4.0 : 2.5),
+                                   "snap " + label + " within " + format (tolerance, 0) + " c (max " + format (r.maxAbs, 1)
+                                       + ", mean " + format (r.mean, 1) + ")");
+                            worst = std::max (worst, r.maxAbs);
+                        }
+
+        note ("worst window error over all configurations: " + format (worst, 1) + " cents");
+
+        // Init defaults (20 ms retune, 15 % humanize) also land on the note once settled.
+        const auto r = measureSnap (48000.0, false, true, true, signals[0], 20.0f, 0.15f);
+        note ("snap sine A3 +35c with Init retune 20 ms / humanize 15 %: max " + format (r.maxAbs, 1) + " c");
+        check (r.windows >= 20 && r.maxAbs <= 5.0, "Init defaults snap A3 +35c within 5 c (max " + format (r.maxAbs, 1) + ")");
+    }
+
+    void testPresetSanity()
+    {
+        auto p = makeProcessor();
+        p->setCurrentProgram (0);
+        check (std::abs (getPlain (*p, "corr_amount") - 1.0f) < 1.0e-4f, "Init amount is 100 %");
+        check (getPlain (*p, "pitch_on") > 0.5f, "Init has pitch correction on");
+        check (getPlain (*p, "retune_speed") <= 25.0f, "Init retune is fast (" + format (getPlain (*p, "retune_speed"), 1) + " ms)");
+
+        for (int i = 0; i < p->getNumPrograms(); ++i)
+            if (p->getProgramName (i) == "Tight Pop")
+            {
+                p->setCurrentProgram (i);
+                check (getPlain (*p, "retune_speed") <= 10.0f, "Tight Pop retune is fast (" + format (getPlain (*p, "retune_speed"), 1) + " ms)");
+                check (std::abs (getPlain (*p, "corr_amount") - 1.0f) < 1.0e-4f, "Tight Pop amount is 100 %");
+                check (getPlain (*p, "humanize") <= 0.1f, "Tight Pop humanize is low");
+            }
+    }
+
     struct TestCase
     {
         const char* name;
@@ -1171,6 +1378,8 @@ int main()
         { "YIN on synthetic tones",         testPitchDetectionTones },
         { "YIN on vibrato",                 testPitchDetectionVibrato },
         { "keyed vs chromatic correction",  testKeyedVsChromaticCorrection },
+        { "strict snapping (cents)",        testStrictSnapping },
+        { "preset sanity",                  testPresetSanity },
         { "unvoiced passthrough",           testUnvoicedPassthrough },
         { "latency reporting",              testLatencyReporting },
         { "gate behaviour",                 testGateBehaviour },
@@ -1187,8 +1396,14 @@ int main()
 
     int failedTests = 0;
 
+    // DOOBLRVOCALS_TEST_FILTER=text runs only the tests whose name contains text.
+    const auto* filter = std::getenv ("DOOBLRVOCALS_TEST_FILTER");
+
     for (const auto& test : tests)
     {
+        if (filter != nullptr && *filter != 0 && std::string (test.name).find (filter) == std::string::npos)
+            continue;
+
         std::cout << "[RUN ] " << test.name << "\n";
         const auto failedBefore = failedChecks, passedBefore = passedChecks;
         test.run();
