@@ -92,6 +92,7 @@ namespace dooblrvocals::dsp
         int olaWrite = 0, olaSize = 0;
         float synthPhase = 0.0f;
         float lastPeriod = 100.0f;
+        float resamplePos = 0.0f;
     };
 
     /**

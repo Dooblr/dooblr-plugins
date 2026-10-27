@@ -83,32 +83,35 @@ namespace dooblrvocals::dsp
 
         double running = 0.0;
         d[0] = 1.0f;
-        auto bestTau = tauMin;
-        auto bestCmnd = 1.0f;
-        auto found = false;
 
         for (int tau = 1; tau <= tauMax; ++tau)
         {
             running += d[tau];
-            const auto cmnd = d[tau] * (float) tau / (float) std::max (1.0e-12, running);
-            d[tau] = cmnd;
+            d[tau] = d[tau] * (float) tau / (float) std::max (1.0e-12, running);
+        }
 
-            if (tau >= tauMin && cmnd < bestCmnd)
+        // Classic YIN: smallest tau below the threshold, then the local minimum.
+        // A later global min is usually 2× / 3× the period of a clean sine.
+        auto bestTau = tauMin;
+        auto bestCmnd = 1.0f;
+        auto found = false;
+
+        for (int tau = tauMin; tau <= tauMax; ++tau)
+        {
+            if (d[tau] < bestCmnd)
             {
-                bestCmnd = cmnd;
+                bestCmnd = d[tau];
                 bestTau = tau;
             }
 
-            if (! found && tau >= tauMin && cmnd < yinThreshold)
+            if (! found && d[tau] < yinThreshold)
             {
-                // Local minimum: walk forward while it is still falling.
                 while (tau + 1 <= tauMax && d[tau + 1] < d[tau])
                     ++tau;
                 bestTau = tau;
                 bestCmnd = d[tau];
                 found = true;
-                if (! hq)
-                    break;
+                break;
             }
         }
 
@@ -251,6 +254,7 @@ namespace dooblrvocals::dsp
         olaWrite = 0;
         synthPhase = 0.0f;
         lastPeriod = 100.0f;
+        resamplePos = 0.0f;
     }
 
     void PitchShifter::setDelayBuffers (const float* left, const float* right, int size, int newWritePos) noexcept
@@ -308,29 +312,50 @@ namespace dooblrvocals::dsp
         for (int i = 0; i < n; ++i)
         {
             const auto voicedI = voiced[i] != 0;
-            const auto ratio = voicedI ? ratios[i] : 1.0f;
+            const auto ratio = std::clamp (voicedI ? ratios[i] : 1.0f, 0.5f, 2.0f);
             const auto period = std::max (16.0f, periods[i]);
-            const auto outPeriod = std::max (8.0f, period / std::max (0.5f, ratio));
+            const auto outPeriod = std::max (8.0f, period / ratio);
 
-            if (voicedI)
+            if (! voicedI)
+            {
+                synthPhase = 0.0f;
+                resamplePos = 0.0f;
+                outL[i] = 0.0f;
+                outR[i] = 0.0f;
+                olaL[(size_t) olaWrite] = 0.0f;
+                olaR[(size_t) olaWrite] = 0.0f;
+                olaWrite = wrap (olaWrite + 1, olaSize);
+                continue;
+            }
+
+            if (formant)
             {
                 synthPhase += 1.0f;
                 if (synthPhase >= outPeriod)
                 {
                     synthPhase -= outPeriod;
-                    addGrain (latency, period, ratio, formant);
+                    addGrain (latency, period, ratio, true);
                 }
+
+                outL[i] = olaL[(size_t) olaWrite];
+                outR[i] = olaR[(size_t) olaWrite];
+                olaL[(size_t) olaWrite] = 0.0f;
+                olaR[(size_t) olaWrite] = 0.0f;
+                olaWrite = wrap (olaWrite + 1, olaSize);
             }
             else
             {
-                synthPhase = 0.0f;
-            }
+                // The delay already plays at 1× (write advances with the output). Extra motion
+                // of the read pointer is (1 − ratio): ratio > 1 shortens the delay (pitch up),
+                // ratio < 1 lengthens it (pitch down). Wrap by T0 so a sine stays continuous.
+                resamplePos += 1.0f - ratio;
+                const auto wrap = period;
+                while (resamplePos > wrap) resamplePos -= wrap;
+                while (resamplePos < 0.0f) resamplePos += wrap;
 
-            outL[i] = olaL[(size_t) olaWrite];
-            outR[i] = olaR[(size_t) olaWrite];
-            olaL[(size_t) olaWrite] = 0.0f;
-            olaR[(size_t) olaWrite] = 0.0f;
-            olaWrite = wrap (olaWrite + 1, olaSize);
+                outL[i] = readAt (delayL, (float) latency + resamplePos);
+                outR[i] = readAt (delayR, (float) latency + resamplePos);
+            }
         }
     }
 

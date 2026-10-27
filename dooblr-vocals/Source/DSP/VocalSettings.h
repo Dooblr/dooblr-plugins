@@ -81,8 +81,10 @@ namespace dooblrvocals::dsp
             case InputType::tenor:    return { 130.0f, 530.0f };
             case InputType::baritone: return { 98.0f, 400.0f };
             case InputType::bass:     return { 82.0f, 330.0f };
-            default:                  return { 82.0f, 1100.0f };
+            case InputType::numTypes: break;
         }
+
+        return { 82.0f, 1100.0f };
     }
 
     /** Lowest F0 the live detector must cover (below bass E2), used to size the delay. */

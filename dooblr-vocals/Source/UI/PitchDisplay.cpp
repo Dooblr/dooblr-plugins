@@ -25,12 +25,6 @@ namespace dooblrvocals::ui
             constexpr int black = (1 << 1) | (1 << 3) | (1 << 6) | (1 << 8) | (1 << 10);
             return ((black >> (pc % 12)) & 1) != 0;
         }
-
-        const char* pcName (int pc) noexcept
-        {
-            static constexpr const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
-            return names[((pc % 12) + 12) % 12];
-        }
     }
 
     PitchDisplay::PitchDisplay (juce::AudioProcessorValueTreeState& s) : gesture (s)

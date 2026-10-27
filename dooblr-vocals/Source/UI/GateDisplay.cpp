@@ -163,7 +163,7 @@ namespace dooblrvocals::ui
         const auto threshold = gesture.get ("gate_threshold");
         const auto y = history.dbToY (threshold);
         g.setColour (Palette::textPrimary.withAlpha (hover == DragKind::thresholdLine || dragging == DragKind::thresholdLine ? 0.95f : 0.55f));
-        g.fillRect (history.getBounds().getX(), y - 0.75f, (float) history.getBounds().getWidth(), 1.5f);
+        g.fillRect ((float) history.getBounds().getX(), y - 0.75f, (float) history.getBounds().getWidth(), 1.5f);
 
         const auto handle = juce::Point<float> (dbToTransferX (threshold), dbToTransferY (threshold));
         g.setColour (Palette::dynamic);

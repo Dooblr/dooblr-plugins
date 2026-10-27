@@ -83,6 +83,8 @@ target_compile_definitions(DooblrVocals
 
 target_link_libraries(DooblrVocals
     PRIVATE
+        juce::juce_audio_utils
+        juce::juce_audio_devices
         juce::juce_audio_processors
         juce::juce_audio_formats
         juce::juce_dsp

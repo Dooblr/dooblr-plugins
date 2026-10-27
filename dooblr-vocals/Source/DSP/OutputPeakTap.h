@@ -1,6 +1,7 @@
 #pragma once
 
 #include <atomic>
+#include <cmath>
 #include <utility>
 
 namespace dooblrvocals::dsp
@@ -25,8 +26,8 @@ namespace dooblrvocals::dsp
     private:
         static void raise (std::atomic<float>& peak, float value) noexcept
         {
-            if (! (value == value))
-                return; // NaN
+            if (std::isnan (value))
+                return;
 
             auto current = peak.load (std::memory_order_relaxed);
             while (value > current && ! peak.compare_exchange_weak (current, value)) {}

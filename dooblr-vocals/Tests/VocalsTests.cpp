@@ -430,7 +430,7 @@ namespace
         setParam (*p, "retune_speed", 0.0f);
         setParam (*p, "humanize", 0.0f);
         setParam (*p, "corr_amount", 1.0f);
-        setParam (*p, "formant", 1.0f);
+        setParam (*p, "formant", 0.0f);
         setParam (*p, "input_type", 2.0f);
         setParam (*p, "quality", 0.0f);
         setParam (*p, "lim_mode", 0.0f);
@@ -441,19 +441,60 @@ namespace
         const auto lat = p->getLatencySamples();
         const auto keyedOut = render (*p, [] (int i) { return sineAt (233.08, i, sampleRate, 0.5f); }, lat + 8192);
         check (allFinite (keyedOut), "keyed engine output finite");
+
+        std::vector<dsp::PitchFrame> tapFrames (2048);
+        const auto nTap = p->getPitchTap().pop (tapFrames.data(), (int) tapFrames.size());
+        int voicedFrames = 0;
+        float lastDet = 0, lastCor = 0;
+        for (int i = 0; i < nTap; ++i)
+            if (tapFrames[(size_t) i].voiced)
+            {
+                ++voicedFrames;
+                lastDet = tapFrames[(size_t) i].detectedHz;
+                lastCor = tapFrames[(size_t) i].correctedHz;
+            }
+        check (voicedFrames > 10, "pitch tap sees voiced frames (" + std::to_string (voicedFrames) + "/" + std::to_string (nTap) + ")");
+        if (voicedFrames > 0)
+            check (std::abs (1200.0 * std::log2 ((double) lastCor / (double) a3)) < 40.0,
+                   "tap corrected Hz is A3: det " + format (lastDet, 1) + " → " + format (lastCor, 1));
+
         const auto keyedHz = detectHz (keyedOut, lat + 2048, 4096, 80.0f, 500.0f);
         const auto keyedCents = keyedHz > 0.0f ? 1200.0 * std::log2 ((double) keyedHz / (double) a3) : 1.0e9;
         check (keyedHz > 0.0f && std::abs (keyedCents) < 80.0,
                "engine keyed snap of Bb → A3: " + format (keyedHz, 1) + " Hz (" + format (keyedCents, 0) + " cents)");
 
-        setParam (*p, "corr_mode", 1.0f);
-        p->reset();
-        p->prepareToPlay (sampleRate, blockSize);
-        const auto chromeOut = render (*p, [] (int i) { return sineAt (233.08, i, sampleRate, 0.5f); }, lat + 8192);
-        const auto chromeHz = detectHz (chromeOut, lat + 2048, 4096, 80.0f, 500.0f);
-        const auto chromeCents = chromeHz > 0.0f ? 1200.0 * std::log2 ((double) chromeHz / 233.08) : 1.0e9;
-        check (chromeHz > 0.0f && std::abs (chromeCents) < 80.0,
-               "engine chromatic keeps Bb: " + format (chromeHz, 1) + " Hz (" + format (chromeCents, 0) + " cents)");
+        auto q = makeProcessor();
+        setParam (*q, "pitch_on", 1.0f);
+        setParam (*q, "corr_mode", 1.0f);
+        setParam (*q, "retune_speed", 0.0f);
+        setParam (*q, "humanize", 0.0f);
+        setParam (*q, "corr_amount", 1.0f);
+        setParam (*q, "formant", 0.0f);
+        setParam (*q, "input_type", 2.0f);
+        setParam (*q, "lim_mode", 0.0f);
+        setParam (*q, "gate_on", 0.0f);
+        setParam (*q, "eq_on", 0.0f);
+        setParam (*q, "comp_on", 0.0f);
+        const auto chromeLat = q->getLatencySamples();
+        const auto chromeOut = render (*q, [] (int i) { return sineAt (233.08, i, sampleRate, 0.5f); }, chromeLat + 8192);
+        std::vector<dsp::PitchFrame> chromeTap (2048);
+        const auto nChromeTap = q->getPitchTap().pop (chromeTap.data(), (int) chromeTap.size());
+        float chromeCor = 0;
+        for (int i = 0; i < nChromeTap; ++i)
+            if (chromeTap[(size_t) i].voiced)
+                chromeCor = chromeTap[(size_t) i].correctedHz;
+        check (chromeCor > 0.0f && std::abs (1200.0 * std::log2 ((double) chromeCor / 233.08)) < 40.0,
+               "tap chromatic keeps Bb (" + format (chromeCor, 1) + " Hz)");
+        double chromeErr = 0.0;
+        int chromeCount = 0;
+        for (int i = chromeLat + 2048; i < chromeOut.getNumSamples(); ++i)
+        {
+            chromeErr += std::abs ((double) chromeOut.getSample (0, i) - (double) sineAt (233.08, i - chromeLat, sampleRate, 0.5f));
+            ++chromeCount;
+        }
+        check (chromeCount > 0 && chromeErr / (double) chromeCount < 0.25,
+               "chromatic output matches delayed input (mean abs err "
+                   + format (chromeCount > 0 ? chromeErr / (double) chromeCount : 1.0, 3) + ")");
     }
 
     void testUnvoicedPassthrough()
@@ -699,75 +740,197 @@ namespace
         folder.deleteRecursively();
     }
 
+    double bufferDiff (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int from)
+    {
+        double diff = 0.0;
+        const auto n = std::min (a.getNumSamples(), b.getNumSamples());
+        from = std::min (from, n - 1);
+        for (int i = from; i < n; ++i)
+            diff += std::abs ((double) a.getSample (0, i) - (double) b.getSample (0, i));
+        return diff;
+    }
+
     void testNoDeadParameters()
     {
         auto p = makeProcessor();
-        setParam (*p, "pitch_on", 1.0f);
-        setParam (*p, "corr_mode", 0.0f);
-        setParam (*p, "corr_scale", (float) dsp::ScaleType::custom);
-        setParam (*p, "retune_speed", 0.0f);
-        setParam (*p, "humanize", 0.0f);
-        setParam (*p, "corr_amount", 1.0f);
-        setParam (*p, "lim_mode", 0.0f);
-        setParam (*p, "gate_on", 1.0f);
-        setParam (*p, "eq_on", 1.0f);
-        setParam (*p, "comp_on", 1.0f);
-
-        const auto ids = allParameterIds (*p);
         const auto lat = liveLatency();
         const auto n = lat + 4096;
-        auto fillSaw = [] (int i) { return sawAt (233.08, i, sampleRate, 0.35f); };
-
         juce::StringArray dead;
-        for (const auto& id : ids)
+
+        auto pulse = [&] (const juce::String& id, const std::function<float (int)>& fill, float lo, float hi, double minDiff)
         {
             auto* param = p->getParameterState().getParameter (id);
             if (param == nullptr)
-                continue;
+            {
+                dead.add (id);
+                return;
+            }
 
             const auto original = param->getValue();
-            auto alt = original < 0.5f ? 0.85f : 0.15f;
-            if (id == "quality")
-                alt = original < 0.5f ? 1.0f : 0.0f;
-            param->setValueNotifyingHost (alt);
-
-            if (id == "quality")
-            {
-                juce::AudioBuffer<float> b (2, blockSize);
-                b.clear();
-                juce::MidiBuffer midi;
-                p->processBlock (b, midi);
-                const auto want = alt > 0.5f ? hqLatency() : liveLatency();
-                if (p->getLatencySamples() != want)
-                    dead.add (id);
-                param->setValueNotifyingHost (original);
-                p->processBlock (b, midi);
-                continue;
-            }
-
+            param->setValueNotifyingHost (param->convertTo0to1 (lo));
             p->reset();
             p->prepareToPlay (sampleRate, blockSize);
-            const auto a = render (*p, fillSaw, n);
-            param->setValueNotifyingHost (original);
+            const auto a = render (*p, fill, n);
+            param->setValueNotifyingHost (param->convertTo0to1 (hi));
             p->reset();
             p->prepareToPlay (sampleRate, blockSize);
-            const auto b = render (*p, fillSaw, n);
-
-            double diff = 0.0;
-            const auto start = std::min (a.getNumSamples(), b.getNumSamples());
-            const auto from = std::min (lat + 256, start - 1);
-            for (int i = from; i < start; ++i)
-                diff += std::abs ((double) a.getSample (0, i) - (double) b.getSample (0, i));
-
-            if (diff < 0.05 && id != "corr_key" && id != "input_type")
-            {
-                // Key with a custom mask may be unused; input type only changes the detector range.
-                // Probe those with a more targeted signal.
-                if (id == "corr_key" || id == "input_type")
-                    continue;
+            const auto b = render (*p, fill, n);
+            if (bufferDiff (a, b, lat + 256) < minDiff)
                 dead.add (id);
-            }
+            param->setValueNotifyingHost (original);
+        };
+
+        setParam (*p, "pitch_on", 1.0f);
+        setParam (*p, "corr_mode", 0.0f);
+        setParam (*p, "corr_key", 0.0f);
+        setParam (*p, "corr_scale", 0.0f);
+        setParam (*p, "retune_speed", 0.0f);
+        setParam (*p, "humanize", 0.0f);
+        setParam (*p, "corr_amount", 1.0f);
+        setParam (*p, "formant", 0.0f);
+        setParam (*p, "lim_mode", 0.0f);
+        setParam (*p, "gate_on", 0.0f);
+        setParam (*p, "eq_on", 0.0f);
+        setParam (*p, "comp_on", 0.0f);
+
+        auto sawBb = [] (int i) { return sawAt (233.08, i, sampleRate, 0.35f); };
+        auto sineA = [] (int i) { return sineAt (221.0, i, sampleRate, 0.4f); };
+        auto sine1k = [] (int i) { return sineAt (1000.0, i, sampleRate, 0.3f); };
+        auto sineHot = [] (int i) { return sineAt (220.0, i, sampleRate, 0.99f); };
+        auto quiet = [] (int i) { return sineAt (220.0, i, sampleRate, 0.01f); };
+
+        pulse ("pitch_on", sawBb, 0.0f, 1.0f, 1.0);
+        pulse ("corr_mode", sawBb, 0.0f, 1.0f, 1.0);
+        pulse ("corr_key", [] (int i) { return sineAt (277.18, i, sampleRate, 0.4f); }, 0.0f, 2.0f, 0.5);
+        pulse ("corr_scale", sawBb, 0.0f, 1.0f, 0.5);
+        setParam (*p, "corr_scale", (float) dsp::ScaleType::custom);
+        pulse ("corr_mask", sawBb, (float) dsp::maskFromDegrees (0, 2, 4, 5, 7, 9, 11), 1 << 10, 0.5);
+        setParam (*p, "corr_scale", 0.0f);
+        pulse ("retune_speed", sawBb, 0.0f, 400.0f, 0.5);
+        pulse ("humanize", sineA, 0.0f, 1.0f, 0.2);
+        pulse ("corr_amount", sawBb, 0.0f, 1.0f, 1.0);
+        pulse ("a4_hz", sawBb, 415.0f, 466.0f, 0.2);
+        pulse ("formant", sawBb, 0.0f, 1.0f, 0.05);
+        pulse ("input_type", [] (int i) { return sineAt (90.0, i, sampleRate, 0.4f); }, 0.0f, 4.0f, 0.05);
+
+        {
+            setParam (*p, "quality", 0.0f);
+            juce::AudioBuffer<float> b (2, blockSize);
+            b.clear();
+            juce::MidiBuffer midi;
+            p->processBlock (b, midi);
+            const auto live = p->getLatencySamples();
+            setParam (*p, "quality", 1.0f);
+            p->processBlock (b, midi);
+            if (p->getLatencySamples() == live)
+                dead.add ("quality");
+            setParam (*p, "quality", 0.0f);
+            p->processBlock (b, midi);
         }
+
+        setParam (*p, "pitch_on", 0.0f);
+        setParam (*p, "gate_threshold", -24.0f);
+        setParam (*p, "gate_range", 60.0f);
+        pulse ("gate_on", quiet, 0.0f, 1.0f, 0.5);
+        setParam (*p, "gate_on", 1.0f);
+        pulse ("gate_threshold", quiet, -80.0f, -6.0f, 0.5);
+        pulse ("gate_release", [lat] (int i)
+               {
+                   return i < lat + 512 ? sineAt (220.0, i, sampleRate, 0.5f) : sineAt (220.0, i, sampleRate, 0.01f);
+               }, 1.0f, 400.0f, 0.05);
+
+        {
+            dsp::Gate gateA, gateB;
+            gateA.prepare (sampleRate);
+            gateB.prepare (sampleRate);
+            dsp::GateSettings fast { true, -24.0f, 0.1f, 0.0f, 5.0f, 60.0f };
+            dsp::GateSettings slow { true, -24.0f, 40.0f, 0.0f, 5.0f, 60.0f };
+            juce::AudioBuffer<float> a (2, 4096), b (2, 4096);
+            for (int i = 0; i < 4096; ++i)
+            {
+                const auto s = i < 64 ? 0.0f : 0.5f;
+                a.setSample (0, i, s);
+                a.setSample (1, i, s);
+                b.setSample (0, i, s);
+                b.setSample (1, i, s);
+            }
+            gateA.process (a, 0, 4096, fast);
+            gateB.process (b, 0, 4096, slow);
+            check (bufferDiff (a, b, 64) > 1.0, "gate attack 0.1 ms vs 40 ms changes the onset");
+
+            dsp::GateSettings noHold { true, -24.0f, 0.1f, 0.0f, 5.0f, 60.0f };
+            dsp::GateSettings held { true, -24.0f, 0.1f, 80.0f, 5.0f, 60.0f };
+            juce::AudioBuffer<float> c (2, 8192), d (2, 8192);
+            for (int i = 0; i < 8192; ++i)
+            {
+                const auto s = i < 256 ? 0.5f : 0.01f;
+                c.setSample (0, i, s); c.setSample (1, i, s);
+                d.setSample (0, i, s); d.setSample (1, i, s);
+            }
+            dsp::Gate gateC, gateD;
+            gateC.prepare (sampleRate);
+            gateD.prepare (sampleRate);
+            gateC.process (c, 0, 8192, noHold);
+            gateD.process (d, 0, 8192, held);
+            check (bufferDiff (c, d, 256) > 0.5, "gate hold keeps the gate open after a drop");
+        }
+        pulse ("gate_range", quiet, 0.0f, 80.0f, 0.5);
+        setParam (*p, "gate_on", 0.0f);
+
+        setParam (*p, "eq_on", 1.0f);
+        setParam (*p, "eq_mid_gain", 12.0f);
+        setParam (*p, "eq_low_gain", 12.0f);
+        setParam (*p, "eq_high_gain", 12.0f);
+        pulse ("eq_on", sine1k, 0.0f, 1.0f, 1.0);
+        pulse ("eq_low_freq", [] (int i) { return sineAt (80.0, i, sampleRate, 0.3f); }, 20.0f, 500.0f, 0.5);
+        pulse ("eq_low_gain", [] (int i) { return sineAt (80.0, i, sampleRate, 0.3f); }, -24.0f, 24.0f, 1.0);
+        pulse ("eq_mid_freq", sine1k, 100.0f, 8000.0f, 0.5);
+        pulse ("eq_mid_gain", sine1k, -24.0f, 24.0f, 1.0);
+        pulse ("eq_mid_q", sine1k, 0.2f, 10.0f, 0.2);
+        pulse ("eq_high_freq", [] (int i) { return sineAt (10000.0, i, sampleRate, 0.2f); }, 2000.0f, 20000.0f, 0.2);
+        pulse ("eq_high_gain", [] (int i) { return sineAt (8000.0, i, sampleRate, 0.2f); }, -24.0f, 24.0f, 0.5);
+        setParam (*p, "eq_on", 0.0f);
+        setParam (*p, "eq_mid_gain", 0.0f);
+
+        setParam (*p, "comp_on", 1.0f);
+        pulse ("comp_on", sineHot, 0.0f, 1.0f, 0.5);
+        pulse ("comp_threshold", sineHot, -48.0f, 0.0f, 0.5);
+        pulse ("comp_ratio", sineHot, 1.0f, 20.0f, 0.2);
+        pulse ("comp_attack", sineHot, 0.1f, 100.0f, 0.05);
+        pulse ("comp_release", sineHot, 10.0f, 1000.0f, 0.05);
+        pulse ("comp_makeup", sineHot, 0.0f, 24.0f, 1.0);
+        setParam (*p, "comp_on", 0.0f);
+
+        setParam (*p, "lim_ceiling", -12.0f);
+        pulse ("lim_mode", sineHot, 0.0f, 2.0f, 0.2);
+        setParam (*p, "lim_mode", 2.0f);
+        pulse ("lim_ceiling", sineHot, -24.0f, 0.0f, 0.5);
+
+        {
+            dsp::OutputStage limA, limB;
+            limA.prepare (sampleRate);
+            limB.prepare (sampleRate);
+            dsp::LimiterSettings fast { dsp::LimiterSettings::limiter, -12.0f, 1.0f, 0.0f };
+            dsp::LimiterSettings slow { dsp::LimiterSettings::limiter, -12.0f, 400.0f, 0.0f };
+            juce::AudioBuffer<float> a (2, 4096), b (2, 4096);
+            for (int i = 0; i < 4096; ++i)
+            {
+                const auto s = i < 256 ? 0.99f : 0.2f;
+                a.setSample (0, i, s); a.setSample (1, i, s);
+                b.setSample (0, i, s); b.setSample (1, i, s);
+            }
+            limA.process (a, 0, 4096, fast);
+            limB.process (b, 0, 4096, slow);
+            check (bufferDiff (a, b, 256) > 0.2, "limiter release 1 ms vs 400 ms changes the tail");
+        }
+        pulse ("output_gain", sineA, -24.0f, 6.0f, 1.0);
+
+        setParam (*p, "eq_on", 1.0f);
+        setParam (*p, "eq_mid_gain", 12.0f);
+        setParam (*p, "comp_on", 1.0f);
+        setParam (*p, "comp_threshold", -24.0f);
+        setParam (*p, "comp_ratio", 8.0f);
+        pulse ("chain_order", sine1k, 0.0f, 5.0f, 0.5);
 
         check (dead.isEmpty(), "every parameter is audible or changes latency; dead: " + dead.joinIntoString (", ").toStdString());
     }
@@ -906,7 +1069,7 @@ namespace
         }
         check (hasAll, "preset menu lists every factory preset");
 
-        for (const auto [w, h] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+        for (const auto& [w, h] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
         {
             editor->setSize (w, h);
             const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
@@ -939,7 +1102,7 @@ namespace
         if (editor == nullptr)
             return;
 
-        for (const auto [w, h] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+        for (const auto& [w, h] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
         {
             editor->setSize (w, h);
             check (editor->getHeaderArea().getHeight() == 60, std::to_string (w) + " header is 60 px");
