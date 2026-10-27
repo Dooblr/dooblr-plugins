@@ -355,7 +355,7 @@ namespace dooblrkick::ui
 
     float MixDisplay::getMarkerX() const
     {
-        const auto inner = plot.reduced (10.0f, 18.0f);
+        const auto inner = plot.reduced (10.0f, 0.0f).withTrimmedTop (18.0f).withTrimmedBottom (10.0f);
         return inner.getX() + std::clamp (gesture.get ("mix_drywet"), 0.0f, 1.0f) * inner.getWidth();
     }
 
@@ -399,7 +399,7 @@ namespace dooblrkick::ui
         lastMix = mix;
 
         drawFrame (g, plot);
-        const auto inner = plot.reduced (10.0f, 18.0f);
+        const auto inner = plot.reduced (10.0f, 0.0f).withTrimmedTop (18.0f).withTrimmedBottom (10.0f);
         auto toPoint = [&] (float m, float gain) { return juce::Point<float> (inner.getX() + m * inner.getWidth(), inner.getBottom() - gain * inner.getHeight()); };
 
         g.setColour (Palette::textMuted.withAlpha (0.8f));
@@ -420,8 +420,6 @@ namespace dooblrkick::ui
         g.drawText ("DRY " + juce::String (juce::roundToInt ((1.0f - mix) * 100.0f)) + " %", plot.reduced (8.0f, 2.0f), juce::Justification::topLeft);
         g.setColour (Palette::master);
         g.drawText ("WET " + juce::String (juce::roundToInt (mix * 100.0f)) + " %", plot.reduced (8.0f, 2.0f), juce::Justification::topRight);
-        g.setColour (Palette::textMuted);
-        g.drawText ("equal-gain crossfade: dry = layers before the chain, wet = after", plot.reduced (8.0f, 2.0f), juce::Justification::bottomLeft);
 
         // Meters.
         drawFrame (g, meters);
@@ -447,7 +445,7 @@ namespace dooblrkick::ui
 
     void MixDisplay::setFromX (float x)
     {
-        const auto inner = plot.reduced (10.0f, 18.0f);
+        const auto inner = plot.reduced (10.0f, 0.0f).withTrimmedTop (18.0f).withTrimmedBottom (10.0f);
         gesture.set ("mix_drywet", std::clamp ((x - inner.getX()) / inner.getWidth(), 0.0f, 1.0f));
         repaint();
     }

@@ -59,6 +59,8 @@ namespace dooblrkick::dsp
         float getGainReductionDb() const noexcept { return gainReductionDb; }
         double getSampleRate() const noexcept { return sampleRate; }
         const KickVoice& getCurrentVoice() const noexcept { return voices[(size_t) currentVoice]; }
+        /** Counts note-ons (wraps); the editor's playhead uses it to see retriggers. */
+        std::uint32_t getHitCount() const noexcept { return hitCount; }
 
         /** Length (seconds) a rendered one-shot needs: the hit, a gate release, and ring-out. */
         static double getRenderLengthSeconds (const KickSettings& settings);
@@ -82,6 +84,7 @@ namespace dooblrkick::dsp
 
         std::array<KickVoice, 2> voices;
         int currentVoice = 0;
+        std::uint32_t hitCount = 0;
         std::array<int, 16> heldNotes {};
         int numHeld = 0;
 

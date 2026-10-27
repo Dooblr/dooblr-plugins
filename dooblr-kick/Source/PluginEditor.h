@@ -11,6 +11,7 @@
 #include "Parameters.h"
 #include "UI/ControlPanel.h"
 #include "UI/EnvelopeEditor.h"
+#include "UI/OutputMeter.h"
 #include "UI/OutputVisuals.h"
 #include "UI/ProcessingVisuals.h"
 #include "UI/Theme.h"
@@ -128,6 +129,9 @@ public:
     dooblrkick::ui::DynamicsDisplay& getDynamicsDisplay() noexcept { return dynamicsDisplay; }
     dooblrkick::ui::LimiterDisplay& getLimiterDisplay() noexcept { return limiterDisplay; }
     dooblrkick::ui::EnvelopeEditor& getMasterEnvelopeEditor() noexcept { return masterEditor; }
+    dooblrkick::ui::OutputMeter& getOutputMeter() noexcept { return outputMeter; }
+    juce::Rectangle<int> getHeaderArea() const noexcept { return headerArea; }
+    static constexpr int meterWidth = 20;
     dooblrkick::ui::MixDisplay& getMixDisplay() noexcept { return mixDisplay; }
     dooblrkick::ui::DriveDisplay& getDriveDisplay() noexcept { return driveDisplay; }
     NavButton& getPageButton (int page) noexcept { return pageButtons[(size_t) page]; }
@@ -184,7 +188,7 @@ private:
     juce::Rectangle<int> headerArea, navArea, displayArea, controlsArea;
     juce::Rectangle<int> layerTitleArea, fxTitleArea, envelopeTitleArea;
 
-    juce::Label titleLabel, subtitleLabel, versionLabel, outputCaption;
+    juce::Label titleLabel, subtitleLabel, outputCaption;
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };
     juce::ComboBox presetBox;
     juce::TextButton saveButton { "Save" }, loadButton { "Load" }, randomButton { "Random" },
@@ -223,6 +227,7 @@ private:
 
     // v0.3.0: the Envelope page (master envelope + dry / wet) and the Drive page view.
     dooblrkick::ui::EnvelopeEditor masterEditor;
+    dooblrkick::ui::OutputMeter outputMeter;
     dooblrkick::ui::MixDisplay mixDisplay;
     dooblrkick::ui::DriveDisplay driveDisplay;
     std::vector<float> meterSpectrumScratch;

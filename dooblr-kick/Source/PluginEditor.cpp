@@ -426,19 +426,22 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
       dynamicsDisplay (processorToEdit.getParameterState()),
       limiterDisplay (processorToEdit.getParameterState()),
       masterEditor (processorToEdit.getParameterState(), params::Envelope::master),
+      outputMeter (&processorToEdit.getOutputPeakTap()),
       mixDisplay (processorToEdit.getParameterState()),
       driveDisplay (processorToEdit.getParameterState())
 {
     setLookAndFeel (&lookAndFeel);
 
     styleLabel (titleLabel, JucePlugin_Name, 24.0f, Palette::textPrimary, juce::Justification::centredLeft, true);
-    styleLabel (subtitleLabel, "Kick designer", 13.0f, Palette::textMuted, juce::Justification::centredLeft);
-    styleLabel (versionLabel, "v" JucePlugin_VersionString, 12.0f, Palette::textMuted, juce::Justification::centredRight);
-    versionLabel.setComponentID ("version");
+    // v0.3.4: the subtitle is the build's version (was a "kick designer" tag line).
+    styleLabel (subtitleLabel, "v" JucePlugin_VersionString, 13.0f, Palette::textMuted, juce::Justification::centredLeft);
+    subtitleLabel.setComponentID ("version");
     styleLabel (outputCaption, "Output", 13.0f, Palette::textMuted, juce::Justification::centredRight);
 
-    for (auto* label : { &titleLabel, &subtitleLabel, &versionLabel, &outputCaption })
+    for (auto* label : { &titleLabel, &subtitleLabel, &outputCaption })
         addAndMakeVisible (label);
+
+    addAndMakeVisible (outputMeter);
 
     // Header.
     undoButton.setComponentID ("undo");
@@ -550,6 +553,8 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
     ampEnvButton.onClick = [this] { if (ampEnvButton.getToggleState()) showEnvelope (params::Envelope::amp); };
     pitchEnvButton.setToggleState (true, juce::dontSendNotification);
     addAndMakeVisible (envelopeEditor);
+    envelopeEditor.setPlayheadTap (&audioProcessor.getPlayheadTap());
+    masterEditor.setPlayheadTap (&audioProcessor.getPlayheadTap());
 
     waveform.onClick = [this] { audioProcessor.triggerAudition(); };
     addAndMakeVisible (waveform);
@@ -1235,11 +1240,18 @@ void DooblrKickAudioProcessorEditor::resized()
         // Fixed-size buttons; the title, preset menu and output slider share what is left, so the
         // header fits from the minimum width (940 px) up without overlapping.
         auto header = headerArea.reduced (32, 10);
-        constexpr int fixedLeft = 8 + 50 + 4 + 50 + 12 + 4 + 46 + 4 + 46 + 8 + 64, fixedRight = 52 + 12 + 48 + 4 + 82 + 12, captionWidth = 52;
+        // v0.3.4: the version moved into the subtitle; its old slot holds the output meter
+        // (narrower), and the space saved goes to the Output slider first.
+        constexpr int fixedLeft = 8 + 50 + 4 + 50 + 12 + 4 + 46 + 4 + 46 + 8 + 64, fixedRight = meterWidth + 10 + 48 + 4 + 82 + 12, captionWidth = 52;
         const auto flexible = header.getWidth() - fixedLeft - fixedRight - captionWidth;
-        const auto sliderWidth = juce::jlimit (88, 200, flexible - 172 - 170);
-        const auto presetWidth = juce::jlimit (110, 170, flexible - sliderWidth - 150);
-        const auto titleWidth = juce::jlimit (120, 172, flexible - sliderWidth - presetWidth);
+        auto spare = juce::jmax (0, flexible - 88 - 110 - 120);
+        auto sliderWidth = 88 + juce::jmin (24, spare);
+        spare -= sliderWidth - 88;
+        const auto titleWidth = 120 + juce::jmin (52, spare);
+        spare -= titleWidth - 120;
+        const auto presetWidth = 110 + juce::jmin (60, spare);
+        spare -= presetWidth - 110;
+        sliderWidth = juce::jmin (200, sliderWidth + spare);
 
         auto titleColumn = header.removeFromLeft (titleWidth);
         titleLabel.setBounds (titleColumn.removeFromTop (titleColumn.getHeight() * 3 / 5));
@@ -1259,8 +1271,8 @@ void DooblrKickAudioProcessorEditor::resized()
         header.removeFromLeft (8);
         randomButton.setBounds (header.removeFromLeft (64).withSizeKeepingCentre (64, 24));
 
-        versionLabel.setBounds (header.removeFromRight (52));
-        header.removeFromRight (12);
+        outputMeter.setBounds (header.removeFromRight (meterWidth));
+        header.removeFromRight (10);
         playButton.setBounds (header.removeFromRight (48).withSizeKeepingCentre (48, 24));
         header.removeFromRight (4);
         exportButton.setBounds (header.removeFromRight (82).withSizeKeepingCentre (82, 24));

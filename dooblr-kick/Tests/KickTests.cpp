@@ -29,6 +29,7 @@
 #include <new>
 #include <set>
 #include <sstream>
+#include <thread>
 #include <vector>
 
 //==============================================================================
@@ -464,7 +465,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.3", "version 0.3.3");
+        check (juce::String (JucePlugin_VersionString) == "0.3.4", "version 0.3.4");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -3350,10 +3351,10 @@ namespace
             check (env.isZoomAreaAt (onLine + juce::Point<float> (0.0f, onLine.y < plot.getCentreY() ? 25.0f : -25.0f)), name + ": just clear of the curve does");
 
             env.mouseMove (makeMouseEvent (env, empty, empty, 0, false));
-            const auto emptyCursor = env.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::UpDownResizeCursor);
+            const auto emptyCursor = env.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::UpDownLeftRightResizeCursor);
             env.mouseMove (makeMouseEvent (env, node, node, 0, false));
             const auto nodeCursor = env.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::DraggingHandCursor);
-            check (emptyCursor && nodeCursor, name + ": up / down cursor over empty space, hand over a point");
+            check (emptyCursor && nodeCursor, name + ": move (zoom / pan) cursor over empty space, hand over a point");
 
             // Drag up: zoom in around the mouse; view only.
             const auto before = allPlainValues (p);
@@ -3525,6 +3526,508 @@ namespace
     }
 
     //==============================================================================
+    // v0.3.4: the envelope graphs carry no help / status text: no grey caption pixels inside the
+    // plot (away from the points and curve handles); the ruler and axis labels sit outside it.
+    //==============================================================================
+    // v0.3.4: envelope pan, axis lock and the animated fit.
+    juce::Point<float> findEmptyPoint (dooblrkick::ui::EnvelopeEditor& env)
+    {
+        const auto plot = env.getPlotArea();
+        for (float y = plot.getY() + 6.0f; y < plot.getCentreY(); y += 4.0f)
+            for (float x = plot.getRight() - 30.0f; x > plot.getCentreX(); x -= 4.0f)
+                if (env.isZoomAreaAt ({ x, y }) && env.isZoomAreaAt ({ x - 120.0f, y }) && env.isZoomAreaAt ({ x, y - 4.0f }))
+                    return { x, y };
+        return plot.getCentre();
+    }
+
+    void testEnvelopePanAndFit()
+    {
+        using params::Envelope;
+        using EE = dooblrkick::ui::EnvelopeEditor;
+        using Axis = EE::DragAxis;
+
+        // Axis lock.
+        check (EE::decideDragAxis ({ 2.0f, 1.0f }) == Axis::undecided, "axis: undecided under the threshold");
+        check (EE::decideDragAxis ({ 10.0f, 3.0f }) == Axis::pan && EE::decideDragAxis ({ -10.0f, 9.0f }) == Axis::pan, "axis: mostly horizontal pans");
+        check (EE::decideDragAxis ({ 3.0f, -10.0f }) == Axis::zoom && EE::decideDragAxis ({ 5.0f, 5.0f }) == Axis::zoom, "axis: mostly vertical (or a tie) zooms");
+
+        // Clamp and fit math.
+        check (EE::clampViewStart (-10.0f, 100.0f, 6000.0f) == 0.0f && EE::clampViewStart (5950.0f, 100.0f, 6000.0f) == 5900.0f
+                   && EE::clampViewStart (300.0f, 100.0f, 6000.0f) == 300.0f && EE::clampViewStart (50.0f, 6000.0f, 6000.0f) == 0.0f,
+               "pan clamps the view to 0 .. max");
+        check (std::abs (EE::fitSpanFor (700.0f, 6000.0f) - 760.0f) < 0.01f && EE::fitSpanFor (10.0f, 6000.0f) == 50.0f
+                   && EE::fitSpanFor (6000.0f, 6000.0f) == 6000.0f && EE::fitSpanFor (590.0f, 600.0f) == 600.0f,
+               "fit: last point + 8 % + 4 ms, at least 50 ms, at most the range");
+
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        editor.setSize (1080, 660);
+        setValues (p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                        { params::nodeValueId (Envelope::master, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::master, 1), 60.0f }, { params::nodeValueId (Envelope::master, 1), 0.8f },
+                        { params::nodeTimeId (Envelope::master, 2), 250.0f }, { params::nodeValueId (Envelope::master, 2), 0.4f },
+                        { params::nodeTimeId (Envelope::master, 3), 700.0f }, { params::nodeValueId (Envelope::master, 3), 0.0f },
+                        { "menv_on", 1.0f }, { "menv_tscale", 1.0f }, { "menv_depth", 1.0f } });
+        editor.selectPage (Editor::envelopePage);
+        auto& env = editor.getMasterEnvelopeEditor();
+        env.checkForChanges();
+        env.resetView();
+        const auto maxMs = env.getMaxTimeMs();
+        check (env.getViewStartMs() == 0.0f && std::abs (env.getViewSpanMs() - 760.0f) < 0.5f && ! env.isViewZoomed(),
+               "master fits 0 .. 700 ms + margin (" + format (env.getViewSpanMs(), 1) + " ms)");
+
+        // Zoom in (vertical), then pan (horizontal): the span stays, the start follows the mouse.
+        auto from = findEmptyPoint (env);
+        simulateDrag (env, from, from + juce::Point<float> (0.0f, 120.0f * std::log2 (0.5f)));
+        const auto span = env.getViewSpanMs();
+        check (env.isViewZoomed() && std::abs (span - 380.0f) < 4.0f, "vertical drag still zooms (span " + format (span, 1) + ")");
+        const auto start0 = env.getViewStartMs();
+        const auto msPerPixel = span / env.getPlotArea().getWidth();
+        from = findEmptyPoint (env);
+        env.mouseDown (makeMouseEvent (env, from, from, 1, false));
+        env.mouseDrag (makeMouseEvent (env, from + juce::Point<float> (-30.0f, 0.0f), from, 1, true));
+        const auto panCursor = env.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::DraggingHandCursor);
+        env.mouseDrag (makeMouseEvent (env, from + juce::Point<float> (-80.0f, 6.0f), from, 1, true));
+        env.mouseUp (makeMouseEvent (env, from + juce::Point<float> (-80.0f, 6.0f), from, 1, true));
+        check (panCursor, "the hand (grab) cursor while panning");
+        check (std::abs (env.getViewSpanMs() - span) < 0.01f && std::abs (env.getViewStartMs() - EE::clampViewStart (start0 + 80.0f * msPerPixel, span, maxMs)) < 0.05f,
+               "dragging left 80 px pans later by 80 px of time (" + format (start0, 1) + " -> " + format (env.getViewStartMs(), 1) + " ms), span kept");
+
+        // Mostly horizontal with some vertical: still a pan, no zoom.
+        from = findEmptyPoint (env);
+        simulateDrag (env, from, from + juce::Point<float> (40.0f, 15.0f));
+        check (std::abs (env.getViewSpanMs() - span) < 0.01f, "a mostly horizontal drag doesn't zoom");
+
+        // Clamping both ways.
+        from = findEmptyPoint (env);
+        simulateDrag (env, from, from + juce::Point<float> (4000.0f, 0.0f));
+        check (env.getViewStartMs() == 0.0f, "panning stops at 0 ms");
+        for (int i = 0; i < 40 && env.getViewStartMs() < maxMs - span - 0.01f; ++i)
+        {
+            from = findEmptyPoint (env);
+            simulateDrag (env, from, from + juce::Point<float> (-4000.0f, 0.0f));
+        }
+        check (std::abs (env.getViewStartMs() - (maxMs - span)) < 0.01f, "panning stops at the end of the range (" + format (env.getViewStartMs(), 1) + " ms)");
+
+        // Wheel: horizontal pans, plain vertical is left alone; a pinch zooms.
+        env.resetView();
+        simulateDrag (env, findEmptyPoint (env), findEmptyPoint (env) + juce::Point<float> (0.0f, -120.0f));
+        env.panBy (100.0f);
+        const auto beforeWheel = env.getViewStartMs();
+        juce::MouseWheelDetails wheel {};
+        wheel.deltaX = -0.1f;
+        const auto inside = env.getPlotArea().getCentre();
+        env.mouseWheelMove (makeMouseEvent (env, inside, inside, 0, false), wheel);
+        check (std::abs (env.getViewStartMs() - (beforeWheel + 0.1f * env.getViewSpanMs())) < 0.05f, "a horizontal swipe pans");
+        wheel.deltaX = 0.0f;
+        wheel.deltaY = 0.2f;
+        const auto beforeVertical = juce::Point<float> (env.getViewStartMs(), env.getViewSpanMs());
+        env.mouseWheelMove (makeMouseEvent (env, inside, inside, 0, false), wheel);
+        check (beforeVertical == juce::Point<float> (env.getViewStartMs(), env.getViewSpanMs()), "a plain vertical wheel doesn't move the view");
+        const auto spanBeforePinch = env.getViewSpanMs();
+        env.mouseMagnify (makeMouseEvent (env, inside, inside, 0, false), 2.0f);
+        check (std::abs (env.getViewSpanMs() - spanBeforePinch * 0.5f) < 0.05f, "a pinch (x2) halves the span");
+        const auto cmdEvent = makeMouseEventWithMods (env, inside, inside, false, juce::ModifierKeys (juce::ModifierKeys::commandModifier));
+        const auto spanBeforeCmd = env.getViewSpanMs();
+        env.mouseWheelMove (cmdEvent, wheel);
+        check (env.getViewSpanMs() < spanBeforeCmd * 0.9f, "Cmd + wheel zooms in");
+
+        // Auto-fit suspended while zoomed / panned, back after the ruler reset.
+        setValues (p, { { params::nodeTimeId (Envelope::master, 3), 1500.0f } });
+        const auto manual = juce::Point<float> (env.getViewStartMs(), env.getViewSpanMs());
+        env.checkForChanges();
+        check (manual == juce::Point<float> (env.getViewStartMs(), env.getViewSpanMs()), "a manual view suspends the auto-fit");
+        simulateDoubleClick (env, env.getRulerArea().getCentre());
+        check (! env.isViewZoomed() && env.getViewStartMs() == 0.0f && std::abs (env.getViewSpanMs() - EE::fitSpanFor (1500.0f, maxMs)) < 0.5f,
+               "double-clicking the ruler fits again (0 - " + format (env.getViewSpanMs(), 0) + " ms)");
+        setValues (p, { { params::nodeTimeId (Envelope::master, 3), 900.0f } });
+        env.checkForChanges();
+        check (std::abs (env.getViewSpanMs() - EE::fitSpanFor (900.0f, maxMs)) < 0.5f, "auto-fit follows a new extent (point moved by a parameter)");
+        setValues (p, { { "menv_tscale", 2.0f } });
+        env.checkForChanges();
+        check (std::abs (env.getViewSpanMs() - EE::fitSpanFor (env.getEffectiveEnvelope().getEndTimeMs(), maxMs)) < 0.5f
+                   && env.getEffectiveEnvelope().getEndTimeMs() > 1700.0f,
+               "auto-fit follows Time Scale (" + format (env.getViewSpanMs(), 0) + " ms)");
+        setValues (p, { { "menv_tscale", 1.0f } });
+        env.checkForChanges();
+
+        // The animation: eased, converging, inside the range on the way.
+        env.setAnimateOffscreen (true);
+        const auto fromSpan = env.getViewSpanMs();
+        setValues (p, { { params::nodeTimeId (Envelope::master, 3), 2500.0f } });
+        env.checkForChanges();
+        const auto target = EE::fitSpanFor (2500.0f, maxMs);
+        check (env.isViewAnimating() && std::abs (env.getViewTarget().y - target) < 0.5f && std::abs (env.getViewSpanMs() - fromSpan) < 0.01f,
+               "a new extent starts an animation (not a jump)");
+        env.advanceViewAnimation (1000.0);
+        auto previous = env.getViewSpanMs();
+        bool monotonic = true, inRange = true;
+        for (double t = 1020.0; t <= 1180.0; t += 20.0)
+        {
+            env.advanceViewAnimation (t);
+            monotonic = monotonic && env.getViewSpanMs() >= previous;
+            inRange = inRange && env.getViewStartMs() >= 0.0f && env.getViewStartMs() + env.getViewSpanMs() <= maxMs + 0.01f;
+            previous = env.getViewSpanMs();
+        }
+        check (monotonic && inRange && env.isViewAnimating() && previous < target, "it moves steadily towards the fit, inside 0 .. max");
+        env.advanceViewAnimation (1000.0 + EE::fitAnimationMs);
+        check (! env.isViewAnimating() && std::abs (env.getViewSpanMs() - target) < 0.01f && env.getViewStartMs() == 0.0f,
+               "and lands exactly on it after " + format ((float) EE::fitAnimationMs, 0) + " ms");
+        // An ease-out: more than half way by a third of the time.
+        setValues (p, { { params::nodeTimeId (Envelope::master, 3), 700.0f } });
+        env.checkForChanges();
+        env.advanceViewAnimation (2000.0);
+        env.advanceViewAnimation (2000.0 + EE::fitAnimationMs / 3.0);
+        check ((target - env.getViewSpanMs()) / (target - EE::fitSpanFor (700.0f, maxMs)) > 0.55f, "eased out (fast start, soft landing)");
+        env.advanceViewAnimation (3000.0);
+        env.setAnimateOffscreen (false);
+
+        // Dragging a point past the edge keeps it in view; the refit waits for mouse-up.
+        env.resetView();
+        const auto viewEnd = env.getViewSpanMs();
+        const auto last = env.getNumNodes() - 1;
+        const auto nodePos = env.getNodePosition (last);
+        env.mouseDown (makeMouseEvent (env, nodePos, nodePos, 1, false));
+        const auto outside = juce::Point<float> (env.getPlotArea().getRight() + 60.0f, nodePos.y);
+        env.mouseDrag (makeMouseEvent (env, outside, nodePos, 1, true));
+        const auto dragged = getPlain (p, params::nodeTimeId (Envelope::master, last));
+        const auto visible = env.getNodePosition (last).x <= env.getPlotArea().getRight() + 0.5f;
+        env.mouseUp (makeMouseEvent (env, outside, nodePos, 1, true));
+        check (dragged > viewEnd && visible, "a point dragged past the edge stays in view (" + format (dragged, 0) + " ms)");
+        check (std::abs (env.getViewSpanMs() - EE::fitSpanFor (dragged, maxMs)) < 0.5f, "mouse-up fits the new extent");
+
+        // The Body graphs share it.
+        editor.selectPage (1);
+        editor.showEnvelope (Envelope::pitch);
+        auto& body = editor.getEnvelopeEditor();
+        body.resetView();
+        from = findEmptyPoint (body);
+        simulateDrag (body, from, from + juce::Point<float> (0.0f, -120.0f));
+        const auto bodyStart = body.getViewStartMs();
+        from = findEmptyPoint (body);
+        simulateDrag (body, from, from + juce::Point<float> (-50.0f, 0.0f));
+        check (body.isViewZoomed() && body.getViewStartMs() > bodyStart, "Body pitch: zoom, then a horizontal drag pans");
+        body.resetView();
+        check (! body.isViewZoomed() && body.getViewStartMs() == 0.0f, "Body pitch: the ruler reset fits again");
+    }
+
+    //==============================================================================
+    // v0.3.4: the playhead.
+    void testPlayhead()
+    {
+        using params::Envelope;
+        using EE = dooblrkick::ui::EnvelopeEditor;
+        using dooblrkick::dsp::PlayheadTap;
+
+        check (std::abs (EE::playheadTimeFor (24000, 48000.0, 0.0f) - 500.0f) < 1.0e-3f
+                   && std::abs (EE::playheadTimeFor (4410, 44100.0, 20.0f) - 80.0f) < 1.0e-3f,
+               "playhead ms = samples / rate, minus the Body Start on the Body graphs");
+
+        // The packed hand-off.
+        {
+            const auto s = PlayheadTap::unpack (PlayheadTap::pack (0x12345u, true, 123456789));
+            check (s.hit == 0x2345u && s.active && s.samples == 123456789, "pack / unpack round trip (hit wraps at 16 bits)");
+            check (PlayheadTap::unpack (PlayheadTap::pack (1, false, -5)).samples == 0, "negative samples clamp to 0");
+            check (std::atomic<std::uint64_t>::is_always_lock_free, "the 64-bit hand-off is lock free on this machine");
+
+            PlayheadTap tap;
+            std::atomic<bool> done { false };
+            std::thread writer ([&]
+            {
+                for (std::int64_t i = 1; i <= 300000; ++i)
+                    tap.publish ((std::uint32_t) i, (i & 1) != 0, i * 3);
+                done = true;
+            });
+            int torn = 0, reads = 0;
+            while (! done.load() || reads < 1000)
+            {
+                const auto s = tap.read();
+                ++reads;
+                if (s.samples != 0 && ((std::uint32_t) (s.samples / 3) & 0xffffu) != s.hit)
+                    ++torn;
+                if (s.samples != 0 && (((s.samples / 3) & 1) != 0) != s.active)
+                    ++torn;
+            }
+            writer.join();
+            check (torn == 0, "concurrent publish / read: every snapshot is consistent (" + std::to_string (reads) + " reads)");
+        }
+
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        editor.setSize (1080, 660);
+        setValues (p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                        { params::nodeValueId (Envelope::master, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::master, 1), 60.0f }, { params::nodeValueId (Envelope::master, 1), 0.8f },
+                        { params::nodeTimeId (Envelope::master, 2), 250.0f }, { params::nodeValueId (Envelope::master, 2), 0.4f },
+                        { params::nodeTimeId (Envelope::master, 3), 700.0f }, { params::nodeValueId (Envelope::master, 3), 0.0f },
+                        { "menv_on", 1.0f }, { "menv_tscale", 2.0f }, { "menv_depth", 1.0f } });
+        editor.selectPage (Editor::envelopePage);
+        auto& env = editor.getMasterEnvelopeEditor();
+        env.checkForChanges();
+        env.resetView();
+
+        // The live processor: a hit with Time Scale 200 % runs the playhead in real time, and the
+        // effective curve under it is the gain the DSP applies there.
+        auto& tap = p.getPlayheadTap();
+        env.updatePlayhead (0.0); // what was there before the hit isn't shown
+        check (env.getPlayheadAlpha() == 0.0f, "no playhead before a hit");
+        renderMidi (p, { { 0, juce::MidiMessage::noteOn (1, 36, 1.0f) } }, 12 * 512);
+        const auto snap = tap.read();
+        env.updatePlayhead (10.0);
+        check (snap.active && snap.samples == 12 * 512, "the processor publishes the hit's samples after each block");
+        check (std::abs (env.getPlayheadMs() - 128.0f) < 0.01f && env.getPlayheadAlpha() == 1.0f, "playhead at 128 ms after 6144 samples at 48 kHz");
+        const auto expectedX = env.getPlotArea().getX() + env.getPlotArea().getWidth() * (128.0f - env.getViewStartMs()) / env.getViewSpanMs();
+        check (env.getPlayheadX().has_value() && std::abs (*env.getPlayheadX() - expectedX) < 0.01f, "and drawn at that time's x");
+        check (std::abs (env.getEffectiveEnvelope().getEndTimeMs() - 1400.0f) < 0.5f && std::abs (env.getViewSpanMs() - EE::fitSpanFor (1400.0f, env.getMaxTimeMs())) < 0.5f,
+               "with Time Scale 200 % the 700 ms point plays at 1400 ms: the graph shows that scaled time, so real time maps 1:1");
+        const auto hitBefore = snap.hit;
+        renderMidi (p, { { 0, juce::MidiMessage::noteOn (1, 36, 1.0f) } }, 2 * 512);
+        check (tap.read().hit == ((hitBefore + 1) & 0xffffu) && tap.read().samples == 1024 && tap.read().active, "a MIDI retrigger publishes a new hit from 0");
+
+        // Fade after the voice ends, retrigger, newest hit.
+        PlayheadTap local;
+        local.setSampleRate (48000.0);
+        local.publish (7, false, 0);
+        env.setPlayheadTap (&local);
+        env.updatePlayhead (0.0);
+        check (env.getPlayheadAlpha() == 0.0f, "an old, finished hit isn't shown when the graph opens");
+        local.publish (8, true, 4800);
+        env.updatePlayhead (1000.0);
+        check (env.getPlayheadAlpha() == 1.0f && std::abs (env.getPlayheadMs() - 100.0f) < 0.01f, "a new hit shows at once (100 ms)");
+        local.publish (8, false, 9600);
+        env.updatePlayhead (1100.0);
+        const auto frozen = env.getPlayheadMs();
+        env.updatePlayhead (1100.0 + EE::playheadFadeMs * 0.5);
+        check (std::abs (env.getPlayheadAlpha() - 0.5f) < 0.01f && frozen == env.getPlayheadMs(), "after the voice ends it fades (half way at "
+                                                                                                    + format ((float) EE::playheadFadeMs * 0.5f, 0) + " ms), standing still");
+        env.updatePlayhead (1100.0 + EE::playheadFadeMs + 1.0);
+        check (env.getPlayheadAlpha() == 0.0f && ! env.getPlayheadX().has_value(), "and is gone after the fade");
+        local.publish (9, true, 480);
+        env.updatePlayhead (2000.0);
+        check (env.getPlayheadAlpha() == 1.0f && std::abs (env.getPlayheadMs() - 10.0f) < 0.01f, "a retrigger restarts it");
+        local.publish (9, true, 14400);
+        env.updatePlayhead (2300.0);
+        local.publish (10, true, 960);
+        env.updatePlayhead (2310.0);
+        check (std::abs (env.getPlayheadMs() - 20.0f) < 0.01f && env.getPlayheadAlpha() == 1.0f, "a retrigger mid-sweep jumps back to the newest hit");
+
+        // Off view: clipped (no x); the auto-fit doesn't chase it.
+        local.publish (10, true, 48000 * 5);
+        env.updatePlayhead (2400.0);
+        const auto spanBefore = env.getViewSpanMs();
+        env.checkForChanges();
+        check (! env.getPlayheadX().has_value() && env.getPlayheadAlpha() == 1.0f && env.getViewSpanMs() == spanBefore,
+               "a playhead beyond the view is clipped, and the view doesn't follow it");
+
+        // The Body graphs: offset by the Body Start.
+        editor.selectPage (1);
+        editor.showEnvelope (Envelope::amp);
+        auto& body = editor.getEnvelopeEditor();
+        setValues (p, { { params::layerId (1, "start"), 20.0f } });
+        body.setPlayheadTap (&local);
+        body.updatePlayhead (0.0);
+        local.publish (11, true, 4800);
+        body.updatePlayhead (10.0);
+        check (std::abs (body.getPlayheadMs() - 80.0f) < 0.01f && body.getPlayheadX().has_value(), "Body amp: 100 ms into the hit is 80 ms on a 20 ms-late Body");
+        setValues (p, { { params::layerId (1, "start"), 0.0f } });
+        body.setPlayheadTap (&p.getPlayheadTap());
+
+        // Snapshot mid-sweep (a simulated position, Time Scale back at 100 %).
+        setValues (p, { { "menv_tscale", 1.0f } });
+        editor.selectPage (Editor::envelopePage);
+        env.checkForChanges();
+        env.resetView();
+        local.publish (12, true, (std::int64_t) (0.32 * 48000.0));
+        env.updatePlayhead (5000.0);
+        check (env.getPlayheadX().has_value(), "snapshot: playhead at 320 ms is in view");
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.4-playhead");
+        env.setPlayheadTap (&p.getPlayheadTap());
+        juce::ignoreUnused (hitBefore);
+    }
+
+    //==============================================================================
+    // v0.3.4: the header's output meter and version.
+    void collectLabels (juce::Component& c, juce::StringArray& texts)
+    {
+        if (auto* label = dynamic_cast<juce::Label*> (&c))
+            texts.add (label->getText());
+        for (auto* child : c.getChildren())
+            collectLabels (*child, texts);
+    }
+
+    void testHeaderMeterAndVersion()
+    {
+        using Meter = dooblrkick::ui::OutputMeter;
+        using Zone = Meter::Zone;
+
+        check (Meter::zoneFor (-20.0f) == Zone::green && Meter::zoneFor (-6.01f) == Zone::green, "meter: green below -6 dBFS");
+        check (Meter::zoneFor (-6.0f) == Zone::yellow && Meter::zoneFor (-0.01f) == Zone::yellow, "meter: yellow from -6 to 0 dBFS");
+        check (Meter::zoneFor (0.0f) == Zone::red && Meter::zoneFor (2.0f) == Zone::red, "meter: red at and above 0 dBFS");
+        check (Meter::colourFor (-20.0f) == Meter::zoneColour (Zone::green) && Meter::colourFor (-6.0f) == Meter::zoneColour (Zone::yellow)
+                   && Meter::colourFor (0.0f) == Meter::zoneColour (Zone::red),
+               "meter: pure zone colours at the thresholds");
+        const auto blend = Meter::colourFor (-6.5f);
+        check (blend != Meter::zoneColour (Zone::green) && blend != Meter::zoneColour (Zone::yellow), "meter: a short blend just under a threshold (smooth)");
+
+        // The tap: per-channel maxima since the last take.
+        dooblrkick::dsp::OutputPeakTap peaks;
+        peaks.push (0.3f, 0.6f);
+        peaks.push (0.5f, 0.1f);
+        const auto taken = peaks.take();
+        check (taken.first == 0.5f && taken.second == 0.6f && peaks.take().first == 0.0f, "peak tap: max per channel, cleared on take");
+
+        // Ballistics and the clip latch.
+        Meter meter;
+        meter.setSize (20, 40);
+        meter.pushPeaks (0.5f, 0.5f, 0.0);
+        check (std::abs (meter.getLevelDb (0) + 6.02f) < 0.05f && ! meter.isClipLatched(), "meter: instant attack (-6 dB), no clip");
+        meter.pushPeaks (1.0f, 0.2f, 16.0);
+        check (meter.isClipLatched (0) && ! meter.isClipLatched (1), "meter: a 0 dBFS peak lights the left clip light");
+        for (double t = 32.0; t <= 1032.0; t += 16.0)
+            meter.pushPeaks (0.0f, 0.0f, t);
+        check (meter.isClipLatched (0), "meter: the clip light stays after the signal is gone");
+        check (meter.getLevelDb (0) < -20.0f && meter.getLevelDb (0) > -30.0f, "meter: smooth release (~26 dB/s; " + format (meter.getLevelDb (0), 1) + " dB after 1 s)");
+        check (meter.getHoldDb (0) < 0.0f && meter.getHoldDb (0) > meter.getLevelDb (0), "meter: the peak hold decays after its hold time, above the bar");
+        meter.mouseDown (makeMouseEvent (meter, { 10.0f, 10.0f }, { 10.0f, 10.0f }, 1, false));
+        check (! meter.isClipLatched(), "meter: a click clears the clip lights");
+
+        // Measured after the Output gain.
+        auto peakFor = [] (float outputDb)
+        {
+            auto p = makeProcessor();
+            setValues (*p, { { "output_gain", outputDb } });
+            p->getOutputPeakTap().take();
+            renderMidi (*p, { { 0, juce::MidiMessage::noteOn (1, 36, 1.0f) } }, 24000);
+            return p->getOutputPeakTap().take();
+        };
+        const auto loud = peakFor (0.0f), quiet = peakFor (-12.0f);
+        const auto ratio = quiet.first / juce::jmax (1.0e-6f, loud.first);
+        check (loud.first > 0.01f && ratio > 0.22f && ratio < 0.29f, "the meter reads the final output: -12 dB Output -> " + format (juce::Decibels::gainToDecibels (ratio), 2) + " dB");
+
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+
+        auto* version = dynamic_cast<juce::Label*> (editor.findChildWithID ("version"));
+        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.4",
+               "header subtitle is the build version (v0.3.4)");
+        juce::StringArray texts;
+        collectLabels (editor, texts);
+        bool tagLine = false;
+        for (const auto& t : texts)
+            tagLine = tagLine || t.containsIgnoreCase ("kick designer");
+        check (! tagLine, "no 'kick designer' text left");
+
+        auto& out = editor.getOutputMeter();
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor.setSize (size.x, size.y);
+            const auto tag = juce::String (size.x) + "x" + juce::String (size.y) + ": ";
+            const auto header = editor.getHeaderArea();
+            std::vector<juce::Component*> items;
+            for (auto* c : editor.getChildren())
+                if (c->isVisible() && c->getBounds().intersects (header) && c->getHeight() < header.getHeight())
+                    items.push_back (c);
+            bool inside = true, overlap = false;
+            for (size_t i = 0; i < items.size(); ++i)
+            {
+                inside = inside && header.contains (items[i]->getBounds());
+                for (size_t j = i + 1; j < items.size(); ++j)
+                    overlap = overlap || items[i]->getBounds().intersects (items[j]->getBounds());
+            }
+            bool rightmost = true;
+            for (auto* c : items)
+                rightmost = rightmost && (c == &out || c->getRight() <= out.getX());
+            auto* slider = editor.findChildWithID ("output_gain");
+            check (items.size() >= 13 && inside && ! overlap, (tag + "header: " + juce::String ((int) items.size()) + " items, inside, no overlaps").toStdString());
+            check (out.isVisible() && rightmost && out.getHeight() >= 36 && out.getWidth() >= 16, (tag + "header: the meter is at the far right, header height").toStdString());
+            check (slider != nullptr && slider->getWidth() >= 112, (tag + "header: Output slider " + juce::String (slider != nullptr ? slider->getWidth() : 0) + " px (was 88 at 940)").toStdString());
+        }
+
+        // Snapshot: left yellow, right red with its clip light.
+        editor.setSize (1080, 660);
+        out.pushPeaks (0.0f, 0.0f, 0.0);
+        out.pushPeaks (0.79f, 1.12f, 16.0);
+        check (Meter::zoneFor (out.getLevelDb (0)) == Zone::yellow && Meter::zoneFor (out.getLevelDb (1)) == Zone::red && out.isClipLatched (1),
+               "snapshot: left yellow, right red + clip");
+        saveSnapshot (editor.createComponentSnapshot (editor.getHeaderArea()), "-v0.3.4-header");
+    }
+
+    void testEnvelopeInfoTextRemoved()
+    {
+        using params::Envelope;
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        setValues (p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                        { params::nodeValueId (Envelope::master, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::master, 1), 60.0f }, { params::nodeValueId (Envelope::master, 1), 0.8f },
+                        { params::nodeTimeId (Envelope::master, 2), 250.0f }, { params::nodeValueId (Envelope::master, 2), 0.4f },
+                        { params::nodeTimeId (Envelope::master, 3), 700.0f }, { params::nodeValueId (Envelope::master, 3), 0.0f } });
+
+        auto greyTextPixels = [] (dooblrkick::ui::EnvelopeEditor& env)
+        {
+            const auto image = env.createComponentSnapshot (env.getLocalBounds(), true, 1.0f);
+            const auto plot = env.getPlotArea();
+            std::vector<juce::Point<float>> marks;
+            for (int n = 0; n < env.getNumNodes(); ++n)
+                marks.push_back (env.getNodePosition (n));
+            for (int s = 0; s + 1 < env.getNumNodes(); ++s)
+                marks.push_back (env.getCurveHandlePosition (s));
+
+            int count = 0;
+            for (int y = (int) plot.getY() + 1; y < (int) plot.getBottom() - 1; ++y)
+                for (int x = (int) plot.getX() + 1; x < (int) plot.getRight() - 1; ++x)
+                {
+                    const juce::Point<float> q ((float) x, (float) y);
+                    if (std::any_of (marks.begin(), marks.end(), [q] (auto m) { return m.getDistanceFrom (q) < 10.0f; }))
+                        continue;
+                    const auto c = image.getPixelAt (x, y);
+                    if (c.getBrightness() > 0.4f && c.getSaturation() < 0.15f)
+                        ++count;
+                }
+            return count;
+        };
+
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor.setSize (size.x, size.y);
+            const auto tag = juce::String (size.x) + "x" + juce::String (size.y) + ": ";
+            editor.selectPage (1); // Body
+            editor.showEnvelope (Envelope::pitch);
+            check (greyTextPixels (editor.getEnvelopeEditor()) == 0, (tag + "no info text in the Body pitch envelope").toStdString());
+            editor.showEnvelope (Envelope::amp);
+            check (greyTextPixels (editor.getEnvelopeEditor()) == 0, (tag + "no info text in the Body amp envelope").toStdString());
+            editor.selectPage (Editor::envelopePage);
+            check (greyTextPixels (editor.getMasterEnvelopeEditor()) == 0, (tag + "no info text in the master envelope").toStdString());
+            setValues (p, { { "menv_on", 0.0f } });
+            editor.getMasterEnvelopeEditor().repaint();
+            check (editor.getMasterEnvelopeEditor().isBypassedLook() && greyTextPixels (editor.getMasterEnvelopeEditor()) == 0,
+                   (tag + "no status caption on the master envelope while it is off (the graph is just dimmed)").toStdString());
+            setValues (p, { { "menv_on", 1.0f } });
+        }
+
+        editor.setSize (1080, 660);
+        editor.selectPage (Editor::envelopePage);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.4-envelope");
+        editor.selectPage (1);
+        editor.showEnvelope (Envelope::pitch);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.4-body");
+    }
+
     // v0.3.3: master envelope knobs - per-point Time / Level / Curve knobs bound to the selected
     // graph point's host parameters, plus two automatable macros (Time Scale, Depth).
     void testEnvelopeKnobs()
@@ -4499,6 +5002,10 @@ int main()
         { "processor on / off toggles on the tabs", testProcessorTabToggles },
         { "layer controls follow Synth / Sample",   testLayerSourceLayout },
         { "master envelope knobs (v0.3.3)",         testEnvelopeKnobs },
+        { "no info text on the envelopes (v0.3.4)", testEnvelopeInfoTextRemoved },
+        { "envelope pan / axis lock / animated fit (v0.3.4)", testEnvelopePanAndFit },
+        { "envelope playhead (v0.3.4)", testPlayhead },
+        { "header output meter + version (v0.3.4)", testHeaderMeterAndVersion },
         { "output graph (anti-aliased)",            testOutputGraph },
     };
 

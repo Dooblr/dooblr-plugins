@@ -95,6 +95,7 @@ DooblrKickAudioProcessor::~DooblrKickAudioProcessor()
 void DooblrKickAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
     meterTap.prepare (sampleRate);
+    playheadTap.setSampleRate (sampleRate);
     engine.setMeterTap (&meterTap);
     engine.prepare (sampleRate, juce::jmax (1, samplesPerBlock));
     engine.setSettings (getCurrentSettings());
@@ -136,6 +137,13 @@ void DooblrKickAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, j
 
     engine.process (buffer, midi);
     gainReductionDb.store (engine.getGainReductionDb());
+
+    const auto& voice = engine.getCurrentVoice();
+    playheadTap.publish (engine.getHitCount(), voice.isActive(), voice.getSamplesElapsed());
+
+    // The header meter: what the host gets, after the Output gain.
+    const auto n = buffer.getNumSamples();
+    outputPeakTap.push (buffer.getMagnitude (0, 0, n), buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : buffer.getMagnitude (0, 0, n));
 }
 
 //==============================================================================

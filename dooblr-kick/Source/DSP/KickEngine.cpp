@@ -179,6 +179,7 @@ namespace dooblrkick::dsp
     void KickEngine::noteOn (int note, float velocity) noexcept
     {
         ringing = true;
+        ++hitCount;
         removeHeld (note);
 
         if (numHeld == (int) heldNotes.size())

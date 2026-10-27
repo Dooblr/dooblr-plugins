@@ -16,16 +16,6 @@ namespace dooblrkick::ui
         constexpr float log2Min = 4.321928f;  // log2 (20 Hz)
         constexpr float log2Max = 13.965784f; // log2 (16 kHz)
 
-        float niceCeiling (float ms)
-        {
-            for (auto step : { 50.0f, 100.0f, 200.0f, 300.0f, 400.0f, 600.0f, 800.0f, 1000.0f, 1500.0f, 2000.0f, 2500.0f,
-                               3000.0f, 4000.0f, 5000.0f, 6000.0f })
-                if (ms <= step)
-                    return step;
-
-            return 6000.0f;
-        }
-
         float gridStep (float spanMs)
         {
             for (auto step : { 1.0f, 2.0f, 5.0f, 10.0f, 25.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f })
@@ -59,8 +49,9 @@ namespace dooblrkick::ui
         }
 
         diamond.addQuadrilateral (0.0f, -4.0f, 4.0f, 0.0f, 0.0f, 4.0f, -4.0f, 0.0f);
+        bodyStart = state.getRawParameterValue (params::layerId (1, "start"));
         updateViewRange();
-        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { checkForChanges(); });
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { tick(); });
     }
 
     void EnvelopeEditor::setEnvelope (params::Envelope newEnvelope)
@@ -68,6 +59,7 @@ namespace dooblrkick::ui
         envelope = newEnvelope;
         hover = drag = {};
         userZoom = false;
+        animating = false;
         updateViewRange();
         repaint();
     }
@@ -157,20 +149,153 @@ namespace dooblrkick::ui
 
     void EnvelopeEditor::updateViewRange()
     {
-        if (userZoom)
-            return; // the user's zoom stays until reset
+        refit (false);
+    }
 
+    float EnvelopeEditor::getExtentMs() const
+    {
         auto last = readNode (getNumNodes() - 1).time;
         if (showsEffectiveCurve())
             last = juce::jmax (last, getEffectiveEnvelope().getEndTimeMs());
-        viewStartMs = 0.0f;
-        viewMs = juce::jmin (niceCeiling (juce::jmax (100.0f, last * 1.15f)), getMaxTimeMs());
+        return last;
+    }
+
+    float EnvelopeEditor::fitSpanFor (float lastMs, float maxMs) noexcept
+    {
+        // 0 .. last point plus a small margin (8 % + 4 ms), at least 50 ms.
+        return juce::jlimit (juce::jmin (50.0f, maxMs), maxMs, juce::jmax (50.0f, lastMs * 1.08f + 4.0f));
+    }
+
+    float EnvelopeEditor::getFitSpanMs() const
+    {
+        return fitSpanFor (getExtentMs(), getMaxTimeMs());
+    }
+
+    float EnvelopeEditor::clampViewStart (float startMs, float spanMs, float maxMs) noexcept
+    {
+        return juce::jlimit (0.0f, juce::jmax (0.0f, maxMs - spanMs), startMs);
+    }
+
+    EnvelopeEditor::DragAxis EnvelopeEditor::decideDragAxis (juce::Point<float> offset) noexcept
+    {
+        if (offset.getDistanceFromOrigin() < axisLockPixels)
+            return DragAxis::undecided;
+
+        return std::abs (offset.x) > std::abs (offset.y) ? DragAxis::pan : DragAxis::zoom;
+    }
+
+    void EnvelopeEditor::refit (bool animate)
+    {
+        if (userZoom)
+            return; // the user's zoom / pan stays until reset
+
+        const auto span = getFitSpanMs();
+
+        if (animate && fitAnimationMs > 0.0 && (isShowing() || animateOffscreen))
+            animateTo (0.0f, span);
+        else
+        {
+            animating = false;
+            viewStartMs = 0.0f;
+            viewMs = span;
+        }
+    }
+
+    void EnvelopeEditor::animateTo (float start, float span)
+    {
+        const auto target = getViewTarget();
+
+        if (juce::approximatelyEqual (target.x, start) && juce::approximatelyEqual (target.y, span))
+            return;
+
+        fromStart = viewStartMs;
+        fromSpan = viewMs;
+        toStart = start;
+        toSpan = span;
+        animStartMs = -1.0;
+        animating = true;
+    }
+
+    void EnvelopeEditor::advanceViewAnimation (double nowMs)
+    {
+        if (! animating)
+            return;
+
+        if (animStartMs < 0.0)
+            animStartMs = nowMs;
+
+        const auto t = fitAnimationMs > 0.0 ? juce::jlimit (0.0, 1.0, (nowMs - animStartMs) / fitAnimationMs) : 1.0;
+        const auto eased = (float) (1.0 - std::pow (1.0 - t, 3.0)); // ease-out cubic
+
+        // Interpolate both edges, so the view never leaves 0 .. max on the way.
+        const auto fromEnd = fromStart + fromSpan, toEnd = toStart + toSpan;
+        const auto start = fromStart + (toStart - fromStart) * eased;
+        const auto end = fromEnd + (toEnd - fromEnd) * eased;
+        viewStartMs = start;
+        viewMs = juce::jmax (minViewMs, end - start);
+
+        if (t >= 1.0)
+        {
+            viewStartMs = toStart;
+            viewMs = toSpan;
+            animating = false;
+        }
+
+        repaint();
+    }
+
+    void EnvelopeEditor::setManualView (float start, float span)
+    {
+        const auto maxSpan = getMaxTimeMs();
+        span = juce::jlimit (juce::jmin (minViewMs, maxSpan), maxSpan, span);
+        start = clampViewStart (start, span, maxSpan);
+        animating = false;
+
+        if (! juce::approximatelyEqual (span, viewMs) || ! juce::approximatelyEqual (start, viewStartMs))
+        {
+            viewMs = span;
+            viewStartMs = start;
+            userZoom = true;
+            repaint();
+        }
+    }
+
+    void EnvelopeEditor::panBy (float deltaMs)
+    {
+        setManualView (viewStartMs + deltaMs, viewMs);
+    }
+
+    void EnvelopeEditor::zoomAround (float x, float spanFactor)
+    {
+        const auto fraction = juce::jlimit (0.0f, 1.0f, (x - plot.getX()) / juce::jmax (1.0f, plot.getWidth()));
+        const auto anchor = xToTime (plot.getX() + fraction * plot.getWidth());
+        const auto span = juce::jlimit (juce::jmin (minViewMs, getMaxTimeMs()), getMaxTimeMs(), viewMs * spanFactor);
+        setManualView (anchor - fraction * span, span);
+    }
+
+    void EnvelopeEditor::keepTimeVisible (float ms)
+    {
+        // While a point is dragged: no refit, but don't let it leave the view.
+        const auto end = viewStartMs + viewMs;
+
+        if (ms <= end && ms >= viewStartMs)
+            return;
+
+        animating = false;
+        const auto maxSpan = getMaxTimeMs();
+
+        if (! userZoom && ms > end)
+            viewMs = juce::jmin (maxSpan, fitSpanFor (ms, maxSpan));
+        else if (ms > end)
+            viewStartMs = clampViewStart (ms - 0.92f * viewMs, viewMs, maxSpan);
+        else
+            viewStartMs = clampViewStart (ms - 0.08f * viewMs, viewMs, maxSpan);
     }
 
     void EnvelopeEditor::resetView()
     {
         userZoom = false;
-        updateViewRange();
+        refit (true);
         repaint();
     }
 
@@ -298,7 +423,7 @@ namespace dooblrkick::ui
         if (hit.kind != hover.kind || hit.index != hover.index)
         {
             hover = hit;
-            setMouseCursor (hit.kind == HitKind::zoom ? juce::MouseCursor::UpDownResizeCursor
+            setMouseCursor (hit.kind == HitKind::zoom ? juce::MouseCursor::UpDownLeftRightResizeCursor
                           : hit.kind == HitKind::node || hit.kind == HitKind::handle ? juce::MouseCursor::DraggingHandCursor
                                                                                      : juce::MouseCursor::NormalCursor);
             repaint();
@@ -348,6 +473,8 @@ namespace dooblrkick::ui
                 return;
             }
 
+            animating = false; // a manual view change takes over from a running fit
+            dragAxis = DragAxis::undecided;
             zoomStartSpan = viewMs;
             zoomStartStart = viewStartMs;
             zoomAnchorFraction = juce::jlimit (0.0f, 1.0f, (e.position.x - plot.getX()) / plot.getWidth());
@@ -367,6 +494,7 @@ namespace dooblrkick::ui
                 const auto previous = readNode (n - 1).time;
                 const auto next = n + 1 < getNumNodes() ? readNode (n + 1).time : getMaxTimeMs();
                 setParam (params::nodeTimeId (envelope, n), juce::jlimit (previous, next, xToTime (e.position.x)));
+                keepTimeVisible (readNode (n).time);
             }
         }
         else if (drag.kind == HitKind::handle)
@@ -379,28 +507,159 @@ namespace dooblrkick::ui
         }
         else if (drag.kind == HitKind::zoom)
         {
-            // Up stretches the view out (zoom in), down contracts it; the time under the mouse stays put.
-            const auto maxSpan = getMaxTimeMs();
-            const auto span = juce::jlimit (minViewMs, maxSpan, zoomStartSpan * std::exp2 ((e.position.y - dragStart.y) / zoomPixelsPerOctave));
-            const auto start = juce::jlimit (0.0f, juce::jmax (0.0f, maxSpan - span), zoomAnchorMs - zoomAnchorFraction * span);
-
-            if (! juce::approximatelyEqual (span, viewMs) || ! juce::approximatelyEqual (start, viewStartMs))
+            // v0.3.4: the axis locks once the drag has moved a few pixels.
+            if (dragAxis == DragAxis::undecided)
             {
-                viewMs = span;
-                viewStartMs = start;
-                userZoom = true;
+                dragAxis = decideDragAxis (e.position - dragStart);
+
+                if (dragAxis == DragAxis::pan)
+                    setMouseCursor (juce::MouseCursor::DraggingHandCursor);
+                else if (dragAxis == DragAxis::zoom)
+                    setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+            }
+
+            const auto maxSpan = getMaxTimeMs();
+
+            if (dragAxis == DragAxis::zoom)
+            {
+                // Up stretches the view out (zoom in), down contracts it; the time under the mouse stays put.
+                const auto span = juce::jlimit (minViewMs, maxSpan, zoomStartSpan * std::exp2 ((e.position.y - dragStart.y) / zoomPixelsPerOctave));
+                setManualView (zoomAnchorMs - zoomAnchorFraction * span, span);
+            }
+            else if (dragAxis == DragAxis::pan)
+            {
+                // The time under the mouse follows it (grab and slide).
+                const auto msPerPixel = zoomStartSpan / juce::jmax (1.0f, plot.getWidth());
+                setManualView (zoomStartStart - (e.position.x - dragStart.x) * msPerPixel, zoomStartSpan);
             }
         }
 
         repaint();
     }
 
-    void EnvelopeEditor::mouseUp (const juce::MouseEvent&)
+    void EnvelopeEditor::mouseUp (const juce::MouseEvent& e)
     {
         endGesture();
+        const auto wasView = drag.kind == HitKind::zoom;
         drag = {};
-        updateViewRange();
+        dragAxis = DragAxis::undecided;
+        refit (true);
+
+        if (wasView)
+        {
+            hover = { HitKind::none, -2 }; // forces the hover cursor to be set again
+            mouseMove (e);
+        }
+
         repaint();
+    }
+
+    void EnvelopeEditor::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+    {
+        if (! plot.withBottom (getRulerArea().getBottom()).contains (e.position))
+        {
+            Component::mouseWheelMove (e, wheel);
+            return;
+        }
+
+        const auto sign = wheel.isReversed ? -1.0f : 1.0f;
+
+        if (e.mods.isCommandDown() || e.mods.isCtrlDown())
+        {
+            // Wheel up / away zooms in.
+            if (! juce::approximatelyEqual (wheel.deltaY, 0.0f))
+                zoomAround (e.position.x, std::exp2 (-sign * wheel.deltaY * 2.0f));
+            return;
+        }
+
+        auto dx = wheel.deltaX;
+        if (juce::approximatelyEqual (dx, 0.0f) && e.mods.isShiftDown())
+            dx = wheel.deltaY;
+
+        if (juce::approximatelyEqual (dx, 0.0f))
+        {
+            Component::mouseWheelMove (e, wheel); // plain vertical scrolling is not ours
+            return;
+        }
+
+        // Like a Viewport: a positive delta moves towards the start.
+        panBy (-sign * dx * viewMs);
+    }
+
+    void EnvelopeEditor::mouseMagnify (const juce::MouseEvent& e, float scaleFactor)
+    {
+        if (scaleFactor > 0.0f && plot.contains (e.position))
+            zoomAround (e.position.x, 1.0f / scaleFactor);
+    }
+
+    //==============================================================================
+    float EnvelopeEditor::playheadTimeFor (std::int64_t samples, double sampleRate, float offsetMs) noexcept
+    {
+        return (float) ((double) samples * 1000.0 / (sampleRate > 0.0 ? sampleRate : 48000.0)) - offsetMs;
+    }
+
+    void EnvelopeEditor::setPlayheadTap (const dsp::PlayheadTap* tap)
+    {
+        playheadTap = tap;
+        playheadSeen = false;
+        playheadActive = false;
+        playheadAlpha = 0.0f;
+    }
+
+    void EnvelopeEditor::updatePlayhead (double nowMs)
+    {
+        if (playheadTap == nullptr)
+            return;
+
+        const auto snap = playheadTap->read();
+        const auto oldAlpha = playheadAlpha, oldMs = playheadMs;
+
+        if (! playheadSeen)
+        {
+            // A hit that was already over when the graph appeared is not shown.
+            playheadSeen = true;
+            playheadHit = snap.hit;
+            playheadActive = snap.active;
+            playheadEndedAt = nowMs - playheadFadeMs;
+        }
+
+        const auto newHit = snap.hit != playheadHit;
+        playheadHit = snap.hit;
+
+        if (snap.active)
+        {
+            const auto offset = envelope == params::Envelope::master || bodyStart == nullptr ? 0.0f : bodyStart->load();
+            playheadMs = playheadTimeFor (snap.samples, playheadTap->getSampleRate(), offset);
+            playheadActive = true;
+            playheadAlpha = 1.0f;
+        }
+        else
+        {
+            if (playheadActive || newHit)
+                playheadEndedAt = nowMs; // the voice just ended: fade from here (position frozen)
+
+            playheadActive = false;
+            playheadAlpha = (float) juce::jlimit (0.0, 1.0, 1.0 - (nowMs - playheadEndedAt) / playheadFadeMs);
+        }
+
+        if (! juce::approximatelyEqual (oldAlpha, playheadAlpha) || (playheadAlpha > 0.0f && ! juce::approximatelyEqual (oldMs, playheadMs)))
+            repaint(); // only while it is visible or fading
+    }
+
+    std::optional<float> EnvelopeEditor::getPlayheadX() const noexcept
+    {
+        if (playheadAlpha <= 0.0f || playheadMs < viewStartMs || playheadMs > viewStartMs + viewMs)
+            return std::nullopt;
+
+        return timeToX (playheadMs);
+    }
+
+    void EnvelopeEditor::tick()
+    {
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        checkForChanges();
+        advanceViewAnimation (now);
+        updatePlayhead (now);
     }
 
     void EnvelopeEditor::mouseDoubleClick (const juce::MouseEvent& e)
@@ -529,7 +788,7 @@ namespace dooblrkick::ui
                 setSelectedNode (getNumNodes() - 1);
 
             if (drag.kind == HitKind::none)
-                updateViewRange();
+                refit (true); // a new extent (points, Time Scale, preset, undo, Random, on / off)
 
             repaint();
         }
@@ -694,6 +953,8 @@ namespace dooblrkick::ui
             }
         }
 
+        paintPlayhead (g);
+
         const auto count = getNumNodes();
 
         // Curve handles and nodes.
@@ -733,16 +994,54 @@ namespace dooblrkick::ui
             }
         }
 
-        g.setFont (juce::FontOptions (10.5f));
-        g.setColour (Palette::textMuted);
-        g.drawText ("double-click: add / remove point   drag diamond: curve   drag empty: zoom   double-click ruler: fit",
-                    plot.reduced (6.0f, 4.0f), juce::Justification::topRight);
+    }
 
-        if (bypassed)
+    void EnvelopeEditor::paintPlayhead (juce::Graphics& g) const
+    {
+        // v0.3.4: the live hit. Clipped to the plot; nothing when it is off view or faded out.
+        const auto x = getPlayheadX();
+
+        if (! x.has_value())
+            return;
+
+        juce::Graphics::ScopedSaveState save (g);
+        g.reduceClipRegion (plot.toNearestInt());
+        const auto alpha = playheadAlpha;
+        const auto head = Palette::textPrimary;
+
+        // Faint played region.
+        const auto left = juce::jmax (plot.getX(), timeToX (0.0f));
+        g.setColour (head.withAlpha (0.035f * alpha));
+        g.fillRect (juce::Rectangle<float>::leftTopRightBottom (left, plot.getY(), *x, plot.getBottom()));
+
+        // Soft trail: alpha strips behind the line (a ColourGradient would allocate).
+        constexpr int strips = 12;
+        constexpr float stripWidth = 2.0f;
+
+        for (int i = 0; i < strips; ++i)
         {
-            g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-            g.setColour (Palette::textMuted);
-            g.drawText ("ENVELOPE OFF (bypassed)", plot.reduced (6.0f, 4.0f), juce::Justification::topLeft);
+            const auto fade = 1.0f - (float) i / (float) strips;
+            g.setColour (head.withAlpha (0.09f * fade * fade * alpha));
+            g.fillRect (juce::Rectangle<float> (*x - stripWidth * (float) (i + 1), plot.getY(), stripWidth, plot.getHeight()));
         }
+
+        g.setColour (head.withAlpha (0.85f * alpha));
+        g.fillRect (juce::Rectangle<float> (*x - 0.75f, plot.getY(), 1.5f, plot.getHeight()));
+
+        // A dot riding the curve at the current gain / pitch (unity while the master is bypassed).
+        float y;
+        if (envelope == params::Envelope::master)
+            y = isBypassedLook() ? valueToY (1.0f)
+              : showsEffectiveCurve() ? valueToY (getEffectiveEnvelope().evaluate (playheadMs))
+                                      : curveYAt (playheadMs);
+        else
+            y = curveYAt (playheadMs);
+
+        const auto colour = envelope == params::Envelope::pitch ? Palette::dynamic
+                          : envelope == params::Envelope::master ? Palette::master : Palette::accent;
+        g.setColour (colour.withAlpha (0.25f * alpha));
+        g.fillEllipse (juce::Rectangle<float> (14.0f, 14.0f).withCentre ({ *x, y }));
+        g.setColour (head.withAlpha (alpha));
+        g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre ({ *x, y }));
     }
 }

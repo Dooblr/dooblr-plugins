@@ -9,6 +9,8 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "DSP/KickEngine.h"
+#include "DSP/OutputPeakTap.h"
+#include "DSP/PlayheadTap.h"
 #include "Parameters.h"
 #include "Samples/SampleBank.h"
 #include "UndoHistory.h"
@@ -90,6 +92,10 @@ public:
 
     /** Lock-free meter / spectrum feed the editor's EQ, Dynamics and Limiter views read. */
     dooblrkick::dsp::MeterTap& getMeterTap() noexcept { return meterTap; }
+    /** v0.3.4: the live hit's position for the envelope graphs' playhead (lock free). */
+    dooblrkick::dsp::PlayheadTap& getPlayheadTap() noexcept { return playheadTap; }
+    /** v0.3.4: the final output's peaks for the header meter (lock free). */
+    dooblrkick::dsp::OutputPeakTap& getOutputPeakTap() noexcept { return outputPeakTap; }
 
 private:
     void parameterValueChanged (int, float) override { ++changeCount; }
@@ -107,6 +113,8 @@ private:
     juce::SharedResourcePointer<dooblrkick::samples::FactoryBank> factoryBank;
 
     dooblrkick::dsp::MeterTap meterTap;
+    dooblrkick::dsp::PlayheadTap playheadTap;
+    dooblrkick::dsp::OutputPeakTap outputPeakTap;
     dooblrkick::dsp::KickEngine engine;
 
     struct UserSlot

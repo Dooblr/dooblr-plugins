@@ -5,10 +5,12 @@
 #include <array>
 #include <atomic>
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "../DSP/PlayheadTap.h"
 #include "../Parameters.h"
 
 namespace dooblrkick::ui
@@ -22,6 +24,13 @@ namespace dooblrkick::ui
         - v0.3.3: drag up / down in empty space (not on a node, a curve handle or within a few
           pixels of the curve) to zoom the time axis in / out around the mouse; double-click the
           time ruler under the plot to fit the envelope again. View only: no parameter, no undo.
+        - v0.3.4: a drag in empty space locks to an axis once it has moved a few pixels: mostly
+          vertical zooms, mostly horizontal pans. A horizontal wheel / trackpad swipe (or
+          Shift + wheel) pans, Cmd/Ctrl + wheel or a pinch zooms. The fitted view animates
+          (eased, VBlank driven) to 0 .. last point whenever the envelope's extent changes;
+          a manual zoom / pan suspends that until the ruler is double-clicked.
+        - v0.3.4: a playhead line sweeps across the graph while a hit plays (from the
+          processor's lock-free PlayheadTap), with a short trail and a dot on the curve.
         Every edit is wrapped in parameter gestures, so it is one undo step and the host sees it.
         The master envelope draws dimmed while it is switched off (still editable).
 
@@ -45,6 +54,8 @@ namespace dooblrkick::ui
         void mouseUp (const juce::MouseEvent& e) override;
         void mouseDoubleClick (const juce::MouseEvent& e) override;
         void mouseExit (const juce::MouseEvent& e) override;
+        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
+        void mouseMagnify (const juce::MouseEvent& e, float scaleFactor) override;
 
         // Geometry, public for tests.
         int getNumNodes() const;
@@ -57,7 +68,49 @@ namespace dooblrkick::ui
         float getMaxTimeMs() const noexcept { return params::maxNodeTimeFor (envelope); }
         float getViewStartMs() const noexcept { return viewStartMs; }
         float getViewSpanMs() const noexcept { return viewMs; }
+        /** True after a manual zoom or pan (auto-fit is suspended until resetView()). */
         bool isViewZoomed() const noexcept { return userZoom; }
+
+        // v0.3.4: pan, axis lock, animated fit. Static helpers are public for tests.
+        enum class DragAxis { undecided, zoom, pan };
+        static constexpr float axisLockPixels = 4.0f;
+        /** Which way an empty-space drag goes, from its offset since mouse-down. */
+        static DragAxis decideDragAxis (juce::Point<float> offset) noexcept;
+        /** A view start kept inside 0 .. maxMs - span. */
+        static float clampViewStart (float startMs, float spanMs, float maxMs) noexcept;
+        /** The fitted span for an envelope whose last point (after Time Scale) is at lastMs. */
+        static float fitSpanFor (float lastMs, float maxMs) noexcept;
+        /** The fitted span for the current envelope (what resetView() / auto-fit move to). */
+        float getFitSpanMs() const;
+        /** Pans the view by a time offset (clamped); a manual view change. */
+        void panBy (float deltaMs);
+        /** Zooms by a factor around a plot x position (clamped); a manual view change. */
+        void zoomAround (float x, float spanFactor);
+        /** Fit animation length; 0 jumps. The animation only runs while the graph is on screen
+            (or when forced for tests), otherwise the view jumps to the fit. */
+        static constexpr double fitAnimationMs = 200.0;
+        void setAnimateOffscreen (bool shouldAnimate) noexcept { animateOffscreen = shouldAnimate; }
+        bool isViewAnimating() const noexcept { return animating; }
+        /** Moves the fit animation to the given time (VBlank calls this with the real clock). */
+        void advanceViewAnimation (double nowMs);
+        /** The view the animation is heading to (start, span). */
+        juce::Point<float> getViewTarget() const noexcept { return animating ? juce::Point<float> (toStart, toSpan) : juce::Point<float> (viewStartMs, viewMs); }
+
+        // v0.3.4: playhead.
+        static constexpr double playheadFadeMs = 300.0;
+        /** Where the playhead reads the live hit; nullptr (default) shows none. */
+        void setPlayheadTap (const dsp::PlayheadTap* tap);
+        /** Reads the tap and updates the playhead (VBlank calls this with the real clock). */
+        void updatePlayhead (double nowMs);
+        /** Playhead position in this graph's time (ms; the Body graphs subtract the Body Start). */
+        float getPlayheadMs() const noexcept { return playheadMs; }
+        /** 1 while the hit sounds, fading to 0 over playheadFadeMs after it ends. */
+        float getPlayheadAlpha() const noexcept { return playheadAlpha; }
+        /** Graph time for a hit position: samples / rate in ms, minus the Body Start on the Body
+            graphs. The master curve is drawn after Time Scale, so real time maps directly. */
+        static float playheadTimeFor (std::int64_t samples, double sampleRate, float offsetMs) noexcept;
+        /** The playhead's x, or nothing while it's hidden or outside the view. */
+        std::optional<float> getPlayheadX() const noexcept;
         /** Whether a drag starting here zooms (empty plot space, clear of nodes, handles and the curve). */
         bool isZoomAreaAt (juce::Point<float> position) const;
         /** Back to the automatic fit (what a double-click on the time ruler does). */
@@ -83,10 +136,20 @@ namespace dooblrkick::ui
         bool addNodeAt (juce::Point<float> position);
         bool removeNode (int node);
 
+        /** What VBlank does first: picks up parameter changes (automation, undo, presets) and
+            starts the auto-fit when the extent changed. Public so tests can run it. */
+        void checkForChanges();
+
     private:
         struct NodeValues { float time, value, curve; };
 
-        void checkForChanges();
+        void tick();
+        void refit (bool animate);
+        void animateTo (float start, float span);
+        void setManualView (float start, float span);
+        void keepTimeVisible (float ms);
+        float getExtentMs() const;
+        void paintPlayhead (juce::Graphics& g) const;
         juce::uint64 computeHash() const noexcept;
         void rebuildCache();
         NodeValues readNode (int node) const;
@@ -114,6 +177,17 @@ namespace dooblrkick::ui
         float viewMs = 600.0f, viewStartMs = 0.0f; // visible span and its start
         bool userZoom = false;
         float zoomStartSpan = 600.0f, zoomStartStart = 0.0f, zoomAnchorMs = 0.0f, zoomAnchorFraction = 0.0f;
+        DragAxis dragAxis = DragAxis::undecided;
+        bool animating = false, animateOffscreen = false;
+        float fromStart = 0.0f, fromSpan = 600.0f, toStart = 0.0f, toSpan = 600.0f;
+        double animStartMs = -1.0; // < 0: starts on the next advance
+
+        const dsp::PlayheadTap* playheadTap = nullptr;
+        std::atomic<float>* bodyStart = nullptr;
+        std::uint32_t playheadHit = 0;
+        bool playheadSeen = false, playheadActive = false;
+        double playheadEndedAt = 0.0;
+        float playheadMs = 0.0f, playheadAlpha = 0.0f;
         Hit hover, drag;
         float dragStartCurve = 0.0f;
         juce::Point<float> dragStart;

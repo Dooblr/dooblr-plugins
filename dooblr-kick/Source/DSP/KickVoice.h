@@ -36,6 +36,7 @@ namespace dooblrkick::dsp
         bool isReleasing() const noexcept { return releaseStep > 0.0f; }
         int getNote() const noexcept { return note; }
         double getElapsedSeconds() const noexcept { return (double) samplesElapsed / sampleRate; }
+        std::int64_t getSamplesElapsed() const noexcept { return samplesElapsed; }
 
         /** Adds this voice into the direct and Drive-send stereo buses. */
         void render (const KickSettings& settings, float* directL, float* directR,

@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.3 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.4 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -82,6 +82,24 @@ Version 0.3.3 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   drag up or down in an empty part of the graph (not on a line or point) to zoom the time
   axis in or out around the mouse. Double-click the time ruler to show the whole envelope
   again. Zoom only changes the view, not the sound, and is not an undo step.
+- **Pan and auto-fit (0.3.4).** A drag in empty graph space locks to the direction it starts
+  in: mostly up / down zooms, mostly sideways pans (hand cursor). A horizontal trackpad swipe
+  or Shift + wheel pans too; Cmd / Ctrl + wheel or a pinch zooms. The view stays inside
+  0 ms .. the graph's maximum. Unless you have zoomed or panned, the view glides (about
+  200 ms, eased) to fit 0 ms .. the last point whenever that changes: adding, removing or
+  dragging a point, Time Scale, presets, undo, Random, switching the envelope on. A point
+  dragged past the edge stays in view. Double-click the ruler to go back to auto-fit.
+- **Playhead (0.3.4).** While a hit plays (MIDI or the Play button) a line sweeps across the
+  master envelope and the Body pitch / amp graphs at the hit's real time, with a short trail
+  and a dot on the curve; it runs until the sound has actually ended (past the last point if
+  the layers ring on), then fades. A retrigger starts it again. The Body graphs account for
+  the Body Start delay. The position comes from the audio thread lock-free (one atomic).
+- **Header meter (0.3.4).** A small stereo peak meter at the top right shows the final output
+  (after Output): green below -6 dBFS, yellow up to 0, red at 0 dBFS and above, with a peak
+  hold and clip lights that stay red until you click the meter. The subtitle under the name
+  shows the version.
+- The envelope graphs carry no help or status captions (0.3.4); hover or drag a point to see its
+  time and value.
 - **Waveform view.** It shows the rendered hit with its length and peak, drawn anti-aliased. Click it to audition.
   The preview renders on a background thread (latest change wins), so turning knobs keeps the
   UI at the display frame rate.
