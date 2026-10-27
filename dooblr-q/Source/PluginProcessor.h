@@ -7,6 +7,7 @@
 #include "Analysis/SpectrumAnalyzer.h"
 #include "DSP/DynamicEQBand.h"
 #include "DSP/FirEqEngine.h"
+#include "DSP/SoloStage.h"
 #include "Parameters.h"
 #include "UndoHistory.h"
 
@@ -65,6 +66,17 @@ public:
 
     /** Reads the current parameter values of a band (any thread). */
     dooblrq::dsp::BandSettings getBandSettings (int bandIndex) const noexcept;
+
+    /** 0.9.1 Solo: a band is soloed when its Solo is on and the band itself is on (a
+        disabled band's Solo is ignored). Any thread. */
+    bool isBandSoloed (int bandIndex) const noexcept;
+    bool isAnyBandSoloed() const noexcept;
+
+    /** The region a band's Solo plays right now (follows a dynamic cut's live cutoff). */
+    dooblrq::dsp::SoloRegion getSoloRegion (int bandIndex) const noexcept;
+
+    /** For tests: the solo stage's current dry/solo mix (audio thread state). */
+    float getSoloMix() const noexcept { return soloStage.getMix(); }
 
     /** Sample rate for response analysis: the prepared rate, or 48 kHz before preparation. */
     double getAnalysisSampleRate() const noexcept;
@@ -139,6 +151,7 @@ private:
         std::atomic<float>* stepped = nullptr;
         std::atomic<float>* drive = nullptr;
         std::atomic<float>* atten = nullptr;
+        std::atomic<float>* solo = nullptr;
     };
 
     juce::AudioProcessorValueTreeState parameters;
@@ -151,6 +164,7 @@ private:
 
     std::array<dooblrq::dsp::DynamicEQBand, dooblrq::params::numBands> bands;
     juce::SmoothedValue<float> outputGain { 1.0f };
+    dooblrq::dsp::SoloStage soloStage;
 
     std::atomic<double> preparedSampleRate { 0.0 };
 

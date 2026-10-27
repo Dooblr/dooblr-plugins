@@ -1,6 +1,8 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 
+#include <algorithm>
+
 namespace params = dooblrq::params;
 namespace Palette = dooblrq::ui::Palette;
 
@@ -53,6 +55,49 @@ void BandTabSwitch::paintButton (juce::Graphics& g, bool highlighted, bool down)
                           .withCentre ({ on ? pill.getRight() - radius : pill.getX() + radius, pill.getCentreY() });
     g.setColour (on ? Palette::background : Palette::textMuted.withAlpha (highlighted ? 0.9f : 0.6f));
     g.fillEllipse (knob);
+}
+
+//==============================================================================
+BandSoloButton::BandSoloButton (const juce::String& componentId)
+{
+    setComponentID (componentId);
+    setClickingTogglesState (false); // the editor sets the parameter (see onSoloClick)
+    setTooltip ("Solo: hear only this band's region (alt/option-click: solo this band only)");
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+}
+
+void BandSoloButton::clicked (const juce::ModifierKeys& modifiers)
+{
+    if (onSoloClick != nullptr)
+        onSoloClick (modifiers.isAltDown());
+}
+
+void BandSoloButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    juce::ignoreUnused (down);
+
+    const auto on = getToggleState();
+    const auto usable = isEnabled();
+    const auto box = getLocalBounds().toFloat().withSizeKeepingCentre ((float) boxWidth, (float) boxHeight).reduced (0.5f);
+
+    if (on && usable)
+    {
+        g.setColour (Palette::dynamic.withAlpha (highlighted ? 1.0f : 0.92f));
+        g.fillRoundedRectangle (box, 3.0f);
+    }
+    else
+    {
+        g.setColour (Palette::background.withAlpha (0.6f));
+        g.fillRoundedRectangle (box, 3.0f);
+        // A Solo left on in a disabled band is shown as a faint amber outline (it is ignored).
+        g.setColour (on ? Palette::dynamic.withAlpha (0.35f)
+                        : Palette::textMuted.withAlpha (! usable ? 0.2f : (highlighted ? 0.8f : 0.45f)));
+        g.drawRoundedRectangle (box, 3.0f, 1.0f);
+    }
+
+    g.setColour (on && usable ? Palette::background : Palette::textMuted.withAlpha (usable ? 1.0f : 0.35f));
+    g.setFont (juce::FontOptions (10.5f, juce::Font::bold));
+    g.drawText ("S", box, juce::Justification::centred);
 }
 
 //==============================================================================
@@ -142,7 +187,25 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
         button.addAndMakeVisible (*bandSwitch);
         bandSwitchAttachments[(size_t) b] = std::make_unique<ButtonAttachment> (
             state, params::bandId (b, params::band::enabled), *bandSwitch);
+
+        // 0.9.1: Solo 'S' on the tab's right.
+        auto& solo = bandSoloButtons[(size_t) b];
+        solo = std::make_unique<BandSoloButton> ("bandSolo" + juce::String (b + 1));
+        solo->onSoloClick = [this, b] (bool exclusive) { toggleSolo (b, exclusive); };
+        button.addAndMakeVisible (*solo);
+        auto* soloPointer = solo.get();
+        bandSoloAttachments[(size_t) b] = std::make_unique<juce::ParameterAttachment> (
+            *state.getParameter (params::bandId (b, params::band::solo)),
+            [this, soloPointer] (float value)
+            {
+                soloPointer->setToggleState (value >= 0.5f, juce::dontSendNotification);
+                responseCurve.repaint();
+            });
+        bandSoloAttachments[(size_t) b]->sendInitialUpdate();
     }
+
+    soloButton.onSoloClick = [this] (bool exclusive) { toggleSolo (selectedBand, exclusive); };
+    addAndMakeVisible (soloButton);
 
     enabledButton.setComponentID (params::band::enabled);
     addAndMakeVisible (enabledButton);
@@ -413,6 +476,51 @@ void DooblrQAudioProcessorEditor::setUpKnob (Knob& knob, const juce::String& cap
     addAndMakeVisible (knob.caption);
 }
 
+void DooblrQAudioProcessorEditor::toggleSolo (int bandIndex, bool exclusive)
+{
+    if (bandIndex < 0 || bandIndex >= params::numBands || ! audioProcessor.getBandSettings (bandIndex).enabled)
+        return;
+
+    auto& state = audioProcessor.getParameterState();
+    const auto soloParameter = [&state] (int b) { return state.getParameter (params::bandId (b, params::band::solo)); };
+    const auto isOn = [&] (int b) { return soloParameter (b)->getValue() >= 0.5f; };
+
+    std::array<float, params::numBands> target {};
+    for (int b = 0; b < params::numBands; ++b)
+        target[(size_t) b] = isOn (b) ? 1.0f : 0.0f;
+
+    if (exclusive)
+    {
+        auto onlyThis = isOn (bandIndex);
+        for (int b = 0; b < params::numBands; ++b)
+            if (b != bandIndex && isOn (b))
+                onlyThis = false;
+
+        for (int b = 0; b < params::numBands; ++b)
+            target[(size_t) b] = (b == bandIndex && ! onlyThis) ? 1.0f : 0.0f;
+    }
+    else
+    {
+        target[(size_t) bandIndex] = isOn (bandIndex) ? 0.0f : 1.0f;
+    }
+
+    // Nested gestures: the undo history records the whole change as one step.
+    std::vector<juce::RangedAudioParameter*> changed;
+    for (int b = 0; b < params::numBands; ++b)
+        if (! juce::exactlyEqual (target[(size_t) b], isOn (b) ? 1.0f : 0.0f))
+            changed.push_back (soloParameter (b));
+
+    for (auto* parameter : changed)
+        parameter->beginChangeGesture();
+    for (int b = 0; b < params::numBands; ++b)
+        if (auto* parameter = soloParameter (b); std::find (changed.begin(), changed.end(), parameter) != changed.end())
+            parameter->setValueNotifyingHost (target[(size_t) b]);
+    for (auto* parameter : changed)
+        parameter->endChangeGesture();
+
+    responseCurve.repaint();
+}
+
 //==============================================================================
 void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
 {
@@ -420,6 +528,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
 
     // Drop the old bindings before attaching the controls to the new band.
     enabledAttachment.reset();
+    soloAttachment.reset();
     dynamicsAttachment.reset();
     typeAttachment.reset();
     slopeAttachment.reset();
@@ -440,6 +549,10 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     const auto id = [this] (const char* suffix) { return params::bandId (selectedBand, suffix); };
 
     enabledAttachment   = std::make_unique<ButtonAttachment>   (state, id (params::band::enabled), enabledButton);
+    soloAttachment      = std::make_unique<juce::ParameterAttachment> (
+        *state.getParameter (id (params::band::solo)),
+        [this] (float value) { soloButton.setToggleState (value >= 0.5f, juce::dontSendNotification); });
+    soloAttachment->sendInitialUpdate();
     typeAttachment      = std::make_unique<ComboBoxAttachment> (state, id (params::band::type), typeBox);
     slopeAttachment     = std::make_unique<ComboBoxAttachment> (state, id (params::band::slope), slopeBox);
     frequencyAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::frequency), frequencyKnob.slider);
@@ -502,7 +615,12 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
 
         button.setColour (juce::TextButton::textColourOffId, settings.enabled ? colour : Palette::textMuted);
         button.setColour (juce::TextButton::textColourOnId, settings.enabled ? colour.brighter (0.3f) : Palette::textPrimary);
+
+        // A disabled band cannot be soloed (its Solo is ignored by the DSP too).
+        bandSoloButtons[(size_t) b]->setEnabled (settings.enabled);
     }
+
+    soloButton.setEnabled (audioProcessor.getBandSettings (selectedBand).enabled);
 
     // Controls that have no audible effect for the current settings are dimmed but stay usable.
     const auto settings = audioProcessor.getBandSettings (selectedBand);
@@ -705,6 +823,7 @@ void DooblrQAudioProcessorEditor::resized()
         button.setBounds (bandRow.removeFromLeft (buttonWidth).reduced (3, 0));
         bandSwitches[b]->setBounds (6, (button.getHeight() - BandTabSwitch::switchHeight - 6) / 2,
                                     BandTabSwitch::switchWidth + 6, BandTabSwitch::switchHeight + 6);
+        bandSoloButtons[b]->setBounds (button.getWidth() - 28, 0, 24, button.getHeight());
     }
 
     responseCurve.setBounds (bounds.reduced (16, 10));
@@ -750,6 +869,11 @@ void DooblrQAudioProcessorEditor::resized()
 
     layoutSection (eqSectionArea, switchColumnWidth, { &enabledButton, &typeBox, &slopeBox, &modelBox, &steppedButton },
                    { &frequencyKnob, &gainKnob, &qKnob, &driveKnob, &attenKnob });
+    {
+        auto row = enabledButton.getBounds();
+        soloButton.setBounds (row.removeFromRight (24));
+        enabledButton.setBounds (row.withTrimmedRight (4));
+    }
     layoutSection (dynamicsSectionArea, dynamicsSwitchWidth, { &dynamicsButton }, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
     rangeRing.placeAround();
 }

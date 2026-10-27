@@ -697,6 +697,57 @@ namespace dooblrq::ui
 
         drawGrid (g);
 
+        // 0.9.1 Solo: dim the plot and light up each soloed band's region (its region filter's
+        // magnitude per column), with the region filter's own response outlined.
+        const auto anySolo = processor.isAnyBandSoloed();
+        const auto dimmed = [&] (int b) { return anySolo && ! processor.isBandSoloed (b); };
+
+        if (anySolo)
+        {
+            g.saveState();
+            g.reduceClipRegion (area.toNearestInt());
+            g.setColour (Palette::background.withAlpha (0.38f));
+            g.fillRect (area);
+
+            const auto sampleRate = processor.getAnalysisSampleRate();
+
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                if (! processor.isBandSoloed (b))
+                    continue;
+
+                const auto region = processor.getSoloRegion (b);
+                const auto colour = bandColour (b);
+                juce::Path outline;
+
+                for (auto x = area.getX(); x <= area.getRight(); x += 2.0f)
+                {
+                    const auto magnitude = dsp::soloMagnitudeAt (region, xToFrequency (x), sampleRate);
+                    const auto db = 20.0 * std::log10 (std::max (magnitude, 1.0e-6));
+                    const auto y = juce::jlimit (area.getY() - 2.0f, area.getBottom() + 2.0f, decibelsToY (db));
+
+                    if (magnitude > 0.02)
+                    {
+                        g.setColour (colour.withAlpha ((float) (0.26 * magnitude)));
+                        g.fillRect (x, area.getY(), 2.0f, area.getHeight());
+                    }
+
+                    if (x <= area.getX())
+                        outline.startNewSubPath (x, y);
+                    else
+                        outline.lineTo (x, y);
+                }
+
+                const float dashes[] { 3.0f, 3.0f };
+                juce::Path dashed;
+                juce::PathStrokeType (1.2f).createDashedStroke (dashed, outline, dashes, 2);
+                g.setColour (colour.withAlpha (0.8f));
+                g.fillPath (dashed);
+            }
+
+            g.restoreState();
+        }
+
         g.saveState();
         g.reduceClipRegion (area.toNearestInt().expanded (1));
 
@@ -726,7 +777,7 @@ namespace dooblrq::ui
 
             for (const auto& run : runs)
             {
-                const auto colour = bandColour (run.band);
+                const auto colour = bandColour (run.band).withMultipliedAlpha (dimmed (run.band) ? 0.3f : 1.0f);
                 juce::Path region, live;
                 std::vector<float> baseY;
                 baseY.reserve (run.points.size());
@@ -769,7 +820,7 @@ namespace dooblrq::ui
             if (! marker.visible)
                 continue;
 
-            const auto colour = bandColour (b);
+            const auto colour = bandColour (b).withMultipliedAlpha (dimmed (b) ? 0.3f : 1.0f);
             const auto selected = b == selectedBand;
             const auto staticX = frequencyToX (marker.staticHz);
             const auto liveX = frequencyToX (marker.liveHz);
@@ -801,6 +852,10 @@ namespace dooblrq::ui
             const auto circle = juce::Rectangle<float> (handleRadius * 2.0f, handleRadius * 2.0f)
                                     .withCentre (handlePosition (b));
             const auto colour = bandColour (b);
+
+            // Solo: bands that are not soloed are drawn faded.
+            if (dimmed (b))
+                g.beginTransparencyLayer (0.35f);
 
             if (s.enabled)
             {
@@ -838,6 +893,22 @@ namespace dooblrq::ui
                 g.setFont (juce::FontOptions (11.0f));
                 g.drawText (text, circle.translated (0.0f, -20.0f).withSizeKeepingCentre (90.0f, 14.0f),
                             juce::Justification::centred);
+            }
+
+            if (dimmed (b))
+                g.endTransparencyLayer();
+
+            // Soloed band: an 'S' badge on the handle's upper right.
+            if (processor.isBandSoloed (b))
+            {
+                const auto badge = juce::Rectangle<float> (12.0f, 11.0f)
+                                       .withCentre ({ circle.getRight() + 1.0f, circle.getY() - 1.0f });
+                g.setColour (Palette::dynamic);
+                g.fillRoundedRectangle (badge, 2.5f);
+                g.setColour (Palette::background);
+                g.drawRoundedRectangle (badge, 2.5f, 1.0f);
+                g.setFont (juce::FontOptions (8.5f, juce::Font::bold));
+                g.drawText ("S", badge, juce::Justification::centred);
             }
         }
 

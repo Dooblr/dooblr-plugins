@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.9.0:** six-band dynamic EQ with dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.9.1:** six-band dynamic EQ with per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -17,7 +17,7 @@ moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-ba
 **Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt. 0.7.1 extends
 Slope to Bell and Notch, so it applies to every band type. 0.8.0 adds the per-band Model,
 Stepped, Drive and Atten controls; see [Models](#models-080). 0.9.0 adds dynamics to Low /
-High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090).)
+High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091).)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -116,6 +116,31 @@ band was a cut, shelf or tilt.
   length limits how steep a very low corner can be (5.9 / 11.7 Hz bins), and the long
   impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
   the ringing is pre- and post-).
+
+## Band Solo (0.9.1)
+
+Every band has an **S** button: on its band tab (top right) and next to the band's on/off
+switch in the panel. While any band is soloed you hear only the region each soloed band
+works on, at its EQ'd level (the region filters have unity gain at their centre / in their
+passband):
+
+- **Bell, Notch:** a band-pass at the band's frequency with the band's Q / Width (-3 dB at the
+  Width edges, more than 30 dB down a decade away).
+- **Low Shelf / High Shelf:** the shelved side (4th-order low-pass / high-pass at the shelf).
+- **Tilt:** the side it raises (high side for positive gain, low side for negative).
+- **Low / High Cut:** a band-pass around the cutoff; with dynamics on it follows the live
+  (dynamic) cutoff. Dynamic bells and shelves keep their region while their gain moves.
+- **Several solos sum.** Alt/Option-click a band's S to solo that band only (alt-click it again
+  to un-solo); that change is one undo step.
+- A **disabled band cannot be soloed:** its S is greyed out and a stored Solo on it is ignored
+  until the band is switched on.
+
+Solo runs after the EQ (all phase modes, all Models) with no added latency, a 20 ms fade on
+every on / off / switch, and a 10 ms glide when a soloed band's frequency or Q moves. With no
+band soloed it is an exact pass-through. The display dims everything, lights the soloed
+regions in the band colour (with a dashed outline), fades the other bands' handles and puts an
+amber S on soloed handles. Parameters "Band N Solo" (IDs `b1_solo` … `b6_solo`) are appended
+after all older parameters, so existing sessions load unchanged.
 
 ## Dynamic cuts and the Range ring (0.9.0)
 

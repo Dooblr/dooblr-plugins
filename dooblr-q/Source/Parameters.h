@@ -31,6 +31,7 @@ namespace dooblrq::params
         inline constexpr const char* stepped         = "stepped"; // added in 0.8.0
         inline constexpr const char* drive           = "drive";   // added in 0.8.0
         inline constexpr const char* atten           = "atten";   // added in 0.8.0
+        inline constexpr const char* solo            = "solo";    // added in 0.9.1
     }
 
     inline constexpr const char* outputGain = "output_gain";

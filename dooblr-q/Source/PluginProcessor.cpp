@@ -34,6 +34,7 @@ DooblrQAudioProcessor::DooblrQAudioProcessor()
         p.stepped         = pointer (params::bandId (b, params::band::stepped));
         p.drive           = pointer (params::bandId (b, params::band::drive));
         p.atten           = pointer (params::bandId (b, params::band::atten));
+        p.solo            = pointer (params::bandId (b, params::band::solo));
     }
 
     outputGainDb = pointer (params::outputGain);
@@ -97,6 +98,29 @@ float DooblrQAudioProcessor::getBandDynamicGainDb (int bandIndex) const noexcept
     return bands[(size_t) bandIndex].getDynamicGainDb();
 }
 
+bool DooblrQAudioProcessor::isBandSoloed (int bandIndex) const noexcept
+{
+    if (bandIndex < 0 || bandIndex >= params::numBands)
+        return false;
+
+    const auto& p = bandParameters[(size_t) bandIndex];
+    return p.solo->load (std::memory_order_relaxed) >= 0.5f && p.enabled->load (std::memory_order_relaxed) >= 0.5f;
+}
+
+bool DooblrQAudioProcessor::isAnyBandSoloed() const noexcept
+{
+    for (int b = 0; b < params::numBands; ++b)
+        if (isBandSoloed (b))
+            return true;
+
+    return false;
+}
+
+dsp::SoloRegion DooblrQAudioProcessor::getSoloRegion (int bandIndex) const noexcept
+{
+    return dsp::soloRegionFor (getBandSettings (bandIndex), (double) getBandDynamicGainDb (bandIndex));
+}
+
 void DooblrQAudioProcessor::setAnalyzerRunning (bool shouldRun) noexcept
 {
     if (shouldRun && ! analyzerRunning.load())
@@ -123,6 +147,10 @@ void DooblrQAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
 
     outputGain.reset (sampleRate, 0.03);
     updateBandSettings (true);
+
+    for (int b = 0; b < params::numBands; ++b)
+        soloStage.setBand (b, isBandSoloed (b), getSoloRegion (b));
+    soloStage.prepare (sampleRate);
 
     for (auto& band : bands)
         band.reset();
@@ -395,6 +423,12 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
     }
 
     applySwitchFade (channels, numChannels, numSamples);
+
+    // Solo (0.9.1): after the EQ in every phase mode, so it adds no latency; pass-through
+    // when nothing is soloed. Disabled bands' Solo is ignored (isBandSoloed).
+    for (int b = 0; b < params::numBands; ++b)
+        soloStage.setBand (b, isBandSoloed (b), getSoloRegion (b));
+    soloStage.process (channels, numChannels, numSamples);
 
     if (outputGain.isSmoothing())
     {

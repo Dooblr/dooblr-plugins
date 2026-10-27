@@ -197,6 +197,14 @@ namespace dooblrq::params
                 withFormatter (formatDecibels)));
         }
 
+        // Added in 0.9.1 after everything older: per band Solo (audition only that band's
+        // region). Old sessions load it off.
+        constexpr int addedInV091 = 5;
+        for (int bandIndex = 0; bandIndex < numBands; ++bandIndex)
+            layout.add (std::make_unique<juce::AudioParameterBool> (
+                juce::ParameterID { bandId (bandIndex, band::solo), addedInV091 },
+                "Band " + juce::String (bandIndex + 1) + " Solo", false));
+
         return layout;
     }
 }

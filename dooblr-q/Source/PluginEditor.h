@@ -25,6 +25,20 @@ private:
     int bandIndex;
 };
 
+/** 0.9.1: a band's Solo toggle ('S'). Clicking does not toggle it directly: the editor sets
+    the parameter (onSoloClick, alt/option = exclusive) and the attachment shows the state. */
+class BandSoloButton final : public juce::ToggleButton
+{
+public:
+    explicit BandSoloButton (const juce::String& componentId);
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override;
+    void clicked (const juce::ModifierKeys& modifiers) override;
+
+    std::function<void (bool exclusive)> onSoloClick;
+
+    static constexpr int boxWidth = 18, boxHeight = 16;
+};
+
 class DooblrQAudioProcessorEditor final : public juce::AudioProcessorEditor,
                                           private juce::Timer,
                                           private juce::ChangeListener
@@ -39,6 +53,11 @@ public:
     /** Binds the band controls to the parameters of the given band (0-based). */
     void selectBand (int bandIndex);
     int getSelectedBand() const noexcept { return selectedBand; }
+
+    /** 0.9.1: what a Solo button click does, as one undoable gesture. Normal: toggles the
+        band's Solo. Exclusive (alt/option-click): solos only this band, or, if it already is
+        the only soloed band, un-solos it. Does nothing for a disabled band. */
+    void toggleSolo (int bandIndex, bool exclusive);
 
     /** Refreshes the Freeze button and the "Live" / "Frozen: N s" readout (timer; public for tests). */
     void updateAnalyzerControls();
@@ -99,6 +118,8 @@ private:
     std::array<std::unique_ptr<BandTabSwitch>, dooblrq::params::numBands> bandSwitches;
 
     juce::ToggleButton enabledButton { "Band on" };
+    std::array<std::unique_ptr<BandSoloButton>, dooblrq::params::numBands> bandSoloButtons;
+    BandSoloButton soloButton { "solo" }; // the selected band's, next to Band on
     juce::ComboBox typeBox;
     juce::ComboBox slopeBox; // 12 ... 60 dB/oct, Brickwall; disabled for Bell and Notch
     Knob frequencyKnob, gainKnob, qKnob; // qKnob is shown as "Width" in octaves
@@ -129,6 +150,8 @@ private:
     std::array<std::unique_ptr<ButtonAttachment>, dooblrq::params::numBands> bandSwitchAttachments;
 
     std::unique_ptr<ButtonAttachment> enabledAttachment, dynamicsAttachment;
+    std::array<std::unique_ptr<juce::ParameterAttachment>, dooblrq::params::numBands> bandSoloAttachments;
+    std::unique_ptr<juce::ParameterAttachment> soloAttachment;
     std::unique_ptr<ComboBoxAttachment> typeAttachment, slopeAttachment, modelAttachment;
     std::unique_ptr<ButtonAttachment> steppedAttachment;
     std::unique_ptr<SliderAttachment> driveAttachment, attenAttachment;

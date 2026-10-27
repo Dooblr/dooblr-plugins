@@ -189,8 +189,8 @@ namespace
         check (processor->getTotalNumInputChannels() == 2, "default input is stereo");
         check (processor->getTotalNumOutputChannels() == 2, "default output is stereo");
         check (processor->hasEditor(), "has an editor");
-        check (processor->getParameters().size() == params::numBands * 15 + 3,
-               "exposes 15 parameters per band plus output gain, stereo link and phase mode");
+        check (processor->getParameters().size() == params::numBands * 16 + 3,
+               "exposes 16 parameters per band plus output gain, stereo link and phase mode");
         check (processor->getParameters()[params::numBands * 10]->getName (64) == "Output Gain"
                    && processor->getParameters()[params::numBands * 10 + 2]->getName (64) == "Phase Mode",
                "phase mode (added in 0.4.0) comes after all older parameters (old indices unchanged)");
@@ -213,6 +213,17 @@ namespace
                     modelsLast = modelsLast && p != nullptr && p->paramID == params::bandId (b, suffixes[k]);
                 }
             check (modelsLast, "the 0.8.0 model parameters come after every older parameter");
+        }
+        {
+            auto solosLast = true;
+            for (int b = 0; b < params::numBands; ++b)
+            {
+                auto* p = dynamic_cast<juce::AudioProcessorParameterWithID*> (processor->getParameters()[params::numBands * 15 + 3 + b]);
+                solosLast = solosLast && p != nullptr && p->paramID == params::bandId (b, params::band::solo)
+                            && p->getName (64) == "Band " + juce::String (b + 1) + " Solo" && p->getDefaultValue() == 0.0f
+                            && p->isAutomatable();
+            }
+            check (solosLast, "the six 'Band N Solo' parameters (0.9.1) come last, default off, automatable");
         }
 
         std::unique_ptr<juce::AudioProcessor> fromFactory (createPluginFilter());
@@ -4935,6 +4946,324 @@ namespace
         processor.editorBeingDeleted (editor.get());
     }
 
+    //==============================================================================
+    // 0.9.1: band Solo
+    void configureBell (DooblrQAudioProcessor& processor, int b, float frequency, float gainDb, float q)
+    {
+        setBand (processor, b, params::band::enabled, 1.0f);
+        setBand (processor, b, params::band::type, (float) dsp::FilterType::bell);
+        setBand (processor, b, params::band::frequency, frequency);
+        setBand (processor, b, params::band::gain, gainDb);
+        setBand (processor, b, params::band::q, q);
+    }
+
+    /** Processes a sine in 256-sample blocks; before each segment's first block calls its action. */
+    juce::AudioBuffer<float> runSineSegments (DooblrQAudioProcessor& processor, double frequency, float amplitude,
+                                              double sampleRate, const std::vector<std::pair<int, std::function<void()>>>& segments)
+    {
+        int total = 0;
+        for (const auto& segment : segments)
+            total += segment.first;
+
+        juce::AudioBuffer<float> buffer (2, total);
+        for (int i = 0; i < total; ++i)
+        {
+            const auto value = amplitude * (float) std::sin (2.0 * juce::MathConstants<double>::pi * frequency * i / sampleRate);
+            buffer.setSample (0, i, value);
+            buffer.setSample (1, i, value);
+        }
+
+        juce::MidiBuffer midi;
+        int start = 0;
+        for (const auto& [length, action] : segments)
+        {
+            if (action != nullptr)
+                action();
+
+            for (int done = 0; done < length;)
+            {
+                const auto n = std::min (256, length - done);
+                juce::AudioBuffer<float> view (buffer.getArrayOfWritePointers(), 2, start + done, n);
+                processor.processBlock (view, midi);
+                done += n;
+            }
+            start += length;
+        }
+        return buffer;
+    }
+
+    float maxStep (const juce::AudioBuffer<float>& buffer, int from, int to)
+    {
+        float result = 0.0f;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            for (int i = std::max (1, from); i < to; ++i)
+                result = std::max (result, std::abs (buffer.getSample (ch, i) - buffer.getSample (ch, i - 1)));
+        return result;
+    }
+
+    double rmsDb (const juce::AudioBuffer<float>& buffer, int from, int to)
+    {
+        return juce::Decibels::gainToDecibels ((double) buffer.getRMSLevel (0, from, to - from), -200.0);
+    }
+
+    void testSoloRegions()
+    {
+        using T = dsp::FilterType;
+        constexpr double sr = 48000.0;
+        const auto magDb = [] (const dsp::SoloRegion& r, double f) { return 20.0 * std::log10 (dsp::soloMagnitudeAt (r, f, sr)); };
+
+        dsp::BandSettings s;
+        s.enabled = true;
+        s.type = T::bell;
+        s.frequency = 1000.0f;
+        s.q = 1.414f;
+        auto r = dsp::soloRegionFor (s, 0.0);
+        const auto bw = params::qToOctaves (1.414);
+        note ("bell region (Q 1.414): centre " + format (magDb (r, 1000.0), 2) + " dB, Width edges "
+              + format (magDb (r, 1000.0 / std::pow (2.0, bw / 2.0)), 2) + " / " + format (magDb (r, 1000.0 * std::pow (2.0, bw / 2.0)), 2)
+              + " dB, 100 Hz " + format (magDb (r, 100.0), 1) + " dB, 10 kHz " + format (magDb (r, 10000.0), 1) + " dB");
+        check (r.shape == dsp::SoloShape::bandPass && std::abs (magDb (r, 1000.0)) < 0.01, "bell: band-pass, unity at the centre");
+        check (std::abs (magDb (r, 1000.0 / std::pow (2.0, bw / 2.0)) + 3.0) < 0.3
+                   && std::abs (magDb (r, 1000.0 * std::pow (2.0, bw / 2.0)) + 3.0) < 0.3,
+               "bell: -3 dB at the band's Width edges");
+        check (magDb (r, 100.0) < -30.0 && magDb (r, 10000.0) < -30.0, "bell: a decade away is more than 30 dB down");
+
+        s.type = T::notch;
+        check (dsp::soloRegionFor (s, 0.0).shape == dsp::SoloShape::bandPass, "notch: band-pass over the notched region");
+
+        s.type = T::lowShelf;
+        r = dsp::soloRegionFor (s, 0.0);
+        check (r.shape == dsp::SoloShape::lowPass && std::abs (magDb (r, 50.0)) < 0.1 && magDb (r, 10000.0) < -30.0,
+               "low shelf: the low side (low-pass at the shelf)");
+        s.type = T::highShelf;
+        r = dsp::soloRegionFor (s, 0.0);
+        check (r.shape == dsp::SoloShape::highPass && std::abs (magDb (r, 15000.0)) < 0.2 && magDb (r, 100.0) < -30.0,
+               "high shelf: the high side (high-pass at the shelf)");
+        s.type = T::tilt;
+        s.gainDb = 4.0f;
+        check (dsp::soloRegionFor (s, 0.0).shape == dsp::SoloShape::highPass, "positive tilt: the raised high side");
+        s.gainDb = -4.0f;
+        check (dsp::soloRegionFor (s, 0.0).shape == dsp::SoloShape::lowPass, "negative tilt: the raised low side");
+
+        s.type = T::lowCut;
+        s.q = 0.707f;
+        r = dsp::soloRegionFor (s, 0.0);
+        check (r.shape == dsp::SoloShape::bandPass && std::abs (r.frequency - 1000.0) < 1.0e-6 && r.q >= 1.0,
+               "low cut: band-pass around the cutoff");
+        s.dynamicsEnabled = true;
+        r = dsp::soloRegionFor (s, 6.0);
+        check (std::abs (r.frequency - dsp::DynamicEQBand::dynamicCutFrequency (T::lowCut, 1000.0, 6.0)) < 1.0e-6,
+               "dynamic low cut: the region follows the live cutoff");
+        s.type = T::highCut;
+        r = dsp::soloRegionFor (s, 6.0);
+        check (std::abs (r.frequency - dsp::DynamicEQBand::dynamicCutFrequency (T::highCut, 1000.0, 6.0)) < 1.0e-6 && r.frequency < 1000.0, "dynamic high cut: the region follows the live cutoff");
+    }
+
+    void testSoloAudio()
+    {
+        constexpr double sr = 48000.0;
+
+        for (const auto mode : allPhaseModes)
+        {
+            const auto name = std::string (phaseName (mode));
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            configureBell (processor, 0, 1000.0f, 6.0f, 2.0f);
+            configureBell (processor, 1, 5000.0f, -6.0f, 1.0f); // another band, not soloed
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            const auto latencyBefore = processor.getLatencySamples();
+            const auto normalCentre = measureSineGainDb (processor, 1000.0, 0.25f, sr);
+
+            setBand (processor, 0, params::band::solo, 1.0f);
+            check (processor.isBandSoloed (0) && ! processor.isBandSoloed (1) && processor.isAnyBandSoloed(), name + ": band 1 soloed");
+            processor.reset();
+            const auto centre = measureSineGainDb (processor, 1000.0, 0.25f, sr);
+            processor.reset();
+            const auto low = measureSineGainDb (processor, 100.0, 0.25f, sr);
+            processor.reset();
+            const auto high = measureSineGainDb (processor, 10000.0, 0.25f, sr);
+            processor.reset();
+            const auto other = measureSineGainDb (processor, 5000.0, 0.25f, sr);
+            note (name + " solo bell 1 kHz +6 dB: 1 kHz " + format (centre, 2) + " dB (normal " + format (normalCentre, 2)
+                  + "), 100 Hz " + format (low, 1) + ", 10 kHz " + format (high, 1) + ", 5 kHz " + format (other, 1) + " dB");
+            check (std::abs (centre - normalCentre) < 0.3, name + ": the soloed region plays at its EQ'd level");
+            check (low < -30.0 && high < -30.0, name + ": far frequencies are attenuated by more than 30 dB");
+            check (other < -15.0, name + ": another band's region is not heard");
+            check (processor.getLatencySamples() == latencyBefore, name + ": soloing does not change the latency");
+
+            // Every model.
+            auto modelsOk = true;
+            for (int m = 0; m < dsp::numModels; ++m)
+            {
+                setBand (processor, 0, params::band::model, (float) m);
+                processor.reset();
+                const auto c = measureSineGainDb (processor, 1000.0, 0.25f, sr, 0.5);
+                processor.reset();
+                const auto f = measureSineGainDb (processor, 12000.0, 0.25f, sr, 0.5);
+                modelsOk = modelsOk && c > 0.0 && c < 12.0 && f < -30.0 && f < c - 30.0;
+            }
+            setBand (processor, 0, params::band::model, 0.0f);
+            check (modelsOk, name + ": solo passes the region and rejects far frequencies with every model");
+        }
+
+        // Multiple solos sum: A + B == (A and B soloed), sample by sample.
+        for (const auto mode : { PhaseMode::zeroLatency, PhaseMode::linearPhase })
+        {
+            const auto run = [&] (bool a, bool b)
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                configureBell (processor, 0, 300.0f, 4.0f, 1.5f);
+                configureBell (processor, 1, 3000.0f, -3.0f, 2.0f);
+                setBand (processor, 0, params::band::solo, a ? 1.0f : 0.0f);
+                setBand (processor, 1, params::band::solo, b ? 1.0f : 0.0f);
+                prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+                juce::AudioBuffer<float> buffer (2, 48000);
+                fillWithNoise (buffer, 91, 0.25f);
+                processInBlocks (processor, buffer, { 512, 128, 333 });
+                return buffer;
+            };
+            const auto both = run (true, true), onlyA = run (true, false), onlyB = run (false, true);
+            float error = 0.0f, peak = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < both.getNumSamples(); ++i)
+                {
+                    error = std::max (error, std::abs (both.getSample (ch, i) - onlyA.getSample (ch, i) - onlyB.getSample (ch, i)));
+                    peak = std::max (peak, std::abs (both.getSample (ch, i)));
+                }
+            note (std::string (phaseName (mode)) + ": two solos vs sum of each, max error " + format (error, 8) + " (peak " + format (peak, 3) + ")");
+            check (error < 1.0e-5f && peak > 0.05f, std::string (phaseName (mode)) + ": multiple soloed bands sum");
+        }
+
+        // Click-free toggling (on, switch band, off) in every phase mode.
+        for (const auto mode : allPhaseModes)
+        {
+            const auto name = std::string (phaseName (mode));
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            configureBell (processor, 0, 4000.0f, 0.0f, 1.0f);
+            configureBell (processor, 1, 200.0f, 0.0f, 1.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 256);
+
+            const int segment = 12000;
+            float mixAfterOn = 0.0f;
+            const auto out = runSineSegments (processor, 200.0, 0.5f, sr, {
+                { segment, nullptr },
+                { segment, [&] { setBand (processor, 0, params::band::solo, 1.0f); } },
+                { segment, [&] { mixAfterOn = processor.getSoloMix();
+                                 setBand (processor, 0, params::band::solo, 0.0f);
+                                 setBand (processor, 1, params::band::solo, 1.0f); } },
+                { segment, [&] { setBand (processor, 1, params::band::solo, 0.0f); } },
+                { segment, nullptr } });
+
+            const auto steady = maxStep (out, segment / 2, segment);
+            const auto toggles = std::max ({ maxStep (out, segment - 512, segment + 2048),
+                                             maxStep (out, 2 * segment - 512, 2 * segment + 2048),
+                                             maxStep (out, 3 * segment - 512, 3 * segment + 2048) });
+            const auto soloedOff = rmsDb (out, segment + 4000, 2 * segment);
+            const auto soloedOn = rmsDb (out, 2 * segment + 4000, 3 * segment);
+            const auto normal = rmsDb (out, 3 * segment + 4000, 4 * segment);
+            note (name + " toggles: max step " + format (toggles, 4) + " vs steady " + format (steady, 4)
+                  + "; 200 Hz tone with 4 kHz band soloed " + format (soloedOff, 1) + " dB, 200 Hz band soloed "
+                  + format (soloedOn, 1) + " dB, normal " + format (normal, 1) + " dB");
+            check (mixAfterOn == 1.0f, name + ": solo fades in fully (20 ms)");
+            check (toggles < steady * 1.3f, name + ": solo on / switch / off are click-free");
+            check (soloedOff < normal - 35.0 && std::abs (soloedOn - normal) < 0.5, name + ": solo switches what is heard");
+            check (allFinite (out), name + ": output stays finite");
+        }
+
+        // A disabled band cannot be soloed: its Solo is ignored (exact identity here).
+        {
+            DooblrQAudioProcessor reference, processor;
+            setBand (processor, 2, params::band::solo, 1.0f); // band 3 is off by default
+            prepare (reference, juce::AudioChannelSet::stereo(), sr, 512);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            check (! processor.isBandSoloed (2) && ! processor.isAnyBandSoloed(), "Solo on a disabled band is not active");
+            juce::AudioBuffer<float> a (2, 24000), b (2, 24000);
+            fillWithNoise (a, 7, 0.3f);
+            b.makeCopyOf (a);
+            processInBlocks (reference, a, { 512 });
+            processInBlocks (processor, b, { 512 });
+            check (bitIdentical (a, b, 2), "a disabled band's Solo leaves the output unchanged");
+
+            setBand (processor, 2, params::band::enabled, 1.0f);
+            check (processor.isBandSoloed (2), "enabling the band makes its Solo active");
+        }
+    }
+
+    void testSoloEditor()
+    {
+        DooblrQAudioProcessor processor;
+        configureBell (processor, 0, 120.0f, 3.0f, 1.0f);
+        configureBell (processor, 1, 1000.0f, -4.0f, 2.0f);
+        configureBell (processor, 2, 6000.0f, 2.0f, 1.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        check (dooblrEditor != nullptr, "editor exists");
+        if (dooblrEditor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+
+        const auto soloOn = [&] (int b) { return getParameter (processor, params::bandId (b, params::band::solo)) >= 0.5f; };
+        std::array<BandSoloButton*, params::numBands> buttons {};
+        auto allFound = true;
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            buttons[(size_t) b] = dynamic_cast<BandSoloButton*> (findById (*editor, "bandSolo" + juce::String (b + 1)));
+            allFound = allFound && buttons[(size_t) b] != nullptr && buttons[(size_t) b]->isVisible()
+                       && buttons[(size_t) b]->getWidth() > 0
+                       && buttons[(size_t) b]->getParentComponent() != nullptr
+                       && buttons[(size_t) b]->getParentComponent()->getLocalBounds().contains (buttons[(size_t) b]->getBounds());
+        }
+        auto* panelSolo = dynamic_cast<BandSoloButton*> (findById (*editor, params::band::solo));
+        check (allFound && panelSolo != nullptr && panelSolo->getWidth() > 0, "every band tab has an S button, plus the band panel");
+        if (! allFound || panelSolo == nullptr)
+            return;
+
+        dooblrEditor->selectBand (0); // refreshes the indicators (the timer does not run here)
+        check (buttons[0]->isEnabled() && ! buttons[4]->isEnabled(), "Solo is disabled on a disabled band");
+
+        // Plain clicks toggle and stack.
+        auto& history = processor.getUndoHistory();
+        buttons[0]->clicked ({});
+        buttons[1]->clicked ({});
+        check (soloOn (0) && soloOn (1) && ! soloOn (2), "clicks solo bands 1 and 2 together");
+        check (buttons[0]->getToggleState() && buttons[1]->getToggleState() && panelSolo->getToggleState(),
+               "the buttons show the Solo state");
+
+        // Alt-click: exclusive, as one undo step.
+        history.clear();
+        buttons[2]->clicked (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+        check (! soloOn (0) && ! soloOn (1) && soloOn (2), "alt-click solos only that band");
+        check (history.getNumUndoableSteps() == 1, "exclusive solo is one undo step");
+        history.undo();
+        check (soloOn (0) && soloOn (1) && ! soloOn (2), "undo restores the previous solos");
+        history.clear();
+        buttons[2]->clicked (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+        buttons[2]->clicked (juce::ModifierKeys (juce::ModifierKeys::altModifier));
+        check (! soloOn (0) && ! soloOn (1) && ! soloOn (2), "alt-click on the only soloed band un-solos it");
+
+        // Disabled band: clicking does nothing.
+        buttons[4]->clicked ({});
+        check (! soloOn (4), "a disabled band's Solo click does nothing");
+
+        // Panel S follows the selected band.
+        dooblrEditor->selectBand (1);
+        panelSolo->clicked ({});
+        check (soloOn (1) && buttons[1]->getToggleState(), "the panel S solos the selected band");
+        panelSolo->clicked ({});
+        check (! soloOn (1), "and un-solos it");
+
+        // Snapshot: band 2 soloed (region lit, others dimmed, S badge on its handle).
+        buttons[1]->clicked ({});
+        dooblrEditor->selectBand (1);
+        check (processor.isAnyBandSoloed() && processor.isBandSoloed (1), "band 2 soloed for the snapshot");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.9.1-solo");
+        processor.editorBeingDeleted (editor.get());
+    }
+
 }
 
 int main()
@@ -4984,6 +5313,9 @@ int main()
         { "dynamic Low / High Cut (0.9.0)",          testDynamicCuts },
         { "outer Range ring (0.9.0)",                testRangeRing },
         { "Range ring snapshots (0.9.0)",            testRangeRingSnapshots },
+        { "band Solo regions (0.9.1)",               testSoloRegions },
+        { "band Solo audio (0.9.1)",                 testSoloAudio },
+        { "band Solo editor (0.9.1)",                testSoloEditor },
         { "CPU per phase mode",                     testCpuUsage },
     };
 
