@@ -5053,8 +5053,17 @@ namespace
         s.type = T::lowCut;
         s.q = 0.707f;
         r = dsp::soloRegionFor (s, 0.0);
-        check (r.shape == dsp::SoloShape::bandPass && std::abs (r.frequency - 1000.0) < 1.0e-6 && r.q >= 1.0,
-               "low cut: band-pass around the cutoff");
+        check (r.shape == dsp::SoloShape::lowPass && r.fromInput && std::abs (r.frequency - 1000.0) < 1.0e-6
+                   && std::abs (magDb (r, 100.0)) < 0.1 && magDb (r, 10000.0) < -30.0,
+               "low cut (0.9.4): what it removes, the input below the cutoff (low-pass at the cutoff)");
+        s.type = T::highCut;
+        r = dsp::soloRegionFor (s, 0.0);
+        check (r.shape == dsp::SoloShape::highPass && r.fromInput && std::abs (r.frequency - 1000.0) < 1.0e-6
+                   && std::abs (magDb (r, 10000.0)) < 0.1 && magDb (r, 100.0) < -30.0,
+               "high cut (0.9.4): what it removes, the input above the cutoff (high-pass at the cutoff)");
+        s.type = T::bell;
+        check (! dsp::soloRegionFor (s, 0.0).fromInput, "a bell's region filters the EQ output (not the input)");
+        s.type = T::lowCut;
         s.dynamicsEnabled = true;
         r = dsp::soloRegionFor (s, 6.0);
         check (std::abs (r.frequency - dsp::DynamicEQBand::dynamicCutFrequency (T::lowCut, 1000.0, 6.0)) < 1.0e-6,
@@ -5613,27 +5622,28 @@ namespace
             check (solosAre (true, false, false), "the ring drag leaves Solo on");
         }
 
-        // --- A drag that starts on the S edits the ring under it; Solo does not toggle.
+        // --- 0.9.4: a drag that starts on the S moves its band (auditioning it); Solo does not toggle.
         {
             const auto h = curve->handlePosition (0);
             const auto badge = curve->soloBadgeBounds (0);
             const auto onS = badge.getCentre();
             curve->updateHover (onS);
-            const auto distance = onS.getDistanceFrom (h);
-            note ("S centre " + format (distance, 1) + " px from the handle (ring hit " + format (Curve::hoverRingInnerHit, 0)
-                  + "-" + format (Curve::hoverRingOuterHit, 0) + " px)");
+            note ("S centre " + format (onS.getDistanceFrom (h), 1) + " px from the handle");
             check (curve->hitAt (onS) == Curve::Hit::soloBadge, "test setup: the press lands on the S");
-            const auto r0 = value (0, params::band::range);
+            const auto r0 = value (0, params::band::range), g0 = value (0, params::band::gain);
             std::vector<juce::Point<float>> path;
             for (int i = 0; i <= 10; ++i)
                 path.push_back (onS.translated (0.0f, 2.0f * (float) i));
             simulatePathDrag (*curve, path);
-            note ("drag from the S: Range " + format (r0, 2) + " -> " + format (value (0, params::band::range), 2) + " dB, Solo "
-                  + (soloOn (0) ? "on" : "off"));
+            note ("drag from the S: gain " + format (g0, 2) + " -> " + format (value (0, params::band::gain), 2) + " dB, Range "
+                  + format (r0, 2) + " -> " + format (value (0, params::band::range), 2) + " dB, Solo " + (soloOn (0) ? "on" : "off"));
             check (soloOn (0), "dragging from the soloed band's S does not un-solo it");
-            check (std::abs (value (0, params::band::range) - (r0 - 4.0f)) < 0.3f, "the drag goes to the ring under the S (-4 dB Range)");
+            check (value (0, params::band::gain) < g0 - 0.5f && std::abs (value (0, params::band::range) - r0) < 0.01f,
+                   "the drag from the S moves the band (gain down), not the ring");
+            setBand (processor, 0, params::band::gain, g0);
 
             // A click without a drag still toggles (on mouse-up).
+            curve->updateHover (onS);
             curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
             check (soloOn (0), "pressing the S does not toggle yet");
             curve->mouseUp (makeMouseEvent (*curve, onS, onS, 1, false));
@@ -5644,31 +5654,52 @@ namespace
             check (soloOn (0), "a second click solos again");
 
             // A press on the S, moved off it and released elsewhere, is not a click.
+            const auto f0 = value (0, params::band::frequency);
             const auto away = onS.translated (60.0f, 60.0f);
             curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
             curve->mouseDrag (makeMouseEvent (*curve, away, onS, 1, true));
             curve->mouseUp (makeMouseEvent (*curve, away, onS, 1, true));
             check (soloOn (0), "a drag off the S does not toggle Solo");
+            setBand (processor, 0, params::band::frequency, f0);
+            setBand (processor, 0, params::band::gain, g0);
         }
 
-        // --- Another band's ring under the soloed band's S: the drag goes to that ring.
+        // --- Another band's ring under the soloed band's S: the S takes the drag (0.9.4), and
+        // that ring is still reachable from its annulus away from the S.
         {
             const auto badgeCentre = curve->soloBadgeBounds (0).getCentre();
             const auto target = badgeCentre.translated (Curve::hoverRingRadius, 0.0f);
             curve->updateHover (curve->handlePosition (2));
             simulateDrag (*curve, curve->handlePosition (2), target);
             const auto h2 = curve->handlePosition (2);
-            curve->updateHover (badgeCentre);
-            check (curve->getHoverBand() == 2 && h2.getDistanceFrom (target) < 1.5f,
-                   "test setup: band 3 sits next to band 1's S, which lies on band 3's ring");
+            check (h2.getDistanceFrom (target) < 1.5f, "test setup: band 3 sits next to band 1's S, which lies on band 3's ring");
             const auto r0 = value (2, params::band::range);
+            const auto f0 = value (0, params::band::frequency), g0 = value (0, params::band::gain);
+            curve->updateHover (badgeCentre);
+            check (curve->hitAt (badgeCentre) == Curve::Hit::soloBadge, "the press on band 1's S hits the S");
             std::vector<juce::Point<float>> path;
             for (int i = 0; i <= 10; ++i)
                 path.push_back (badgeCentre.translated (0.0f, -2.0f * (float) i));
             simulatePathDrag (*curve, path);
-            note ("band 3 ring drag through band 1's S: Range " + format (r0, 2) + " -> " + format (value (2, params::band::range), 2) + " dB");
+            note ("drag from band 1's S over band 3's ring: band 1 gain " + format (g0, 2) + " -> "
+                  + format (value (0, params::band::gain), 2) + " dB, band 3 Range " + format (r0, 2) + " -> "
+                  + format (value (2, params::band::range), 2) + " dB");
+            check (value (0, params::band::gain) > g0 + 0.5f && std::abs (value (2, params::band::range) - r0) < 0.01f,
+                   "the S drag moves band 1, band 3's ring is untouched");
+            check (solosAre (true, false, false), "and band 1 stays soloed");
+            setBand (processor, 0, params::band::frequency, f0);
+            setBand (processor, 0, params::band::gain, g0);
+
+            const auto top = curve->handlePosition (2).translated (0.0f, -Curve::hoverRingRadius);
+            curve->updateHover (top);
+            check (curve->hitAt (top) == Curve::Hit::rangeRing, "band 3's ring annulus away from the S is a ring hit");
+            path.clear();
+            for (int i = 0; i <= 10; ++i)
+                path.push_back (top.translated (0.0f, -2.0f * (float) i));
+            simulatePathDrag (*curve, path);
+            note ("band 3 ring drag from its annulus: Range " + format (r0, 2) + " -> " + format (value (2, params::band::range), 2) + " dB");
             check (std::abs (value (2, params::band::range) - (r0 + 4.0f)) < 0.3f && processor.getBandSettings (2).dynamicsEnabled,
-                   "band 3's ring takes the drag (the soloed S does not swallow it)");
+                   "band 3's ring still takes a drag from its own annulus");
             check (solosAre (true, false, false), "and band 1 stays soloed");
             setBand (processor, 2, params::band::frequency, 250.0f);
         }
@@ -5791,6 +5822,343 @@ namespace
         processor.editorBeingDeleted (editor.get());
     }
 
+    //==============================================================================
+    // 0.9.4: press on a band's S and drag: that band is auditioned alone for the gesture and
+    // moves like its handle; Solo itself is untouched. Cuts audition what they remove.
+    void testSoloDrag()
+    {
+        using Curve = dooblrq::ui::ResponseCurveComponent;
+        constexpr double sr = 48000.0;
+
+        // --- Cut auditions through the processor: the removed side of the input.
+        for (const auto mode : allPhaseModes)
+        {
+            const auto name = std::string (phaseName (mode));
+            for (const auto type : { dsp::FilterType::lowCut, dsp::FilterType::highCut })
+            {
+                const auto low = type == dsp::FilterType::lowCut;
+                const auto label = name + (low ? " low cut 1 kHz" : " high cut 1 kHz");
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                configureBell (processor, 0, 1000.0f, 0.0f, 0.707f);
+                setBand (processor, 0, params::band::type, (float) type);
+                configureBell (processor, 1, 3000.0f, 3.0f, 1.0f); // a band that is not soloed
+                prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+                const auto eqBelow = measureSineGainDb (processor, 200.0, 0.25f, sr, 0.5);
+                processor.reset();
+                const auto eqAbove = measureSineGainDb (processor, 5000.0, 0.25f, sr, 0.5);
+
+                setBand (processor, 0, params::band::solo, 1.0f);
+                processor.reset();
+                const auto below = measureSineGainDb (processor, 200.0, 0.25f, sr, 0.5);
+                processor.reset();
+                const auto above = measureSineGainDb (processor, 5000.0, 0.25f, sr, 0.5);
+                note (label + ": EQ 200 Hz " + format (eqBelow, 1) + " / 5 kHz " + format (eqAbove, 1) + " dB; soloed 200 Hz "
+                      + format (below, 1) + " / 5 kHz " + format (above, 1) + " dB");
+                const auto kept = low ? below : above, removed = low ? above : below;
+                check (kept > -1.0 && kept < 0.5 && removed < -30.0,
+                       label + ": solo plays what the cut removes (" + std::string (low ? "below" : "above") + " the cutoff) at input level");
+
+                // The S-drag audition does the same, exclusively (Solo param off on this band).
+                setBand (processor, 0, params::band::solo, 0.0f);
+                setBand (processor, 1, params::band::solo, 1.0f);
+                processor.setSoloAudition (0);
+                check (processor.isBandHeardSolo (0) && ! processor.isBandHeardSolo (1) && ! processor.isBandSoloed (0),
+                       label + ": the audition is heard alone, not a parameter");
+                processor.reset();
+                const auto aBelow = measureSineGainDb (processor, 200.0, 0.25f, sr, 0.5);
+                processor.reset();
+                const auto aAbove = measureSineGainDb (processor, 5000.0, 0.25f, sr, 0.5);
+                processor.reset();
+                const auto aOther = measureSineGainDb (processor, 3000.0, 0.25f, sr, 0.5);
+                note (label + " audition: 200 Hz " + format (aBelow, 1) + " / 5 kHz " + format (aAbove, 1) + " / 3 kHz "
+                      + format (aOther, 1) + " dB");
+                const auto aKept = low ? aBelow : aAbove, aRemoved = low ? aAbove : aBelow;
+                check (aKept > -1.0 && aRemoved < -30.0, label + ": the S-drag audition plays the removed side too");
+                processor.setSoloAudition (-1);
+                check (! processor.isBandHeardSolo (0) && processor.isBandHeardSolo (1), label + ": ending it restores Solo as it was");
+            }
+
+            // Alignment: in a latent mode the removed side comes from the delayed input, so an
+            // impulse through a soloed low cut peaks at the plug-in latency (plus the filter's
+            // own short delay), not before it.
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                configureBell (processor, 0, 1000.0f, 0.0f, 0.707f);
+                setBand (processor, 0, params::band::type, (float) dsp::FilterType::lowCut);
+                setBand (processor, 0, params::band::solo, 1.0f);
+                prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+                const auto latency = processor.getLatencySamples();
+                juce::AudioBuffer<float> buffer (2, 48000);
+                buffer.clear();
+                processInBlocks (processor, buffer, { 512 }); // the solo fade settles on silence
+                buffer.clear();
+                buffer.setSample (0, 0, 1.0f);
+                buffer.setSample (1, 0, 1.0f);
+                processInBlocks (processor, buffer, { 512 });
+                int peakAt = 0;
+                for (int i = 1; i < buffer.getNumSamples(); ++i)
+                    if (std::abs (buffer.getSample (0, i)) > std::abs (buffer.getSample (0, peakAt)))
+                        peakAt = i;
+                float early = 0.0f;
+                for (int i = 0; i < std::max (0, latency - 8); ++i)
+                    early = std::max (early, std::abs (buffer.getSample (0, i)));
+                note (name + ": soloed low cut impulse peak at " + std::to_string (peakAt) + " samples (latency "
+                      + std::to_string (latency) + "), max before latency " + format (early, 6));
+                check (peakAt >= latency && peakAt < latency + 48 && early < 1.0e-3f,
+                       name + ": the cut audition is aligned with the EQ output (no added latency)");
+            }
+        }
+
+        // --- Slicing: a 4096-sample block gives what 512-sample blocks give (low cut soloed).
+        for (const auto mode : { PhaseMode::zeroLatency, PhaseMode::linearPhase })
+        {
+            const auto run = [&] (std::initializer_list<int> blocks)
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                configureBell (processor, 0, 800.0f, 0.0f, 0.707f);
+                setBand (processor, 0, params::band::type, (float) dsp::FilterType::lowCut);
+                setBand (processor, 0, params::band::solo, 1.0f);
+                configureBell (processor, 1, 3000.0f, 4.0f, 1.0f);
+                setBand (processor, 1, params::band::solo, 1.0f);
+                prepare (processor, juce::AudioChannelSet::stereo(), sr, 4096);
+                juce::AudioBuffer<float> buffer (2, 32768);
+                fillWithNoise (buffer, 17, 0.25f);
+                processInBlocks (processor, buffer, blocks);
+                return buffer;
+            };
+            const auto big = run ({ 4096 }), small = run ({ 512 });
+            float error = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < big.getNumSamples(); ++i)
+                    error = std::max (error, std::abs (big.getSample (ch, i) - small.getSample (ch, i)));
+            note (std::string (phaseName (mode)) + ": 4096- vs 512-sample blocks with solos, max difference " + format (error, 8));
+            check (error < 1.0e-5f && allFinite (big), std::string (phaseName (mode)) + ": large blocks match small blocks with solos");
+        }
+
+        // --- The editor gesture.
+        DooblrQAudioProcessor processor;
+        configureBell (processor, 0, 1000.0f, 4.0f, 1.0f);
+        configureBell (processor, 1, 4000.0f, -3.0f, 1.5f);
+        configureBell (processor, 2, 120.0f, 0.0f, 0.707f);
+        setBand (processor, 2, params::band::type, (float) dsp::FilterType::lowCut);
+        for (int b = 3; b < params::numBands; ++b)
+            setBand (processor, b, params::band::enabled, 0.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        check (dooblrEditor != nullptr, "editor exists");
+        if (dooblrEditor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+        auto* curve = dynamic_cast<Curve*> (findById (*editor, "responseCurve"));
+        check (curve != nullptr && curve->getWidth() > 0, "response curve found");
+        if (curve == nullptr)
+            return;
+
+        auto& history = processor.getUndoHistory();
+        const auto soloOn = [&] (int b) { return getParameter (processor, params::bandId (b, params::band::solo)) >= 0.5f; };
+        const auto value = [&] (int b, const char* suffix) { return getParameter (processor, params::bandId (b, suffix)); };
+
+        setBand (processor, 0, params::band::solo, 1.0f); // band 1 soloed, band 2 not
+
+        // Press, drag, release on band 2 (not soloed) and on band 1 (soloed).
+        for (const auto b : { 1, 0 })
+        {
+            const auto label = std::string (b == 0 ? "soloed" : "not soloed") + " band " + std::to_string (b + 1);
+            const auto wasSoloed = soloOn (b);
+            const auto f0 = value (b, params::band::frequency), g0 = value (b, params::band::gain);
+            const auto h0 = curve->handlePosition (b);
+            curve->updateHover (h0);
+            curve->advanceHoverAnimation (0.2);
+            const auto onS = curve->soloBadgeBounds (b).getCentre();
+            const auto sOffset = onS - h0;
+            curve->updateHover (onS);
+            check (curve->hitAt (onS) == Curve::Hit::soloBadge, label + ": test setup, the press lands on the S");
+            history.clear();
+
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            check (processor.getSoloAudition() < 0 && curve->getSoloDragBand() < 0, label + ": the press alone does not audition");
+            curve->mouseDrag (makeMouseEvent (*curve, onS.translated (2.0f, 0.0f), onS, 1, false));
+            check (processor.getSoloAudition() < 0, label + ": within the 3 px click slop, still no audition");
+
+            const auto delta = juce::Point<float> (-50.0f, -25.0f);
+            for (int i = 1; i <= 10; ++i)
+                curve->mouseDrag (makeMouseEvent (*curve, onS + delta * ((float) i / 10.0f), onS, 1, true));
+            const auto end = onS + delta;
+            curve->advanceHoverAnimation (0.05);
+            const auto heardAlone = processor.isBandHeardSolo (b) && processor.isAnyBandHeardSolo();
+            auto othersHeard = false;
+            for (int o = 0; o < params::numBands; ++o)
+                othersHeard = othersHeard || (o != b && processor.isBandHeardSolo (o));
+            const auto badgeNow = curve->soloBadgeBounds (b).getCentre();
+            note (label + " S-drag: " + format (f0, 0) + " Hz / " + format (g0, 1) + " dB -> " + format (value (b, params::band::frequency), 0)
+                  + " Hz / " + format (value (b, params::band::gain), 1) + " dB; S " + format (badgeNow.getDistanceFrom (end), 2)
+                  + " px from the pointer, handle offset kept within " + format ((badgeNow - curve->handlePosition (b)).getDistanceFrom (sOffset), 2) + " px");
+            check (processor.getSoloAudition() == b && curve->getSoloDragBand() == b, label + ": dragging auditions the band");
+            check (heardAlone && ! othersHeard, label + ": the audition is exclusive (other soloed bands are not heard)");
+            check (soloOn (0) && ! soloOn (1), label + ": the Solo parameters are untouched during the drag");
+            check (value (b, params::band::frequency) < f0 * 0.85f && value (b, params::band::gain) > g0 + 1.0f,
+                   label + ": the drag moves the band (frequency down, gain up)");
+            check (badgeNow.getDistanceFrom (end) < 1.5f, label + ": the S stays under the pointer, pinned to its handle");
+            check (dooblrEditor->getSelectedBand() == b, label + ": the dragged band is selected");
+
+            curve->mouseUp (makeMouseEvent (*curve, end, onS, 1, true));
+            check (processor.getSoloAudition() < 0 && curve->getSoloDragBand() < 0, label + ": release ends the audition");
+            check (soloOn (b) == wasSoloed && soloOn (0) && ! soloOn (1), label + ": Solo returns to what it was");
+            check (processor.isBandHeardSolo (0) && ! processor.isBandHeardSolo (1), label + ": band 1's own Solo is heard again");
+            check (history.getNumUndoableSteps() == 1, label + ": the move is one undo step");
+            history.undo();
+            check (std::abs (value (b, params::band::frequency) - f0) < 0.5f && std::abs (value (b, params::band::gain) - g0) < 0.01f
+                       && soloOn (0) && ! soloOn (1),
+                   label + ": undo restores the band and leaves Solo alone");
+        }
+
+        // A cut band's S-drag: vertical is Q.
+        {
+            const auto h0 = curve->handlePosition (2);
+            curve->updateHover (h0);
+            curve->advanceHoverAnimation (0.2);
+            const auto onS = curve->soloBadgeBounds (2).getCentre();
+            curve->updateHover (onS);
+            const auto q0 = value (2, params::band::q), f0 = value (2, params::band::frequency);
+            history.clear();
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            for (int i = 1; i <= 10; ++i)
+                curve->mouseDrag (makeMouseEvent (*curve, onS.translated (4.0f * (float) i, -4.8f * (float) i), onS, 1, true));
+            const auto auditioned = processor.getSoloAudition() == 2 && processor.getSoloRegion (2).fromInput;
+            curve->mouseUp (makeMouseEvent (*curve, onS.translated (40.0f, -48.0f), onS, 1, true));
+            note ("low cut S-drag: " + format (f0, 0) + " Hz / Q " + format (q0, 2) + " -> " + format (value (2, params::band::frequency), 0)
+                  + " Hz / Q " + format (value (2, params::band::q), 2));
+            check (auditioned, "low cut S-drag auditions the removed side (input, low-pass)");
+            check (value (2, params::band::frequency) > f0 * 1.1f && value (2, params::band::q) > q0 * 1.2f,
+                   "low cut S-drag: horizontal is the cutoff, up raises Q");
+            check (history.getNumUndoableSteps() == 1 && processor.getSoloAudition() < 0 && ! soloOn (2), "one undo step, audition ended, Solo off");
+            setBand (processor, 2, params::band::frequency, f0);
+            setBand (processor, 2, params::band::q, q0);
+        }
+
+        // A click (under 3 px) still toggles; Alt-click is exclusive.
+        {
+            const auto h1 = curve->handlePosition (1);
+            curve->updateHover (h1);
+            curve->advanceHoverAnimation (0.2);
+            const auto onS = curve->soloBadgeBounds (1).getCentre();
+            curve->updateHover (onS);
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            curve->mouseDrag (makeMouseEvent (*curve, onS.translated (2.0f, 1.0f), onS, 1, false));
+            curve->mouseUp (makeMouseEvent (*curve, onS.translated (2.0f, 1.0f), onS, 1, false));
+            check (soloOn (0) && soloOn (1) && processor.getSoloAudition() < 0, "a 2 px click on band 2's S adds it to Solo, no audition");
+            curve->updateHover (onS);
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            curve->mouseUp (makeMouseEvent (*curve, onS, onS, 1, false));
+            check (soloOn (0) && ! soloOn (1), "a second click un-solos it");
+
+            const auto alt = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | juce::ModifierKeys::altModifier);
+            curve->updateHover (onS);
+            curve->mouseDown (makeMouseEventWithMods (*curve, onS, onS, 1, false, alt));
+            curve->mouseUp (makeMouseEventWithMods (*curve, onS, onS, 1, false, alt));
+            check (! soloOn (0) && soloOn (1), "Alt-click on band 2's S solos it exclusively");
+            setBand (processor, 0, params::band::solo, 1.0f);
+            setBand (processor, 1, params::band::solo, 0.0f);
+        }
+
+        // --- No zipper: auditioning on, sweeping, and off, one change per block as a drag does.
+        for (const auto mode : allPhaseModes)
+        {
+            const auto name = std::string (phaseName (mode));
+            DooblrQAudioProcessor audio;
+            setParameter (audio, params::phaseMode, (float) mode);
+            configureBell (audio, 0, 1000.0f, 3.0f, 1.0f);
+            configureBell (audio, 1, 4000.0f, 0.0f, 1.0f);
+            setBand (audio, 0, params::band::solo, 1.0f);
+            prepare (audio, juce::AudioChannelSet::stereo(), sr, 256);
+            constexpr double tone = 1250.0;
+            std::vector<std::pair<int, std::function<void()>>> segments { { 9600, nullptr }, { 4800, [&audio] { audio.setSoloAudition (1); } } };
+            for (int i = 1; i <= 75; ++i)
+                segments.push_back ({ 256, [&audio, i] { setBand (audio, 1, params::band::frequency,
+                                                                (float) (4000.0 * std::pow (0.3125, (double) i / 75.0))); } });
+            segments.push_back ({ 4800, [&audio] { audio.setSoloAudition (-1); } });
+            segments.push_back ({ 4800, nullptr });
+            const auto out = runSineSegments (audio, tone, 0.5f, sr, segments);
+            const auto sweepFrom = 9600 + 4800, sweepTo = sweepFrom + 75 * 256;
+            float peak = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 9600; i < out.getNumSamples(); ++i)
+                    peak = std::max (peak, std::abs (out.getSample (ch, i)));
+            const auto ideal = 2.0f * peak * (float) std::sin (juce::MathConstants<double>::pi * tone / sr);
+            const auto onStep = maxStep (out, 9600, sweepFrom), sweep = maxStep (out, sweepFrom, sweepTo);
+            const auto offStep = maxStep (out, sweepTo, sweepTo + 4800);
+            note (name + ": audition on / sweep 4 -> 1.25 kHz / off, 1.25 kHz tone: max steps " + format (onStep, 4) + " / "
+                  + format (sweep, 4) + " / " + format (offStep, 4) + " vs " + format (ideal, 4) + " for a clean sine at peak " + format (peak, 3));
+            check (allFinite (out) && peak > 0.2f && onStep < ideal * 1.1f && sweep < ideal * 1.1f && offStep < ideal * 1.1f,
+                   name + ": the S-drag audition switches and sweeps click-free (no zipper steps)");
+        }
+
+        // A cut audition swept the same way (the removed side follows the cutoff smoothly).
+        {
+            DooblrQAudioProcessor audio;
+            configureBell (audio, 0, 2000.0f, 0.0f, 0.707f);
+            setBand (audio, 0, params::band::type, (float) dsp::FilterType::highCut);
+            prepare (audio, juce::AudioChannelSet::stereo(), sr, 256);
+            constexpr double tone = 1600.0;
+            std::vector<std::pair<int, std::function<void()>>> segments { { 9600, nullptr }, { 4800, [&audio] { audio.setSoloAudition (0); } } };
+            for (int i = 1; i <= 75; ++i)
+                segments.push_back ({ 256, [&audio, i] { setBand (audio, 0, params::band::frequency,
+                                                                (float) (2000.0 * std::pow (0.5, (double) i / 75.0))); } });
+            segments.push_back ({ 4800, [&audio] { audio.setSoloAudition (-1); } });
+            segments.push_back ({ 4800, nullptr });
+            const auto out = runSineSegments (audio, tone, 0.5f, sr, segments);
+            float peak = 0.0f;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < out.getNumSamples(); ++i)
+                    peak = std::max (peak, std::abs (out.getSample (ch, i)));
+            const auto ideal = 2.0f * peak * (float) std::sin (juce::MathConstants<double>::pi * tone / sr);
+            const auto step = maxStep (out, 9600, out.getNumSamples());
+            note ("high cut audition sweep 2 -> 1 kHz, 1.6 kHz tone: max step " + format (step, 4) + " vs " + format (ideal, 4)
+                  + " (peak " + format (peak, 3) + ")");
+            check (allFinite (out) && step < ideal * 1.1f, "a cut's audition sweeps click-free");
+        }
+
+        // Snapshot: band 2 held mid S-drag (auditioned; band 1's own Solo not heard meanwhile).
+        // (2 kHz: clear of the disabled bands' handles, which win over an S.)
+        configureBell (processor, 1, 2000.0f, -4.0f, 1.4f);
+        dooblrEditor->selectBand (1);
+        {
+            const auto h = curve->handlePosition (1);
+            curve->updateHover (h);
+            curve->advanceHoverAnimation (0.2);
+            const auto onS = curve->soloBadgeBounds (1).getCentre();
+            curve->updateHover (onS);
+            check (curve->hitAt (onS) == Curve::Hit::soloBadge, "snapshot setup: the press lands on band 2's S");
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            for (int i = 1; i <= 8; ++i)
+                curve->mouseDrag (makeMouseEvent (*curve, onS.translated (-7.0f * (float) i, 3.0f * (float) i), onS, 1, true));
+            curve->advanceHoverAnimation (0.2);
+            check (processor.getSoloAudition() == 1 && soloOn (0) && ! soloOn (1), "snapshot: band 2 held mid S-drag, auditioned");
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.9.4-sdrag");
+            curve->mouseUp (makeMouseEvent (*curve, onS.translated (-56.0f, 24.0f), onS, 1, true));
+            check (processor.getSoloAudition() < 0, "snapshot: released");
+        }
+
+        // Closing the editor mid S-drag never leaves the audition on.
+        {
+            const auto onS = curve->soloBadgeBounds (1).getCentre();
+            curve->updateHover (curve->handlePosition (1));
+            curve->advanceHoverAnimation (0.2);
+            curve->updateHover (onS);
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            curve->mouseDrag (makeMouseEvent (*curve, onS.translated (20.0f, 0.0f), onS, 1, true));
+            check (processor.getSoloAudition() == 1, "test setup: mid S-drag");
+            processor.editorBeingDeleted (editor.get());
+            editor.reset();
+            check (processor.getSoloAudition() < 0, "deleting the editor mid S-drag ends the audition");
+        }
+    }
+
 }
 
 int main()
@@ -5845,6 +6213,7 @@ int main()
         { "band Solo editor (0.9.1)",                testSoloEditor },
         { "hover Range ring and blue S (0.9.2)",     testHoverRing },
         { "editing while soloed (0.9.3)",           testSoloEditing },
+        { "S-drag audition (0.9.4)",                testSoloDrag },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

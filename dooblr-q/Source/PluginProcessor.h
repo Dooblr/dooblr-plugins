@@ -72,6 +72,17 @@ public:
     bool isBandSoloed (int bandIndex) const noexcept;
     bool isAnyBandSoloed() const noexcept;
 
+    /** 0.9.4 S-drag audition: while a band's S is dragged on the graph, that band alone is
+        heard (exclusive, temporary, not a parameter: no undo step, nothing saved, Solo itself
+        is unchanged). -1 ends it. Any thread. */
+    void setSoloAudition (int bandIndex) noexcept;
+    int getSoloAudition() const noexcept { return soloAudition.load (std::memory_order_relaxed); }
+
+    /** What is heard: the auditioned band alone while an S-drag audition runs, otherwise the
+        soloed bands (isBandSoloed). Any thread. */
+    bool isBandHeardSolo (int bandIndex) const noexcept;
+    bool isAnyBandHeardSolo() const noexcept;
+
     /** The region a band's Solo plays right now (follows a dynamic cut's live cutoff). */
     dooblrq::dsp::SoloRegion getSoloRegion (int bandIndex) const noexcept;
 
@@ -131,7 +142,8 @@ private:
     void updateBandSettings (bool snap) noexcept;
     void applyPhaseMode (int mode, bool fadeIn) noexcept;
     void updateKernel (bool immediate) noexcept;
-    void processFirBlock (float* const* channels, int numChannels, int numSamples, bool linked, bool outputDry) noexcept;
+    void processFirBlock (float* const* channels, int numChannels, int numSamples, bool linked, bool outputDry,
+                          float* const* delayedInput = nullptr) noexcept;
     void applySwitchFade (float* const* channels, int numChannels, int numSamples) noexcept;
 
     struct BandParameterPointers
@@ -165,11 +177,18 @@ private:
     std::array<dooblrq::dsp::DynamicEQBand, dooblrq::params::numBands> bands;
     juce::SmoothedValue<float> outputGain { 1.0f };
     dooblrq::dsp::SoloStage soloStage;
+    std::atomic<int> soloAudition { -1 };
+
+    // 0.9.4: cut bands' solo plays what they remove, from the (latency-aligned) input. The
+    // block is processed in slices of up to soloSliceSize so this stays preallocated.
+    static constexpr int soloSliceSize = 1024;
+    juce::AudioBuffer<float> soloInput { 2, soloSliceSize };
 
     std::atomic<double> preparedSampleRate { 0.0 };
 
     // Natural / Linear phase (audio thread only, preallocated in prepareToPlay).
     static constexpr int firChunkSize = dooblrq::dsp::FirEqEngine::partitionSize;
+    static_assert (soloSliceSize % coefficientUpdateInterval == 0 && soloSliceSize % firChunkSize == 0);
     static constexpr int switchFadeLength = 256;
     dooblrq::dsp::FirEqEngine firEngine;
     std::atomic<int> activePhaseMode { 0 };

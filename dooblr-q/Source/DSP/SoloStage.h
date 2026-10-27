@@ -20,8 +20,11 @@
       High Shelf      high-pass at the shelf midpoint.
       Tilt            the side the tilt raises: high-pass at the pivot for a positive tilt,
                       low-pass for a negative one.
-      Low / High Cut  band-pass around the cutoff (Q at least 1, about 1.9 octaves), at the
-                      live cutoff while dynamics move it.
+      Low / High Cut  (0.9.4) what the cut removes: the band's input (the plug-in input,
+                      aligned with the EQ output in every phase mode) through a low-pass
+                      (Low Cut) or high-pass (High Cut) at the cutoff, the live cutoff while
+                      dynamics move it. (0.9.1 to 0.9.3 played a band-pass of the EQ'd
+                      output around the cutoff, i.e. what the cut keeps near its edge.)
 
     Every region filter is unity gain at its centre (band-pass) or in its passband, so the
     soloed region plays at the level the EQ gives it: comparable to the normal output.
@@ -40,6 +43,7 @@ namespace dooblrq::dsp
         SoloShape shape = SoloShape::bandPass;
         double frequency = 1000.0;
         double q = 0.707;
+        bool fromInput = false; // true: filter the input (cut bands), not the EQ output
     };
 
     /** The region a band's solo plays; dynamicGainDb moves a dynamic cut's cutoff. */
@@ -70,8 +74,9 @@ namespace dooblrq::dsp
         /** Called once per block for every band (audio thread). */
         void setBand (int bandIndex, bool soloed, const SoloRegion& region) noexcept;
 
-        /** In place on the EQ output. */
-        void process (float* const* channels, int numChannels, int numSamples) noexcept;
+        /** In place on the EQ output. input (may be null: the EQ output is used) is the
+            plug-in input aligned with it, for regions with fromInput. */
+        void process (float* const* channels, const float* const* input, int numChannels, int numSamples) noexcept;
 
         /** True while any band is soloed or a fade is still running. */
         bool isActive() const noexcept;
@@ -87,6 +92,7 @@ namespace dooblrq::dsp
             SoloRegion region;
             double logFrequency = 0.0, q = 0.707;
             SoloShape shape = SoloShape::bandPass;
+            bool fromInput = false;
             SoloCoefficients coefficients;
             std::array<std::array<SvfState, 2>, maxChannels> state {};
         };

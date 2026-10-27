@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.9.3:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle, per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.9.4:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle (drag the S to audition and move a band), per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -17,7 +17,7 @@ moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-ba
 **Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt. 0.7.1 extends
 Slope to Bell and Notch, so it applies to every band type. 0.8.0 adds the per-band Model,
 Stepped, Drive and Atten controls; see [Models](#models-080). 0.9.0 adds dynamics to Low /
-High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091). 0.9.2 adds the hover ring and blue S on the graph; see [Hover ring and blue S](#hover-ring-and-blue-s-092).)
+High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091). 0.9.2 adds the hover ring and blue S on the graph; see [Hover ring and blue S](#hover-ring-and-blue-s-092). 0.9.4 makes the S draggable; see [S-drag audition](#s-drag-audition-094).)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -125,14 +125,36 @@ handles, the hover ring, the panel knobs and the outer Range ring. The audition 
 (the solo region glides, so moving a soloed band is click-free).
 
 - The blue **S** on the graph now toggles Solo on **release, and only for a click** (the
-  pointer moved no more than 3 px). A drag that starts on an S edits a ring instead: a
-  neighbouring band's ring if the pointer is on it (a soloed band's always-visible S can sit
-  on one), otherwise the S's own band's ring (the S sits on its edge). Before 0.9.3 the S toggled on the press and swallowed the
+  pointer moved no more than 3 px). Before 0.9.3 the S toggled on the press and swallowed the
   drag, so grabbing a ring near an S un-soloed (or soloed) the band and edited nothing.
+  (In 0.9.3 a drag from an S edited the ring under it; since 0.9.4 it auditions and moves the
+  S's band, see below. A ring is still dragged from its annulus away from any S.)
 - Handles still take priority over every S and ring, so dragging a soloed band's handle
   never touches Solo.
 - Faded (non-soloed) handles are drawn through a transparency layer clipped to the handle,
   not the whole graph, so painting with Solo on stays cheap.
+
+## S-drag audition (0.9.4)
+
+Press a band's blue **S** on the graph and drag: for the whole gesture you hear **that band
+alone** (exclusively, whatever else is soloed), and the drag moves the band like its handle:
+horizontal = frequency, vertical = gain (bell, shelves; tilt amount for Tilt) or Q (Low / High
+Cut, Notch). The S stays pinned to its handle, under the pointer, and a readout ("Solo  1.25 kHz
++6.0 dB", or "Solo (cut)  … Q 0.71") shows next to the handle; the display shows that band's
+solo region and dims the rest.
+
+- **Temporary:** on release the audition ends and Solo is exactly what it was (a soloed band
+  stays soloed, others stay as they were). The audition is not a parameter: nothing is
+  saved or automated, and the move itself is **one undo step**.
+- **Low / High Cut** audition (and, since 0.9.4, normal Solo of a cut) plays **what the cut
+  removes**: the input below a Low Cut's cutoff (4th-order low-pass at the live cutoff) or above
+  a High Cut's (high-pass). It is taken from the plug-in input, aligned with the EQ output in
+  every phase mode (no added latency), since the EQ'd signal has already lost those
+  frequencies. (0.9.1–0.9.3 played a band-pass around the cutoff of the EQ'd output.)
+- A **click** (under 3 px of travel) still toggles Solo on release; **Alt/Option-click** is
+  still exclusive. Handles still win over every S and ring.
+- Switching the audition on / off uses the same 20 ms crossfades as Solo, and moving the band
+  glides (10 ms), so it is click- and zipper-free. Closing the editor mid-drag ends it.
 
 ## Hover ring and blue S (0.9.2)
 
@@ -168,8 +190,9 @@ passband):
   Width edges, more than 30 dB down a decade away).
 - **Low Shelf / High Shelf:** the shelved side (4th-order low-pass / high-pass at the shelf).
 - **Tilt:** the side it raises (high side for positive gain, low side for negative).
-- **Low / High Cut:** a band-pass around the cutoff; with dynamics on it follows the live
-  (dynamic) cutoff. Dynamic bells and shelves keep their region while their gain moves.
+- **Low / High Cut:** since 0.9.4, what the cut removes: the input below a Low Cut (low-pass
+  at the cutoff) or above a High Cut (high-pass), at input level (0.9.1–0.9.3: a band-pass
+  around the cutoff); with dynamics on it follows the live (dynamic) cutoff. Dynamic bells and shelves keep their region while their gain moves.
 - **Several solos sum.** Alt/Option-click a band's S to solo that band only (alt-click it again
   to un-solo); that change is one undo step.
 - A **disabled band cannot be soloed:** its S is greyed out and a stored Solo on it is ignored

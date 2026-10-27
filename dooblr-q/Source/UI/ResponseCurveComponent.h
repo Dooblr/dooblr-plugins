@@ -101,6 +101,9 @@ namespace dooblrq::ui
         float getHoverAlpha (int bandIndex) const noexcept;
         bool isRingDragging() const noexcept { return ringBand >= 0; }
 
+        /** 0.9.4: the band whose S is being dragged (auditioned and moved), -1 none. */
+        int getSoloDragBand() const noexcept { return soloDragBand; }
+
         /** Advances the fades (called from the display's vblank; public so tests can drive it). */
         void advanceHoverAnimation (double dtSeconds);
 
@@ -227,6 +230,9 @@ namespace dooblrq::ui
         void endRingDrag();
         void drawHoverRing (juce::Graphics& g, int bandIndex, float alpha);
         void drawSoloBadge (juce::Graphics& g, int bandIndex, float alpha);
+        void drawSoloDragReadout (juce::Graphics& g, int bandIndex);
+        void beginSoloDrag (int bandIndex);
+        void endSoloAudition();
         void parameterValueChanged (int parameterIndex, float newValue) override;
         void parameterGestureChanged (int, bool) override {}
 
@@ -293,9 +299,10 @@ namespace dooblrq::ui
         juce::Point<float> ringDownPosition, ringLastPosition;
         double ringAmount = 0.0;                            // upward amount (dB) while dragging
         bool ringGesture = false, ringEngagedDynamics = false;
-        // 0.9.3: a press on the S toggles Solo on release, and only if it was a click (no drag);
-        // a drag that starts on it goes to the ring under it (if any) instead.
+        // A press on the S toggles Solo on release, and only if it was a click (no drag, 0.9.3);
+        // 0.9.4: a drag that starts on it auditions that band alone and moves it.
         int soloPressBand = -1;
+        int soloDragBand = -1;
         bool soloPressAlt = false;
         juce::Point<float> soloPressPosition;
         double lastVBlankTime = 0.0;

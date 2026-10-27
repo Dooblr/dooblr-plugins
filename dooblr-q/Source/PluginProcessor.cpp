@@ -116,6 +116,29 @@ bool DooblrQAudioProcessor::isAnyBandSoloed() const noexcept
     return false;
 }
 
+void DooblrQAudioProcessor::setSoloAudition (int bandIndex) noexcept
+{
+    soloAudition.store (bandIndex >= 0 && bandIndex < params::numBands ? bandIndex : -1, std::memory_order_relaxed);
+}
+
+bool DooblrQAudioProcessor::isBandHeardSolo (int bandIndex) const noexcept
+{
+    if (const auto audition = getSoloAudition(); audition >= 0)
+        return bandIndex == audition
+               && bandParameters[(size_t) audition].enabled->load (std::memory_order_relaxed) >= 0.5f;
+
+    return isBandSoloed (bandIndex);
+}
+
+bool DooblrQAudioProcessor::isAnyBandHeardSolo() const noexcept
+{
+    for (int b = 0; b < params::numBands; ++b)
+        if (isBandHeardSolo (b))
+            return true;
+
+    return false;
+}
+
 dsp::SoloRegion DooblrQAudioProcessor::getSoloRegion (int bandIndex) const noexcept
 {
     return dsp::soloRegionFor (getBandSettings (bandIndex), (double) getBandDynamicGainDb (bandIndex));
@@ -149,8 +172,9 @@ void DooblrQAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     updateBandSettings (true);
 
     for (int b = 0; b < params::numBands; ++b)
-        soloStage.setBand (b, isBandSoloed (b), getSoloRegion (b));
+        soloStage.setBand (b, isBandHeardSolo (b), getSoloRegion (b));
     soloStage.prepare (sampleRate);
+    soloInput.setSize (2, soloSliceSize, false, true, true);
 
     for (auto& band : bands)
         band.reset();
@@ -262,7 +286,7 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
 }
 
 void DooblrQAudioProcessor::processFirBlock (float* const* channels, int numChannels, int numSamples,
-                                             bool linked, bool outputDry) noexcept
+                                             bool linked, bool outputDry, float* const* delayedInput) noexcept
 {
     const auto latency = getLatencySamples();
     const auto ringSize = (int) dryRing[0].size();
@@ -305,6 +329,10 @@ void DooblrQAudioProcessor::processFirBlock (float* const* channels, int numChan
         }
 
         dryRingPosition = (dryRingPosition + length) % ringSize;
+
+        if (delayedInput != nullptr)
+            for (int ch = 0; ch < numChannels; ++ch)
+                juce::FloatVectorOperations::copy (delayedInput[ch] + start, dryScratch.getReadPointer (ch), length);
 
         // 4. FIR convolution, per channel with the shared kernel.
         firEngine.process (chunk, numChannels, length);
@@ -407,28 +435,42 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
         requested != activePhaseMode.load (std::memory_order_relaxed))
         applyPhaseMode (requested, true);
 
-    if (activePhaseMode.load (std::memory_order_relaxed) == (int) params::PhaseMode::zeroLatency)
+    // Slices of soloSliceSize (a multiple of the coefficient interval and the FIR partition,
+    // so the EQ output is identical to processing the block whole).
+    for (int sliceStart = 0; sliceStart < numSamples; sliceStart += soloSliceSize)
     {
-        for (int start = 0; start < numSamples; start += coefficientUpdateInterval)
+        const auto sliceLength = juce::jmin (soloSliceSize, numSamples - sliceStart);
+        float* slice[2] { channels[0] + sliceStart, numChannels > 1 ? channels[1] + sliceStart : nullptr };
+        auto* const* input = soloInput.getArrayOfWritePointers();
+
+        if (activePhaseMode.load (std::memory_order_relaxed) == (int) params::PhaseMode::zeroLatency)
         {
-            const auto length = juce::jmin (coefficientUpdateInterval, numSamples - start);
+            for (int ch = 0; ch < numChannels; ++ch)
+                juce::FloatVectorOperations::copy (input[ch], slice[ch], sliceLength);
 
-            for (auto& band : bands)
-                band.process (channels, numChannels, start, length, linked);
+            for (int start = 0; start < sliceLength; start += coefficientUpdateInterval)
+            {
+                const auto length = juce::jmin (coefficientUpdateInterval, sliceLength - start);
+
+                for (auto& band : bands)
+                    band.process (slice, numChannels, start, length, linked);
+            }
         }
-    }
-    else
-    {
-        processFirBlock (channels, numChannels, numSamples, linked, false);
-    }
+        else
+        {
+            processFirBlock (slice, numChannels, sliceLength, linked, false, input);
+        }
 
-    applySwitchFade (channels, numChannels, numSamples);
+        applySwitchFade (slice, numChannels, sliceLength);
 
-    // Solo (0.9.1): after the EQ in every phase mode, so it adds no latency; pass-through
-    // when nothing is soloed. Disabled bands' Solo is ignored (isBandSoloed).
-    for (int b = 0; b < params::numBands; ++b)
-        soloStage.setBand (b, isBandSoloed (b), getSoloRegion (b));
-    soloStage.process (channels, numChannels, numSamples);
+        // Solo (0.9.1): after the EQ in every phase mode, so it adds no latency; pass-through
+        // when nothing is soloed. Disabled bands' Solo is ignored (isBandSoloed); an S-drag
+        // audition (0.9.4) temporarily hears only its band. Cut bands play their removed
+        // side from the input (aligned with the EQ output in every phase mode).
+        for (int b = 0; b < params::numBands; ++b)
+            soloStage.setBand (b, isBandHeardSolo (b), getSoloRegion (b));
+        soloStage.process (slice, input, numChannels, sliceLength);
+    }
 
     if (outputGain.isSmoothing())
     {

@@ -63,6 +63,7 @@ namespace dooblrq::ui
 
     ResponseCurveComponent::~ResponseCurveComponent()
     {
+        endSoloAudition(); // never leave an S-drag audition running
         vblank.reset();
         stopTimer();
 
@@ -410,7 +411,8 @@ namespace dooblrq::ui
         if (b < 0 || b >= params::numBands)
             return false;
 
-        return processor.isBandSoloed (b) || (b == hoverBand && processor.getBandSettings (b).enabled);
+        return processor.isBandSoloed (b) || b == soloDragBand
+               || (b == hoverBand && processor.getBandSettings (b).enabled);
     }
 
     juce::Rectangle<float> ResponseCurveComponent::soloBadgeBounds (int b) const
@@ -958,10 +960,46 @@ namespace dooblrq::ui
         }
     }
 
+    void ResponseCurveComponent::drawSoloDragReadout (juce::Graphics& g, int b)
+    {
+        // 0.9.4: what the S-drag is doing: "Solo", the frequency, and the vertical value.
+        const auto s = processor.getBandSettings (b);
+        const auto f = (double) s.frequency;
+        const auto frequency = f >= 1000.0 ? juce::String (f / 1000.0, f >= 10000.0 ? 1 : 2) + " kHz"
+                                           : juce::String (juce::roundToInt (f)) + " Hz";
+        juce::String value;
+
+        if (verticalIsQ (s.type))
+            value = "Q " + juce::String (s.q, 2);
+        else
+            value = juce::String (s.type == dsp::FilterType::tilt ? "Tilt " : "")
+                    + (s.gainDb >= 0.0f ? "+" : "") + juce::String (s.gainDb, 1) + " dB";
+
+        const auto cut = s.type == dsp::FilterType::lowCut || s.type == dsp::FilterType::highCut;
+        const auto text = juce::String (cut ? "Solo (cut)  " : "Solo  ") + frequency + "  " + value;
+        const auto badge = soloBadgeBounds (b);
+        const auto handle = handlePosition (b);
+        const auto area = plotArea();
+
+        // On the side of the handle away from the S, kept inside the plot.
+        auto box = juce::Rectangle<float> (150.0f, 18.0f)
+                       .withCentre (handle.translated (0.0f, badge.getCentreY() < handle.y ? hoverRingOuterHit + 12.0f
+                                                                                           : -hoverRingOuterHit - 12.0f));
+        box = box.constrainedWithin (area.reduced (2.0f));
+
+        g.setColour (Palette::panelRaised.withAlpha (0.92f));
+        g.fillRoundedRectangle (box, 4.0f);
+        g.setColour (Palette::solo);
+        g.drawRoundedRectangle (box.reduced (0.5f), 4.0f, 1.0f);
+        g.setColour (Palette::textPrimary);
+        g.setFont (juce::FontOptions (11.5f, juce::Font::bold));
+        g.drawText (text, box, juce::Justification::centred);
+    }
+
     void ResponseCurveComponent::drawSoloBadge (juce::Graphics& g, int b, float alpha)
     {
         const auto badge = soloBadgeBounds (b);
-        const auto soloed = processor.isBandSoloed (b);
+        const auto soloed = processor.isBandSoloed (b) || b == soloDragBand;
 
         if (soloed)
         {
@@ -1005,7 +1043,7 @@ namespace dooblrq::ui
         // band's transparency layer is always begun and ended in pairs.
         std::array<bool, params::numBands> soloed {};
         for (int b = 0; b < params::numBands; ++b)
-            soloed[(size_t) b] = processor.isBandSoloed (b);
+            soloed[(size_t) b] = processor.isBandHeardSolo (b); // an S-drag audition shows too
         const auto anySolo = std::find (soloed.begin(), soloed.end(), true) != soloed.end();
         const auto dimmed = [&] (int b) { return anySolo && ! soloed[(size_t) b]; };
 
@@ -1155,7 +1193,7 @@ namespace dooblrq::ui
 
         // 0.9.2: hover rings sit under the handles.
         for (int b = 0; b < params::numBands; ++b)
-            if (const auto alpha = getHoverAlpha (b); alpha > 0.005f && hoverRingAvailable (b))
+            if (const auto alpha = getHoverAlpha (b); alpha > 0.005f && hoverRingAvailable (b) && b != soloDragBand)
                 drawHoverRing (g, b, alpha);
 
         for (int b = 0; b < params::numBands; ++b)
@@ -1225,11 +1263,15 @@ namespace dooblrq::ui
         // 0.9.2: the blue S (Solo) on top: always for soloed bands, fading with the ring on hover.
         for (int b = 0; b < params::numBands; ++b)
         {
-            const auto alpha = processor.isBandSoloed (b) ? 1.0f
-                                                          : (processor.getBandSettings (b).enabled ? getHoverAlpha (b) : 0.0f);
+            const auto alpha = processor.isBandSoloed (b) || b == soloDragBand
+                                   ? 1.0f
+                                   : (processor.getBandSettings (b).enabled ? getHoverAlpha (b) : 0.0f);
             if (alpha > 0.005f)
                 drawSoloBadge (g, b, alpha);
         }
+
+        if (soloDragBand >= 0)
+            drawSoloDragReadout (g, soloDragBand);
 
         // Bandwidth handles of the selected band, and a readout while they are dragged.
         if (widthHandlesVisible())
@@ -1387,25 +1429,17 @@ namespace dooblrq::ui
                 widthDragSide = 0;
                 qDrag = false;
 
-                // 0.9.3: the S is a click target only. Nothing toggles on the press: a release
-                // without a drag toggles Solo (mouseUp); a drag goes to the ring under the S, if
-                // there is one, so an always-visible soloed S never swallows a ring drag.
-                // The S sits on its band's ring edge: a drag from it edits the ring under the
-                // pointer (a neighbour's, if one is there), otherwise the S's own band's ring.
-                auto ring = hit == Hit::rangeRing ? band : ringBandAt (event.position);
-
-                if (ring < 0 && hit == Hit::soloBadge && hoverRingAvailable (band))
-                    ring = band;
-
+                // Nothing toggles on the press. A release without a drag toggles Solo (mouseUp,
+                // 0.9.3); a drag (0.9.4) auditions the S's band alone and moves it (mouseDrag).
                 if (hit == Hit::soloBadge)
                 {
                     soloPressBand = band;
                     soloPressAlt = event.mods.isAltDown();
                     soloPressPosition = event.position;
                 }
-
-                if (ring >= 0)
+                else
                 {
+                    const auto ring = band;
                     const auto s = processor.getBandSettings (ring);
                     ringBand = ring;
                     ringDragMode = 0;
@@ -1414,7 +1448,7 @@ namespace dooblrq::ui
                     ringGesture = false;
                     ringEngagedDynamics = false;
 
-                    if (hit == Hit::rangeRing && onBandSelected != nullptr)
+                    if (onBandSelected != nullptr)
                         onBandSelected (ring);
                 }
 
@@ -1476,13 +1510,16 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::mouseDrag (const juce::MouseEvent& event)
     {
-        // A press on the S that moves is a drag, not a click: it never toggles Solo.
-        if (soloPressBand >= 0 && (event.mouseWasDraggedSinceMouseDown()
-                                   || event.position.getDistanceFrom (soloPressPosition) > soloClickSlop))
-            soloPressBand = -1;
-
+        // A press on the S that moves is a drag, not a click: it never toggles Solo. It
+        // auditions the band alone for the whole gesture and moves the band like its handle.
         if (soloPressBand >= 0)
-            return;
+        {
+            if (! event.mouseWasDraggedSinceMouseDown()
+                && event.position.getDistanceFrom (soloPressPosition) <= soloClickSlop)
+                return;
+
+            beginSoloDrag (std::exchange (soloPressBand, -1));
+        }
 
         if (ringBand >= 0)
         {
@@ -1537,7 +1574,7 @@ namespace dooblrq::ui
             return;
         }
 
-        if (draggingBand < 0 || ! event.mouseWasDraggedSinceMouseDown())
+        if (draggingBand < 0 || (! event.mouseWasDraggedSinceMouseDown() && soloDragBand < 0))
             return;
 
         if (widthDragSide != 0)
@@ -1613,6 +1650,40 @@ namespace dooblrq::ui
         repaint();
     }
 
+    void ResponseCurveComponent::beginSoloDrag (int band)
+    {
+        // The handle drag, with the pointer's offset from the handle kept from the press, so
+        // the S stays pinned to its handle (and under the pointer) as the band moves.
+        const auto s = processor.getBandSettings (band);
+        soloDragBand = band;
+        draggingBand = band;
+        widthDragSide = 0;
+        qDrag = false;
+        dragEnabledBand = false;
+        dragOffset = handlePosition (band) - soloPressPosition;
+        dragStartGainDb = s.gainDb;
+        dragStartQ = s.q;
+        dragStartY = soloPressPosition.y;
+        dragVerticalSuffix = verticalIsQ (s.type) ? params::band::q : params::band::gain;
+
+        processor.setSoloAudition (band); // exclusive and temporary: Solo itself is untouched
+
+        if (onBandSelected != nullptr)
+            onBandSelected (band);
+
+        for (const auto* suffix : { params::band::frequency, dragVerticalSuffix })
+            if (auto* parameter = bandParameter (band, suffix))
+                parameter->beginChangeGesture();
+
+        repaint();
+    }
+
+    void ResponseCurveComponent::endSoloAudition()
+    {
+        if (std::exchange (soloDragBand, -1) >= 0)
+            processor.setSoloAudition (-1); // back to what Solo was (20 ms crossfade)
+    }
+
     void ResponseCurveComponent::endRingDrag()
     {
         if (ringBand < 0)
@@ -1681,6 +1752,14 @@ namespace dooblrq::ui
                 parameter->endChangeGesture();
 
         draggingBand = -1;
+
+        if (soloDragBand >= 0)
+        {
+            endSoloAudition();
+            updateHover (event.position);
+            updateCursor (event.position);
+            repaint();
+        }
     }
 
     void ResponseCurveComponent::mouseDoubleClick (const juce::MouseEvent& event)

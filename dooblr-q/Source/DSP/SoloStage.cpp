@@ -62,8 +62,9 @@ namespace dooblrq::dsp
 
             case FilterType::lowCut:
             case FilterType::highCut:
-                r.shape = SoloShape::bandPass;
-                r.q = std::max (1.0, r.q);
+                // What the cut takes away: below a Low Cut, above a High Cut, from the input.
+                r.shape = s.type == FilterType::lowCut ? SoloShape::lowPass : SoloShape::highPass;
+                r.fromInput = true;
                 if (s.dynamicsEnabled && std::isfinite (dynamicGainDb))
                     r.frequency = DynamicEQBand::dynamicCutFrequency (s.type, r.frequency, dynamicGainDb);
                 break;
@@ -155,8 +156,9 @@ namespace dooblrq::dsp
     {
         const auto targetLog = std::log (std::max (1.0, band.region.frequency));
 
-        if (snap || band.shape != band.region.shape)
+        if (snap || band.shape != band.region.shape || band.fromInput != band.region.fromInput)
         {
+            band.fromInput = band.region.fromInput;
             band.logFrequency = targetLog;
             band.q = band.region.q;
             band.shape = band.region.shape;
@@ -167,11 +169,11 @@ namespace dooblrq::dsp
             band.q += (band.region.q - band.q) * glide;
         }
 
-        SoloRegion current { band.shape, std::exp (band.logFrequency), band.q };
+        SoloRegion current { band.shape, std::exp (band.logFrequency), band.q, band.fromInput };
         band.coefficients = makeSoloCoefficients (current, sampleRate);
     }
 
-    void SoloStage::process (float* const* channels, int numChannels, int numSamples) noexcept
+    void SoloStage::process (float* const* channels, const float* const* input, int numChannels, int numSamples) noexcept
     {
         if (! isActive())
             return; // exact pass-through
@@ -230,6 +232,7 @@ namespace dooblrq::dsp
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 auto* data = channels[ch] + start;
+                const auto* source = input != nullptr && input[ch] != nullptr ? input[ch] + start : data;
 
                 for (int n = 0; n < length; ++n)
                 {
@@ -244,7 +247,8 @@ namespace dooblrq::dsp
                             continue;
 
                         auto& state = band.state[(size_t) ch];
-                        const auto y = processSvf (processSvf (x, state[0], band.coefficients.sections[0]),
+                        const auto in = band.fromInput ? source[n] : x;
+                        const auto y = processSvf (processSvf (in, state[0], band.coefficients.sections[0]),
                                                    state[1], band.coefficients.sections[1]);
                         solo += weightRamp[b][(size_t) n] * y;
                     }
