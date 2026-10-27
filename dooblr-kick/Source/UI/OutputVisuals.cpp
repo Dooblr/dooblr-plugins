@@ -563,20 +563,20 @@ namespace dooblrkick::ui
                 g.setColour (Palette::spectrum.withAlpha (0.16f));
                 g.fillPath (spectrumFill);
                 g.setColour (Palette::spectrum.withAlpha (0.55f));
-                g.strokePath (spectrumLine, juce::PathStrokeType (1.0f));
+                g.strokePath (spectrumLine, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
 
             if (! peakLine.isEmpty())
             {
                 g.setColour (Palette::frozen.withAlpha (0.6f));
-                g.strokePath (peakLine, juce::PathStrokeType (1.0f));
+                g.strokePath (peakLine, juce::PathStrokeType (1.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
             }
 
             const auto colour = on ? Palette::accent : Palette::textMuted.withAlpha (0.6f);
             g.setColour (colour.withAlpha (on ? 0.12f : 0.06f));
             g.fillPath (curveFill);
             g.setColour (colour);
-            g.strokePath (curveLine, juce::PathStrokeType (2.0f));
+            g.strokePath (curveLine, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
 
         for (int b = 0; b < numBands; ++b)
@@ -947,7 +947,7 @@ namespace dooblrkick::ui
             juce::Graphics::ScopedSaveState save (g);
             g.reduceClipRegion (transfer.toNearestInt());
             g.setColour (on ? Palette::dynamic : Palette::textMuted.withAlpha (0.6f));
-            g.strokePath (curve, juce::PathStrokeType (2.0f));
+            g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
             const auto handle = getThresholdHandlePosition();
             const auto handleActive = hover == DragKind::thresholdHandle || dragging == DragKind::thresholdHandle;

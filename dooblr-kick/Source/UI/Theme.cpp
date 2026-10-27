@@ -86,6 +86,50 @@ namespace dooblrkick::ui
         g.drawLine ({ centre.getPointOnCircumference (radius * 0.15f, angle), tip }, 2.0f);
     }
 
+    void DooblrLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
+                                              float minSliderPos, float maxSliderPos, juce::Slider::SliderStyle style, juce::Slider& slider)
+    {
+        if (style != juce::Slider::LinearVertical)
+        {
+            juce::LookAndFeel_V4::drawLinearSlider (g, x, y, width, height, sliderPos, minSliderPos, maxSliderPos, style, slider);
+            return;
+        }
+
+        const auto area = juce::Rectangle<int> (x, y, width, height).toFloat();
+        const auto cx = area.getCentreX();
+        const auto fill = slider.findColour (juce::Slider::trackColourId);
+        const auto top = area.getY(), bottom = area.getBottom();
+
+        // Scale ticks (every 12 dB for a dB range), drawn left and right of the groove.
+        const auto range = slider.getRange();
+        g.setColour (Palette::divider);
+        for (auto v = std::ceil (range.getStart() / 12.0) * 12.0; v <= range.getEnd() + 1.0e-6; v += 12.0)
+        {
+            const auto ty = juce::jmap ((float) slider.valueToProportionOfLength (v), 0.0f, 1.0f, bottom, top);
+            const auto len = std::abs (v) < 1.0e-6 ? 9.0f : 5.0f;
+            g.fillRect (juce::Rectangle<float> (cx - 7.0f - len, ty - 0.5f, len, 1.0f));
+            g.fillRect (juce::Rectangle<float> (cx + 7.0f, ty - 0.5f, len, 1.0f));
+        }
+
+        const auto groove = juce::Rectangle<float> (cx - 2.5f, top, 5.0f, area.getHeight());
+        g.setColour (slider.findColour (juce::Slider::rotarySliderOutlineColourId));
+        g.fillRoundedRectangle (groove, 2.5f);
+
+        if (slider.isEnabled())
+        {
+            g.setColour (fill);
+            g.fillRoundedRectangle (groove.withTop (sliderPos), 2.5f);
+        }
+
+        const auto cap = juce::Rectangle<float> (juce::jmin (30.0f, area.getWidth() - 4.0f), 12.0f).withCentre ({ cx, sliderPos });
+        g.setColour (Palette::panelRaised);
+        g.fillRoundedRectangle (cap, 3.0f);
+        g.setColour (slider.isMouseOverOrDragging() ? fill : Palette::divider.brighter (0.4f));
+        g.drawRoundedRectangle (cap.reduced (0.5f), 3.0f, 1.0f);
+        g.setColour (slider.isEnabled() ? Palette::textPrimary : Palette::textMuted);
+        g.fillRect (juce::Rectangle<float> (cap.getWidth() - 10.0f, 1.5f).withCentre (cap.getCentre()));
+    }
+
     void DooblrLookAndFeel::drawToggleButton (juce::Graphics& g, juce::ToggleButton& button,
                                               bool highlighted, bool down)
     {

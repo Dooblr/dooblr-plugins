@@ -28,7 +28,18 @@ namespace dooblrkick::presets
     */
     void apply (juce::AudioProcessorValueTreeState& state, const ValueList& values, bool asGesture);
 
-    /** A musically constrained random kick (always the full set of sound parameters). */
+    /** A musically constrained random kick: the Click and Body layers (every sound parameter,
+        including Synth / Sample source and sample choice; not their key tracking or solo), the
+        pitch and amp envelopes, Sub, Tail, Noise and the Drive stage. EQ, Dynamics, Limiter,
+        the Envelope page, the Key and the output gain are left alone. Every value is inside its
+        parameter's range.
+
+        On / off: each of the five layers is switched by its own draw (Click and Body 80 %, Sub
+        60 %, Tail and Noise 30 %); a soloed layer stays on; if all five come up off, one of them
+        (at random) is switched on, so at least one layer is always on. A layer heard on its own
+        gets a level of at least soloLevelFloorDb. */
+    inline constexpr float soloLevelFloorDb = -9.0f;
+
     ValueList randomise (juce::AudioProcessorValueTreeState& state, juce::Random& random);
 
     /** ~/Music/dooblr-kick/Presets */

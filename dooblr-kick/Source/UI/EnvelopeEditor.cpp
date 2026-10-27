@@ -5,22 +5,34 @@
 #include "Theme.h"
 
 #include <cmath>
+#include <limits>
 
 namespace dooblrkick::ui
 {
     namespace
     {
-        constexpr float nodeRadius = 5.0f, hitRadius = 9.0f;
+        constexpr float nodeRadius = 5.0f, hitRadius = 9.0f, lineHitRadius = 7.0f;
+        constexpr float zoomPixelsPerOctave = 120.0f; // drag distance that halves / doubles the span
         constexpr float log2Min = 4.321928f;  // log2 (20 Hz)
         constexpr float log2Max = 13.965784f; // log2 (16 kHz)
 
         float niceCeiling (float ms)
         {
-            for (auto step : { 50.0f, 100.0f, 200.0f, 300.0f, 400.0f, 600.0f, 800.0f, 1000.0f, 1500.0f, 2000.0f, 2500.0f })
+            for (auto step : { 50.0f, 100.0f, 200.0f, 300.0f, 400.0f, 600.0f, 800.0f, 1000.0f, 1500.0f, 2000.0f, 2500.0f,
+                               3000.0f, 4000.0f, 5000.0f, 6000.0f })
                 if (ms <= step)
                     return step;
 
-            return 2500.0f;
+            return 6000.0f;
+        }
+
+        float gridStep (float spanMs)
+        {
+            for (auto step : { 1.0f, 2.0f, 5.0f, 10.0f, 25.0f, 50.0f, 100.0f, 250.0f, 500.0f, 1000.0f })
+                if (spanMs / step <= 12.0f)
+                    return step;
+
+            return 1000.0f;
         }
     }
 
@@ -34,6 +46,9 @@ namespace dooblrkick::ui
         {
             auto& r = raw[(size_t) e];
             r.count = state.getRawParameterValue (params::envelopeCountId (e));
+            r.on = e == params::Envelope::master ? state.getRawParameterValue ("menv_on") : nullptr;
+            r.timeScale = e == params::Envelope::master ? state.getRawParameterValue ("menv_tscale") : nullptr;
+            r.depth = e == params::Envelope::master ? state.getRawParameterValue ("menv_depth") : nullptr;
 
             for (int n = 0; n < params::maxNodes; ++n)
             {
@@ -52,6 +67,7 @@ namespace dooblrkick::ui
     {
         envelope = newEnvelope;
         hover = drag = {};
+        userZoom = false;
         updateViewRange();
         repaint();
     }
@@ -76,8 +92,54 @@ namespace dooblrkick::ui
     }
 
     //==============================================================================
-    float EnvelopeEditor::timeToX (float ms) const noexcept { return plot.getX() + plot.getWidth() * ms / viewMs; }
-    float EnvelopeEditor::xToTime (float x) const noexcept  { return (x - plot.getX()) / plot.getWidth() * viewMs; }
+    float EnvelopeEditor::timeToX (float ms) const noexcept { return plot.getX() + plot.getWidth() * (ms - viewStartMs) / viewMs; }
+    float EnvelopeEditor::xToTime (float x) const noexcept  { return viewStartMs + (x - plot.getX()) / plot.getWidth() * viewMs; }
+
+    void EnvelopeEditor::setSelectedNode (int node)
+    {
+        node = juce::jlimit (0, getNumNodes() - 1, node);
+
+        if (node == selectedNode)
+            return;
+
+        selectedNode = node;
+        repaint();
+
+        if (onSelectedNodeChange)
+            onSelectedNodeChange (node);
+    }
+
+    bool EnvelopeEditor::showsEffectiveCurve() const noexcept
+    {
+        const auto& r = raw[(size_t) envelope];
+        return r.timeScale != nullptr && (r.timeScale->load() != 1.0f || r.depth->load() < 1.0f);
+    }
+
+    dsp::MultiPointEnvelope EnvelopeEditor::getEffectiveEnvelope() const
+    {
+        const auto& r = raw[(size_t) envelope];
+        dsp::MultiPointEnvelope env;
+        env.numNodes = getNumNodes();
+
+        for (int n = 0; n < params::maxNodes; ++n)
+        {
+            const auto v = readNode (n);
+            auto& node = env.nodes[(size_t) n];
+            node = { v.time, v.value, v.curve };
+
+            if (r.timeScale != nullptr)
+                node = params::applyMasterMacros (node, r.timeScale->load(), r.depth->load());
+        }
+
+        env.sanitise();
+        return env;
+    }
+
+    bool EnvelopeEditor::isBypassedLook() const noexcept
+    {
+        const auto* on = raw[(size_t) envelope].on;
+        return on != nullptr && on->load() < 0.5f;
+    }
 
     float EnvelopeEditor::valueToY (float value) const noexcept
     {
@@ -95,8 +157,74 @@ namespace dooblrkick::ui
 
     void EnvelopeEditor::updateViewRange()
     {
-        const auto last = readNode (getNumNodes() - 1).time;
-        viewMs = niceCeiling (juce::jmax (100.0f, last * 1.15f));
+        if (userZoom)
+            return; // the user's zoom stays until reset
+
+        auto last = readNode (getNumNodes() - 1).time;
+        if (showsEffectiveCurve())
+            last = juce::jmax (last, getEffectiveEnvelope().getEndTimeMs());
+        viewStartMs = 0.0f;
+        viewMs = juce::jmin (niceCeiling (juce::jmax (100.0f, last * 1.15f)), getMaxTimeMs());
+    }
+
+    void EnvelopeEditor::resetView()
+    {
+        userZoom = false;
+        updateViewRange();
+        repaint();
+    }
+
+    float EnvelopeEditor::curveYAt (float ms) const
+    {
+        const auto count = getNumNodes();
+
+        if (ms <= 0.0f)
+            return valueToY (readNode (0).value);
+
+        for (int seg = 0; seg < count - 1; ++seg)
+        {
+            const auto a = readNode (seg), b = readNode (seg + 1);
+
+            if (ms < b.time)
+            {
+                const auto x = b.time - a.time > 1.0e-6f ? (ms - a.time) / (b.time - a.time) : 1.0f;
+                const auto shaped = dsp::applyCurve (juce::jlimit (0.0f, 1.0f, x), a.curve);
+                return valueToY (envelope == params::Envelope::pitch
+                                     ? std::exp2 (std::log2 (a.value) + (std::log2 (b.value) - std::log2 (a.value)) * shaped)
+                                     : a.value + (b.value - a.value) * shaped);
+            }
+        }
+
+        return valueToY (readNode (count - 1).value);
+    }
+
+    float EnvelopeEditor::distanceToCurve (juce::Point<float> p) const
+    {
+        // Nearest point of the drawn curve, sampled per pixel around p (steep segments included).
+        auto best = std::numeric_limits<float>::max();
+
+        for (float dx = -lineHitRadius; dx <= lineHitRadius; dx += 1.0f)
+        {
+            const auto y = curveYAt (xToTime (p.x + dx));
+            best = juce::jmin (best, std::hypot (dx, y - p.y));
+        }
+
+        // Vertical jumps (nodes at the same time) are vertical lines between two y values.
+        for (int n = 1; n < getNumNodes(); ++n)
+        {
+            const auto a = getNodePosition (n - 1), b = getNodePosition (n);
+
+            if (std::abs (a.x - b.x) < 0.5f && std::abs (p.x - a.x) <= lineHitRadius
+                && p.y >= juce::jmin (a.y, b.y) && p.y <= juce::jmax (a.y, b.y))
+                best = juce::jmin (best, std::abs (p.x - a.x));
+        }
+
+        return best;
+    }
+
+    bool EnvelopeEditor::isZoomAreaAt (juce::Point<float> position) const
+    {
+        return hitTestPoint (position).kind == HitKind::zoom;
     }
 
     juce::Point<float> EnvelopeEditor::getNodePosition (int node) const
@@ -127,7 +255,13 @@ namespace dooblrkick::ui
             if (getCurveHandlePosition (s).getDistanceFrom (p) <= hitRadius)
                 return { HitKind::handle, s };
 
-        return {};
+        if (! plot.contains (p))
+            return {};
+
+        if (distanceToCurve (p) <= lineHitRadius)
+            return { HitKind::line, -1 };
+
+        return { HitKind::zoom, -1 };
     }
 
     //==============================================================================
@@ -164,7 +298,9 @@ namespace dooblrkick::ui
         if (hit.kind != hover.kind || hit.index != hover.index)
         {
             hover = hit;
-            setMouseCursor (hit.kind == HitKind::none ? juce::MouseCursor::NormalCursor : juce::MouseCursor::DraggingHandCursor);
+            setMouseCursor (hit.kind == HitKind::zoom ? juce::MouseCursor::UpDownResizeCursor
+                          : hit.kind == HitKind::node || hit.kind == HitKind::handle ? juce::MouseCursor::DraggingHandCursor
+                                                                                     : juce::MouseCursor::NormalCursor);
             repaint();
         }
     }
@@ -188,6 +324,11 @@ namespace dooblrkick::ui
         }
 
         if (drag.kind == HitKind::node)
+            setSelectedNode (drag.index);
+        else if (drag.kind == HitKind::handle)
+            setSelectedNode (drag.index + 1);
+
+        if (drag.kind == HitKind::node)
         {
             if (drag.index > 0)
                 beginGesture ({ params::nodeTimeId (envelope, drag.index), params::nodeValueId (envelope, drag.index) });
@@ -198,6 +339,19 @@ namespace dooblrkick::ui
         {
             dragStartCurve = readNode (drag.index).curve;
             beginGesture ({ params::nodeCurveId (envelope, drag.index) });
+        }
+        else if (drag.kind == HitKind::zoom)
+        {
+            if (e.mods.isPopupMenu())
+            {
+                drag = {};
+                return;
+            }
+
+            zoomStartSpan = viewMs;
+            zoomStartStart = viewStartMs;
+            zoomAnchorFraction = juce::jlimit (0.0f, 1.0f, (e.position.x - plot.getX()) / plot.getWidth());
+            zoomAnchorMs = xToTime (e.position.x);
         }
     }
 
@@ -211,7 +365,7 @@ namespace dooblrkick::ui
             if (n > 0)
             {
                 const auto previous = readNode (n - 1).time;
-                const auto next = n + 1 < getNumNodes() ? readNode (n + 1).time : params::maxNodeTimeMs;
+                const auto next = n + 1 < getNumNodes() ? readNode (n + 1).time : getMaxTimeMs();
                 setParam (params::nodeTimeId (envelope, n), juce::jlimit (previous, next, xToTime (e.position.x)));
             }
         }
@@ -222,6 +376,20 @@ namespace dooblrkick::ui
             const auto towardsEnd = b.value < a.value ? 1.0f : -1.0f;
             const auto delta = (e.position.y - dragStart.y) / 120.0f * towardsEnd;
             setParam (params::nodeCurveId (envelope, drag.index), juce::jlimit (-1.0f, 1.0f, dragStartCurve + delta));
+        }
+        else if (drag.kind == HitKind::zoom)
+        {
+            // Up stretches the view out (zoom in), down contracts it; the time under the mouse stays put.
+            const auto maxSpan = getMaxTimeMs();
+            const auto span = juce::jlimit (minViewMs, maxSpan, zoomStartSpan * std::exp2 ((e.position.y - dragStart.y) / zoomPixelsPerOctave));
+            const auto start = juce::jlimit (0.0f, juce::jmax (0.0f, maxSpan - span), zoomAnchorMs - zoomAnchorFraction * span);
+
+            if (! juce::approximatelyEqual (span, viewMs) || ! juce::approximatelyEqual (start, viewStartMs))
+            {
+                viewMs = span;
+                viewStartMs = start;
+                userZoom = true;
+            }
         }
 
         repaint();
@@ -241,8 +409,10 @@ namespace dooblrkick::ui
 
         if (hit.kind == HitKind::node)
             removeNode (hit.index);
-        else if (hit.kind == HitKind::none && plot.contains (e.position))
+        else if ((hit.kind == HitKind::zoom || hit.kind == HitKind::line) && plot.contains (e.position))
             addNodeAt (e.position);
+        else if (hit.kind == HitKind::none && getRulerArea().contains (e.position))
+            resetView(); // double-click the time ruler: fit the envelope again
     }
 
     bool EnvelopeEditor::addNodeAt (juce::Point<float> position)
@@ -252,7 +422,7 @@ namespace dooblrkick::ui
         if (count >= params::maxNodes)
             return false;
 
-        const auto time = juce::jlimit (0.0f, params::maxNodeTimeMs, xToTime (position.x));
+        const auto time = juce::jlimit (0.0f, getMaxTimeMs(), xToTime (position.x));
         std::vector<NodeValues> nodes;
 
         for (int n = 0; n < count; ++n)
@@ -287,6 +457,7 @@ namespace dooblrkick::ui
         }
 
         presets::apply (state, values, true);
+        setSelectedNode (insertAt);
         repaint();
         return true;
     }
@@ -326,6 +497,13 @@ namespace dooblrkick::ui
     juce::uint64 EnvelopeEditor::computeHash() const noexcept
     {
         juce::uint64 hash = (juce::uint64) getNumNodes() * 31u + (juce::uint64) envelope;
+        hash = hash * 1000003u ^ (isBypassedLook() ? 7u : 3u);
+
+        if (const auto& r = raw[(size_t) envelope]; r.timeScale != nullptr)
+        {
+            hash = hash * 1000003u ^ (juce::uint64) (juce::int64) juce::roundToInt (r.timeScale->load() * 10000.0f);
+            hash = hash * 1000003u ^ (juce::uint64) (juce::int64) juce::roundToInt (r.depth->load() * 10000.0f);
+        }
 
         for (int n = 0; n < params::maxNodes; ++n)
         {
@@ -347,6 +525,9 @@ namespace dooblrkick::ui
         {
             lastHash = hash;
 
+            if (selectedNode > getNumNodes() - 1)
+                setSelectedNode (getNumNodes() - 1);
+
             if (drag.kind == HitKind::none)
                 updateViewRange();
 
@@ -357,14 +538,18 @@ namespace dooblrkick::ui
     void EnvelopeEditor::rebuildCache()
     {
         // Grid (depends on the view range and the plot size).
-        const auto timeStep = viewMs <= 200.0f ? 25.0f : viewMs <= 600.0f ? 100.0f : viewMs <= 1500.0f ? 250.0f : 500.0f;
+        // Grid lines follow the zoom: about 6..12 per view, at 1-2-5 steps.
+        const auto timeStep = gridStep (viewMs);
         timeLines.clear();
         timeLabels.clear();
+        const auto viewEnd = viewStartMs + viewMs;
+        const auto decimals = timeStep < 1.0f ? 1 : 0;
 
-        for (float t = 0.0f; t <= viewMs + 0.5f; t += timeStep)
+        for (auto i = (int) std::ceil (viewStartMs / timeStep - 1.0e-3f); (float) i * timeStep <= viewEnd + 1.0e-3f; ++i)
         {
+            const auto t = (float) i * timeStep;
             timeLines.push_back (timeToX (t));
-            timeLabels.push_back ({ timeToX (t), juce::String (juce::roundToInt (t)) + (t > 0.0f ? "" : " ms") });
+            timeLabels.push_back ({ timeToX (t), juce::String (t, decimals) + (timeLabels.empty() ? " ms" : "") });
         }
 
         valueLines.clear();
@@ -390,30 +575,59 @@ namespace dooblrkick::ui
         // The curve.
         const auto count = getNumNodes();
         curvePath.clear();
-        curvePath.preallocateSpace ((count - 1) * 48 * 3 + 8);
+        curvePath.preallocateSpace ((count - 1) * 200 * 3 + 16);
         curvePath.startNewSubPath (getNodePosition (0));
+        const auto viewStart = viewStartMs;
 
         for (int seg = 0; seg < count - 1; ++seg)
         {
             const auto a = readNode (seg), b = readNode (seg + 1);
+            // Only the visible part of a segment is sampled (about one point per 3 px), so a
+            // zoomed-in view stays smooth; parts outside the plot are straight (clipped) lines.
+            const auto t0 = juce::jmax (a.time, viewStart), t1 = juce::jmin (b.time, viewEnd);
 
-            for (int k = 1; k <= 48; ++k)
+            if (t1 > t0 && b.time > a.time)
             {
-                const auto x = (float) k / 48.0f;
-                const auto shaped = dsp::applyCurve (x, a.curve);
-                const auto value = envelope == params::Envelope::pitch
-                                       ? std::exp2 (std::log2 (a.value) + (std::log2 (b.value) - std::log2 (a.value)) * shaped)
-                                       : a.value + (b.value - a.value) * shaped;
-                curvePath.lineTo (timeToX (a.time + (b.time - a.time) * x), valueToY (value));
+                const auto steps = juce::jlimit (8, 200, (int) ((timeToX (t1) - timeToX (t0)) / 3.0f));
+
+                for (int k = 0; k <= steps; ++k)
+                {
+                    const auto t = t0 + (t1 - t0) * (float) k / (float) steps;
+                    curvePath.lineTo (timeToX (t), curveYAt (juce::jmin (t, b.time - 1.0e-4f)));
+                }
             }
+
+            curvePath.lineTo (getNodePosition (seg + 1));
         }
 
-        curvePath.lineTo (plot.getRight(), getNodePosition (count - 1).y);
+        const auto left = juce::jmin (plot.getX(), getNodePosition (0).x);
+        const auto right = juce::jmax (plot.getRight(), getNodePosition (count - 1).x);
+        curvePath.lineTo (right, getNodePosition (count - 1).y);
 
         fillPath = curvePath;
-        fillPath.lineTo (plot.getRight(), plot.getBottom());
-        fillPath.lineTo (plot.getX(), plot.getBottom());
+        fillPath.lineTo (right, plot.getBottom());
+        fillPath.lineTo (left, plot.getBottom());
         fillPath.closeSubPath();
+
+        // Master with Time Scale / Depth away from 100 %: the envelope as it plays.
+        effectivePath.clear();
+        if (showsEffectiveCurve())
+        {
+            const auto effective = getEffectiveEnvelope();
+            const auto steps = juce::jlimit (16, 600, juce::roundToInt (plot.getWidth() / 2.0f));
+            effectivePath.preallocateSpace (steps * 3 + 8);
+
+            for (int i = 0; i <= steps; ++i)
+            {
+                const auto t = viewStartMs + viewMs * (float) i / (float) steps;
+                const juce::Point<float> p (timeToX (t), valueToY (effective.evaluate (t)));
+
+                if (i == 0)
+                    effectivePath.startNewSubPath (p);
+                else
+                    effectivePath.lineTo (p);
+            }
+        }
     }
 
     void EnvelopeEditor::resized()
@@ -423,12 +637,15 @@ namespace dooblrkick::ui
 
     void EnvelopeEditor::paint (juce::Graphics& g)
     {
-        const auto colour = envelope == params::Envelope::pitch ? Palette::dynamic
-                          : envelope == params::Envelope::master ? Palette::master : Palette::accent;
+        const auto bypassed = isBypassedLook();
+        const auto colour = (envelope == params::Envelope::pitch ? Palette::dynamic
+                           : envelope == params::Envelope::master ? Palette::master : Palette::accent)
+                                .withMultipliedAlpha (bypassed ? 0.4f : 1.0f);
 
         // Rebuild the cached geometry only when something it depends on changed.
         auto hash = computeHash();
         hash = hash * 1000003u ^ (juce::uint64) juce::roundToInt (viewMs * 10.0f);
+        hash = hash * 1000003u ^ (juce::uint64) juce::roundToInt (viewStartMs * 10.0f);
         hash = hash * 1000003u ^ (juce::uint64) (juce::int64) juce::roundToInt (plot.getWidth() * 7.0f + plot.getHeight() * 131.0f + plot.getX());
 
         if (hash != cacheHash || curvePath.isEmpty())
@@ -467,7 +684,14 @@ namespace dooblrkick::ui
             g.setColour (colour.withAlpha (0.10f));
             g.fillPath (fillPath);
             g.setColour (colour);
-            g.strokePath (curvePath, juce::PathStrokeType (2.0f));
+            g.strokePath (curvePath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            if (! effectivePath.isEmpty())
+            {
+                // A thin light line (a dashed stroke would allocate in paint).
+                g.setColour (Palette::textPrimary.withAlpha (0.55f));
+                g.strokePath (effectivePath, juce::PathStrokeType (1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
         }
 
         const auto count = getNumNodes();
@@ -490,6 +714,12 @@ namespace dooblrkick::ui
             g.setColour (active ? Palette::textPrimary : colour);
             g.fillEllipse (juce::Rectangle<float> (nodeRadius * 2.0f, nodeRadius * 2.0f).withCentre (p));
 
+            if (n == getSelectedNode() && onSelectedNodeChange)
+            {
+                g.setColour (Palette::textPrimary.withAlpha (0.8f));
+                g.drawEllipse (juce::Rectangle<float> (nodeRadius * 2.0f + 6.0f, nodeRadius * 2.0f + 6.0f).withCentre (p), 1.2f);
+            }
+
             if (active)
             {
                 const auto v = readNode (n);
@@ -505,6 +735,14 @@ namespace dooblrkick::ui
 
         g.setFont (juce::FontOptions (10.5f));
         g.setColour (Palette::textMuted);
-        g.drawText ("double-click: add / remove point   drag diamond: curve", plot.reduced (6.0f, 4.0f), juce::Justification::topRight);
+        g.drawText ("double-click: add / remove point   drag diamond: curve   drag empty: zoom   double-click ruler: fit",
+                    plot.reduced (6.0f, 4.0f), juce::Justification::topRight);
+
+        if (bypassed)
+        {
+            g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+            g.setColour (Palette::textMuted);
+            g.drawText ("ENVELOPE OFF (bypassed)", plot.reduced (6.0f, 4.0f), juce::Justification::topLeft);
+        }
     }
 }

@@ -217,7 +217,7 @@ namespace dooblrkick::ui
             juce::Graphics::ScopedSaveState s (g);
             g.reduceClipRegion (plot.getSmallestIntegerContainer());
             g.setColour (colour);
-            g.strokePath (curve, juce::PathStrokeType (2.0f));
+            g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
             if (shownInDb > -90.0f)
             {
@@ -247,7 +247,7 @@ namespace dooblrkick::ui
             g.setColour (Palette::textMuted);
             g.fillPath (dashed);
             g.setColour (colour);
-            g.strokePath (after, juce::PathStrokeType (1.8f));
+            g.strokePath (after, juce::PathStrokeType (1.8f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
         }
         g.setColour (Palette::textMuted);
         g.drawText ("0 dBFS sine: before (dashed) / after", wave.reduced (6.0f, 3.0f), juce::Justification::topLeft);

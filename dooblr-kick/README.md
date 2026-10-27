@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.1 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.3 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -29,7 +29,14 @@ Version 0.3.1 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   (default off) that re-pitches the sample by the played note relative to Key.
 - **Synth / Sample switch** on the click, body, tail and noise layers. Pick one of the 21
   factory samples below, or load your own WAV/AIFF/FLAC file. User samples are saved with the
-  project.
+  project. The layer page shows only the controls the selected source uses (Synth hides the
+  sample picker, file loader, key tracking and sample-only knobs; Sample hides the synth wave /
+  type, harmonics, phase, spread, colour and width). Hidden settings keep their values. The
+  layout does not move when you switch: shared controls keep the same place in both modes, and
+  each mode's own controls use fixed slots.
+- **Level fader.** Each layer's level is a tall vertical fader at the left of its page, with a
+  dB readout (double-click for the default, Shift-drag for fine steps). It is the same
+  "Level" parameter as before, so projects and presets are unchanged.
 - **Tune range -48 .. +24 semitones** on the click, body, tail and noise tune knobs, shown as
   semitones and cents ("-12 st -25 ct"). Drag is fine-grained (Shift for finer, double-click
   for the default; values can be typed). A sample tuned -48 st plays 16x slower and its whole
@@ -63,12 +70,30 @@ Version 0.3.1 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   automation and presets. Each drag in a view is one undo step.
   The meters come from the audio thread through lock-free FIFOs (no locks or allocations on
   the audio thread) and are drawn at the display refresh rate.
-- **Waveform view.** It shows the rendered hit with its length and peak. Click it to audition.
+- **Envelope page (master envelope).** A multi-point gain envelope over the whole kick, up to
+  6000 ms. Its tab has a power toggle (off is a unity bypass; the tab and graph are drawn
+  dimmed and can still be edited). Knobs under the graph follow the selected point (Time, Level
+  and the Curve into that point; point 0 has Level only) and are the existing "Master Env N"
+  host parameters, so they map and automate like any knob. Two extra automatable macros sit
+  beside them: **Time Scale** (25 % .. 400 %, stretches every point's time) and **Depth**
+  (0 .. 100 %, blends between flat unity and the drawn shape). At their defaults (100 %, 100 %)
+  the sound is unchanged.
+- **Zoom on envelope graphs.** On the master envelope and the Body pitch and amp envelopes,
+  drag up or down in an empty part of the graph (not on a line or point) to zoom the time
+  axis in or out around the mouse. Double-click the time ruler to show the whole envelope
+  again. Zoom only changes the view, not the sound, and is not an undo step.
+- **Waveform view.** It shows the rendered hit with its length and peak, drawn anti-aliased. Click it to audition.
   The preview renders on a background thread (latest change wins), so turning knobs keeps the
   UI at the display frame rate.
 - **Presets:** Init plus six factory kicks: Hardstyle, Techno Rumble, Dubstep Punch, House
   Thump, Trap 808-ish and DnB. User presets are saved and loaded as `.dkick` files. Random
-  creates a new kick within musical ranges.
+  creates a new kick within musical ranges, as one undo step. It rolls the whole Click and
+  Body layers (Synth or Sample source, sample choice, click type, pitch and length, body wave,
+  tune, harmonics and drive, levels and filters), the pitch and amp envelopes, Sub, Tail, Noise
+  and the Drive stage. It also switches each of the five layers on or off (Click and Body 80 %
+  of the time, Sub 60 %, Tail and Noise 30 %), keeps a soloed layer on, and always leaves at
+  least one layer on; a layer heard on its own gets at least -9 dB. It leaves key tracking, solo, the Key, the output gain, EQ, Dynamics,
+  the Limiter and the Envelope page as they are.
 - **Export WAV.** It renders the current kick as 24-bit stereo at 48 kHz into
   `~/Music/dooblr-kick`.
 - **Undo/redo** (Cmd-Z / Cmd-Shift-Z) keeps 50 steps. One drag or preset load is one step.

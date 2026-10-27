@@ -20,6 +20,10 @@ namespace dooblrkick::ui
         setMouseCursor (juce::MouseCursor::PointingHandCursor);
         setOpaque (true);
         requestedCount = shownCount = counter();
+        upper.reserve ((size_t) maxColumns);
+        lower.reserve ((size_t) maxColumns);
+        bandPath.preallocateSpace (maxColumns * 2 * 5 + 16);
+        edgePath.preallocateSpace (maxColumns * 2 * 5 + 16);
         startThread (juce::Thread::Priority::low);
         vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { poll(); });
     }
@@ -219,28 +223,63 @@ namespace dooblrkick::ui
         lengthMs = result.lengthMs;
         shownCount = result.count;
         infoText = juce::String (juce::roundToInt (lengthMs)) + " ms   peak " + juce::String (peakDb, 1) + " dBFS";
-        rebuildPath();
+        graphDirty = true;
         repaint();
     }
 
-    void WaveformView::rebuildPath()
+    namespace
     {
-        wavePath.clear();
+        // Quadratic segments through the midpoints of consecutive points: smooth (C1) and never
+        // outside the hull of the column points, so peaks are not exaggerated.
+        void addEdge (juce::Path& path, const std::vector<juce::Point<float>>& points, bool reverse, bool startNewSubPath)
+        {
+            const auto n = (int) points.size();
+
+            if (n == 0)
+                return;
+
+            const auto at = [&] (int i) { return points[(size_t) (reverse ? n - 1 - i : i)]; };
+
+            if (startNewSubPath)
+                path.startNewSubPath (at (0));
+            else
+                path.lineTo (at (0));
+
+            // One vertex per physical pixel column is already finer than any curve fit could
+            // show (a quadratic between column midpoints differs by well under a pixel), and
+            // straight segments keep the renderer from subdividing curves on every paint.
+            for (int i = 1; i < n; ++i)
+                path.lineTo (at (i));
+        }
+    }
+
+    void WaveformView::rebuildPath (float scale)
+    {
+        bandPath.clear();
+        edgePath.clear();
+        upper.clear();
+        lower.clear();
+        graphDirty = false;
+        graphScale = scale;
+        graphColumns = 0;
+        ++graphRebuilds;
+
         const auto wave = getLocalBounds().toFloat().reduced (8.0f, 22.0f);
 
-        if (peaks.empty() || wave.getWidth() < 1.0f)
+        if (peaks.empty() || wave.getWidth() < 1.0f || wave.getHeight() < 1.0f)
             return;
 
-        // One rectangle per pixel column, from the cached peaks.
-        const auto columns = juce::jmax (1, (int) wave.getWidth());
+        // One min/max pair per physical pixel column, at the column centre (sub-pixel x).
+        const auto columns = juce::jlimit (2, maxColumns, (int) std::ceil (wave.getWidth() * scale));
         const auto centreY = wave.getCentreY();
         const auto halfHeight = wave.getHeight() * 0.5f;
+        const auto columnWidth = wave.getWidth() / (float) columns;
+        const auto minThickness = 0.5f / scale; // half a physical pixel, so the band never vanishes
         const auto numPeakColumns = (int) peaks.size();
-        wavePath.preallocateSpace (columns * 5 * 3);
 
         for (int x = 0; x < columns; ++x)
         {
-            const auto from = (int) ((juce::int64) numPeakColumns * x / columns);
+            const auto from = juce::jmin (numPeakColumns - 1, (int) ((juce::int64) numPeakColumns * x / columns));
             const auto to = juce::jmax (from + 1, (int) ((juce::int64) numPeakColumns * (x + 1) / columns));
             auto lo = 1.0f, hi = -1.0f;
 
@@ -251,14 +290,36 @@ namespace dooblrkick::ui
             }
 
             hi = juce::jlimit (-1.0f, 1.0f, hi);
-            lo = juce::jlimit (-1.0f, 1.0f, lo);
-            wavePath.addRectangle (wave.getX() + (float) x, centreY - hi * halfHeight, 1.0f, juce::jmax (1.0f, (hi - lo) * halfHeight));
+            lo = juce::jlimit (-1.0f, hi, lo);
+            const auto px = wave.getX() + ((float) x + 0.5f) * columnWidth;
+            auto top = centreY - hi * halfHeight, bottom = centreY - lo * halfHeight;
+
+            if (bottom - top < minThickness)
+            {
+                const auto mid = (top + bottom) * 0.5f;
+                top = mid - minThickness * 0.5f;
+                bottom = mid + minThickness * 0.5f;
+            }
+
+            upper.emplace_back (px, top);
+            lower.emplace_back (px, bottom);
         }
+
+        graphColumns = columns;
+
+        // Filled band: the upper edge left to right, then the lower edge back.
+        addEdge (bandPath, upper, false, true);
+        addEdge (bandPath, lower, true, false);
+        bandPath.closeSubPath();
+
+        // The two edges, stroked on top of the fill.
+        addEdge (edgePath, upper, false, true);
+        addEdge (edgePath, lower, false, true);
     }
 
     void WaveformView::resized()
     {
-        rebuildPath();
+        graphDirty = true;
     }
 
     void WaveformView::mouseUp (const juce::MouseEvent& e)
@@ -275,11 +336,21 @@ namespace dooblrkick::ui
         const auto area = getLocalBounds().toFloat();
         const auto wave = area.reduced (8.0f, 22.0f);
 
-        g.setColour (Palette::grid);
-        g.drawHorizontalLine (juce::roundToInt (wave.getCentreY()), wave.getX(), wave.getRight());
+        // The pixel scale this context really draws at (2 on Retina, or a snapshot's scale).
+        const auto scale = juce::jlimit (1.0f, 8.0f, g.getInternalContext().getPhysicalPixelScaleFactor());
 
-        g.setColour (Palette::accent.withAlpha (0.85f));
-        g.fillPath (wavePath);
+        if (graphDirty || ! juce::approximatelyEqual (scale, graphScale))
+            rebuildPath (scale); // reuses the reserved storage: no allocation
+
+        // Centre line: one physical pixel, at the true (unrounded) centre.
+        g.setColour (Palette::grid);
+        g.fillRect (juce::Rectangle<float> (wave.getX(), wave.getCentreY() - 0.5f / scale, wave.getWidth(), 1.0f / scale));
+
+        g.setColour (Palette::accent.withAlpha (0.55f));
+        g.fillPath (bandPath);
+        g.setColour (Palette::accent.withAlpha (0.95f));
+        // On macOS the CoreGraphics context strokes natively (no stroked outline is built here).
+        g.strokePath (edgePath, juce::PathStrokeType (1.25f, juce::PathStrokeType::beveled, juce::PathStrokeType::butt));
 
         g.setFont (juce::FontOptions (11.0f));
         g.setColour (Palette::textMuted);

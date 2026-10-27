@@ -46,6 +46,7 @@ private:
     Power toggle on a processing tab (Drive, EQ, Dynamics, Limiter): the only place a processor
     is switched on or off. It is a child of its tab, so it moves with the tab when the chain is
     reordered, and it takes its own clicks, so toggling never selects the tab.
+    v0.3.3: the Envelope tab has one too (stage -1, "power_envelope", bound to menv_on).
 */
 class ProcessorPowerButton final : public juce::Button
 {
@@ -55,6 +56,7 @@ public:
     int getStage() const noexcept { return stage; }
 
     static constexpr int size = 20;
+    static constexpr int envelopeStage = -1;
 
 private:
     int stage;
@@ -72,7 +74,9 @@ public:
     int getChainSlot() const noexcept { return chainSlot; }
     juce::Rectangle<int> getHandleArea() const;
     bool isDraggingHandle() const noexcept { return handleDrag; }
-    /** Processing tabs: draws the tab dimmed while its processor is off (it stays selectable). */
+    /** Tabs with a power toggle that are not in the chain (v0.3.3: Envelope). */
+    void setHasPowerToggle (bool has);
+    /** Processing / Envelope tabs: draws the tab dimmed while it is off (it stays selectable). */
     void setProcessorOn (bool on);
     bool isProcessorOn() const noexcept { return processorOn; }
     /** Where the power toggle sits (left of the label, after the chain position). */
@@ -88,7 +92,7 @@ public:
 
 private:
     int chainSlot = -1;
-    bool handleDrag = false, processorOn = true;
+    bool handleDrag = false, processorOn = true, hasPowerToggle = false;
 };
 
 class DooblrKickAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -114,6 +118,10 @@ public:
 
     // For tests.
     dooblrkick::ui::EnvelopeEditor& getEnvelopeEditor() noexcept { return envelopeEditor; }
+    dooblrkick::ui::LevelFader& getLevelFader (int layer) noexcept { return *levelFaders[(size_t) layer]; }
+    dooblrkick::ui::EnvelopePointKnobs& getEnvelopePointKnobs() noexcept { return *envelopePointKnobs; }
+    /** A page's control panels (layer pages: "layer", then "sound"). */
+    const std::vector<std::unique_ptr<dooblrkick::ui::ControlPanel>>& getPanels (int page) const noexcept { return pagePanels[(size_t) page]; }
     dooblrkick::ui::WaveformView& getWaveformView() noexcept { return waveform; }
     juce::ComboBox& getPresetBox() noexcept { return presetBox; }
     dooblrkick::ui::EqDisplay& getEqDisplay() noexcept { return eqDisplay; }
@@ -125,6 +133,8 @@ public:
     NavButton& getPageButton (int page) noexcept { return pageButtons[(size_t) page]; }
     /** The power toggle on a processing stage's tab (stage = dsp chain stage index). */
     ProcessorPowerButton& getPowerButton (int stage) noexcept { return *powerButtons[(size_t) stage]; }
+    /** The master envelope's on / off toggle on the Envelope tab (v0.3.3, bound to menv_on). */
+    ProcessorPowerButton& getEnvelopePowerButton() noexcept { return *envelopePower; }
     /** Whether a processing stage is on: Drive / EQ by their switch, Dynamics if the shaper or
         the compressor is on, Limiter unless its mode is Off. */
     bool isStageOn (int stage) const;
@@ -134,6 +144,9 @@ public:
     void setStageOn (int stage, bool on);
     /** Re-reads the processors' on state into the tab toggles (normally on the timer). */
     void refreshPowerButtonsNow();
+    /** Shows the source-specific layer controls for each layer's Synth / Sample source (v0.3.2;
+        normally on a source change or the timer). */
+    void refreshLayerSourceLayoutNow() { updateEnablement(); }
     /** The chain order the left column currently shows (stage per slot). */
     dooblrkick::dsp::ChainOrder getShownChainOrder() const noexcept { return shownOrder; }
     /** Reads the processor's meter tap into the visible page's view (normally every vblank). */
@@ -185,9 +198,19 @@ private:
     std::array<std::unique_ptr<LayerTabSwitch>, dooblrkick::params::numLayers> layerSwitches;
     std::array<std::unique_ptr<SoloButton>, dooblrkick::params::numLayers> soloButtons;
     std::array<std::unique_ptr<ProcessorPowerButton>, dooblrkick::dsp::numChainStages> powerButtons;
+    std::unique_ptr<ProcessorPowerButton> envelopePower;
 
     std::array<juce::TextButton, dooblrkick::params::numLayers> loadSampleButtons;
     std::array<juce::Label, dooblrkick::params::numLayers> sampleFileLabels;
+    /** v0.3.3: a layer's Load button over its file name, one fixed cell among the sample controls. */
+    struct StackCell final : public juce::Component
+    {
+        std::function<void()> onResize;
+        void resized() override { if (onResize) onResize(); }
+    };
+    std::array<StackCell, dooblrkick::params::numLayers> loadSampleCells;
+    std::array<std::unique_ptr<dooblrkick::ui::LevelFader>, dooblrkick::params::numLayers> levelFaders;
+    std::unique_ptr<dooblrkick::ui::EnvelopePointKnobs> envelopePointKnobs;
 
     juce::TextButton pitchEnvButton { "Pitch env" }, ampEnvButton { "Amp env" };
     dooblrkick::ui::EnvelopeEditor envelopeEditor;
@@ -209,6 +232,7 @@ private:
 
     // Per page: one or two panels (owned; only the selected page's are visible).
     std::array<std::vector<std::unique_ptr<dooblrkick::ui::ControlPanel>>, numPages> pagePanels;
+    std::vector<std::unique_ptr<juce::ParameterAttachment>> sourceWatchers;
 
     int selectedPage = 1;
     std::unique_ptr<juce::FileChooser> fileChooser;
@@ -219,6 +243,7 @@ private:
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment> outputAttachment;
     std::array<std::unique_ptr<ButtonAttachment>, dooblrkick::params::numLayers> layerSwitchAttachments, soloAttachments;
+    std::unique_ptr<ButtonAttachment> envelopePowerAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrKickAudioProcessorEditor)
 };

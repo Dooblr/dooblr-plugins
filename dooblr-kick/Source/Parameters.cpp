@@ -395,7 +395,7 @@ namespace dooblrkick::params
             const auto n = juce::String (node + 1);
 
             if (node > 0)
-                addFloat (layout, nodeTimeId (Envelope::master, node), "Master Env " + n + " Time", range (0.0f, maxNodeTimeMs, 200.0f), m.timeMs, msString(), "ms");
+                addFloat (layout, nodeTimeId (Envelope::master, node), "Master Env " + n + " Time", range (0.0f, maxMasterNodeTimeMs, 200.0f), m.timeMs, msString(), "ms");
 
             addFloat (layout, nodeValueId (Envelope::master, node), "Master Env " + n + " Level", range (0.0f, 1.0f), m.value, percentString());
 
@@ -405,6 +405,11 @@ namespace dooblrkick::params
 
         addFloat (layout, "mix_drywet", "Dry/Wet", range (0.0f, 1.0f), 1.0f, percentString());
         addChoice (layout, "chain_order", "Chain Order", chainOrderChoices(), 0);
+
+        //== 0.3.3 (appended): master envelope macros for the Envelope page knobs ==============
+        // Both default to transparent (100 %): the times and levels are then exactly the points'.
+        addFloat (layout, "menv_tscale", "Master Env Time Scale", logRange (minMasterTimeScale, maxMasterTimeScale), 1.0f, percentString());
+        addFloat (layout, "menv_depth", "Master Env Depth", range (0.0f, 1.0f), 1.0f, percentString());
 
         return layout;
     }
@@ -477,6 +482,7 @@ namespace dooblrkick::params
 
         masterOn = get ("menv_on"); masterCount = get (envelopeCountId (Envelope::master));
         dryWet = get ("mix_drywet"); chainOrder = get ("chain_order");
+        masterTimeScale = get ("menv_tscale"); masterDepth = get ("menv_depth");
 
         for (int node = 0; node < maxNodes; ++node)
         {
@@ -617,6 +623,7 @@ namespace dooblrkick::params
             auto& m = s.master.envelope.nodes[(size_t) node];
             m.timeMs = node > 0 ? f (masterTime[(size_t) node]) : 0.0f;
             m.value = f (masterLevel[(size_t) node]);
+            m = applyMasterMacros (m, f (masterTimeScale), f (masterDepth));
             m.curve = node < maxNodes - 1 ? f (masterCurve[(size_t) node]) : 0.0f;
         }
 

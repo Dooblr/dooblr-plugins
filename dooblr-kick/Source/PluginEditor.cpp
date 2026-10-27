@@ -41,18 +41,21 @@ namespace
 
     juce::String lid (int layer, const char* suffix) { return params::layerId (layer, suffix); }
 
+    // v0.3.3 layer pages. Level is the fader at the page's left (not in a panel). Panel 1 ("layer"):
+    // Source and the mix / filter controls, the same in both sources. Panel 2 ("sound"): first the
+    // source-specific region, a fixed run of slots whose Synth-only and Sample-only members swap
+    // in place (a slot with no member for the current source stays empty), then the shared sound
+    // controls. So switching Synth / Sample never moves or resizes anything else.
+    enum SourceSlot { slotA, slotB, slotC, slotD };
+
     Specs layerCommonSpecs (int layer)
     {
         Specs specs;
 
         if (params::layerHasSample (layer))
-        {
             specs.push_back ({ lid (layer, "source"), "Source", K::combo });
-            specs.push_back ({ lid (layer, "sample"), "Sample", K::combo });
-        }
 
-        for (auto spec : Specs { { lid (layer, "level"), "Level", K::knob },
-                                 { lid (layer, "pan"), "Pan", K::knob },
+        for (auto spec : Specs { { lid (layer, "pan"), "Pan", K::knob },
                                  { lid (layer, "start"), "Start", K::knob },
                                  { lid (layer, "send"), "Drive send", K::knob },
                                  { lid (layer, "ftype"), "Filter", K::combo },
@@ -63,30 +66,69 @@ namespace
         return specs;
     }
 
+    /** The "Load file" cell of a layer's sample controls goes in this slot, before this control. */
+    struct LoadCellPlace { int slot; const char* before; };
+
+    LoadCellPlace loadCellPlace (int layer)
+    {
+        switch (layer)
+        {
+            case dooblrkick::dsp::clickLayer: return { slotB, "click_keytrack" };
+            case dooblrkick::dsp::bodyLayer:  return { slotD, "body_tune" };
+            case dooblrkick::dsp::tailLayer:  return { slotC, "tail_tune" };
+            default:                          return { slotC, "noise_attack" };
+        }
+    }
+
     Specs layerSoundSpecs (int layer)
     {
         switch (layer)
         {
             case dooblrkick::dsp::clickLayer:
-                return { { "click_type", "Type", K::combo }, { "click_pitch", "Pitch", K::knob }, { "click_length", "Length", K::knob },
-                         { "click_tone", "Tone", K::knob }, { "click_keytrack", "Smp key track", K::toggle } };
+                return { { "click_type", "Type", K::combo, 0, 0, slotA }, { "click_sample", "Sample", K::combo, 0, 0, slotA },
+                         /* slot B: Load file (sample) */
+                         { "click_keytrack", "Smp key track", K::toggle, 0, 0, slotC },
+                         { "click_pitch", "Pitch", K::knob }, { "click_length", "Length", K::knob }, { "click_tone", "Tone", K::knob } };
             case dooblrkick::dsp::bodyLayer:
-                return { { "body_wave", "Wave", K::combo }, { "body_harm", "Harmonics", K::knob }, { "body_tune", "Tune", K::knob },
-                         { "body_phase", "Start phase", K::knob }, { "body_drive", "Drive", K::knob },
-                         { "body_smp_penv", "Smp pitch env", K::knob }, { "body_keytrack", "Smp key track", K::toggle } };
+                return { { "body_wave", "Wave", K::combo, 0, 0, slotA }, { "body_sample", "Sample", K::combo, 0, 0, slotA },
+                         { "body_harm", "Harmonics", K::knob, 0, 0, slotB }, { "body_smp_penv", "Smp pitch env", K::knob, 0, 0, slotB },
+                         { "body_phase", "Start phase", K::knob, 0, 0, slotC }, { "body_keytrack", "Smp key track", K::toggle, 0, 0, slotC },
+                         /* slot D: Load file (sample) */
+                         { "body_tune", "Tune", K::knob }, { "body_drive", "Drive", K::knob } };
             case dooblrkick::dsp::subLayer:
                 return { { "sub_tune", "Tune", K::knob }, { "sub_fine", "Fine", K::knob }, { "sub_phase", "Start phase", K::knob },
                          { "sub_envamt", "Pitch env", K::knob }, { "sub_attack", "Attack", K::knob }, { "sub_hold", "Hold", K::knob },
                          { "sub_decay", "Decay", K::knob }, { "sub_curve", "Curve", K::knob } };
             case dooblrkick::dsp::tailLayer:
-                return { { "tail_wave", "Wave", K::combo }, { "tail_tune", "Tune", K::knob }, { "tail_spread", "Spread", K::knob },
-                         { "tail_phase", "Start phase", K::knob }, { "tail_attack", "Attack", K::knob }, { "tail_hold", "Hold", K::knob },
-                         { "tail_decay", "Decay", K::knob }, { "tail_curve", "Curve", K::knob }, { "tail_drive", "Drive", K::knob },
-                         { "tail_keytrack", "Smp key track", K::toggle } };
+                return { { "tail_wave", "Wave", K::combo, 0, 0, slotA }, { "tail_sample", "Sample", K::combo, 0, 0, slotA },
+                         { "tail_spread", "Spread", K::knob, 0, 0, slotB }, { "tail_keytrack", "Smp key track", K::toggle, 0, 0, slotB },
+                         { "tail_phase", "Start phase", K::knob, 0, 0, slotC }, /* + Load file (sample) */
+                         { "tail_tune", "Tune", K::knob }, { "tail_attack", "Attack", K::knob }, { "tail_hold", "Hold", K::knob },
+                         { "tail_decay", "Decay", K::knob }, { "tail_curve", "Curve", K::knob }, { "tail_drive", "Drive", K::knob } };
             default:
-                return { { "noise_color", "Colour", K::combo }, { "noise_width", "Width", K::knob }, { "noise_attack", "Attack", K::knob },
-                         { "noise_hold", "Hold", K::knob }, { "noise_decay", "Decay", K::knob }, { "noise_curve", "Curve", K::knob },
-                         { "noise_tune", "Smp tune", K::knob } };
+                return { { "noise_color", "Colour", K::combo, 0, 0, slotA }, { "noise_sample", "Sample", K::combo, 0, 0, slotA },
+                         { "noise_width", "Width", K::knob, 0, 0, slotB }, { "noise_tune", "Smp tune", K::knob, 0, 0, slotB },
+                         /* slot C: Load file (sample) */
+                         { "noise_attack", "Attack", K::knob }, { "noise_hold", "Hold", K::knob }, { "noise_decay", "Decay", K::knob },
+                         { "noise_curve", "Curve", K::knob } };
+        }
+    }
+
+    /** Controls that only matter for one source of a layer with a Synth / Sample switch:
+        hidden while the other source is selected (v0.3.2), in their fixed slots (v0.3.3).
+        Everything else on the page is shared. */
+    struct SourceSpecific { std::vector<const char*> synthOnly, sampleOnly; };
+
+    SourceSpecific sourceSpecificIds (int layer)
+    {
+        switch (layer)
+        {
+            case dooblrkick::dsp::clickLayer: return { { "click_type" }, { "click_sample", "click_keytrack" } };
+            case dooblrkick::dsp::bodyLayer:  return { { "body_wave", "body_harm", "body_phase" },
+                                                       { "body_sample", "body_smp_penv", "body_keytrack" } };
+            case dooblrkick::dsp::tailLayer:  return { { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_keytrack" } };
+            case dooblrkick::dsp::noiseLayer: return { { "noise_color", "noise_width" }, { "noise_sample", "noise_tune" } };
+            default: return {};
         }
     }
 
@@ -173,16 +215,27 @@ ProcessorPowerButton::ProcessorPowerButton (int stageIndex)
 {
     static constexpr const char* ids[] = { "power_drive", "power_eq", "power_dynamics", "power_limiter" };
     static constexpr const char* names[] = { "Drive", "EQ", "Dynamics (transient shaper + compressor)", "Limiter" };
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+
+    if (stage == envelopeStage)
+    {
+        // Bound to menv_on by a ButtonAttachment: a click toggles it (one undo step).
+        setComponentID ("power_envelope");
+        setTooltip ("Master envelope on/off (off: bypassed, the hit plays unshaped)");
+        setClickingTogglesState (true);
+        return;
+    }
+
     setComponentID (ids[stage]);
     setTooltip (juce::String (names[stage]) + " on/off");
-    setMouseCursor (juce::MouseCursor::PointingHandCursor);
     setClickingTogglesState (false); // the editor applies the change to the parameters
 }
 
 void ProcessorPowerButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
     const auto on = getToggleState();
-    const auto colour = pageColour (DooblrKickAudioProcessorEditor::pageForStage (stage));
+    const auto colour = pageColour (stage == envelopeStage ? (int) DooblrKickAudioProcessorEditor::envelopePage
+                                                           : DooblrKickAudioProcessorEditor::pageForStage (stage));
     auto circle = getLocalBounds().toFloat().withSizeKeepingCentre ((float) size, (float) size).reduced (1.0f);
 
     if (down)
@@ -223,11 +276,20 @@ void NavButton::setProcessorOn (bool on)
     }
 }
 
+void NavButton::setHasPowerToggle (bool has)
+{
+    hasPowerToggle = has;
+    repaint();
+}
+
 juce::Rectangle<int> NavButton::getPowerArea() const
 {
     constexpr int size = ProcessorPowerButton::size;
-    return chainSlot < 0 ? juce::Rectangle<int>()
-                         : juce::Rectangle<int> (6 + 16 + 3, (getHeight() - size) / 2, size, size);
+
+    if (chainSlot < 0)
+        return hasPowerToggle ? juce::Rectangle<int> (6 + 3, (getHeight() - size) / 2, size, size) : juce::Rectangle<int>();
+
+    return { 6 + 16 + 3, (getHeight() - size) / 2, size, size };
 }
 
 void NavButton::setChainSlot (int slot)
@@ -246,9 +308,30 @@ juce::Rectangle<int> NavButton::getHandleArea() const
 
 void NavButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 {
-    if (chainSlot < 0)
+    if (chainSlot < 0 && ! hasPowerToggle)
     {
         juce::TextButton::paintButton (g, highlighted, down);
+        return;
+    }
+
+    if (chainSlot < 0)
+    {
+        // A tab with a power toggle but no chain slot (Envelope): toggle, then the label; dimmed while off.
+        auto& lf = getLookAndFeel();
+        const auto on = getToggleState();
+        lf.drawButtonBackground (g, *this, findColour (on ? buttonOnColourId : buttonColourId), highlighted, down);
+
+        if (! processorOn)
+        {
+            g.setColour (Palette::background.withAlpha (0.35f));
+            g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f);
+        }
+
+        auto area = getLocalBounds().reduced (6, 0);
+        area.removeFromLeft (3 + ProcessorPowerButton::size + 5);
+        g.setColour (findColour (on ? textColourOnId : textColourOffId).withMultipliedAlpha (processorOn ? 1.0f : 0.45f));
+        g.setFont (juce::FontOptions (juce::jlimit (12.0f, 15.0f, (float) getHeight() * 0.40f)));
+        g.drawFittedText (getButtonText(), area, juce::Justification::centredLeft, 1, 0.8f);
         return;
     }
 
@@ -425,6 +508,16 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
             soloAttachments[(size_t) p] = std::make_unique<ButtonAttachment> (state, params::layerId (p, "solo"), *solo);
         }
 
+        if (p == envelopePage)
+        {
+            // v0.3.3: the master envelope's on / off lives on its tab, like the processors'.
+            envelopePower = std::make_unique<ProcessorPowerButton> (ProcessorPowerButton::envelopeStage);
+            button.setHasPowerToggle (true);
+            button.addAndMakeVisible (*envelopePower);
+            envelopePowerAttachment = std::make_unique<ButtonAttachment> (state, "menv_on", *envelopePower);
+            envelopePower->onStateChange = [this] { pageButtons[(size_t) envelopePage].setProcessorOn (envelopePower->getToggleState()); };
+        }
+
         if (p >= drivePage)
         {
             const auto stage = p - drivePage;
@@ -480,12 +573,14 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
         panels.push_back (std::make_unique<ControlPanel> (state, name + " sound", pageColour (layer), layerSoundSpecs (layer)));
     }
 
-    pagePanels[envelopePage].push_back (std::make_unique<ControlPanel> (state, "Master", pageColour (envelopePage), Specs {
-        { "menv_on", "Envelope on", K::toggle }, { "mix_drywet", "Dry/Wet", K::knob },
-        { "chain_order", "Chain order", K::combo, 256 } }));
-    pagePanels[envelopePage].push_back (std::make_unique<ControlPanel> (state, "Play", pageColour (envelopePage), Specs {
+    // v0.3.3: knobs for the master envelope (the selected point's Time / Level / Curve, plus Time
+    // Scale and Depth), then Play and the mix in one row. On / off: the Envelope tab's power toggle.
+    pagePanels[envelopePage].push_back (std::make_unique<ControlPanel> (state, "Master envelope", pageColour (envelopePage), Specs {
+        { "menv_tscale", "Time scale", K::knob }, { "menv_depth", "Depth", K::knob } }));
+    pagePanels[envelopePage].push_back (std::make_unique<ControlPanel> (state, "Play & mix", pageColour (envelopePage), Specs {
         { "root_note", "Key", K::knob },
-        { "vel_sens", "Velocity", K::knob }, { "gate", "Gate", K::toggle }, { "release", "Release", K::knob } }));
+        { "vel_sens", "Velocity", K::knob }, { "gate", "Gate", K::toggle }, { "release", "Release", K::knob },
+        { "mix_drywet", "Dry/Wet", K::knob }, { "chain_order", "Chain order", K::combo, 256 } }));
     pagePanels[drivePage].push_back (std::make_unique<ControlPanel> (state, "Drive", pageColour (drivePage), Specs {
         { "dist_type", "Type", K::combo }, { "dist_drive", "Drive", K::knob },
         { "dist_tone", "Tone", K::knob }, { "dist_bits", "Bits", K::knob }, { "dist_rate", "Rate", K::knob },
@@ -522,9 +617,30 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
         styleLabel (label, "(no file loaded)", 11.0f, Palette::textMuted, juce::Justification::centredLeft);
         label.setComponentID (lid (layer, "sampleFile"));
 
-        auto& panel = *pagePanels[(size_t) layer].front();
-        panel.addExtra (button, 96);
-        panel.addExtra (label, 150);
+        // v0.3.3: button over file name in one cell of the sound panel's sample slots.
+        auto& cell = loadSampleCells[(size_t) layer];
+        cell.addAndMakeVisible (button);
+        cell.addAndMakeVisible (label);
+        cell.onResize = [&cell, &button, &label]
+        {
+            auto area = cell.getLocalBounds().withTrimmedTop (18);
+            button.setBounds (area.removeFromTop (26).reduced (0, 1));
+            area.removeFromTop (2);
+            label.setBounds (area.removeFromTop (18));
+        };
+        const auto place = loadCellPlace (layer);
+        pagePanels[(size_t) layer].back()->addExtra (cell, ControlPanel::comboWidth, place.slot, place.before, true);
+    }
+
+    envelopePointKnobs = std::make_unique<dooblrkick::ui::EnvelopePointKnobs> (state, pageColour (envelopePage));
+    pagePanels[envelopePage].front()->addExtra (*envelopePointKnobs, dooblrkick::ui::EnvelopePointKnobs::preferredWidth, -1, "menv_tscale", true);
+    envelopePointKnobs->onPointChange = [this] (int point) { masterEditor.setSelectedNode (point); };
+    masterEditor.onSelectedNodeChange = [this] (int point) { envelopePointKnobs->setPoint (point); };
+
+    for (int layer = 0; layer < params::numLayers; ++layer)
+    {
+        levelFaders[(size_t) layer] = std::make_unique<dooblrkick::ui::LevelFader> (state, lid (layer, "level"), pageColour (layer));
+        addChildComponent (*levelFaders[(size_t) layer]);
     }
 
     // The Limiter panel's mode box offers Clipper / Limiter; Off is the Limiter tab's toggle.
@@ -533,6 +649,12 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
         modeBox->setTextWhenNothingSelected ("Off");
         modeBox->setTooltip ("Limiter mode (switch the limiter on / off with the Limiter tab's toggle)");
     }
+
+    // A source change (switch, automation, preset, undo, Random) re-lays the layer page at once.
+    for (int layer = 0; layer < params::numLayers; ++layer)
+        if (params::layerHasSample (layer))
+            if (auto* source = state.getParameter (lid (layer, "source")))
+                sourceWatchers.push_back (std::make_unique<juce::ParameterAttachment> (*source, [this] (float) { updateEnablement(); }, nullptr));
 
     refreshPowerButtonsNow();
     outputAttachment = std::make_unique<SliderAttachment> (state, "output_gain", outputSlider);
@@ -554,11 +676,16 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
 DooblrKickAudioProcessorEditor::~DooblrKickAudioProcessorEditor()
 {
     meterVBlank.reset();
+    sourceWatchers.clear();
     audioProcessor.getUndoHistory().getUndoManager().removeChangeListener (this);
 
-    // The panels hold the load buttons / file labels as (unowned) children; drop the panels first.
+    // The panels hold the load cells as (unowned) children; drop the panels first.
     for (auto& panels : pagePanels)
         panels.clear();
+    for (auto& fader : levelFaders)
+        fader.reset();
+    masterEditor.onSelectedNodeChange = nullptr;
+    envelopePointKnobs.reset();
 
     setLookAndFeel (nullptr);
 }
@@ -572,6 +699,9 @@ void DooblrKickAudioProcessorEditor::selectPage (int page)
     for (int p = 0; p < numPages; ++p)
         for (auto& panel : pagePanels[(size_t) p])
             panel->setVisible (p == selectedPage);
+
+    for (int layer = 0; layer < params::numLayers; ++layer)
+        levelFaders[(size_t) layer]->setVisible (layer == selectedPage);
 
     const auto visual = showsVisual();
     envelopeEditor.setVisible (! visual);
@@ -631,7 +761,13 @@ void DooblrKickAudioProcessorEditor::updateSampleFileLabel()
 
 void DooblrKickAudioProcessorEditor::updateEnablement()
 {
-    const auto value = [this] (const juce::String& id) { return state.getRawParameterValue (id)->load(); };
+    // From the parameter itself, not the raw value: a parameter listener (the source watchers)
+    // runs before the state's raw value has been updated.
+    const auto value = [this] (const juce::String& id)
+    {
+        auto* param = state.getParameter (id);
+        return param->convertFrom0to1 (param->getValue());
+    };
 
     const auto setEnabled = [this] (int page, const juce::String& id, bool enabled)
     {
@@ -639,6 +775,8 @@ void DooblrKickAudioProcessorEditor::updateEnablement()
             if (auto* control = panel->findControl (id))
                 control->setEnabled (enabled);
     };
+
+    bool layoutChanged = false;
 
     for (int layer = 0; layer < params::numLayers; ++layer)
     {
@@ -649,37 +787,24 @@ void DooblrKickAudioProcessorEditor::updateEnablement()
         if (! params::layerHasSample (layer))
             continue;
 
+        // v0.3.2: the controls of the other source are hidden (not just disabled) and the
+        // rest reflow; the hidden parameters keep their values.
         const auto sampled = value (lid (layer, "source")) > 0.5f;
-        setEnabled (layer, lid (layer, "sample"), sampled);
+        const auto ids = sourceSpecificIds (layer);
 
-        loadSampleButtons[(size_t) layer].setEnabled (sampled);
-        sampleFileLabels[(size_t) layer].setEnabled (sampled);
-
-        switch (layer)
+        for (auto& panel : pagePanels[(size_t) layer])
         {
-            case dooblrkick::dsp::clickLayer:
-                setEnabled (layer, "click_type", ! sampled);
-                setEnabled (layer, "click_keytrack", sampled);
-                break;
-            case dooblrkick::dsp::bodyLayer:
-                for (auto* id : { "body_wave", "body_harm", "body_phase" })
-                    setEnabled (layer, id, ! sampled);
-                setEnabled (layer, "body_smp_penv", sampled);
-                setEnabled (layer, "body_keytrack", sampled);
-                break;
-            case dooblrkick::dsp::tailLayer:
-                for (auto* id : { "tail_wave", "tail_spread", "tail_phase" })
-                    setEnabled (layer, id, ! sampled);
-                setEnabled (layer, "tail_keytrack", sampled);
-                break;
-            case dooblrkick::dsp::noiseLayer:
-                for (auto* id : { "noise_color", "noise_width" })
-                    setEnabled (layer, id, ! sampled);
-                setEnabled (layer, "noise_tune", sampled);
-                break;
-            default: break;
+            for (const auto* id : ids.synthOnly)
+                layoutChanged = panel->setShown (id, ! sampled) || layoutChanged;
+            for (const auto* id : ids.sampleOnly)
+                layoutChanged = panel->setShown (id, sampled) || layoutChanged;
+            layoutChanged = panel->setShown (loadSampleCells[(size_t) layer], sampled) || layoutChanged;
         }
     }
+
+    // Panel heights follow what is shown.
+    if (layoutChanged && ! getBounds().isEmpty())
+        resized();
 
     const auto crush = juce::roundToInt (value ("dist_type")) == 4;
     setEnabled (drivePage, "dist_bits", crush);
@@ -782,6 +907,9 @@ void DooblrKickAudioProcessorEditor::refreshPowerButtonsNow()
         powerButtons[(size_t) stage]->setToggleState (on, juce::dontSendNotification);
         pageButtons[(size_t) pageForStage (stage)].setProcessorOn (on);
     }
+
+    if (envelopePower != nullptr)
+        pageButtons[(size_t) envelopePage].setProcessorOn (envelopePower->getToggleState());
 }
 
 //==============================================================================
@@ -1175,14 +1303,20 @@ void DooblrKickAudioProcessorEditor::resized()
                                                       LayerTabSwitch::switchWidth + 6, LayerTabSwitch::switchHeight + 6);
                 soloButtons[(size_t) p]->setBounds (button.getWidth() - 26, 0, 24, button.getHeight());
             }
+
+            if (p == envelopePage)
+                envelopePower->setBounds (button.getPowerArea());
         }
 
         layoutChainButtons();
     }
 
-    // Controls: the selected page's panels, each at its preferred height.
+    // Controls: the selected page's panels, each at its preferred height. Layer pages: the Level
+    // fader takes the left edge, as tall as the panels (v0.3.3).
     auto content = bounds;
-    const auto controlsWidth = content.getWidth() - 40;
+    const auto isLayer = selectedPage < params::numLayers;
+    constexpr int faderColumn = dooblrkick::ui::LevelFader::width + 12;
+    const auto controlsWidth = content.getWidth() - 40 - (isLayer ? faderColumn : 0);
     auto panelsHeight = 0;
 
     for (auto& panel : pagePanels[(size_t) selectedPage])
@@ -1191,6 +1325,13 @@ void DooblrKickAudioProcessorEditor::resized()
     controlsArea = content.removeFromBottom (juce::jmin (panelsHeight + 14, content.getHeight() - 200));
     {
         auto controls = controlsArea.reduced (20, 10);
+
+        if (isLayer)
+        {
+            auto column = controls.removeFromLeft (faderColumn);
+            levelFaders[(size_t) selectedPage]->setBounds (column.withWidth (dooblrkick::ui::LevelFader::width)
+                                                                 .withTrimmedBottom (juce::jmax (0, column.getHeight() - panelsHeight + 10)));
+        }
 
         for (auto& panel : pagePanels[(size_t) selectedPage])
         {

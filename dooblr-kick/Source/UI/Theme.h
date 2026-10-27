@@ -33,5 +33,10 @@ namespace dooblrkick::ui
                                float rotaryStartAngle, float rotaryEndAngle, juce::Slider&) override;
 
         void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
+
+        /** Vertical sliders (the layer Level faders, v0.3.3): a slim groove filled from the bottom
+            and a flat cap. Other linear styles use the default look. */
+        void drawLinearSlider (juce::Graphics&, int x, int y, int width, int height, float sliderPos, float minSliderPos,
+                               float maxSliderPos, juce::Slider::SliderStyle, juce::Slider&) override;
     };
 }

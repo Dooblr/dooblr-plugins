@@ -2,7 +2,10 @@
 
 #include "Parameters.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <iterator>
 
 namespace dooblrkick::presets
 {
@@ -221,28 +224,104 @@ namespace dooblrkick::presets
         addEnvelope (v, params::Envelope::amp, { { 0, 1, uni (-0.2f, 0.3f) }, { a1, uni (0.75f, 1.0f), uni (0.0f, 0.4f) },
                                                  { a2, uni (0.3f, 0.75f), uni (0.2f, 0.6f) }, { a3, 0, 0 } });
 
-        add (v, { { "body_wave", (float) r.nextInt (4) }, { "body_harm", uni (0.0f, 0.3f) }, { "body_drive", uni (0.0f, 0.5f) },
-                  { "body_phase", r.nextBool() ? 0.0f : 90.0f }, { "body_level", uni (-3.0f, 0.0f) } });
+        // On / off (v0.3.3): every layer is switched by its own draw - Click and Body 80 %,
+        // Sub 60 %, Tail and Noise 30 % - so any of them, Click and Body included, can be off.
+        // A layer the user has soloed stays on. If all five come up off, one of the five (each
+        // equally likely) is switched back on, so a result is never silent. Every layer's sound
+        // parameters are set whether it is on or not, so switching one back on sounds coherent.
+        // (Its level is floored at the end if it is the only layer heard.)
+        std::array<float, params::numLayers> on {};
+        {
+            constexpr std::array<float, params::numLayers> onChance { 0.8f, 0.8f, 0.6f, 0.3f, 0.3f };
+            for (int layer = 0; layer < params::numLayers; ++layer)
+            {
+                on[(size_t) layer] = chance (onChance[(size_t) layer]);
+                if (const auto* solo = state.getRawParameterValue (params::layerId (layer, "solo")); solo != nullptr && solo->load() > 0.5f)
+                    on[(size_t) layer] = 1.0f;
+            }
+            if (std::all_of (on.begin(), on.end(), [] (float o) { return o < 0.5f; }))
+                on[(size_t) r.nextInt (params::numLayers)] = 1.0f;
+        }
+        const auto clickOn = on[0], bodyOn = on[1];
 
-        add (v, { { "click_on", 1 }, { "click_type", (float) r.nextInt (5) }, { "click_level", uni (-20.0f, -6.0f) },
-                  { "click_length", logUni (3.0f, 40.0f) }, { "click_tone", uni (-0.4f, 0.4f) },
-                  { "click_source", chance (0.4f) }, { "click_sample", (float) (5 + r.nextInt (4)) } });
+        // Body: centred; mostly the synth (whose pitch is the envelope above and
+        // never follows the MIDI note), sometimes a kick sample bent by that envelope. Every Body
+        // sound parameter is set, so the result never depends on what was there before.
+        // Key tracking (body_keytrack) is left as the user set it.
+        {
+            const auto bodySample = chance (0.25f);
+            static constexpr float bodySamples[] { 0, 1, 2, 11, 12 }; // kit kicks, muted BD, synth kicks
+            add (v, { { "body_on", bodyOn }, { "body_level", uni (-3.0f, 0.0f) }, { "body_pan", 0 }, { "body_start", 0 },
+                      { "body_send", uni (0.7f, 1.0f) }, { "body_source", bodySample },
+                      { "body_sample", bodySamples[r.nextInt ((int) std::size (bodySamples))] },
+                      { "body_wave", (float) r.nextInt (4) }, { "body_harm", uni (0.0f, 0.3f) }, { "body_drive", uni (0.0f, 0.5f) },
+                      { "body_phase", r.nextBool() ? 0.0f : 90.0f },
+                      { "body_tune", bodySample > 0.5f ? uni (-7.0f, 3.0f) : uni (-2.0f, 2.0f) },
+                      { "body_smp_penv", bodySample > 0.5f ? uni (0.0f, 0.5f) : 0.0f } });
 
-        add (v, { { "sub_on", chance (0.6f) }, { "sub_level", uni (-14.0f, -4.0f) }, { "sub_hold", uni (20.0f, 200.0f) },
+            const auto lowPass = chance (0.25f);
+            add (v, { { "body_ftype", lowPass > 0.5f ? 1.0f : 0.0f }, { "body_cutoff", logUni (1500.0f, 12000.0f) },
+                      { "body_reso", uni (0.0f, 0.3f) } });
+        }
+
+        // Click: centred; a synth click (type, pitch, length, tone) or a short
+        // percussive sample. Its key tracking (click_keytrack) is left as the user set it.
+        {
+            const auto clickSample = chance (0.4f);
+            static constexpr float clickSamples[] { 5, 6, 7, 8, 14 }; // cajon, frame drum, slapstick, woodblock, synth click
+            add (v, { { "click_on", clickOn }, { "click_level", uni (-20.0f, -6.0f) }, { "click_pan", 0 }, { "click_start", 0 },
+                      { "click_send", uni (0.3f, 1.0f) }, { "click_source", clickSample },
+                      { "click_sample", clickSamples[r.nextInt ((int) std::size (clickSamples))] },
+                      { "click_type", (float) r.nextInt (5) },
+                      { "click_pitch", clickSample > 0.5f ? uni (-5.0f, 5.0f) : uni (-7.0f, 7.0f) },
+                      { "click_length", clickSample > 0.5f ? logUni (15.0f, 80.0f) : logUni (3.0f, 40.0f) },
+                      { "click_tone", uni (-0.4f, 0.4f) } });
+
+            const auto highPass = chance (0.3f);
+            add (v, { { "click_ftype", highPass > 0.5f ? 2.0f : 0.0f }, { "click_cutoff", logUni (300.0f, 3000.0f) },
+                      { "click_reso", uni (0.0f, 0.3f) } });
+        }
+
+        add (v, { { "sub_on", on[2] }, { "sub_level", uni (-14.0f, -4.0f) }, { "sub_hold", uni (20.0f, 200.0f) },
                   { "sub_decay", uni (150.0f, 900.0f) }, { "sub_envamt", uni (0.0f, 0.3f) } });
 
-        add (v, { { "tail_on", chance (0.3f) }, { "tail_level", uni (-18.0f, -8.0f) }, { "tail_source", chance (0.5f) },
+        add (v, { { "tail_on", on[3] }, { "tail_level", uni (-18.0f, -8.0f) }, { "tail_source", chance (0.5f) },
                   { "tail_sample", (float) (2 + r.nextInt (3)) }, { "tail_decay", uni (400.0f, 1500.0f) },
                   { "tail_drive", uni (0.0f, 0.6f) }, { "tail_start", uni (0.0f, 40.0f) } });
 
-        add (v, { { "noise_on", chance (0.3f) }, { "noise_level", uni (-30.0f, -16.0f) }, { "noise_decay", uni (30.0f, 200.0f) },
+        add (v, { { "noise_on", on[4] }, { "noise_level", uni (-30.0f, -16.0f) }, { "noise_decay", uni (30.0f, 200.0f) },
                   { "noise_color", (float) r.nextInt (3) } });
 
         const auto drive = chance (0.6f);
         add (v, { { "dist_on", drive }, { "dist_type", (float) r.nextInt (4) }, { "dist_drive", uni (4.0f, 24.0f) },
                   { "dist_tone", uni (0.4f, 1.0f) }, { "dist_out", -6.0f } });
 
-        juce::ignoreUnused (state);
+        // The layer heard on its own (the only one on, or the only soloed one) is never
+        // near-silent: its level is at least -9 dB (Click, Sub, Tail and Noise draw lower ones)
+        // and its filter is off (a random high-pass over a dark click can all but remove it).
+        {
+            std::vector<int> heard, soloedOn;
+            for (int layer = 0; layer < params::numLayers; ++layer)
+            {
+                if (on[(size_t) layer] < 0.5f)
+                    continue;
+                heard.push_back (layer);
+                if (const auto* solo = state.getRawParameterValue (params::layerId (layer, "solo")); solo != nullptr && solo->load() > 0.5f)
+                    soloedOn.push_back (layer);
+            }
+            if (! soloedOn.empty())
+                heard = soloedOn;
+
+            if (heard.size() == 1)
+                for (auto& [id, value] : v)
+                {
+                    if (id == params::layerId (heard.front(), "level"))
+                        value = std::max (value, soloLevelFloorDb);
+                    else if (id == params::layerId (heard.front(), "ftype"))
+                        value = 0.0f;
+                }
+        }
+
         return v;
     }
 

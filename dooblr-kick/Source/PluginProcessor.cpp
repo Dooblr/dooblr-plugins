@@ -16,7 +16,7 @@ namespace
     // 3: v0.1.1 sample list. 4: v0.3.0 added the master envelope (menv_*), dry / wet (mix_drywet)
     //    and the chain order (chain_order). Older states have none of them, so they load at their
     //    defaults (flat 100 % envelope, 100 % wet, the v0.2.0 order), which render bit-identically.
-    constexpr int stateVersion = 4;
+    constexpr int stateVersion = 5;
 
     /** Brings an older saved state / preset tree up to the current stateVersion, in place. */
     void migrateState (juce::ValueTree& state)
@@ -52,6 +52,15 @@ namespace
                 if (choice.isValid() && juce::roundToInt ((float) choice.getProperty ("value")) >= params::legacyUserSampleChoice)
                     choice.setProperty ("value", (float) params::userSampleChoice, nullptr);
             }
+        }
+
+        if (version < 5)
+        {
+            // 0.3.3 appended the master envelope macros; a state from before has none, so pin them
+            // at their transparent defaults (100 %): it sounds exactly as it was saved.
+            for (const auto* id : { "menv_tscale", "menv_depth" })
+                if (! state.getChildWithProperty ("id", id).isValid())
+                    state.appendChild (juce::ValueTree ("PARAM", { { "id", id }, { "value", 1.0f } }), nullptr);
         }
 
         state.setProperty (stateVersionProperty, stateVersion, nullptr);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -45,6 +46,26 @@ namespace dooblrkick::params
     juce::String nodeCurveId (Envelope envelope, int node);  // nodes 0 .. 6 (segment to the next node)
 
     inline constexpr float minPitchHz = 20.0f, maxPitchHz = 16000.0f, maxNodeTimeMs = 2000.0f;
+    /** v0.3.3: master envelope (Envelope tab) points reach 6 s; the Body pitch / amp ones stay at 2 s. */
+    inline constexpr float maxMasterNodeTimeMs = 6000.0f;
+    constexpr float maxNodeTimeFor (Envelope e) noexcept { return e == Envelope::master ? maxMasterNodeTimeMs : maxNodeTimeMs; }
+
+    /** v0.3.3 master envelope macros: "Master Env Time Scale" (menv_tscale, 25 % .. 400 %) stretches
+        every point's time (capped at 6000 ms) and "Master Env Depth" (menv_depth, 0 .. 100 %) blends
+        the envelope towards unity: gain = 1 - depth * (1 - level). At 100 % / 100 % (the defaults)
+        a point is returned unchanged, bit for bit. */
+    inline constexpr float minMasterTimeScale = 0.25f, maxMasterTimeScale = 4.0f;
+
+    inline dsp::EnvelopeNode applyMasterMacros (dsp::EnvelopeNode node, float timeScale, float depth) noexcept
+    {
+        if (timeScale != 1.0f)
+            node.timeMs = std::min (node.timeMs * timeScale, maxMasterNodeTimeMs);
+
+        if (depth < 1.0f)
+            node.value = 1.0f - std::max (0.0f, depth) * (1.0f - node.value);
+
+        return node;
+    }
 
     /** Chain order choices ("Drive > EQ > Dynamics > Limiter" ...), index = dsp chain order index. */
     juce::StringArray chainOrderChoices();
@@ -94,7 +115,7 @@ namespace dooblrkick::params
         Value shapeOn, shapeAttack, shapeSustain;
         Value compOn, compThreshold, compRatio, compAttack, compRelease, compMakeup;
         Value limMode, limCeiling, limRelease, outputGain;
-        Value masterCount, masterOn, dryWet, chainOrder;
+        Value masterCount, masterOn, dryWet, chainOrder, masterTimeScale, masterDepth;
         std::array<Value, maxNodes> masterTime {}, masterLevel {}, masterCurve {};
     };
 }

@@ -402,6 +402,18 @@ namespace
         }
     }
 
+    juce::Component* findById (juce::Component& parent, const juce::String& id)
+    {
+        for (auto* child : parent.getChildren())
+        {
+            if (child->getComponentID() == id)
+                return child;
+            if (auto* found = findById (*child, id))
+                return found;
+        }
+        return nullptr;
+    }
+
     /** The tab power toggles (v0.3.1) and the parameters each one switches. */
     const std::vector<std::pair<juce::String, juce::StringArray>>& processorPowerParameters()
     {
@@ -452,7 +464,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.1", "version 0.3.1");
+        check (juce::String (JucePlugin_VersionString) == "0.3.3", "version 0.3.3");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -780,7 +792,7 @@ namespace
         auto tree = juce::ValueTree::fromXml (*xml);
         check (tree.hasProperty ("stateVersion") || tree.hasProperty ("version"), "state carries a version");
         const auto versionKey = tree.hasProperty ("stateVersion") ? "stateVersion" : "version";
-        check ((int) tree.getProperty (versionKey) == 4, "state version is 4");
+        check ((int) tree.getProperty (versionKey) == 5, "state version is 5");
         tree.setProperty (versionKey, 1, nullptr);
 
         auto setStored = [&] (const juce::String& id, float value)
@@ -1082,6 +1094,219 @@ namespace
 
         check (bad == 0, "30 random kicks are all non-silent, finite and below 0 dBFS (" + std::to_string (bad) + " bad)");
         check (p->getUndoHistory().getNumUndoableSteps() == 30, "each randomise is one undo step");
+    }
+
+    void testRandomiseClickBody()
+    {
+        using dooblrkick::presets::ValueList;
+        const juce::StringArray clickIds { "click_on", "click_level", "click_pan", "click_start", "click_send", "click_source",
+                                           "click_sample", "click_type", "click_pitch", "click_length", "click_tone",
+                                           "click_ftype", "click_cutoff", "click_reso" };
+        const juce::StringArray bodyIds { "body_on", "body_level", "body_pan", "body_start", "body_send", "body_source",
+                                          "body_sample", "body_wave", "body_harm", "body_drive", "body_phase", "body_tune",
+                                          "body_smp_penv", "body_ftype", "body_cutoff", "body_reso" };
+        const juce::StringArray untouched { "click_keytrack", "body_keytrack", "click_solo", "body_solo", "output_gain",
+                                            "root_note", "lim_mode", "lim_ceiling", "eq_on", "comp_on", "shape_on" };
+
+        // The value lists: every id exists, every value is inside its range (no snapping needed),
+        // both layers are fully covered, key tracking / solo / output are not touched.
+        {
+            auto p = makeProcessor();
+            juce::Random random (77);
+            bool idsOk = true, inRange = true, coversClick = true, coversBody = true, leavesAlone = true;
+            std::set<int> clickSources, bodySources, clickSamples, bodySamples;
+            int clickOff = 0, bodyOff = 0, clickAndBodyOff = 0, allOff = 0, quietAlone = 0;
+
+            for (int i = 0; i < 200; ++i)
+            {
+                const auto values = dooblrkick::presets::randomise (p->getParameterState(), random);
+                std::set<juce::String> seen;
+
+                for (const auto& [id, value] : values)
+                {
+                    seen.insert (id);
+                    auto* param = p->getParameterState().getParameter (id);
+                    idsOk = idsOk && param != nullptr;
+
+                    if (param != nullptr)
+                    {
+                        const auto& range = param->getNormalisableRange();
+                        inRange = inRange && std::isfinite (value) && value >= range.start - 1.0e-4f && value <= range.end + 1.0e-4f;
+                    }
+
+                    if (id == "click_source") clickSources.insert ((int) value);
+                    if (id == "body_source")  bodySources.insert ((int) value);
+                    if (id == "click_sample") clickSamples.insert ((int) value);
+                    if (id == "body_sample")  bodySamples.insert ((int) value);
+                }
+
+                // v0.3.3: on / off across all five layers.
+                std::map<juce::String, float> byId (values.begin(), values.end());
+                int onCount = 0, lone = -1;
+                for (int layer = 0; layer < params::numLayers; ++layer)
+                    if (byId[params::layerId (layer, "on")] > 0.5f) { ++onCount; lone = layer; }
+                clickOff += byId["click_on"] < 0.5f ? 1 : 0;
+                bodyOff += byId["body_on"] < 0.5f ? 1 : 0;
+                clickAndBodyOff += byId["click_on"] < 0.5f && byId["body_on"] < 0.5f ? 1 : 0;
+                allOff += onCount == 0 ? 1 : 0;
+                if (onCount == 1 && byId[params::layerId (lone, "level")] < dooblrkick::presets::soloLevelFloorDb - 1.0e-3f)
+                    ++quietAlone;
+
+                for (const auto& id : clickIds) coversClick = coversClick && seen.count (id) > 0;
+                for (const auto& id : bodyIds)  coversBody = coversBody && seen.count (id) > 0;
+                for (const auto& id : untouched) leavesAlone = leavesAlone && seen.count (id) == 0;
+            }
+
+            check (idsOk, "randomise only sets parameters that exist");
+            check (inRange, "200 randomisations: every value is finite and inside its parameter's range");
+            check (coversClick, "randomise sets every Click sound parameter (source, sample, type, pitch, length, tone, level, filter ...)");
+            check (coversBody, "randomise sets every Body sound parameter (source, sample, wave, tune, drive, level, filter ...)");
+            check (leavesAlone, "randomise leaves key tracking, solo, the Key, output gain, EQ, Dynamics and the Limiter alone");
+            check (clickOff > 0 && bodyOff > 0 && clickAndBodyOff > 0, "200 randomisations: Click is sometimes off ("
+                   + std::to_string (clickOff) + "), Body too (" + std::to_string (bodyOff) + "), and sometimes both ("
+                   + std::to_string (clickAndBodyOff) + ")");
+            check (clickOff < 100 && bodyOff < 100, "Click and Body are still on most of the time");
+            check (allOff == 0, "200 randomisations: never all five layers off");
+            check (quietAlone == 0, "a layer that is on alone is never below -9 dB");
+            check (clickSources.size() == 2 && bodySources.size() == 2, "both Synth and Sample sources come up for Click and Body");
+            check (clickSamples.size() >= 4 && bodySamples.size() >= 4 && clickSamples.count (params::userSampleChoice) == 0
+                       && bodySamples.count (params::userSampleChoice) == 0,
+                   "several factory samples are chosen (never the User file slot)");
+        }
+
+        // Seeded randomisations on a processor: Click and Body change every time, each press is
+        // one undo step, and every result renders finite, non-silent audio within 0 dBFS, with
+        // both Click and Body audible in it. Key tracking stays opt-in (as the user left it).
+        for (const auto seed : { 1, 2, 3, 4, 5, 6 })
+        {
+            auto p = makeProcessor();
+            setParam (*p, "body_keytrack", 1.0f); // a user choice that randomise must keep
+            p->getUndoHistory().clear();
+            juce::Random random (seed);
+            const auto tag = "seed " + std::to_string (seed) + ": ";
+
+            for (int i = 0; i < 4; ++i)
+            {
+                std::map<juce::String, float> before;
+                for (const auto& id : clickIds) before[id] = getPlain (*p, id);
+                for (const auto& id : bodyIds)  before[id] = getPlain (*p, id);
+
+                const auto steps = p->getUndoHistory().getNumUndoableSteps();
+                p->randomise (random);
+                check (p->getUndoHistory().getNumUndoableSteps() == steps + 1, tag + "randomise is one undo step");
+
+                int clickChanged = 0, bodyChanged = 0;
+                for (const auto& id : clickIds) clickChanged += std::abs (getPlain (*p, id) - before[id]) > 1.0e-4f ? 1 : 0;
+                for (const auto& id : bodyIds)  bodyChanged += std::abs (getPlain (*p, id) - before[id]) > 1.0e-4f ? 1 : 0;
+                check (clickChanged >= 3 && bodyChanged >= 3, tag + "Click and Body parameters change ("
+                       + std::to_string (clickChanged) + " / " + std::to_string (bodyChanged) + ")");
+                int layersOn = 0;
+                for (int layer = 0; layer < params::numLayers; ++layer)
+                    layersOn += getPlain (*p, params::layerId (layer, "on")) > 0.5f ? 1 : 0;
+                check (layersOn >= 1, tag + "at least one of the five layers is on");
+                check (getPlain (*p, "body_keytrack") > 0.5f && getPlain (*p, "click_keytrack") < 0.5f, tag + "key tracking is left as it was");
+
+                const auto full = renderNote (*p, (int) getPlain (*p, "root_note"), 1.0f, 1.0);
+                check (allFinite (full) && peakOf (full) > 0.1f && peakOf (full) <= 1.0f,
+                       tag + "renders finite, non-silent audio within 0 dBFS (peak " + format (peakOf (full), 3) + ")");
+
+                // Audibility of Click and Body when they are on; switched on when off, they sound
+                // (their parameters were randomised too). These edits are undone again below.
+                for (const auto* layer : { "click", "body" })
+                {
+                    const auto onId = juce::String (layer) + "_on";
+                    const auto wasOn = getPlain (*p, onId) > 0.5f;
+                    setParam (*p, onId, wasOn ? 0.0f : 1.0f);
+                    const auto toggled = renderNote (*p, (int) getPlain (*p, "root_note"), 1.0f, 1.0);
+                    setParam (*p, onId, wasOn ? 1.0f : 0.0f);
+                    check (allFinite (toggled) && maxDifference (full, toggled) > (juce::String (layer) == "click" ? 0.01f : 0.05f),
+                           tag + layer + (wasOn ? " is on and audible" : " is off, and switching it on is audible"));
+                }
+            }
+
+        }
+
+        // v0.3.3: results with a single layer on (each of the five, found across seeds) and with a
+        // soloed layer render finite, clearly audible audio.
+        {
+            std::array<bool, params::numLayers> rendered {};
+            int lonelyResults = 0, bad = 0;
+            juce::Random random (2026);
+            auto p = makeProcessor();
+
+            for (int i = 0; i < 4000 && lonelyResults < params::numLayers; ++i)
+            {
+                const auto values = dooblrkick::presets::randomise (p->getParameterState(), random);
+                std::map<juce::String, float> byId (values.begin(), values.end());
+                int onCount = 0, lone = -1;
+                for (int layer = 0; layer < params::numLayers; ++layer)
+                    if (byId[params::layerId (layer, "on")] > 0.5f) { ++onCount; lone = layer; }
+                if (onCount != 1 || rendered[(size_t) lone])
+                    continue;
+
+                rendered[(size_t) lone] = true;
+                ++lonelyResults;
+                auto q = makeProcessor();
+                dooblrkick::presets::apply (q->getParameterState(), values, false);
+                const auto b = renderNote (*q, (int) getPlain (*q, "root_note"), 1.0f, 1.0);
+                if (! allFinite (b) || peakOf (b) < 0.1f || peakOf (b) > 1.0f)
+                {
+                    ++bad;
+                    note ("  " + std::string (params::layerNames[(size_t) lone]) + " alone: peak " + format (peakOf (b), 3));
+                }
+            }
+            check (lonelyResults == params::numLayers, "each of the five layers comes up as the only one on ("
+                   + std::to_string (lonelyResults) + " of 5 found)");
+            check (bad == 0, "a layer on its own is clearly audible (peak > 0.1), finite and within 0 dBFS");
+
+            for (int layer = 0; layer < params::numLayers; ++layer)
+            {
+                auto q = makeProcessor();
+                setParam (*q, params::layerId (layer, "solo"), 1.0f);
+                juce::Random soloRandom (300 + layer);
+                bool keptOn = true, audible = true;
+                for (int i = 0; i < 6; ++i)
+                {
+                    q->randomise (soloRandom);
+                    keptOn = keptOn && getPlain (*q, params::layerId (layer, "on")) > 0.5f;
+                    const auto b = renderNote (*q, (int) getPlain (*q, "root_note"), 1.0f, 1.0);
+                    audible = audible && allFinite (b) && peakOf (b) > 0.1f && peakOf (b) <= 1.0f;
+                }
+                check (keptOn && audible, std::string (params::layerNames[(size_t) layer]) + " soloed: Random keeps it on and it is audible");
+            }
+        }
+
+        // Undo restores the previous Click and Body completely.
+        {
+            auto p = makeProcessor();
+            p->loadFactoryPreset (2, false);
+            std::map<juce::String, float> values;
+            for (const auto& id : allParameterIds (*p)) values[id] = getPlain (*p, id);
+
+            p->getUndoHistory().clear();
+            juce::Random random (99);
+            p->randomise (random);
+            check (p->getUndoHistory().getNumUndoableSteps() == 1, "one randomise = one undo step");
+            p->getUndoHistory().undo();
+
+            juce::StringArray differing;
+            for (const auto& [id, value] : values)
+                if (std::abs (getPlain (*p, id) - value) >= 1.0e-3f)
+                    differing.add (id);
+
+            // The sound: fresh processors (no voice / filter state carried over) for both.
+            auto reference = makeProcessor();
+            reference->loadFactoryPreset (2, false);
+            juce::MemoryBlock undone;
+            p->getStateInformation (undone);
+            auto restoredProcessor = makeProcessor();
+            restoredProcessor->setStateInformation (undone.getData(), (int) undone.getSize());
+            const auto difference = maxDifference (renderNote (*restoredProcessor, 36, 1.0f, 1.0), renderNote (*reference, 36, 1.0f, 1.0));
+
+            check (differing.isEmpty() && difference < 1.0e-4f,
+                   "undoing a randomise restores the previous Click, Body and sound (differing: "
+                       + differing.joinIntoString (", ").toStdString() + "; render diff " + std::to_string (difference) + ")");
+        }
     }
 
     void testUserPresets()
@@ -1761,10 +1986,22 @@ namespace
 
         editor->setSize (1080, 660);
 
+        // v0.3.2: a layer shows only its current source's controls, so look with every layer on
+        // Synth and then on Sample.
+        auto setSources = [&] (bool sample)
+        {
+            for (int layer = 0; layer < params::numLayers; ++layer)
+                if (params::layerHasSample (layer))
+                    setParam (*p, params::layerId (layer, "source"), sample ? 1.0f : 0.0f);
+            editor->refreshLayerSourceLayoutNow();
+        };
+
         // Every parameter is reachable: union of the controls visible on each page.
         std::set<juce::String> reachable;
+        for (const auto sampleSources : { false, true })
         for (int page = 0; page < Editor::numPages; ++page)
         {
+            setSources (sampleSources);
             editor->selectPage (page);
             check (editor->getSelectedPage() == page, "page " + std::to_string (page) + " selected");
             std::map<juce::String, juce::Component*> visible;
@@ -1803,8 +2040,10 @@ namespace
 
         // Every control is wired: moving it changes its parameter.
         juce::StringArray unwired;
+        for (const auto sampleSources : { false, true })
         for (int page = 0; page < Editor::numPages; ++page)
         {
+            setSources (sampleSources);
             editor->selectPage (page);
             std::map<juce::String, juce::Component*> visible;
             collectComponents (*editor, visible, true);
@@ -1821,6 +2060,8 @@ namespace
                 {
                     const auto old = slider->getValue();
                     slider->setValue (slider->getMinimum() + (slider->getMaximum() - slider->getMinimum()) * (before < 0.5f ? 0.8 : 0.2), juce::sendNotificationSync);
+                    if (std::abs (param->getValue() - before) < 1.0e-4f) // the value happened to be the default: try another
+                        slider->setValue (slider->getMinimum() + (slider->getMaximum() - slider->getMinimum()) * 0.65, juce::sendNotificationSync);
                     if (std::abs (param->getValue() - before) < 1.0e-4f) unwired.add (id);
                     slider->setValue (old, juce::sendNotificationSync);
                 }
@@ -1842,6 +2083,7 @@ namespace
             }
         }
 
+        setSources (false);
         check (unwired.isEmpty(), "every control moves its parameter: unwired " + unwired.joinIntoString (", ").toStdString());
 
         // Envelope editor: drag, add, remove and curve, each one undo step.
@@ -2527,7 +2769,7 @@ namespace
         juce::MemoryBlock resaved;
         q->getStateInformation (resaved);
         auto resavedXml = juce::AudioProcessor::getXmlFromBinary (resaved.getData(), (int) resaved.getSize());
-        check (resavedXml != nullptr && resavedXml->getIntAttribute ("stateVersion") == 4, "states are written as version 4");
+        check (resavedXml != nullptr && resavedXml->getIntAttribute ("stateVersion") == 5, "states are written as version 5");
     }
 
     void testMasterEnvelopeShapes()
@@ -2992,6 +3234,495 @@ namespace
         saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.0-chain");
     }
 
+    // v0.3.3 ----------------------------------------------------------------------------------
+
+    std::vector<float> allPlainValues (Processor& p)
+    {
+        std::vector<float> values;
+        for (auto* param : p.getParameters())
+            values.push_back (param->getValue());
+        return values;
+    }
+
+    void testMasterEnvelopeLongRange()
+    {
+        using params::Envelope;
+        auto p = makeProcessor();
+        auto& state = p->getParameterState();
+        bool masterRange = true, otherRange = true;
+        for (int n = 1; n < params::maxNodes; ++n) // node 0 is fixed at 0 ms (no time parameter)
+        {
+            masterRange = masterRange && state.getParameter (params::nodeTimeId (Envelope::master, n))->getNormalisableRange().end == 6000.0f;
+            otherRange = otherRange && state.getParameter (params::nodeTimeId (Envelope::amp, n))->getNormalisableRange().end == 2000.0f
+                         && state.getParameter (params::nodeTimeId (Envelope::pitch, n))->getNormalisableRange().end == 2000.0f;
+        }
+        check (masterRange, "master envelope points reach 6000 ms");
+        check (otherRange, "Body pitch / amp envelope points still reach 2000 ms");
+
+        // A 6 s master envelope over a long Tail renders to its end and stops there.
+        setValues (*p, { { "tail_on", 1.0f }, { "tail_hold", 2000.0f }, { "tail_decay", 5000.0f },
+                         { params::envelopeCountId (Envelope::master), 3.0f },
+                         { params::nodeValueId (Envelope::master, 0), 1.0f },
+                         { params::nodeTimeId (Envelope::master, 1), 3000.0f }, { params::nodeValueId (Envelope::master, 1), 1.0f },
+                         { params::nodeTimeId (Envelope::master, 2), 6000.0f }, { params::nodeValueId (Envelope::master, 2), 0.0f } });
+        check (std::abs (getPlain (*p, params::nodeTimeId (Envelope::master, 2)) - 6000.0f) < 0.5f, "a master point can be set to 6000 ms");
+        const auto settings = p->getCurrentSettings();
+        const auto length = dsp::KickEngine::getRenderLengthSeconds (settings);
+        const auto render = dsp::KickEngine::renderOneShot (settings, sampleRate, 36, 1.0f);
+        const auto at = [] (double seconds) { return (int) (seconds * sampleRate); };
+        check (length >= 6.0 && length <= 30.0 && render.getNumSamples() >= at (6.0), "the render covers the whole 6 s envelope ("
+                                                                                          + format (length, 2) + " s, " + format (render.getNumSamples() / sampleRate, 2) + " s rendered)");
+        check (allFinite (render) && peakOf (render, at (5.5), at (5.9)) > 1.0e-4f, "still sounding at 5.5 - 5.9 s ("
+                                                                                     + format (juce::Decibels::gainToDecibels (peakOf (render, at (5.5), at (5.9)), -200.0f), 1) + " dB)");
+        check (peakOf (render, at (6.01)) < 1.0e-4f, "and silent after the envelope's 6 s end point ("
+                                                      + format (juce::Decibels::gainToDecibels (peakOf (render, at (6.01)), -200.0f), 1) + " dB)");
+
+        // The live voice too.
+        const auto live = renderNote (*p, 36, 1.0f, 6.5);
+        check (allFinite (live) && peakOf (live, at (5.5), at (5.9)) > 1.0e-4f && peakOf (live, at (6.05)) < 1.0e-4f,
+               "the played note follows the 6 s envelope as well");
+    }
+
+    void testEnvelopeZoom()
+    {
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        using params::Envelope;
+        using EE = dooblrkick::ui::EnvelopeEditor;
+        editor.setSize (1080, 660);
+        auto& undo = p.getUndoHistory();
+
+        const auto exercise = [&] (EE& env, const std::string& name, float maxMs)
+        {
+            check (env.getMaxTimeMs() == maxMs, name + ": zoom range up to " + format (maxMs, 0) + " ms");
+            env.resetView();
+            const auto plot = env.getPlotArea();
+            const auto span0 = env.getViewSpanMs();
+            check (env.getViewStartMs() == 0.0f && ! env.isViewZoomed() && span0 >= 100.0f && span0 <= maxMs, name + ": starts fitted (0 - " + format (span0, 0) + " ms)");
+
+            // What zooms and what does not.
+            const auto node = env.getNodePosition (env.getNumNodes() - 1);
+            const auto handle = env.getCurveHandlePosition (0);
+            juce::Point<float> empty, onLine;
+            bool foundEmpty = false, foundLine = false;
+            for (float fy = 0.05f; fy < 0.96f && ! (foundEmpty && foundLine); fy += 0.01f)
+                for (float fx = 0.1f; fx < 0.9f; fx += 0.05f)
+                {
+                    const juce::Point<float> q { plot.getX() + plot.getWidth() * fx, plot.getY() + plot.getHeight() * fy };
+                    if (! foundEmpty && env.isZoomAreaAt (q) && q.getDistanceFrom (node) > 30.0f && q.getDistanceFrom (handle) > 30.0f)
+                        empty = q, foundEmpty = true;
+                }
+            // A point on the drawn curve: halfway between the first two points, at the curve's height.
+            {
+                // The middle of the non-zooming band around the curve at that x.
+                const auto a = env.getNodePosition (env.getNumNodes() - 2), b = env.getNodePosition (env.getNumNodes() - 1);
+                const auto x = a.x + (b.x - a.x) * 0.3f;
+                float first = -1.0f, last = -1.0f;
+                for (float y = plot.getY(); y <= plot.getBottom(); y += 0.5f)
+                {
+                    const juce::Point<float> q { x, y };
+                    if (! env.isZoomAreaAt (q) && q.getDistanceFrom (env.getCurveHandlePosition (env.getNumNodes() - 2)) > 12.0f)
+                    {
+                        if (first < 0.0f) first = y;
+                        last = y;
+                    }
+                    else if (first >= 0.0f)
+                        break;
+                }
+                if (first >= 0.0f)
+                    onLine = { x, (first + last) * 0.5f }, foundLine = true;
+            }
+            check (foundEmpty, name + ": empty plot space found");
+            check (! env.isZoomAreaAt (node) && ! env.isZoomAreaAt (handle), name + ": points and curve handles do not zoom");
+            check (foundLine && ! env.isZoomAreaAt (onLine + juce::Point<float> (0.0f, 3.0f)) && ! env.isZoomAreaAt (onLine + juce::Point<float> (0.0f, -3.0f)),
+                   name + ": the curve (+/- a few px) does not zoom");
+            if (! env.isZoomAreaAt (onLine + juce::Point<float> (0.0f, onLine.y < plot.getCentreY() ? 25.0f : -25.0f)))
+            {
+                juce::String nodes;
+                for (int n = 0; n < env.getNumNodes(); ++n)
+                    nodes << env.getNodePosition (n).toString() << " / " << env.getCurveHandlePosition (juce::jmin (n, env.getNumNodes() - 2)).toString() << "; ";
+                note ("  " + name + ": on line " + onLine.toString().toStdString() + ", plot " + plot.toString().toStdString() + ", nodes / handles " + nodes.toStdString());
+            }
+            check (env.isZoomAreaAt (onLine + juce::Point<float> (0.0f, onLine.y < plot.getCentreY() ? 25.0f : -25.0f)), name + ": just clear of the curve does");
+
+            env.mouseMove (makeMouseEvent (env, empty, empty, 0, false));
+            const auto emptyCursor = env.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::UpDownResizeCursor);
+            env.mouseMove (makeMouseEvent (env, node, node, 0, false));
+            const auto nodeCursor = env.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::DraggingHandCursor);
+            check (emptyCursor && nodeCursor, name + ": up / down cursor over empty space, hand over a point");
+
+            // Drag up: zoom in around the mouse; view only.
+            const auto before = allPlainValues (p);
+            undo.clear();
+            const auto anchorX = plot.getX() + plot.getWidth() * 0.25f;
+            const auto anchorMs = env.getViewStartMs() + 0.25f * span0;
+            simulateDrag (env, { anchorX, empty.y }, { anchorX, empty.y - 120.0f });
+            check (env.isViewZoomed() && std::abs (env.getViewSpanMs() - span0 * 0.5f) < span0 * 0.01f,
+                   name + ": dragging up 120 px halves the span (" + format (span0, 0) + " -> " + format (env.getViewSpanMs(), 1) + " ms)");
+            check (std::abs (env.getViewStartMs() + 0.25f * env.getViewSpanMs() - anchorMs) < span0 * 0.002f, name + ": anchored at the mouse");
+            check (allPlainValues (p) == before && undo.getNumUndoableSteps() == 0, name + ": no parameter change, no undo step");
+
+            // Clamping (each drag starts on empty space at the current zoom).
+            const auto zoomPoint = [&] (float fromY, float stepY)
+            {
+                for (float y = fromY; y >= plot.getY() && y <= plot.getBottom(); y += stepY)
+                    for (float fx : { 0.25f, 0.5f, 0.75f, 0.1f, 0.9f })
+                        if (const juce::Point<float> q { plot.getX() + plot.getWidth() * fx, y }; env.isZoomAreaAt (q))
+                            return q;
+                return empty;
+            };
+            const auto low = zoomPoint (plot.getBottom() - 4.0f, -2.0f);
+            simulateDrag (env, low, { low.x, low.y - 3000.0f });
+            check (env.getViewSpanMs() == EE::minViewMs, name + ": zoom in stops at 20 ms (" + format (env.getViewSpanMs(), 2) + ")");
+            const auto deepLabel = env.getViewStartMs();
+            const auto high = zoomPoint (plot.getY() + 4.0f, 2.0f);
+            simulateDrag (env, high, { high.x, high.y + 3000.0f });
+            check (env.getViewSpanMs() == maxMs && env.getViewStartMs() == 0.0f, name + ": zoom out stops at the full " + format (maxMs, 0) + " ms ("
+                                                                                     + format (env.getViewSpanMs(), 0) + ", from " + format (deepLabel, 1) + " ms)");
+            check (allPlainValues (p) == before && undo.getNumUndoableSteps() == 0, name + ": still no parameter change or undo step");
+
+            // Dragging on the curve neither zooms nor edits.
+            env.resetView();
+            simulateDrag (env, onLine, onLine + juce::Point<float> (0.0f, -60.0f));
+            check (! env.isViewZoomed() && allPlainValues (p) == before, name + ": a drag on the curve line does nothing");
+
+            // Points still drag while zoomed (zoom anchored under the last point keeps it in place).
+            const auto last = env.getNumNodes() - 1;
+            const auto timeId = params::nodeTimeId (env.getEnvelope(), last);
+            const auto lastPos = env.getNodePosition (last);
+            const juce::Point<float> below { lastPos.x, lastPos.y < plot.getCentreY() ? plot.getBottom() - 6.0f : plot.getY() + 6.0f };
+            check (env.isZoomAreaAt (below), name + ": space under / over the last point zooms");
+            simulateDrag (env, below, below + juce::Point<float> (0.0f, -120.0f));
+            check (env.isViewZoomed() && env.getNodePosition (last).getDistanceFrom (lastPos) < 1.0f, name + ": the point under the mouse stays put");
+            const auto t0 = getPlain (p, timeId);
+            const auto pixelMs = env.getViewSpanMs() / plot.getWidth();
+            undo.clear();
+            simulateDrag (env, env.getNodePosition (last), env.getNodePosition (last) + juce::Point<float> (-40.0f, 0.0f));
+            check (std::abs ((t0 - getPlain (p, timeId)) - 40.0f * pixelMs) < 3.0f * pixelMs + 0.5f && undo.getNumUndoableSteps() == 1,
+                   name + ": a point drag still edits in the zoomed scale (" + format (t0, 1) + " -> " + format (getPlain (p, timeId), 1) + " ms, one undo step)");
+            undo.undo();
+
+            // Reset: double-click the time ruler; double-click empty space still adds a point.
+            simulateDoubleClick (env, { env.getRulerArea().getCentreX(), env.getRulerArea().getBottom() - 2.0f });
+            check (! env.isViewZoomed() && env.getViewStartMs() == 0.0f && std::abs (env.getViewSpanMs() - span0) < 0.5f,
+                   name + ": double-clicking the time ruler fits the view again");
+        };
+
+        editor.selectPage (Editor::envelopePage);
+        exercise (editor.getMasterEnvelopeEditor(), "master", 6000.0f);
+        editor.selectPage (dsp::bodyLayer);
+        auto& body = editor.getEnvelopeEditor();
+        for (const auto e : { Envelope::pitch, Envelope::amp })
+        {
+            body.setEnvelope (e);
+            exercise (body, e == Envelope::pitch ? "body pitch" : "body amp", 2000.0f);
+        }
+
+        // Snapshot: Body amp envelope zoomed into its first 100 ms.
+        body.setEnvelope (Envelope::amp);
+        editor.selectPage (dsp::bodyLayer);
+        {
+            const auto plot = body.getPlotArea();
+            const juce::Point<float> from { plot.getX() + 2.0f, plot.getBottom() - 4.0f };
+            const auto octaves = std::log2 (body.getViewSpanMs() / 100.0f);
+            if (body.isZoomAreaAt (from))
+                simulateDrag (body, from, from + juce::Point<float> (0.0f, -120.0f * octaves));
+            check (body.isViewZoomed() && std::abs (body.getViewSpanMs() - 100.0f) < 1.0f, "body amp zoomed to 100 ms for the snapshot ("
+                                                                                             + format (body.getViewSpanMs(), 1) + " ms)");
+            saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.3-layer-env-zoom");
+        }
+
+        // Snapshot: a long master envelope, zoomed out to the full 6 s.
+        editor.selectPage (Editor::envelopePage);
+        auto& master = editor.getMasterEnvelopeEditor();
+        setValues (p, { { params::envelopeCountId (Envelope::master), 5.0f },
+                        { params::nodeValueId (Envelope::master, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::master, 1), 400.0f }, { params::nodeValueId (Envelope::master, 1), 0.7f },
+                        { params::nodeTimeId (Envelope::master, 2), 2200.0f }, { params::nodeValueId (Envelope::master, 2), 0.55f },
+                        { params::nodeTimeId (Envelope::master, 3), 4200.0f }, { params::nodeValueId (Envelope::master, 3), 0.3f },
+                        { params::nodeTimeId (Envelope::master, 4), 5400.0f }, { params::nodeValueId (Envelope::master, 4), 0.0f } });
+        setValues (p, { { params::nodeCurveId (Envelope::master, 0), 0.5f }, { params::nodeCurveId (Envelope::master, 3), -0.4f } });
+        master.resetView();
+        {
+            const auto plot = master.getPlotArea();
+            juce::Point<float> from;
+            bool found = false;
+            for (float fx = 0.05f; fx < 0.95f && ! found; fx += 0.05f)
+            {
+                const juce::Point<float> q { plot.getX() + plot.getWidth() * fx, plot.getBottom() - 4.0f };
+                if (master.isZoomAreaAt (q))
+                    from = q, found = true;
+            }
+            simulateDrag (master, from, from + juce::Point<float> (0.0f, 400.0f));
+            check (found && master.getViewSpanMs() == 6000.0f, "master zoomed out to 6000 ms for the snapshot");
+        }
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.3-envelope");
+    }
+
+    void testEnvelopePowerToggle()
+    {
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        using params::Envelope;
+        editor.setSize (1080, 660);
+        editor.refreshPowerButtonsNow();
+
+        auto& tab = editor.getPageButton (Editor::envelopePage);
+        auto& power = editor.getEnvelopePowerButton();
+        const auto b = power.getBounds();
+        check (getPlain (p, "menv_on") > 0.5f && power.getToggleState() && tab.isProcessorOn(), "on by default (menv_on unchanged)");
+        check (power.getComponentID() == "power_envelope" && power.getParentComponent() == &tab && power.isVisible()
+                   && tab.getLocalBounds().contains (b) && b.getWidth() >= 18 && b.getHeight() >= 18 && tab.getComponentAt (b.getCentre()) == &power,
+               "the Envelope tab has a round power toggle (inside the tab, hit first)");
+
+        auto& undo = p.getUndoHistory();
+        editor.selectPage (dsp::bodyLayer);
+        undo.clear();
+        power.setToggleState (false, juce::sendNotificationSync); // what a click does (ButtonAttachment)
+        editor.refreshPowerButtonsNow();
+        check (getPlain (p, "menv_on") < 0.5f && ! tab.isProcessorOn(), "the toggle switches the master envelope off; the tab dims");
+        check (editor.getSelectedPage() == dsp::bodyLayer && ! tab.getToggleState(), "toggling does not select the tab");
+        check (undo.getNumUndoableSteps() == 1, "one undo step");
+        check (editor.getMasterEnvelopeEditor().isBypassedLook(), "the envelope graph draws dimmed while off");
+
+        // Still editable while off.
+        editor.selectPage (Editor::envelopePage);
+        auto& env = editor.getMasterEnvelopeEditor();
+        const auto from = env.getNodePosition (1);
+        simulateDrag (env, from, from + juce::Point<float> (-40.0f, 60.0f));
+        check (getPlain (p, params::nodeValueId (Envelope::master, 1)) < 0.95f, "the graph is still editable while off");
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.3-envelope-off");
+
+        undo.clear();
+        setParam (p, "menv_on", 1.0f);
+        editor.refreshPowerButtonsNow();
+        check (power.getToggleState() && tab.isProcessorOn() && ! env.isBypassedLook(), "parameter -> toggle: on again, undimmed");
+
+        // Off = bypassed at unity: identical to the default flat envelope.
+        const auto shaped = [] (Processor& q)
+        {
+            setValues (q, { { params::envelopeCountId (Envelope::master), 3.0f },
+                            { params::nodeTimeId (Envelope::master, 1), 80.0f }, { params::nodeValueId (Envelope::master, 1), 0.3f },
+                            { params::nodeTimeId (Envelope::master, 2), 300.0f }, { params::nodeValueId (Envelope::master, 2), 0.0f } });
+        };
+        auto flat = makeProcessor();
+        auto off = makeProcessor();
+        auto on = makeProcessor();
+        shaped (*off);
+        shaped (*on);
+        setParam (*off, "menv_on", 0.0f);
+        const auto rf = renderMidi (*flat, twoHits(), 36000), ro = renderMidi (*off, twoHits(), 36000), rn = renderMidi (*on, twoHits(), 36000);
+        check (exactDifference (rf, ro) == 0.0f, "off with a shaped envelope renders bit-identical to the default flat envelope");
+        check (exactDifference (rf, rn) > 0.05f, "and on, the same envelope shapes the hit");
+    }
+
+    //==============================================================================
+    // v0.3.3: master envelope knobs - per-point Time / Level / Curve knobs bound to the selected
+    // graph point's host parameters, plus two automatable macros (Time Scale, Depth).
+    void testEnvelopeKnobs()
+    {
+        using params::Envelope;
+        {
+            auto p = makeProcessor();
+            const auto* tscale = getParam (*p, "menv_tscale");
+            const auto* depth = getParam (*p, "menv_depth");
+            check (tscale != nullptr && depth != nullptr && tscale->isAutomatable() && depth->isAutomatable()
+                       && tscale->getName (64) == "Master Env Time Scale" && depth->getName (64) == "Master Env Depth",
+                   "Time Scale and Depth are automatable host parameters with clear names");
+            check (getPlain (*p, "menv_tscale") == 1.0f && getPlain (*p, "menv_depth") == 1.0f
+                       && std::abs (tscale->getDefaultValue() - 0.5f) < 1.0e-4f,
+                   "they default to 100 % (Time Scale's 100 % sits at the knob's centre)");
+
+            // Transparent at the defaults: the envelope the DSP gets is exactly the parameters.
+            setValues (*p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                             { params::nodeValueId (Envelope::master, 0), 1.0f },
+                             { params::nodeTimeId (Envelope::master, 1), 37.3f }, { params::nodeValueId (Envelope::master, 1), 0.81f },
+                             { params::nodeTimeId (Envelope::master, 2), 211.7f }, { params::nodeValueId (Envelope::master, 2), 0.33f },
+                             { params::nodeTimeId (Envelope::master, 3), 640.1f }, { params::nodeValueId (Envelope::master, 3), 0.0f },
+                             { params::nodeCurveId (Envelope::master, 1), 0.4f } });
+            auto settings = params::SettingsReader (p->getParameterState()).read();
+            bool exact = settings.master.envelope.numNodes == 4;
+            for (int n = 1; n < 4; ++n)
+                exact = exact && settings.master.envelope.nodes[(size_t) n].timeMs == getPlain (*p, params::nodeTimeId (Envelope::master, n))
+                        && settings.master.envelope.nodes[(size_t) n].value == getPlain (*p, params::nodeValueId (Envelope::master, n));
+            check (exact, "at 100 % the master envelope is exactly its point parameters (bit-exact)");
+
+            // Time Scale and Depth, set as a host would (automation), change the render as expected.
+            setValues (*p, { { params::envelopeCountId (Envelope::master), 3.0f },
+                             { params::nodeTimeId (Envelope::master, 1), 100.0f }, { params::nodeValueId (Envelope::master, 1), 1.0f },
+                             { params::nodeTimeId (Envelope::master, 2), 200.0f }, { params::nodeValueId (Envelope::master, 2), 0.0f },
+                             { params::nodeCurveId (Envelope::master, 0), 0.0f }, { params::nodeCurveId (Envelope::master, 1), 0.0f } });
+            const auto sr = p->getSampleRate();
+            const auto window = [sr] (const juce::AudioBuffer<float>& b) { return peakOf (b, (int) (0.25 * sr), (int) (0.35 * sr)); };
+            const auto plain = renderNote (*p, 36, 1.0f, 0.6);
+            setParam (*p, "menv_tscale", 2.0f);
+            settings = params::SettingsReader (p->getParameterState()).read();
+            const auto scaled = renderNote (*p, 36, 1.0f, 0.6);
+            check (std::abs (settings.master.envelope.getEndTimeMs() - 400.0f) < 0.5f && window (plain) < 1.0e-3f && window (scaled) > 0.01f,
+                   "Time Scale 200 % doubles the envelope (ends at " + format (settings.master.envelope.getEndTimeMs(), 1)
+                       + " ms; 250-350 ms peak " + format (window (plain), 4) + " -> " + format (window (scaled), 3) + ")");
+            setParam (*p, "menv_tscale", 0.5f);
+            settings = params::SettingsReader (p->getParameterState()).read();
+            check (std::abs (settings.master.envelope.getEndTimeMs() - 100.0f) < 0.5f, "Time Scale 50 % halves it");
+            setParam (*p, "menv_tscale", 1.0f);
+
+            setParam (*p, "menv_depth", 0.5f);
+            settings = params::SettingsReader (p->getParameterState()).read();
+            const auto half = renderNote (*p, 36, 1.0f, 0.6);
+            check (std::abs (settings.master.envelope.getEndValue() - 0.5f) < 1.0e-5f && window (half) > 0.01f,
+                   "Depth 50 % lifts the envelope's floor to 0.5 (audible after the envelope ends)");
+            setParam (*p, "menv_depth", 0.0f);
+            const auto flat = renderNote (*p, 36, 1.0f, 0.6);
+            setParam (*p, "menv_on", 0.0f);
+            const auto bypass = renderNote (*p, 36, 1.0f, 0.6);
+            check (maxDifference (flat, bypass) < 1.0e-6f, "Depth 0 % is flat: it sounds as the envelope switched off ("
+                                                             + format (maxDifference (flat, bypass), 8) + ")");
+
+            // An older (version 4) state, without the two parameters, loads them at 100 %.
+            auto writer = makeProcessor();
+            writer->loadFactoryPreset (3, false);
+            juce::MemoryBlock state;
+            writer->getStateInformation (state);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (state.getData(), (int) state.getSize());
+            auto tree = juce::ValueTree::fromXml (*xml);
+            tree.setProperty ("stateVersion", 4, nullptr);
+            for (int i = tree.getNumChildren(); --i >= 0;)
+                if (const auto id = tree.getChild (i).getProperty ("id").toString(); id == "menv_tscale" || id == "menv_depth")
+                    tree.removeChild (i, nullptr);
+            juce::MemoryBlock oldState;
+            juce::AudioProcessor::copyXmlToBinary (*tree.createXml(), oldState);
+            auto q = makeProcessor();
+            setValues (*q, { { "menv_tscale", 3.0f }, { "menv_depth", 0.2f } });
+            q->setStateInformation (oldState.getData(), (int) oldState.getSize());
+            check (getPlain (*q, "menv_tscale") == 1.0f && getPlain (*q, "menv_depth") == 1.0f
+                       && exactDifference (renderMidi (*writer, twoHits(), 36000), renderMidi (*q, twoHits(), 36000)) == 0.0f,
+                   "a version 4 state loads Time Scale and Depth at 100 % and sounds bit-identical");
+        }
+
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        auto& undo = p.getUndoHistory();
+        editor.setSize (1080, 660);
+        editor.selectPage (Editor::envelopePage);
+        auto& graph = editor.getMasterEnvelopeEditor();
+        auto& knobs = editor.getEnvelopePointKnobs();
+        setValues (p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                        { params::nodeValueId (Envelope::master, 0), 1.0f },
+                        { params::nodeTimeId (Envelope::master, 1), 60.0f }, { params::nodeValueId (Envelope::master, 1), 0.8f },
+                        { params::nodeTimeId (Envelope::master, 2), 250.0f }, { params::nodeValueId (Envelope::master, 2), 0.4f },
+                        { params::nodeTimeId (Envelope::master, 3), 700.0f }, { params::nodeValueId (Envelope::master, 3), 0.0f } });
+        graph.resetView();
+
+        // Graph -> knobs: selecting a point rebinds the knobs to its parameters.
+        graph.setSelectedNode (2);
+        check (knobs.getPoint() == 2 && knobs.getBoundParameterId (0) == params::nodeTimeId (Envelope::master, 2)
+                   && knobs.getBoundParameterId (1) == params::nodeValueId (Envelope::master, 2)
+                   && knobs.getBoundParameterId (2) == params::nodeCurveId (Envelope::master, 1),
+               "selecting point 3 in the graph binds Time / Level / Curve to its parameters (curve: the segment into it)");
+        check (std::abs (knobs.getTimeKnob().getValue() - 250.0) < 0.01 && std::abs (knobs.getLevelKnob().getValue() - 0.4) < 1.0e-4,
+               "and the knobs show its values");
+        {
+            const auto at = graph.getNodePosition (1);
+            graph.mouseDown (makeMouseEvent (graph, at, at, 1, false));
+            graph.mouseUp (makeMouseEvent (graph, at, at, 1, false));
+            check (knobs.getPoint() == 1 && graph.getSelectedNode() == 1, "clicking a point in the graph selects it for the knobs");
+        }
+        graph.setSelectedNode (0);
+        check (knobs.getPoint() == 0 && ! knobs.getTimeKnob().isEnabled() && ! knobs.getCurveKnob().isEnabled() && knobs.getLevelKnob().isEnabled()
+                   && knobs.getBoundParameterId (1) == params::nodeValueId (Envelope::master, 0),
+               "the first point: Level only (its time is fixed at 0 ms and it has no segment before it)");
+
+        // Knob selector -> graph.
+        graph.setSelectedNode (1);
+        knobs.getNextButton().onClick();
+        check (knobs.getPoint() == 2 && graph.getSelectedNode() == 2, "> selects the next point in the graph too");
+        knobs.getPreviousButton().onClick();
+        check (knobs.getPoint() == 1 && graph.getSelectedNode() == 1, "< selects the previous point");
+
+        // Parameter (automation) -> knob, and knob -> parameter -> graph, one undo step.
+        graph.setSelectedNode (2);
+        setParam (p, params::nodeValueId (Envelope::master, 2), 0.3f);
+        check (std::abs (knobs.getLevelKnob().getValue() - 0.3) < 1.0e-4, "an automated point level shows on the Level knob");
+        const auto before = graph.getNodePosition (2);
+        undo.clear();
+        auto& time = knobs.getTimeKnob();
+        {
+            const auto c = time.getLocalBounds().getCentre().toFloat();
+            simulateDrag (time, c, c + juce::Point<float> (0.0f, -60.0f));
+        }
+        const auto after = graph.getNodePosition (2);
+        const auto dragged = getPlain (p, params::nodeTimeId (Envelope::master, 2));
+        check (dragged > 260.0f && std::abs (time.getValue() - dragged) < 0.6f && after.x > before.x + 2.0f,
+               "dragging the Time knob moves the point's parameter (250 -> " + format (dragged, 1) + " ms) and the graph follows ("
+                   + format (before.x, 1) + " -> " + format (after.x, 1) + " px)");
+        check (undo.getNumUndoableSteps() == 1, "one knob turn is one undo step (" + std::to_string (undo.getNumUndoableSteps()) + ")");
+        undo.undo();
+        check (std::abs (getPlain (p, params::nodeTimeId (Envelope::master, 2)) - 250.0f) < 0.6f && std::abs (time.getValue() - 250.0) < 0.6,
+               "undo puts the point and the knob back");
+
+        // Time Scale on the panel: the knob is its host parameter and the graph shows the result.
+        if (auto* scale = dynamic_cast<juce::Slider*> (findById (editor, "menv_tscale")))
+        {
+            undo.clear();
+            const auto c = scale->getLocalBounds().getCentre().toFloat();
+            simulateDrag (*scale, c, c + juce::Point<float> (0.0f, -40.0f));
+            const auto effective = graph.getEffectiveEnvelope();
+            const auto factor = getPlain (p, "menv_tscale");
+            check (factor > 1.05f && graph.showsEffectiveCurve()
+                       && std::abs (effective.getEndTimeMs() - 700.0f * factor) < 1.0f && undo.getNumUndoableSteps() == 1,
+                   "dragging the Time Scale knob sets its parameter (" + format (factor * 100.0f, 0) + " %, one undo step) and the graph draws the scaled curve (ends at "
+                       + format (effective.getEndTimeMs(), 0) + " ms)");
+        }
+        else
+            check (false, "Time Scale knob found");
+        check (findById (editor, "menv_depth") != nullptr && findById (editor, "menv_depth")->isVisible(), "Depth knob shown");
+
+        // Everything on the Envelope page fits at the three sizes.
+        for (const auto [w, hgt] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+        {
+            editor.setSize (w, hgt);
+            const auto size = std::to_string (w) + "x" + std::to_string (hgt);
+            std::map<juce::String, juce::Component*> visible;
+            for (const auto& panel : editor.getPanels (Editor::envelopePage))
+                collectComponents (*panel, visible, true);
+            int problems = 0;
+            std::vector<std::pair<juce::String, juce::Rectangle<int>>> leaves;
+            for (const auto& [id, c] : visible)
+            {
+                if (id == "menv_point_knobs")
+                    continue;
+                const auto b = editor.getLocalArea (c->getParentComponent(), c->getBounds());
+                if (! editor.getLocalBounds().contains (b))
+                    ++problems, note ("  " + size + ": " + id.toStdString() + " outside the editor");
+                for (const auto& [other, ob] : leaves)
+                    if (ob.intersects (b))
+                        ++problems, note ("  " + size + ": " + id.toStdString() + " overlaps " + other.toStdString());
+                leaves.push_back ({ id, b });
+            }
+            bool all = true;
+            for (const auto* id : { "menv_knob_time", "menv_knob_level", "menv_knob_curve", "menv_point_prev", "menv_point_next", "menv_tscale", "menv_depth" })
+                all = all && visible.count (id) == 1;
+            check (all && problems == 0, size + ": the envelope knobs are shown, inside the editor, with no overlaps");
+        }
+
+        editor.setSize (1080, 660);
+        setValues (p, { { "menv_tscale", 1.4f }, { "menv_depth", 0.75f } });
+        graph.setSelectedNode (2);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.3-env-knobs");
+    }
+
     void testEnvelopePage()
     {
         EditorHolder h;
@@ -3020,9 +3751,11 @@ namespace
         std::map<juce::String, juce::Component*> visible;
         collectComponents (editor, visible, true);
         bool playControls = true;
-        for (const auto* id : { "root_note", "vel_sens", "gate", "release", "menv_on", "mix_drywet", "chain_order" })
+        for (const auto* id : { "root_note", "vel_sens", "gate", "release", "mix_drywet", "chain_order" })
             playControls = playControls && visible.count (id) == 1;
-        check (playControls, "Key, Velocity, Gate, Release and Envelope on / Dry/Wet / Chain order controls are on the Envelope page");
+        check (playControls, "Key, Velocity, Gate, Release and Dry/Wet / Chain order controls are on the Envelope page");
+        check (visible.count ("menv_on") == 0 && visible.count ("power_envelope") == 1,
+               "the envelope on / off is the Envelope tab's power toggle, not a switch in the panel (v0.3.3)");
 
         auto& undo = p.getUndoHistory();
         undo.clear();
@@ -3283,6 +4016,275 @@ namespace
     }
 
     //==============================================================================
+    // v0.3.2: a layer with a Synth / Sample switch shows only its current source's controls.
+    void testLayerSourceLayout()
+    {
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+
+        struct Expect { int layer; juce::StringArray synthOnly, sampleOnly, shared; };
+        const std::vector<Expect> layers {
+            { dsp::clickLayer, { "click_type" }, { "click_sample", "click_keytrack", "click_loadSample", "click_sampleFile" },
+              { "click_pitch", "click_length", "click_tone" } },
+            { dsp::bodyLayer, { "body_wave", "body_harm", "body_phase" },
+              { "body_sample", "body_smp_penv", "body_keytrack", "body_loadSample", "body_sampleFile" }, { "body_tune", "body_drive" } },
+            { dsp::tailLayer, { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_keytrack", "tail_loadSample", "tail_sampleFile" },
+              { "tail_tune", "tail_attack", "tail_hold", "tail_decay", "tail_curve", "tail_drive" } },
+            { dsp::noiseLayer, { "noise_color", "noise_width" }, { "noise_sample", "noise_tune", "noise_loadSample", "noise_sampleFile" },
+              { "noise_attack", "noise_hold", "noise_decay", "noise_curve" } },
+        };
+
+        // Hidden values are kept: give the other source's controls distinctive values first.
+        setValues (p, { { "click_type", 3 }, { "body_wave", 2 }, { "body_harm", 0.4f }, { "body_sample", 4 }, { "body_smp_penv", 0.6f },
+                        { "tail_spread", 30 }, { "noise_width", 0.3f }, { "noise_tune", 5 } });
+        const auto kept = [&]
+        {
+            std::map<juce::String, float> v;
+            for (const auto* id : { "click_type", "body_wave", "body_harm", "body_sample", "body_smp_penv", "tail_spread", "noise_width", "noise_tune" })
+                v[id] = getPlain (p, id);
+            return v;
+        }();
+
+        for (const auto [w, hgt] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
+        {
+            editor.setSize (w, hgt);
+            const auto size = std::to_string (w) + "x" + std::to_string (hgt);
+
+            for (const auto& e : layers)
+            {
+                editor.selectPage (e.layer);
+                std::map<juce::String, juce::Rectangle<int>> synthBounds, sampleBounds, synthBoundsFirst;
+                std::vector<juce::Rectangle<int>> synthPanels;
+
+                for (const auto sample : { false, true, false })
+                {
+                    // Like automation / a preset / undo: the parameter only, no click, no refresh call.
+                    setParam (p, params::layerId (e.layer, "source"), sample ? 1.0f : 0.0f);
+                    const auto name = size + " " + params::layerId (e.layer, sample ? "sample mode" : "synth mode").toStdString();
+
+                    std::map<juce::String, juce::Component*> visible;
+                    collectComponents (editor, visible, true);
+                    auto shown = [&] (const juce::String& id) { return visible.count (id) == 1; };
+
+                    bool right = true;
+                    for (const auto& id : e.synthOnly)  right = right && shown (id) == ! sample;
+                    for (const auto& id : e.sampleOnly) right = right && shown (id) == sample;
+                    check (right, name + ": only this source's controls are shown");
+
+                    bool shared = true;
+                    for (const auto* common : { "source", "level", "pan", "start", "send", "ftype", "cutoff", "reso" })
+                        shared = shared && shown (params::layerId (e.layer, common));
+                    for (const auto& id : e.shared)
+                        shared = shared && shown (id);
+                    check (shared, name + ": the shared controls stay visible");
+
+                    // v0.3.3 fixed layout: where every shown control sits, relative to the editor.
+                    std::map<juce::String, juce::Rectangle<int>> placed;
+                    const auto prefix = params::layerId (e.layer, "");
+                    const auto inPage = [&] (juce::Component* c)
+                    {
+                        for (const auto& panel : editor.getPanels (e.layer))
+                            if (panel->isParentOf (c))
+                                return true;
+                        return editor.getLevelFader (e.layer).isParentOf (c);
+                    };
+                    for (const auto& [id, c] : visible)
+                        if (id.startsWith (prefix) && ! id.endsWith ("_fader") && inPage (c))
+                            placed[id] = editor.getLocalArea (c->getParentComponent(), c->getBounds());
+                    if (sample)
+                        sampleBounds = placed;
+                    else
+                        synthBounds = placed;
+
+                    // No overlaps, and nothing clipped by any parent up to the editor.
+                    int problems = 0;
+                    for (auto a = placed.begin(); a != placed.end(); ++a)
+                    {
+                        for (auto b = std::next (a); b != placed.end(); ++b)
+                            if (a->second.intersects (b->second))
+                            {
+                                ++problems;
+                                note ("  " + name + ": " + a->first.toStdString() + " overlaps " + b->first.toStdString());
+                            }
+
+                        for (auto* c = visible[a->first]; c != nullptr && c != &editor; c = c->getParentComponent())
+                            if (c->getParentComponent() != nullptr && ! c->getParentComponent()->getLocalBounds().contains (c->getBounds()))
+                            {
+                                ++problems;
+                                note ("  " + name + ": " + a->first.toStdString() + " is clipped");
+                                break;
+                            }
+                    }
+                    check (! placed.empty() && problems == 0, name + ": no overlaps and nothing clipped");
+
+                    // The Level fader: vertical, at the left of the panels, as tall as them.
+                    auto& fader = editor.getLevelFader (e.layer);
+                    const auto& panels = editor.getPanels (e.layer);
+                    const auto faderBounds = editor.getLocalArea (fader.getParentComponent(), fader.getBounds());
+                    const auto inEditor = [&] (juce::Component& c) { return editor.getLocalArea (c.getParentComponent(), c.getBounds()); };
+                    int panelsLeft = editor.getWidth();
+                    for (const auto& panel : panels)
+                        panelsLeft = std::min (panelsLeft, inEditor (*panel).getX());
+                    for (const auto& [id, b] : placed)
+                        if (! id.endsWith ("_level"))
+                            panelsLeft = std::min (panelsLeft, b.getX());
+                    const auto slider = fader.getSlider().getSliderStyle() == juce::Slider::LinearVertical;
+                    if (! (fader.isVisible() && slider && faderBounds.getRight() <= panelsLeft))
+                        note ("  " + name + ": panels start at x " + std::to_string (panelsLeft));
+                    check (fader.isVisible() && slider && visible.count (params::layerId (e.layer, "level")) == 1 && faderBounds.getRight() <= panelsLeft
+                               && faderBounds.getHeight() >= 3 * faderBounds.getWidth()
+                               && std::abs (faderBounds.getY() - inEditor (*panels.front()).getY()) <= 2 && std::abs (faderBounds.getBottom() - inEditor (*panels.back()).getBottom()) <= 2,
+                           name + ": the Level fader is vertical, left of the panels, and spans them (" + faderBounds.toString().toStdString() + ")");
+
+                    if (sample)
+                    {
+                        int moved = 0, shared = 0;
+                        for (const auto& [id, b] : synthBounds)
+                            if (auto other = sampleBounds.find (id); other != sampleBounds.end())
+                            {
+                                ++shared;
+                                if (other->second != b)
+                                {
+                                    ++moved;
+                                    note ("  " + name + ": " + id.toStdString() + " moves " + b.toString().toStdString() + " -> " + other->second.toString().toStdString());
+                                }
+                            }
+                        std::vector<juce::Rectangle<int>> panelNow;
+                        for (const auto& panel : panels)
+                            panelNow.push_back (panel->getBounds());
+                        check (shared >= 8 && moved == 0 && panelNow == synthPanels,
+                               name + ": all " + std::to_string (shared) + " shared controls and the panels keep exactly their Synth bounds");
+                    }
+                    else
+                    {
+                        std::vector<juce::Rectangle<int>> panelNow;
+                        for (const auto& panel : panels)
+                            panelNow.push_back (panel->getBounds());
+                        if (! synthPanels.empty())
+                            check (panelNow == synthPanels && placed == synthBoundsFirst, name + ": back to Synth, the same layout as before");
+                        synthPanels = panelNow;
+                        synthBoundsFirst = placed;
+                    }
+                }
+            }
+        }
+
+        bool same = true;
+        for (const auto& [id, value] : kept)
+            same = same && std::abs (getPlain (p, id) - value) < 1.0e-4f;
+        check (same, "hidden controls keep their parameter values");
+
+        // Undo and Random follow too (the source parameter changes, the page follows at once).
+        editor.setSize (1080, 660);
+        editor.selectPage (dsp::bodyLayer);
+        setParam (p, "body_source", 0.0f);
+        auto& undo = p.getUndoHistory();
+        undo.clear();
+        if (auto* box = dynamic_cast<juce::ComboBox*> (findById (editor, "body_source")))
+        {
+            box->setSelectedItemIndex (1, juce::sendNotificationSync);
+            check (findById (editor, "body_sample") != nullptr && findById (editor, "body_sample")->isVisible()
+                       && ! findById (editor, "body_wave")->isVisible(), "picking Sample in the switch shows the sample controls");
+            undo.undo();
+            check (getPlain (p, "body_source") < 0.5f && findById (editor, "body_wave")->isVisible()
+                       && ! findById (editor, "body_sample")->isVisible(), "undo back to Synth shows the synth controls");
+        }
+        else
+            check (false, "body source switch found");
+
+        for (int seed = 1; seed <= 12; ++seed)
+        {
+            juce::Random random (seed);
+            p.randomise (random);
+            const auto sampled = getPlain (p, "body_source") > 0.5f;
+            if (findById (editor, "body_wave")->isVisible() == sampled || findById (editor, "body_sample")->isVisible() != sampled)
+            {
+                check (false, "Random seed " + std::to_string (seed) + ": the page follows the randomised source");
+                break;
+            }
+        }
+
+        // Snapshots of the default kick's Body page in each mode.
+        EditorHolder shot;
+        if (shot.editor != nullptr)
+        {
+            shot.editor->setSize (1080, 660);
+            shot.editor->selectPage (dsp::bodyLayer);
+            saveSnapshot (shot.editor->createComponentSnapshot (shot.editor->getLocalBounds()), "-v0.3.3-body-synth");
+            setParam (*shot.processor, "body_source", 1.0f);
+            saveSnapshot (shot.editor->createComponentSnapshot (shot.editor->getLocalBounds()), "-v0.3.3-body-sample");
+        }
+    }
+
+    //==============================================================================
+    // v0.3.3: the output graph draws an anti-aliased, sub-pixel min/max envelope.
+    void testOutputGraph()
+    {
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        editor.setSize (1080, 660);
+        editor.selectPage (dsp::bodyLayer);
+        auto& wave = editor.getWaveformView();
+        wave.refreshNow();
+        check (wave.hasContent(), "the output graph has the rendered kick");
+
+        // A Retina-scale crop of the graph (what the snapshots show before / after).
+        const auto crop = wave.createComponentSnapshot (wave.getLocalBounds(), true, 2.0f);
+        check (crop.getWidth() == wave.getWidth() * 2, "the graph paints at 2x");
+        saveSnapshot (crop, "-v0.3.3-graph");
+        const auto expected = juce::jlimit (2, 4096, (int) std::ceil ((wave.getWidth() - 16) * 2.0f)); // the plot is inset 8 px each side
+        check (wave.getGraphScale() == 2.0f && wave.getGraphColumns() == expected,
+               "min / max per physical pixel column at 2x (" + std::to_string (wave.getGraphColumns()) + " columns for " + std::to_string (wave.getWidth()) + " px)");
+        check (wave.getLocalBounds().toFloat().expanded (1.0f).contains (wave.getGraphFill().getBounds()) && ! wave.getGraphFill().isEmpty(),
+               "the filled band stays inside the graph");
+
+        // Cached: repaints at the same scale do not rebuild; a rebuild allocates nothing more than a cached paint.
+        juce::Image image (juce::Image::ARGB, wave.getWidth() * 2, wave.getHeight() * 2, true);
+        const auto paintOnce = [&]
+        {
+            juce::Graphics g (image);
+            g.addTransform (juce::AffineTransform::scale (2.0f));
+            allocationCount.store (0);
+            countAllocations.store (true);
+            wave.paint (g);
+            countAllocations.store (false);
+            return allocationCount.load();
+        };
+        const auto rebuilds = wave.getGraphRebuilds();
+        const auto cachedAllocs = paintOnce();
+        check (wave.getGraphRebuilds() == rebuilds, "repainting at the same scale reuses the cached graph");
+        wave.resized(); // marks the graph dirty
+        const auto rebuildAllocs = paintOnce();
+        check (wave.getGraphRebuilds() == rebuilds + 1 && rebuildAllocs <= cachedAllocs,
+               "a rebuild allocates nothing of its own (" + std::to_string (rebuildAllocs) + " vs " + std::to_string (cachedAllocs) + " in the renderer)");
+
+        // Headless paint cost (software renderer, 2x): cached and rebuilding.
+        const auto timeIt = [&] (bool rebuild)
+        {
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            for (int i = 0; i < 100; ++i)
+            {
+                if (rebuild) wave.resized();
+                juce::Graphics g (image);
+                g.addTransform (juce::AffineTransform::scale (2.0f));
+                wave.paint (g);
+            }
+            return (juce::Time::getMillisecondCounterHiRes() - start) / 100.0;
+        };
+        const auto cachedMs = timeIt (false), rebuildMs = timeIt (true);
+        note ("    output graph paint (software, 2x, " + std::to_string (image.getWidth()) + "x" + std::to_string (image.getHeight()) + "): cached "
+              + format (cachedMs, 3) + " ms, rebuilding " + format (rebuildMs, 3) + " ms");
+        check (rebuildMs < 8.0, "paint stays cheap");
+    }
+
+    //==============================================================================
     // v0.3.1: processors are switched on / off by power toggles on their tabs.
     void testProcessorTabToggles()
     {
@@ -3308,7 +4310,9 @@ namespace
                          && tab.getComponentAt (b.getCentre()) == &power;
         }
         check (placed, "Drive, EQ, Dynamics and Limiter tabs each have a power toggle (inside the tab, clear of the handle, hit first)");
-        check (editor.getPageButton (Editor::envelopePage).getNumChildComponents() == 0, "the Envelope tab has no processor toggle");
+        check (editor.getPageButton (Editor::envelopePage).getNumChildComponents() == 1
+                   && editor.getPageButton (Editor::envelopePage).getChildComponent (0) == &editor.getEnvelopePowerButton(),
+               "the Envelope tab has just its envelope power toggle (v0.3.3)");
 
         const auto clickPower = [&] (int stage)
         {
@@ -3462,6 +4466,7 @@ int main()
         { "pitch envelope start / end / curve",     testPitchEnvelopeEndpoints },
         { "envelopes decay to silence",             testEnvelopesDecayToSilence },
         { "factory presets and randomise",          testPresetsLoad },
+        { "randomise covers Click and Body",        testRandomiseClickBody },
         { "user presets",                           testUserPresets },
         { "state round-trip",                       testStateRoundTrip },
         { "layer mute / solo / level",              testLayerMuteAndSolo },
@@ -3486,9 +4491,15 @@ int main()
         { "chain order state, presets, undo",       testChainOrderStateAndUndo },
         { "chain tab drag and drop",                testChainDragAndDrop },
         { "Envelope page",                          testEnvelopePage },
+        { "master envelope 6000 ms",                testMasterEnvelopeLongRange },
+        { "envelope graph zoom",                    testEnvelopeZoom },
+        { "master envelope power toggle",           testEnvelopePowerToggle },
         { "Drive view",                             testDriveView },
         { "layout fit 940x600 .. 2400x1400",        testLayoutFit },
         { "processor on / off toggles on the tabs", testProcessorTabToggles },
+        { "layer controls follow Synth / Sample",   testLayerSourceLayout },
+        { "master envelope knobs (v0.3.3)",         testEnvelopeKnobs },
+        { "output graph (anti-aliased)",            testOutputGraph },
     };
 
     int failedTests = 0;
