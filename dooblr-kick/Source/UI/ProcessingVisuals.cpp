@@ -233,7 +233,7 @@ namespace dooblrkick::ui
         g.drawText ("in", plot.withTrimmedLeft (4).withTrimmedBottom (2), juce::Justification::bottomRight);
         g.drawText ("out", plot.reduced (4.0f, 2.0f), juce::Justification::topLeft);
         if (! on)
-            g.drawText ("Drive off - drag to turn on", plot.reduced (6.0f).withTrimmedTop (plot.getHeight() * 0.6f), juce::Justification::centred);
+            g.drawText ("Drive off - switch it on from the Drive tab", plot.reduced (6.0f).withTrimmedTop (plot.getHeight() * 0.6f), juce::Justification::centred);
 
         // Before / after cycle.
         drawFrame (g, wave);
@@ -299,8 +299,8 @@ namespace dooblrkick::ui
             dragging = true;
             dragDrive = gesture.get ("dist_drive");
             dragMix = gesture.get ("dist_mix");
-            gesture.begin ({ "dist_on", "dist_drive", "dist_mix" });
-            gesture.set ("dist_on", 1.0f);
+            // Editing never switches Drive on: that is the Drive tab's power toggle.
+            gesture.begin ({ "dist_drive", "dist_mix" });
         }
     }
 

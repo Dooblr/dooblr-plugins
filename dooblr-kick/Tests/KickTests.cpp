@@ -402,6 +402,15 @@ namespace
         }
     }
 
+    /** The tab power toggles (v0.3.1) and the parameters each one switches. */
+    const std::vector<std::pair<juce::String, juce::StringArray>>& processorPowerParameters()
+    {
+        static const std::vector<std::pair<juce::String, juce::StringArray>> map {
+            { "power_drive", { "dist_on" } }, { "power_eq", { "eq_on" } },
+            { "power_dynamics", { "shape_on", "comp_on" } }, { "power_limiter", { "lim_mode" } } };
+        return map;
+    }
+
     juce::StringArray allParameterIds (Processor& p)
     {
         juce::StringArray ids;
@@ -443,7 +452,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.0", "version 0.3.0");
+        check (juce::String (JucePlugin_VersionString) == "0.3.1", "version 0.3.1");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -1761,7 +1770,15 @@ namespace
             std::map<juce::String, juce::Component*> visible;
             collectComponents (*editor, visible, true);
             for (const auto& [id, component] : visible)
+            {
                 reachable.insert (id);
+
+                // v0.3.1: processors are switched on / off by the power toggles on their tabs.
+                for (const auto& [powerId, paramIds] : processorPowerParameters())
+                    if (id == powerId)
+                        for (const auto& paramId : paramIds)
+                            reachable.insert (paramId);
+            }
 
             // Nothing visible is cut off by its parent.
             std::function<void (juce::Component&)> checkBounds = [&] (juce::Component& parent)
@@ -2140,13 +2157,13 @@ namespace
         const auto f1 = getPlain (*p, "eq_mid_freq"), g1 = getPlain (*p, "eq_mid_gain");
         check (f1 > f0 * 1.3f && g1 > g0 + 3.0f, "dragging the Mid handle right/up raises its frequency and gain ("
                                                      + format (f0, 0) + " -> " + format (f1, 0) + " Hz, " + format (g0, 1) + " -> " + format (g1, 1) + " dB)");
-        check (getPlain (*p, "eq_on") > 0.5f, "dragging a handle switches the EQ on");
+        check (getPlain (*p, "eq_on") < 0.5f, "dragging a handle leaves the EQ off (only its tab toggle switches it)");
         const auto handleNow = eq.getHandlePosition (dooblrkick::ui::EqDisplay::mid);
         check (handleNow.getDistanceFrom (from + juce::Point<float> (80.0f, -40.0f)) < 1.5f, "the handle follows the mouse (and the knobs' parameters)");
         check (undo.getNumUndoableSteps() == 1, "a handle drag is one undo step (" + std::to_string (undo.getNumUndoableSteps()) + ")");
         undo.undo();
         check (std::abs (getPlain (*p, "eq_mid_freq") - f0) < 0.5f && std::abs (getPlain (*p, "eq_mid_gain") - g0) < 0.01f
-                   && getPlain (*p, "eq_on") < 0.5f, "undo restores frequency, gain and the EQ switch");
+                   && getPlain (*p, "eq_on") < 0.5f, "undo restores frequency and gain");
 
         // Parameters move the handle (knob -> view).
         setParam (*p, "eq_low_freq", 100.0f);
@@ -2243,15 +2260,15 @@ namespace
         undo.undo();
         check (std::abs (getPlain (*p, "comp_threshold") + 30.0f) < 0.05f, "undo restores the threshold");
 
-        // Threshold handle on the curve, with the compressor off: switches it on, one step.
+        // Threshold handle on the curve, with the compressor off: edits the threshold, leaves it off, one step.
         setParam (*p, "comp_on", 0.0f);
         undo.clear();
         const auto handle = dyn.getThresholdHandlePosition();
         simulateDrag (dyn, handle, handle + juce::Point<float> (40.0f, 0.0f));
-        check (getPlain (*p, "comp_threshold") > -28.0f && getPlain (*p, "comp_on") > 0.5f && undo.getNumUndoableSteps() == 1,
-               "dragging the curve's threshold handle right raises the threshold and switches the compressor on (one step)");
+        check (getPlain (*p, "comp_threshold") > -28.0f && getPlain (*p, "comp_on") < 0.5f && undo.getNumUndoableSteps() == 1,
+               "dragging the curve's threshold handle right raises the threshold and leaves the compressor off (one step)");
         undo.undo();
-        check (getPlain (*p, "comp_on") < 0.5f && std::abs (getPlain (*p, "comp_threshold") + 30.0f) < 0.05f, "undo restores both");
+        check (getPlain (*p, "comp_on") < 0.5f && std::abs (getPlain (*p, "comp_threshold") + 30.0f) < 0.05f, "undo restores the threshold");
 
         // Ratio: drag the curve so it passes through (T + 20, T + 2.5) -> 8:1.
         setParam (*p, "comp_on", 1.0f);
@@ -2290,10 +2307,10 @@ namespace
         setParam (*p, "lim_mode", 0.0f);
         undo.clear();
         simulateDrag (lim, ceilFrom, ceilFrom + juce::Point<float> (0.0f, -20.0f));
-        check (juce::roundToInt (getPlain (*p, "lim_mode")) == 2 && getPlain (*p, "lim_ceiling") > -9.0f && undo.getNumUndoableSteps() == 1,
-               "with the mode Off, dragging the ceiling switches the limiter on (one step)");
+        check (juce::roundToInt (getPlain (*p, "lim_mode")) == 0 && getPlain (*p, "lim_ceiling") > -9.0f && undo.getNumUndoableSteps() == 1,
+               "with the limiter off, dragging the ceiling edits it and leaves the limiter off (one step)");
         undo.undo();
-        check (juce::roundToInt (getPlain (*p, "lim_mode")) == 0, "undo switches it back off");
+        check (juce::roundToInt (getPlain (*p, "lim_mode")) == 0 && std::abs (getPlain (*p, "lim_ceiling") + 9.0f) < 0.05f, "undo restores the ceiling");
 
         // Waveform-click audition animates the view too (no MIDI).
         setParam (*p, "lim_mode", 2.0f);
@@ -3068,9 +3085,9 @@ namespace
         std::map<juce::String, juce::Component*> visible;
         collectComponents (editor, visible, true);
         bool controls = true;
-        for (const auto* id : { "dist_on", "dist_type", "dist_drive", "dist_tone", "dist_mix", "dist_bits", "dist_rate" })
+        for (const auto* id : { "dist_type", "dist_drive", "dist_tone", "dist_mix", "dist_bits", "dist_rate" })
             controls = controls && visible.count (id) == 1;
-        check (controls, "all drive parameters have controls on the page");
+        check (controls && visible.count ("power_drive") == 1, "all drive parameters have controls on the page (on / off on the Drive tab)");
         // Sends stay on their layer pages and still decide what reaches Drive.
         bool sends = true;
         for (int layer = 0; layer < params::numLayers; ++layer)
@@ -3123,13 +3140,15 @@ namespace
         undo.clear();
         const auto plot = drive.getTransferArea();
         simulateDrag (drive, plot.getCentre(), plot.getCentre() + juce::Point<float> (plot.getWidth() * 0.25f, -plot.getHeight() * 0.25f));
-        check (getPlain (p, "dist_on") > 0.5f, "dragging the curve switches Drive on");
+        check (getPlain (p, "dist_on") < 0.5f, "dragging the curve leaves Drive off (only its tab toggle switches it)");
         check (std::abs (getPlain (p, "dist_drive") - 18.0f) < 1.0f && std::abs (getPlain (p, "dist_mix") - 0.75f) < 0.03f,
                "up = more drive, right = more mix (" + format (getPlain (p, "dist_drive"), 1) + " dB, " + format (100.0f * getPlain (p, "dist_mix"), 0) + " %)");
         check (undo.getNumUndoableSteps() == 1, "one undo step for the drag");
-        check (drive.transfer (0.5f) > 0.5f + 0.05f, "the curve bends with the new settings");
         undo.undo();
-        check (getPlain (p, "dist_on") < 0.5f && std::abs (getPlain (p, "dist_drive") - 6.0f) < 0.01f, "undo restores on / drive / mix together");
+        check (getPlain (p, "dist_on") < 0.5f && std::abs (getPlain (p, "dist_drive") - 6.0f) < 0.01f && std::abs (getPlain (p, "dist_mix") - 0.5f) < 0.01f,
+               "undo restores drive / mix together");
+        setValues (p, { { "dist_on", 1 }, { "dist_drive", 18 }, { "dist_mix", 0.75f } });
+        check (drive.transfer (0.5f) > 0.5f + 0.05f, "switched on, the curve bends with the dragged settings");
 
         // Type segments.
         setParam (p, "dist_on", 1.0f);
@@ -3263,6 +3282,165 @@ namespace
         }
     }
 
+    //==============================================================================
+    // v0.3.1: processors are switched on / off by power toggles on their tabs.
+    void testProcessorTabToggles()
+    {
+        EditorHolder h;
+        check (h.editor != nullptr, "editor created");
+        if (h.editor == nullptr)
+            return;
+        auto& editor = *h.editor;
+        auto& p = *h.processor;
+        editor.setSize (1080, 660);
+        editor.selectPage (dsp::bodyLayer);
+        auto& undo = p.getUndoHistory();
+
+        // Each processing tab carries its own toggle: a child of the tab, left of the label, clear of the handle.
+        bool placed = true;
+        for (int stage = 0; stage < dsp::numChainStages; ++stage)
+        {
+            auto& tab = editor.getPageButton (Editor::pageForStage (stage));
+            auto& power = editor.getPowerButton (stage);
+            const auto b = power.getBounds();
+            placed = placed && power.getParentComponent() == &tab && power.isVisible() && tab.getLocalBounds().contains (b)
+                         && ! b.intersects (tab.getHandleArea()) && b.getWidth() >= 18 && b.getHeight() >= 18
+                         && tab.getComponentAt (b.getCentre()) == &power;
+        }
+        check (placed, "Drive, EQ, Dynamics and Limiter tabs each have a power toggle (inside the tab, clear of the handle, hit first)");
+        check (editor.getPageButton (Editor::envelopePage).getNumChildComponents() == 0, "the Envelope tab has no processor toggle");
+
+        const auto clickPower = [&] (int stage)
+        {
+            // The toggle's click handler (a real click lands on the toggle, a child of the tab: see the hit test above).
+            auto& power = editor.getPowerButton (stage);
+            if (power.onClick) power.onClick();
+        };
+
+        // Drive and EQ: their switch parameter, one undo step, the page stays as it was.
+        for (const auto& [stage, id] : { std::pair { (int) dsp::driveStage, "dist_on" }, std::pair { (int) dsp::eqStage, "eq_on" } })
+        {
+            const auto name = std::string (dsp::chainStageName (stage));
+            auto& tab = editor.getPageButton (Editor::pageForStage (stage));
+            setParam (p, id, 0.0f);
+            editor.refreshPowerButtonsNow();
+            check (! editor.getPowerButton (stage).getToggleState() && ! tab.isProcessorOn(), name + ": off shows as off (toggle and dimmed tab)");
+            undo.clear();
+            clickPower (stage);
+            check (getPlain (p, id) > 0.5f && editor.getPowerButton (stage).getToggleState() && tab.isProcessorOn(), name + ": the tab toggle switches it on");
+            check (editor.getSelectedPage() == dsp::bodyLayer && ! tab.getToggleState(), name + ": toggling does not select the tab");
+            check (undo.getNumUndoableSteps() == 1, name + ": one undo step");
+            clickPower (stage);
+            check (getPlain (p, id) < 0.5f, name + ": and off again");
+            undo.undo();
+            check (getPlain (p, id) > 0.5f, name + ": undo restores it");
+            setParam (p, id, 0.0f); // automation / presets
+            editor.refreshPowerButtonsNow();
+            check (! editor.getPowerButton (stage).getToggleState(), name + ": the toggle follows the parameter");
+        }
+
+        // Dynamics: one toggle for the transient shaper and the compressor.
+        setValues (p, { { "shape_on", 0 }, { "comp_on", 0 } });
+        undo.clear();
+        clickPower (dsp::dynamicsStage);
+        check (getPlain (p, "shape_on") > 0.5f && getPlain (p, "comp_on") > 0.5f && undo.getNumUndoableSteps() == 1,
+               "Dynamics on (nothing remembered): shaper and compressor on, one undo step");
+        setParam (p, "shape_on", 0.0f);
+        editor.refreshPowerButtonsNow();
+        check (editor.getPowerButton (dsp::dynamicsStage).getToggleState(), "Dynamics shows on while either part is on");
+        undo.clear();
+        clickPower (dsp::dynamicsStage);
+        check (getPlain (p, "shape_on") < 0.5f && getPlain (p, "comp_on") < 0.5f && ! editor.getPowerButton (dsp::dynamicsStage).getToggleState(),
+               "Dynamics off: both off");
+        clickPower (dsp::dynamicsStage);
+        check (getPlain (p, "shape_on") < 0.5f && getPlain (p, "comp_on") > 0.5f, "Dynamics on again restores what was on (compressor only)");
+        check (undo.getNumUndoableSteps() == 2, "one undo step per toggle");
+        undo.undo();
+        check (getPlain (p, "shape_on") < 0.5f && getPlain (p, "comp_on") < 0.5f, "undo: off again");
+
+        // Limiter: Off <-> the remembered mode; the panel's mode box no longer offers Off.
+        editor.selectPage (Editor::outputPage);
+        std::map<juce::String, juce::Component*> visible;
+        collectComponents (editor, visible, true);
+        auto* mode = dynamic_cast<juce::ComboBox*> (visible.count ("lim_mode") ? visible["lim_mode"] : nullptr);
+        check (mode != nullptr && mode->getNumItems() == 2 && mode->getItemText (0) == "Clipper" && mode->getItemText (1) == "Limiter",
+               "the Limiter panel's mode box offers Clipper / Limiter (no Off)");
+        setParam (p, "lim_mode", 1.0f);
+        editor.refreshPowerButtonsNow();
+        undo.clear();
+        clickPower (dsp::limiterStage);
+        check (juce::roundToInt (getPlain (p, "lim_mode")) == 0 && undo.getNumUndoableSteps() == 1, "Limiter tab toggle: off (one step)");
+        check (editor.getSelectedPage() == Editor::outputPage, "toggling the selected tab keeps its page");
+        if (mode != nullptr)
+            check (! mode->isEnabled() && mode->getSelectedId() == 0 && mode->getText().isEmpty()
+                       && mode->getTextWhenNothingSelected() == "Off",
+                   "while off, the mode box is disabled and shows Off (nothing selected)");
+        clickPower (dsp::limiterStage);
+        check (juce::roundToInt (getPlain (p, "lim_mode")) == 1, "Limiter on restores the mode it had (Clipper)");
+        if (mode != nullptr)
+        {
+            check (mode->isEnabled() && mode->getText() == "Clipper", "the mode box shows it again");
+            mode->setSelectedId (2, juce::sendNotificationSync);
+            check (juce::roundToInt (getPlain (p, "lim_mode")) == 2, "choosing Limiter in the box sets the mode");
+        }
+
+        // No enable switches inside the processor panels; the limiter panel is called Limiter.
+        bool noSwitches = true;
+        for (const auto page : { (int) Editor::drivePage, (int) Editor::eqPage, (int) Editor::dynamicsPage, (int) Editor::outputPage })
+        {
+            editor.selectPage (page);
+            std::map<juce::String, juce::Component*> shown;
+            collectComponents (editor, shown, true);
+            for (const auto* id : { "dist_on", "eq_on", "shape_on", "comp_on" })
+                noSwitches = noSwitches && shown.count (id) == 0;
+            int toggles = 0;
+            for (const auto& [id, c] : shown)
+                if (dynamic_cast<dooblrkick::ui::ControlPanel*> (c->getParentComponent()) != nullptr)
+                    toggles += dynamic_cast<juce::ToggleButton*> (c) != nullptr ? 1 : 0;
+            noSwitches = noSwitches && toggles == 0;
+        }
+        check (noSwitches, "the Drive, EQ, Dynamics and Limiter panels have no on / off switches");
+        std::map<juce::String, juce::Component*> all;
+        collectComponents (editor, all, false);
+        check (all.count ("panel_Limiter") == 1 && all.count ("panel_Output") == 0, "the limiter panel is captioned Limiter");
+
+        // A switched-off processor's tab is dimmed but still selectable.
+        setParam (p, "eq_on", 0.0f);
+        editor.refreshPowerButtonsNow();
+        auto& eqTab = editor.getPageButton (Editor::eqPage);
+        check (! eqTab.isProcessorOn(), "EQ off: its tab is dimmed");
+        eqTab.setToggleState (true, juce::sendNotificationSync); // what a click on the tab body does
+        check (editor.getSelectedPage() == Editor::eqPage, "a switched-off processor's tab still selects its page");
+
+        // The toggle moves with its tab when the chain is reordered, and still works there.
+        const auto inEditor = [&] (juce::Component& c) { return editor.getLocalArea (&c, c.getLocalBounds()); };
+        const auto before = inEditor (editor.getPowerButton (dsp::driveStage));
+        dragChainTab (editor, dsp::driveStage, 3);
+        const auto after = inEditor (editor.getPowerButton (dsp::driveStage));
+        auto& driveTab = editor.getPageButton (Editor::drivePage);
+        check (editor.getShownChainOrder()[3] == dsp::driveStage && after.getY() > before.getY() + 100
+                   && driveTab.getBounds().contains (after) && after.getX() == before.getX(),
+               "after dragging Drive to slot 4 its toggle sits in the Drive tab, now at the bottom");
+        setParam (p, "dist_on", 0.0f);
+        clickPower (dsp::driveStage);
+        check (getPlain (p, "dist_on") > 0.5f && editor.getSelectedPage() == Editor::eqPage, "and it still switches Drive (page unchanged)");
+        setParam (p, "chain_order", 0.0f);
+        editor.syncChainOrderNow();
+
+        // Snapshots: the left column with one processor (Drive) off, and a processor page.
+        setValues (p, { { "dist_on", 0 }, { "eq_on", 1 }, { "shape_on", 1 }, { "comp_on", 1 }, { "lim_mode", 2 } });
+        editor.refreshPowerButtonsNow();
+        editor.selectPage (Editor::eqPage);
+        const auto firstTab = editor.getPageButton (0).getBounds();
+        const auto lastTab = editor.getPageButton (Editor::outputPage).getBounds();
+        saveSnapshot (editor.createComponentSnapshot (juce::Rectangle<int> (0, firstTab.getY() - 32, 150, lastTab.getBottom() + 12 - (firstTab.getY() - 32))),
+                      "-v0.3.1-tabs");
+        editor.selectPage (Editor::dynamicsPage);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.1-panel");
+        editor.selectPage (Editor::outputPage);
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.1-limiter");
+    }
+
     struct TestCase
     {
         const char* name;
@@ -3310,6 +3488,7 @@ int main()
         { "Envelope page",                          testEnvelopePage },
         { "Drive view",                             testDriveView },
         { "layout fit 940x600 .. 2400x1400",        testLayoutFit },
+        { "processor on / off toggles on the tabs", testProcessorTabToggles },
     };
 
     int failedTests = 0;

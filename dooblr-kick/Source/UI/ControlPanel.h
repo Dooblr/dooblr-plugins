@@ -23,6 +23,10 @@ namespace dooblrkick::ui
             juce::String caption;
             Kind kind = Kind::knob;
             int width = 0; // 0: the kind's standard width
+            /** Combos: leading choices not offered in the box (e.g. a mode's "Off", which belongs to
+                the processor's tab power toggle). While the parameter is on one of them the box
+                shows nothing selected (see setTextWhenNothingSelected). */
+            int hiddenLeadingChoices = 0;
         };
 
         ControlPanel (juce::AudioProcessorValueTreeState& state, const juce::String& title, juce::Colour colour,
@@ -55,6 +59,7 @@ namespace dooblrkick::ui
             std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> sliderAttachment;
             std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> buttonAttachment;
             std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> comboAttachment;
+            std::unique_ptr<juce::ParameterAttachment> choiceAttachment;
         };
 
         std::vector<juce::Rectangle<int>> layoutCells (int width) const;

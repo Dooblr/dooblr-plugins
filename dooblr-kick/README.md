@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.0 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.1 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -51,10 +51,16 @@ Version 0.3.0 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   pre-shaper input and gain reduction) and the transfer curve with a dot at the current level.
   Drag the threshold line or the curve's threshold handle for threshold, and the curve above the
   threshold for ratio.
-- **Limiter** (the last tab, formerly "Output"): limiter or clipper (or off), ceiling, release
+- **Limiter** (the last tab, formerly "Output"): limiter or clipper, ceiling, release
   and output gain. The page shows the limiter's input, output (before output gain) and gain
   reduction over time, with a draggable ceiling line and GR / peak readouts.
-- Dragging in a view while that section is off switches it on. Each drag is one undo step.
+- **On/off is on the tabs.** Each processing tab (Drive, EQ, Dynamics, Limiter) has a power
+  toggle; the panels and views have no on/off switches, and editing a section that is off
+  leaves it off. A switched-off tab is drawn dimmed and can still be selected. The Dynamics
+  toggle switches the transient shaper and compressor together (on restores whichever were on;
+  both if none is remembered). The Limiter toggle switches between Off and the last mode
+  (Clipper or Limiter; Limiter by default). Each toggle is one undo step and follows
+  automation and presets. Each drag in a view is one undo step.
   The meters come from the audio thread through lock-free FIFOs (no locks or allocations on
   the audio thread) and are drawn at the display refresh rate.
 - **Waveform view.** It shows the rendered hit with its length and peak. Click it to audition.
@@ -136,6 +142,8 @@ installing.
 - CPU use, and that the audio thread does not allocate. Only `operator new` is counted, not
   `malloc`.
 - Editor layout, wiring, resizing and the background preview render.
+- The processor on/off toggles on the tabs (parameters, undo, not selecting the tab, moving
+  with a chain reorder, no switches left in the panels).
 - The meter tap (frames and spectrum during playback, full-FIFO behaviour), that the reported
   compressor / limiter gain reduction matches the gain the DSP applied, and the EQ /
   Dynamics / Limiter views (handle, threshold, ratio and ceiling drags with undo, rendering,

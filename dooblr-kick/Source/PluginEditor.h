@@ -43,6 +43,24 @@ private:
 };
 
 /**
+    Power toggle on a processing tab (Drive, EQ, Dynamics, Limiter): the only place a processor
+    is switched on or off. It is a child of its tab, so it moves with the tab when the chain is
+    reordered, and it takes its own clicks, so toggling never selects the tab.
+*/
+class ProcessorPowerButton final : public juce::Button
+{
+public:
+    explicit ProcessorPowerButton (int stageIndex);
+    void paintButton (juce::Graphics& g, bool highlighted, bool down) override;
+    int getStage() const noexcept { return stage; }
+
+    static constexpr int size = 20;
+
+private:
+    int stage;
+};
+
+/**
     A tab in the left column. Processing-chain tabs (slot >= 0) also show their position
     in the chain and a hamburger handle: dragging the handle reorders the chain, a click
     anywhere else selects the page as usual.
@@ -54,6 +72,11 @@ public:
     int getChainSlot() const noexcept { return chainSlot; }
     juce::Rectangle<int> getHandleArea() const;
     bool isDraggingHandle() const noexcept { return handleDrag; }
+    /** Processing tabs: draws the tab dimmed while its processor is off (it stays selectable). */
+    void setProcessorOn (bool on);
+    bool isProcessorOn() const noexcept { return processorOn; }
+    /** Where the power toggle sits (left of the label, after the chain position). */
+    juce::Rectangle<int> getPowerArea() const;
 
     std::function<void (const juce::MouseEvent&)> onHandleDown, onHandleDrag, onHandleUp;
 
@@ -65,7 +88,7 @@ public:
 
 private:
     int chainSlot = -1;
-    bool handleDrag = false;
+    bool handleDrag = false, processorOn = true;
 };
 
 class DooblrKickAudioProcessorEditor final : public juce::AudioProcessorEditor,
@@ -100,6 +123,17 @@ public:
     dooblrkick::ui::MixDisplay& getMixDisplay() noexcept { return mixDisplay; }
     dooblrkick::ui::DriveDisplay& getDriveDisplay() noexcept { return driveDisplay; }
     NavButton& getPageButton (int page) noexcept { return pageButtons[(size_t) page]; }
+    /** The power toggle on a processing stage's tab (stage = dsp chain stage index). */
+    ProcessorPowerButton& getPowerButton (int stage) noexcept { return *powerButtons[(size_t) stage]; }
+    /** Whether a processing stage is on: Drive / EQ by their switch, Dynamics if the shaper or
+        the compressor is on, Limiter unless its mode is Off. */
+    bool isStageOn (int stage) const;
+    /** What the tab power toggle does (one undo step). Dynamics off remembers which of the shaper
+        and compressor were on and on restores them (both if none remembered); Limiter off
+        remembers Clipper / Limiter and on restores it (Limiter if none remembered). */
+    void setStageOn (int stage, bool on);
+    /** Re-reads the processors' on state into the tab toggles (normally on the timer). */
+    void refreshPowerButtonsNow();
     /** The chain order the left column currently shows (stage per slot). */
     dooblrkick::dsp::ChainOrder getShownChainOrder() const noexcept { return shownOrder; }
     /** Reads the processor's meter tap into the visible page's view (normally every vblank). */
@@ -150,6 +184,7 @@ private:
     int draggingStage = -1, dragGrabOffset = 0, dragY = 0;
     std::array<std::unique_ptr<LayerTabSwitch>, dooblrkick::params::numLayers> layerSwitches;
     std::array<std::unique_ptr<SoloButton>, dooblrkick::params::numLayers> soloButtons;
+    std::array<std::unique_ptr<ProcessorPowerButton>, dooblrkick::dsp::numChainStages> powerButtons;
 
     std::array<juce::TextButton, dooblrkick::params::numLayers> loadSampleButtons;
     std::array<juce::Label, dooblrkick::params::numLayers> sampleFileLabels;

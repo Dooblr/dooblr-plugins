@@ -65,9 +65,36 @@ namespace dooblrkick::ui
                 case Kind::combo:
                 {
                     auto box = std::make_unique<juce::ComboBox>();
-                    box->addItemList (parameter->getAllValueStrings(), 1);
                     box->setTooltip (parameter->getName (64));
-                    item.comboAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, spec.parameterId, *box);
+
+                    if (spec.hiddenLeadingChoices <= 0)
+                    {
+                        box->addItemList (parameter->getAllValueStrings(), 1);
+                        item.comboAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, spec.parameterId, *box);
+                    }
+                    else if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (parameter))
+                    {
+                        // Item id k + 1 is choice hidden + k.
+                        const auto hidden = spec.hiddenLeadingChoices;
+                        const auto choices = parameter->getAllValueStrings();
+                        for (int i = hidden; i < choices.size(); ++i)
+                            box->addItem (choices[i], i - hidden + 1);
+
+                        auto* rawBox = box.get();
+                        item.choiceAttachment = std::make_unique<juce::ParameterAttachment> (*ranged, [rawBox, hidden] (float value)
+                        {
+                            const auto index = juce::roundToInt (value);
+                            rawBox->setSelectedId (index >= hidden ? index - hidden + 1 : 0, juce::dontSendNotification);
+                        });
+                        auto* attachment = item.choiceAttachment.get();
+                        box->onChange = [rawBox, attachment, hidden]
+                        {
+                            if (const auto id = rawBox->getSelectedId(); id > 0)
+                                attachment->setValueAsCompleteGesture ((float) (id - 1 + hidden));
+                        };
+                        item.choiceAttachment->sendInitialUpdate();
+                    }
+
                     item.control = std::move (box);
                     item.width = spec.width > 0 ? spec.width : comboWidth;
 
@@ -99,6 +126,7 @@ namespace dooblrkick::ui
             item.sliderAttachment.reset();
             item.buttonAttachment.reset();
             item.comboAttachment.reset();
+            item.choiceAttachment.reset();
         }
     }
 

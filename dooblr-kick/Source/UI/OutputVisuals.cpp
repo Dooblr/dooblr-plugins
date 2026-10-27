@@ -639,16 +639,13 @@ namespace dooblrkick::ui
             return;
 
         const auto& ids = bandIds[(size_t) dragBand];
-        const auto wasOff = gesture.get ("eq_on") < 0.5f;
         altDrag = e.mods.isAltDown() && ids.q != nullptr;
         dragStartQ = ids.q != nullptr ? gesture.get (ids.q) : 1.0f;
         grabOffset = getHandlePosition (dragBand) - e.position;
 
-        if (altDrag) gesture.begin ({ ids.q, "eq_on" });
-        else         gesture.begin ({ ids.freq, ids.gain, "eq_on" });
-
-        if (wasOff)
-            gesture.set ("eq_on", 1.0f);
+        // Editing never switches the EQ on: that is the EQ tab's power toggle.
+        if (altDrag) gesture.begin ({ ids.q });
+        else         gesture.begin ({ ids.freq, ids.gain });
 
         hoverBand = dragBand;
         updateReadout (dragBand);
@@ -695,8 +692,7 @@ namespace dooblrkick::ui
         if (band < 0)
             return;
 
-        gesture.begin ({ bandIds[(size_t) band].gain, "eq_on" });
-        gesture.set ("eq_on", 1.0f);
+        gesture.begin ({ bandIds[(size_t) band].gain });
         gesture.set (bandIds[(size_t) band].gain, 0.0f);
         gesture.end();
         rebuildCurve();
@@ -715,8 +711,7 @@ namespace dooblrkick::ui
         }
 
         const auto* qId = bandIds[(size_t) band].q;
-        gesture.begin ({ qId, "eq_on" });
-        gesture.set ("eq_on", 1.0f);
+        gesture.begin ({ qId });
         gesture.set (qId, gesture.get (qId) * std::exp2 (wheel.deltaY * 2.0f));
         gesture.end();
         rebuildCurve();
@@ -971,7 +966,7 @@ namespace dooblrkick::ui
 
         const auto t = transfer.reduced (6.0f, 4.0f);
         drawLabel (g, readout, t, juce::Justification::topLeft, on ? Palette::textPrimary : Palette::textMuted, 11.0f);
-        drawLabel (g, on ? juce::String (gesture.get ("comp_ratio"), 1) + ":1" : juce::String ("drag to switch on"),
+        drawLabel (g, on ? juce::String (gesture.get ("comp_ratio"), 1) + ":1" : juce::String ("off (Dynamics tab)"),
                    t.withTrimmedTop (14.0f), juce::Justification::topLeft, Palette::textMuted, 10.0f);
         drawLabel (g, "in", { transfer.getRight() - 20.0f, transfer.getBottom() - 15.0f, 16.0f, 12.0f }, juce::Justification::centredRight,
                    Palette::textMuted, 9.0f);
@@ -1029,11 +1024,8 @@ namespace dooblrkick::ui
         if (kind == DragKind::none)
             return;
 
-        const auto wasOff = gesture.get ("comp_on") < 0.5f;
-        gesture.begin ({ kind == DragKind::ratio ? "comp_ratio" : "comp_threshold", "comp_on" });
-
-        if (wasOff)
-            gesture.set ("comp_on", 1.0f);
+        // Editing never switches the compressor on: that is the Dynamics tab's power toggle.
+        gesture.begin ({ kind == DragKind::ratio ? "comp_ratio" : "comp_threshold" });
     }
 
     void DynamicsDisplay::mouseDown (const juce::MouseEvent& e)
@@ -1240,7 +1232,7 @@ namespace dooblrkick::ui
                 g.fillRect (x, y - 0.5f, 4.0f, 1.0f);
         }
 
-        drawLabel (g, (on ? "ceiling " : "ceiling (mode Off: drag to switch on) ") + ceilingText,
+        drawLabel (g, (on ? "ceiling " : "ceiling (limiter off) ") + ceilingText,
                    { h.getRight() - 260.0f, y - 15.0f, 256.0f, 14.0f }, juce::Justification::centredRight, colour);
 
         auto legend = juce::Rectangle<float> (h.getX() + 6.0f, h.getBottom() - 16.0f, 60.0f, 14.0f);
@@ -1302,11 +1294,8 @@ namespace dooblrkick::ui
 
         dragging = true;
         limiterGrab = getCeilingY() - e.position.y;
-        const auto wasOff = juce::roundToInt (gesture.get ("lim_mode")) == 0;
-        gesture.begin ({ "lim_ceiling", "lim_mode" });
-
-        if (wasOff)
-            gesture.set ("lim_mode", 2.0f);
+        // Editing never switches the limiter on: that is the Limiter tab's power toggle.
+        gesture.begin ({ "lim_ceiling" });
 
         updateReadouts();
         repaint();

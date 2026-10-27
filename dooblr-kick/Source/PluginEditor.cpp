@@ -168,6 +168,68 @@ void SoloButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
 }
 
 //==============================================================================
+ProcessorPowerButton::ProcessorPowerButton (int stageIndex)
+    : juce::Button ("power"), stage (stageIndex)
+{
+    static constexpr const char* ids[] = { "power_drive", "power_eq", "power_dynamics", "power_limiter" };
+    static constexpr const char* names[] = { "Drive", "EQ", "Dynamics (transient shaper + compressor)", "Limiter" };
+    setComponentID (ids[stage]);
+    setTooltip (juce::String (names[stage]) + " on/off");
+    setMouseCursor (juce::MouseCursor::PointingHandCursor);
+    setClickingTogglesState (false); // the editor applies the change to the parameters
+}
+
+void ProcessorPowerButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
+{
+    const auto on = getToggleState();
+    const auto colour = pageColour (DooblrKickAudioProcessorEditor::pageForStage (stage));
+    auto circle = getLocalBounds().toFloat().withSizeKeepingCentre ((float) size, (float) size).reduced (1.0f);
+
+    if (down)
+        circle = circle.reduced (0.6f);
+
+    if (on)
+    {
+        g.setColour (colour.withAlpha (highlighted ? 1.0f : 0.92f));
+        g.fillEllipse (circle);
+    }
+    else
+    {
+        g.setColour (Palette::background.withAlpha (0.65f));
+        g.fillEllipse (circle);
+        g.setColour (Palette::textMuted.withAlpha (highlighted ? 0.85f : 0.5f));
+        g.drawEllipse (circle.reduced (0.5f), 1.0f);
+    }
+
+    // Power glyph: an open ring with a stem through the gap.
+    const auto glyph = circle.reduced (circle.getWidth() * 0.27f);
+    const auto c = glyph.getCentre();
+    const auto r = glyph.getWidth() * 0.5f;
+    juce::Path ring;
+    ring.addCentredArc (c.x, c.y, r, r, 0.0f, juce::degreesToRadians (40.0f), juce::degreesToRadians (320.0f), true);
+    const auto ink = on ? Palette::background : Palette::textMuted.withAlpha (highlighted ? 0.95f : 0.7f);
+    g.setColour (ink);
+    g.strokePath (ring, juce::PathStrokeType (1.6f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+    g.drawLine (c.x, glyph.getY() - 1.0f, c.x, c.y, 1.6f);
+}
+
+//==============================================================================
+void NavButton::setProcessorOn (bool on)
+{
+    if (processorOn != on)
+    {
+        processorOn = on;
+        repaint();
+    }
+}
+
+juce::Rectangle<int> NavButton::getPowerArea() const
+{
+    constexpr int size = ProcessorPowerButton::size;
+    return chainSlot < 0 ? juce::Rectangle<int>()
+                         : juce::Rectangle<int> (6 + 16 + 3, (getHeight() - size) / 2, size, size);
+}
+
 void NavButton::setChainSlot (int slot)
 {
     if (chainSlot != slot)
@@ -195,15 +257,22 @@ void NavButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
     lf.drawButtonBackground (g, *this, findColour (on ? buttonOnColourId : buttonColourId), highlighted || handleDrag, down || handleDrag);
 
     auto area = getLocalBounds().reduced (6, 0);
-    const auto textColour = findColour (on ? textColourOnId : textColourOffId);
-    const auto fontSize = juce::jlimit (12.0f, 16.0f, (float) getHeight() * 0.42f);
+    // A processor that is switched off draws its tab dimmed (it can still be selected).
+    const auto textColour = findColour (on ? textColourOnId : textColourOffId).withMultipliedAlpha (processorOn ? 1.0f : 0.45f);
+    const auto fontSize = juce::jlimit (12.0f, 15.0f, (float) getHeight() * 0.40f);
+
+    if (! processorOn)
+    {
+        g.setColour (Palette::background.withAlpha (0.35f));
+        g.fillRoundedRectangle (getLocalBounds().toFloat().reduced (1.0f), 4.0f);
+    }
 
     // Position in the chain.
-    const auto badge = area.removeFromLeft (20).toFloat().withSizeKeepingCentre (18.0f, 18.0f);
+    const auto badge = area.removeFromLeft (16).toFloat().withSizeKeepingCentre (16.0f, 16.0f);
     g.setColour (on ? textColour.withAlpha (0.25f) : Palette::background.withAlpha (0.7f));
     g.fillEllipse (badge);
     g.setColour (textColour.withAlpha (0.9f));
-    g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+    g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
     g.drawText (juce::String (chainSlot + 1), badge, juce::Justification::centred);
 
     // Hamburger handle.
@@ -213,10 +282,10 @@ void NavButton::paintButton (juce::Graphics& g, bool highlighted, bool down)
         g.fillRoundedRectangle (handle.getX(), handle.getY() + 4.0f * (float) i, handle.getWidth(), 1.6f, 0.8f);
 
     area.removeFromRight (20);
-    area.removeFromLeft (6);
+    area.removeFromLeft (3 + ProcessorPowerButton::size + 5); // the power toggle (a child component)
     g.setColour (textColour);
     g.setFont (juce::FontOptions (fontSize));
-    g.drawFittedText (getButtonText(), area, juce::Justification::centredLeft, 1);
+    g.drawFittedText (getButtonText(), area, juce::Justification::centredLeft, 1, 0.8f);
 }
 
 void NavButton::mouseMove (const juce::MouseEvent& e)
@@ -363,6 +432,12 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
             button.onHandleDown = [this, stage] (const juce::MouseEvent& e) { chainHandleDown (stage, e); };
             button.onHandleDrag = [this, stage] (const juce::MouseEvent& e) { chainHandleDrag (stage, e); };
             button.onHandleUp = [this, stage] (const juce::MouseEvent& e) { chainHandleUp (stage, e); };
+
+            // The tab's power toggle: a child of the tab (moves with it, takes its own clicks).
+            auto& power = powerButtons[(size_t) stage];
+            power = std::make_unique<ProcessorPowerButton> (stage);
+            power->onClick = [this, stage] { setStageOn (stage, ! isStageOn (stage)); };
+            button.addAndMakeVisible (*power);
         }
     }
 
@@ -412,20 +487,20 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
         { "root_note", "Key", K::knob },
         { "vel_sens", "Velocity", K::knob }, { "gate", "Gate", K::toggle }, { "release", "Release", K::knob } }));
     pagePanels[drivePage].push_back (std::make_unique<ControlPanel> (state, "Drive", pageColour (drivePage), Specs {
-        { "dist_on", "Drive on", K::toggle }, { "dist_type", "Type", K::combo }, { "dist_drive", "Drive", K::knob },
+        { "dist_type", "Type", K::combo }, { "dist_drive", "Drive", K::knob },
         { "dist_tone", "Tone", K::knob }, { "dist_bits", "Bits", K::knob }, { "dist_rate", "Rate", K::knob },
         { "dist_out", "Output", K::knob }, { "dist_mix", "Mix", K::knob } }));
     pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "EQ", pageColour (eqPage), Specs {
-        { "eq_on", "EQ on", K::toggle }, { "eq_low_freq", "Low freq", K::knob }, { "eq_low_gain", "Low gain", K::knob },
+        { "eq_low_freq", "Low freq", K::knob }, { "eq_low_gain", "Low gain", K::knob },
         { "eq_mid_freq", "Mid freq", K::knob }, { "eq_mid_gain", "Mid gain", K::knob }, { "eq_mid_q", "Mid Q", K::knob },
         { "eq_high_freq", "High freq", K::knob }, { "eq_high_gain", "High gain", K::knob } }));
     pagePanels[dynamicsPage].push_back (std::make_unique<ControlPanel> (state, "Transient shaper", pageColour (dynamicsPage), Specs {
-        { "shape_on", "Shaper on", K::toggle }, { "shape_attack", "Attack", K::knob }, { "shape_sustain", "Sustain", K::knob } }));
+        { "shape_attack", "Attack", K::knob }, { "shape_sustain", "Sustain", K::knob } }));
     pagePanels[dynamicsPage].push_back (std::make_unique<ControlPanel> (state, "Compressor", pageColour (dynamicsPage), Specs {
-        { "comp_on", "Comp on", K::toggle }, { "comp_threshold", "Threshold", K::knob }, { "comp_ratio", "Ratio", K::knob },
+        { "comp_threshold", "Threshold", K::knob }, { "comp_ratio", "Ratio", K::knob },
         { "comp_attack", "Attack", K::knob }, { "comp_release", "Release", K::knob }, { "comp_makeup", "Makeup", K::knob } }));
-    pagePanels[outputPage].push_back (std::make_unique<ControlPanel> (state, "Output", pageColour (outputPage), Specs {
-        { "lim_mode", "Mode", K::combo }, { "lim_ceiling", "Ceiling", K::knob }, { "lim_release", "Release", K::knob },
+    pagePanels[outputPage].push_back (std::make_unique<ControlPanel> (state, "Limiter", pageColour (outputPage), Specs {
+        { "lim_mode", "Mode", K::combo, 0, 1 }, { "lim_ceiling", "Ceiling", K::knob }, { "lim_release", "Release", K::knob },
         { "output_gain", "Gain", K::knob } }));
 
     for (auto& panels : pagePanels)
@@ -452,6 +527,14 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
         panel.addExtra (label, 150);
     }
 
+    // The Limiter panel's mode box offers Clipper / Limiter; Off is the Limiter tab's toggle.
+    if (auto* modeBox = dynamic_cast<juce::ComboBox*> (pagePanels[outputPage].front()->findControl ("lim_mode")))
+    {
+        modeBox->setTextWhenNothingSelected ("Off");
+        modeBox->setTooltip ("Limiter mode (switch the limiter on / off with the Limiter tab's toggle)");
+    }
+
+    refreshPowerButtonsNow();
     outputAttachment = std::make_unique<SliderAttachment> (state, "output_gain", outputSlider);
 
     refreshPresetBox();
@@ -604,8 +687,101 @@ void DooblrKickAudioProcessorEditor::updateEnablement()
     setEnabled (envelopePage, "release", value ("gate") > 0.5f);
 
     const auto limiter = juce::roundToInt (value ("lim_mode"));
+    setEnabled (outputPage, "lim_mode", limiter > 0);
     setEnabled (outputPage, "lim_ceiling", limiter > 0);
     setEnabled (outputPage, "lim_release", limiter == 2);
+}
+
+//==============================================================================
+namespace
+{
+    // Remembered (in the plugin state) while a stage is off, for the tab toggle to restore.
+    const juce::Identifier dynamicsResumeProperty { "powerResumeDynamics" }; // bit 0 shaper, bit 1 compressor
+    const juce::Identifier limiterResumeProperty { "powerResumeLimiter" };   // lim_mode index (1 or 2)
+}
+
+bool DooblrKickAudioProcessorEditor::isStageOn (int stage) const
+{
+    const auto value = [this] (const char* id) { return state.getRawParameterValue (id)->load(); };
+
+    switch (stage)
+    {
+        case dooblrkick::dsp::driveStage:    return value ("dist_on") > 0.5f;
+        case dooblrkick::dsp::eqStage:       return value ("eq_on") > 0.5f;
+        case dooblrkick::dsp::dynamicsStage: return value ("shape_on") > 0.5f || value ("comp_on") > 0.5f;
+        case dooblrkick::dsp::limiterStage:  return juce::roundToInt (value ("lim_mode")) != 0;
+        default: return false;
+    }
+}
+
+void DooblrKickAudioProcessorEditor::setStageOn (int stage, bool on)
+{
+    dooblrkick::ui::ParameterGesture gesture (state); // one gesture: one undo step
+
+    switch (stage)
+    {
+        case dooblrkick::dsp::driveStage:
+            gesture.begin ({ "dist_on" });
+            gesture.set ("dist_on", on ? 1.0f : 0.0f);
+            break;
+        case dooblrkick::dsp::eqStage:
+            gesture.begin ({ "eq_on" });
+            gesture.set ("eq_on", on ? 1.0f : 0.0f);
+            break;
+        case dooblrkick::dsp::dynamicsStage:
+        {
+            gesture.begin ({ "shape_on", "comp_on" });
+
+            if (on)
+            {
+                auto bits = (int) state.state.getProperty (dynamicsResumeProperty, 3);
+                bits = (bits & 3) == 0 ? 3 : (bits & 3);
+                gesture.set ("shape_on", (bits & 1) != 0 ? 1.0f : 0.0f);
+                gesture.set ("comp_on", (bits & 2) != 0 ? 1.0f : 0.0f);
+            }
+            else
+            {
+                const auto bits = (gesture.get ("shape_on") > 0.5f ? 1 : 0) | (gesture.get ("comp_on") > 0.5f ? 2 : 0);
+                if (bits != 0)
+                    state.state.setProperty (dynamicsResumeProperty, bits, nullptr);
+                gesture.set ("shape_on", 0.0f);
+                gesture.set ("comp_on", 0.0f);
+            }
+            break;
+        }
+        case dooblrkick::dsp::limiterStage:
+        {
+            gesture.begin ({ "lim_mode" });
+
+            if (on)
+            {
+                const auto mode = (int) state.state.getProperty (limiterResumeProperty, 2);
+                gesture.set ("lim_mode", (float) (mode == 1 ? 1 : 2));
+            }
+            else
+            {
+                if (const auto mode = juce::roundToInt (gesture.get ("lim_mode")); mode != 0)
+                    state.state.setProperty (limiterResumeProperty, mode, nullptr);
+                gesture.set ("lim_mode", 0.0f);
+            }
+            break;
+        }
+        default: break;
+    }
+
+    gesture.end();
+    refreshPowerButtonsNow();
+    updateEnablement();
+}
+
+void DooblrKickAudioProcessorEditor::refreshPowerButtonsNow()
+{
+    for (int stage = 0; stage < dooblrkick::dsp::numChainStages; ++stage)
+    {
+        const auto on = isStageOn (stage);
+        powerButtons[(size_t) stage]->setToggleState (on, juce::dontSendNotification);
+        pageButtons[(size_t) pageForStage (stage)].setProcessorOn (on);
+    }
 }
 
 //==============================================================================
@@ -838,6 +1014,7 @@ void DooblrKickAudioProcessorEditor::readMeters()
 void DooblrKickAudioProcessorEditor::timerCallback()
 {
     updateEnablement();
+    refreshPowerButtonsNow();
 
     syncChainOrderNow();
 
@@ -1089,6 +1266,7 @@ void DooblrKickAudioProcessorEditor::layoutChainButtons()
         }
 
         button.setBounds (bounds);
+        powerButtons[(size_t) stage]->setBounds (button.getPowerArea());
     }
 }
 
