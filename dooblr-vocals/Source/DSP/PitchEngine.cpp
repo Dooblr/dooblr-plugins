@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace dooblrvocals::dsp
 {
@@ -11,12 +12,6 @@ namespace dooblrvocals::dsp
 
         int wrap (int i, int n) noexcept { return ((i % n) + n) % n; }
 
-        float hann (int i, int n) noexcept
-        {
-            if (n <= 1)
-                return 1.0f;
-            return 0.5f - 0.5f * std::cos (2.0f * pi * (float) i / (float) (n - 1));
-        }
 
         float rmsOf (const float* x, int n) noexcept
         {
@@ -32,11 +27,13 @@ namespace dooblrvocals::dsp
     {
         sampleRate = newSampleRate;
         diff.assign ((size_t) std::max (4, maxWindow / 2 + 2), 0.0f);
+        rawDiff.assign (diff.size(), 0.0f);
     }
 
     void PitchDetector::reset() noexcept
     {
         std::fill (diff.begin(), diff.end(), 0.0f);
+        std::fill (rawDiff.begin(), rawDiff.end(), 0.0f);
     }
 
     int PitchDetector::recommendedWindow (float minHz) const noexcept
@@ -67,18 +64,23 @@ namespace dooblrvocals::dsp
             return out;
 
         auto* d = diff.data();
-        d[0] = 0.0f;
+        auto* raw = rawDiff.data();
+        d[0] = raw[0] = 0.0f;
+
+        // Same integration length for every lag: with a shrinking (window - tau) sum the
+        // difference function tilts towards longer lags and the interpolated period is biased
+        // by several cents.
+        const auto length = window - tauMax;
 
         for (int tau = 1; tau <= tauMax; ++tau)
         {
             double sum = 0.0;
-            const auto last = window - tau;
-            for (int j = 0; j < last; ++j)
+            for (int j = 0; j < length; ++j)
             {
                 const auto delta = (double) x[j] - (double) x[j + tau];
                 sum += delta * delta;
             }
-            d[tau] = (float) sum;
+            d[tau] = raw[tau] = (float) sum;
         }
 
         double running = 0.0;
@@ -118,14 +120,21 @@ namespace dooblrvocals::dsp
         if (! found && bestCmnd > 0.35f)
             return out;
 
-        // Parabolic interpolation around the chosen tau.
+        // Parabolic interpolation on the raw difference function (YIN step 5): the cumulative
+        // mean normalisation skews the dip, the raw function is symmetric around the period.
+        for (int step = 0; step < 2 && bestTau + 1 < tauMax && raw[bestTau + 1] < raw[bestTau]; ++step)
+            ++bestTau;
+        for (int step = 0; step < 2 && bestTau - 1 > 1 && raw[bestTau - 1] < raw[bestTau]; ++step)
+            --bestTau;
+
         auto tau = (float) bestTau;
         if (bestTau > 1 && bestTau < tauMax)
         {
-            const auto s0 = d[bestTau - 1], s1 = d[bestTau], s2 = d[bestTau + 1];
-            const auto denom = 2.0f * s1 - s0 - s2;
-            if (std::abs (denom) > 1.0e-12f)
-                tau += 0.5f * (s0 - s2) / denom;
+            const auto s0 = (double) raw[bestTau - 1], s1 = (double) raw[bestTau], s2 = (double) raw[bestTau + 1];
+            // Vertex of the parabola through (-1, s0), (0, s1), (1, s2).
+            const auto curvature = s0 - 2.0 * s1 + s2;
+            if (curvature > 1.0e-12)
+                tau += (float) std::clamp (0.5 * (s0 - s2) / curvature, -1.0, 1.0);
         }
 
         const auto hz = (float) sampleRate / std::max (2.0f, tau);
@@ -237,13 +246,17 @@ namespace dooblrvocals::dsp
     }
 
     //==============================================================================
-    void PitchShifter::prepare (double newSampleRate, int delaySizeToUse)
+    void PitchShifter::prepare (double newSampleRate, int maxGrainHalf)
     {
         sampleRate = newSampleRate;
-        delaySize = std::max (64, delaySizeToUse);
-        olaSize = std::max (4096, delaySize);
+        olaSize = 1024;
+        while (olaSize < 2 * std::max (64, maxGrainHalf) + 8)
+            olaSize <<= 1;
+        olaMask = olaSize - 1;
+        maxHalf = olaSize / 2 - 4;
         olaL.assign ((size_t) olaSize, 0.0f);
         olaR.assign ((size_t) olaSize, 0.0f);
+        olaW.assign ((size_t) olaSize, 0.0f);
         reset();
     }
 
@@ -251,112 +264,141 @@ namespace dooblrvocals::dsp
     {
         std::fill (olaL.begin(), olaL.end(), 0.0f);
         std::fill (olaR.begin(), olaR.end(), 0.0f);
-        olaWrite = 0;
-        synthPhase = 0.0f;
-        lastPeriod = 100.0f;
-        resamplePos = 0.0f;
+        std::fill (olaW.begin(), olaW.end(), 0.0f);
+        lastOut = std::numeric_limits<std::int64_t>::min();
+        newestInput = 0;
+        marking = false;
+        synthMark = analysisEpoch = 0.0;
     }
 
-    void PitchShifter::setDelayBuffers (const float* left, const float* right, int size, int newWritePos) noexcept
+    void PitchShifter::setDelayBuffers (const float* left, const float* right, int size) noexcept
     {
         delayL = left;
         delayR = right;
         delaySize = size;
-        writePos = newWritePos;
     }
 
-    float PitchShifter::readAt (const float* buf, float delay) const noexcept
+    float PitchShifter::readAbs (const float* buf, double t) const noexcept
     {
-        if (buf == nullptr || delaySize <= 0)
+        if (buf == nullptr || delaySize <= 2)
             return 0.0f;
 
-        delay = std::clamp (delay, 0.0f, (float) delaySize - 2.0f);
-        const auto newest = writePos - 1;
-        const auto pos = (float) newest - delay;
-        auto i0 = (int) std::floor (pos);
-        const auto frac = pos - (float) i0;
-        i0 = wrap (i0, delaySize);
-        const auto i1 = wrap (i0 + 1, delaySize);
-        return buf[i0] + frac * (buf[i1] - buf[i0]);
+        t = std::clamp (t, (double) (newestInput - delaySize + 2), (double) newestInput);
+        const auto i0 = (std::int64_t) std::floor (t);
+        const auto frac = (float) (t - (double) i0);
+        const auto a = (int) (((i0 % delaySize) + delaySize) % delaySize);
+        const auto b = a + 1 == delaySize ? 0 : a + 1;
+        return buf[a] + frac * (buf[b] - buf[a]);
     }
 
-    void PitchShifter::addGrain (int latency, float period, float ratio, bool formant) noexcept
+    namespace
     {
-        period = std::clamp (period, 16.0f, (float) delaySize * 0.25f);
-        ratio = std::clamp (ratio, 0.5f, 2.0f);
-
-        const auto inLen = 2.0f * period;
-        const auto outLen = formant ? inLen : std::max (32.0f, inLen / ratio);
-        const auto grain = std::clamp ((int) std::lround (outLen), 32, olaSize / 2);
-        const auto scale = 0.5f; // 50 % overlap Hann is ~unity for period hops
-
-        for (int k = 0; k < grain; ++k)
+        /** Grain half-length (output samples) for period T at the ratio, limited so the grain's
+            input never reaches past the newest sample (lookahead = latency). */
+        float grainHalf (float period, float ratio, bool formant, float lookahead, int maxHalf) noexcept
         {
-            const auto t = (float) k / (float) std::max (1, grain - 1);
-            // Formant on: walk the original 2·T0 grain 1:1. Formant off: resample it by ratio
-            // so the spectral envelope moves with the pitch.
-            const auto inIndex = formant ? t * inLen : t * inLen;
-            const auto delay = (float) latency + inLen - 1.0f - inIndex;
-            const auto w = hann (k, grain) * scale;
-            const auto idx = wrap (olaWrite + k, olaSize);
-            olaL[(size_t) idx] += w * readAt (delayL, delay);
-            olaR[(size_t) idx] += w * readAt (delayR, delay);
+            const auto hopOut = period / ratio;
+            const auto stretch = formant ? 1.0f : ratio;
+            const auto wanted = formant ? std::max (period, hopOut) : hopOut;
+            const auto fit = (lookahead - 4.0f - 0.5f * period) / (1.0f + stretch);
+            return std::clamp (std::min (wanted, fit), 8.0f, (float) maxHalf);
         }
-
-        lastPeriod = period;
     }
 
-    void PitchShifter::process (float* outL, float* outR, int n, int latency, const float* ratios,
-                                const char* voiced, const float* periods, bool formant) noexcept
+    void PitchShifter::addGrain (float period, float ratio, bool formant) noexcept
     {
-        for (int i = 0; i < n; ++i)
-        {
-            const auto voicedI = voiced[i] != 0;
-            const auto ratio = std::clamp (voicedI ? ratios[i] : 1.0f, 0.5f, 2.0f);
-            const auto period = std::max (16.0f, periods[i]);
-            const auto outPeriod = std::max (8.0f, period / ratio);
+        const auto lookahead = (float) (newestInput - lastOut - 1);
+        const auto half = grainHalf (period, ratio, formant, lookahead, maxHalf);
+        const auto stretch = (double) (formant ? 1.0f : ratio);
+        const auto T = (double) period;
 
-            if (! voicedI)
-            {
-                synthPhase = 0.0f;
-                resamplePos = 0.0f;
-                outL[i] = 0.0f;
-                outR[i] = 0.0f;
-                olaL[(size_t) olaWrite] = 0.0f;
-                olaR[(size_t) olaWrite] = 0.0f;
-                olaWrite = wrap (olaWrite + 1, olaSize);
+        // Pitch-synchronous analysis epoch nearest this mark: epochs step by whole periods, so
+        // every grain starts on the same phase of the waveform.
+        while (analysisEpoch + 0.5 * T <= synthMark) analysisEpoch += T;
+        while (analysisEpoch - 0.5 * T > synthMark) analysisEpoch -= T;
+        while (analysisEpoch + (double) half * stretch > (double) newestInput && analysisEpoch - T > (double) (newestInput - delaySize + 4))
+            analysisEpoch -= T;
+
+        const auto now = lastOut + 1; // the output sample being produced
+        const auto first = std::max (now, (std::int64_t) std::ceil (synthMark - (double) half));
+        const auto last = (std::int64_t) std::floor (synthMark + (double) half);
+        const auto invHalf = 1.0 / (double) half;
+
+        for (auto j = first; j <= last; ++j)
+        {
+            const auto d = (double) j - synthMark;
+            const auto w = (float) (0.5 + 0.5 * std::cos ((double) pi * d * invHalf));
+            if (w <= 0.0f)
                 continue;
+            const auto x = analysisEpoch + d * stretch;
+            const auto idx = (size_t) (j & olaMask);
+            olaL[idx] += w * readAbs (delayL, x);
+            olaR[idx] += w * readAbs (delayR, x);
+            olaW[idx] += w;
+        }
+
+        synthMark += T / (double) ratio;
+    }
+
+    void PitchShifter::processSample (std::int64_t tOut, std::int64_t newest, float ratio, float period,
+                                      bool voiced, bool formant, float& outL, float& outR) noexcept
+    {
+        newestInput = newest;
+
+        if (tOut != lastOut + 1 || lastOut == std::numeric_limits<std::int64_t>::min())
+        {
+            // First call, or the latency changed (Live <-> HQ): start a fresh time line.
+            std::fill (olaL.begin(), olaL.end(), 0.0f);
+            std::fill (olaR.begin(), olaR.end(), 0.0f);
+            std::fill (olaW.begin(), olaW.end(), 0.0f);
+            marking = false;
+        }
+
+        lastOut = tOut - 1; // addGrain() writes from tOut on
+        ratio = std::clamp (ratio, 0.5f, 2.0f);
+        period = std::clamp (period, 16.0f, (float) maxHalf);
+
+        if (voiced)
+        {
+            const auto lookahead = (float) (newest - tOut);
+
+            if (! marking)
+            {
+                marking = true;
+                synthMark = (double) tOut + (double) grainHalf (period, ratio, formant, lookahead, maxHalf);
+                analysisEpoch = synthMark;
             }
 
-            if (formant)
+            for (int guard = 0; guard < 32; ++guard)
             {
-                synthPhase += 1.0f;
-                if (synthPhase >= outPeriod)
-                {
-                    synthPhase -= outPeriod;
-                    addGrain (latency, period, ratio, true);
-                }
-
-                outL[i] = olaL[(size_t) olaWrite];
-                outR[i] = olaR[(size_t) olaWrite];
-                olaL[(size_t) olaWrite] = 0.0f;
-                olaR[(size_t) olaWrite] = 0.0f;
-                olaWrite = wrap (olaWrite + 1, olaSize);
-            }
-            else
-            {
-                // The delay already plays at 1× (write advances with the output). Extra motion
-                // of the read pointer is (1 − ratio): ratio > 1 shortens the delay (pitch up),
-                // ratio < 1 lengthens it (pitch down). Wrap by T0 so a sine stays continuous.
-                resamplePos += 1.0f - ratio;
-                const auto wrap = period;
-                while (resamplePos > wrap) resamplePos -= wrap;
-                while (resamplePos < 0.0f) resamplePos += wrap;
-
-                outL[i] = readAt (delayL, (float) latency + resamplePos);
-                outR[i] = readAt (delayR, (float) latency + resamplePos);
+                if (synthMark - (double) grainHalf (period, ratio, formant, lookahead, maxHalf) > (double) tOut)
+                    break;
+                addGrain (period, ratio, formant);
             }
         }
+        else
+        {
+            marking = false;
+        }
+
+        const auto idx = (size_t) (tOut & olaMask);
+        const auto w = olaW[idx];
+
+        if (w >= 1.0f || (marking && w > 1.0e-3f))
+        {
+            outL = olaL[idx] / w;
+            outR = olaR[idx] / w;
+        }
+        else
+        {
+            // Voicing on / off edges: what the grains do not cover is the dry input.
+            const auto rest = 1.0f - std::max (0.0f, w);
+            outL = olaL[idx] + rest * readAbs (delayL, (double) tOut);
+            outR = olaR[idx] + rest * readAbs (delayR, (double) tOut);
+        }
+
+        olaL[idx] = olaR[idx] = olaW[idx] = 0.0f;
+        lastOut = tOut;
     }
 
     //==============================================================================
@@ -369,14 +411,10 @@ namespace dooblrvocals::dsp
         delayL.assign ((size_t) delaySize, 0.0f);
         delayR.assign ((size_t) delaySize, 0.0f);
         monoScratch.assign ((size_t) delaySize, 0.0f);
-        ratioScratch.assign ((size_t) maxBlock, 1.0f);
-        voicedScratch.assign ((size_t) maxBlock, 0);
-        periodScratch.assign ((size_t) maxBlock, 100.0f);
-        wetL.assign ((size_t) maxBlock, 0.0f);
-        wetR.assign ((size_t) maxBlock, 0.0f);
         detector.prepare (sampleRate, 8192);
         corrector.prepare (sampleRate);
-        shifter.prepare (sampleRate, delaySize);
+        shifter.prepare (sampleRate, hq + 64);
+        shifter.setDelayBuffers (delayL.data(), delayR.data(), delaySize);
         reset();
     }
 
@@ -385,6 +423,7 @@ namespace dooblrvocals::dsp
         std::fill (delayL.begin(), delayL.end(), 0.0f);
         std::fill (delayR.begin(), delayR.end(), 0.0f);
         writePos = 0;
+        inputCount = 0;
         hopCounter = 0;
         lastEstimate = {};
         lastCorrectedHz = 0.0f;
@@ -415,13 +454,22 @@ namespace dooblrvocals::dsp
         const auto range = rangeFor (s.input);
         const auto minHz = range.minHz;
         const auto maxHz = range.maxHz;
-        const auto window = std::min (detector.recommendedWindow (minHz) * (hq ? 2 : 1), delaySize - latency - 4);
+        auto window = std::min (detector.recommendedWindow (minHz) * (hq ? 2 : 1), delaySize - latency - 4);
         if (window < 64)
             return;
 
+        // Centre the window where the next grains are taken: one period after the playback
+        // point (latency samples back). A window ending at the playback point lags the audio
+        // being shifted by half a window, which smears vibrato and glides.
+        window = std::min (window, 2 * latency);
+        const auto centre = window / 2;
+        const auto ahead = lastEstimate.hz > 20.0f
+                               ? std::clamp ((int) std::lround (sampleRate / lastEstimate.hz), 0, std::max (0, latency - centre))
+                               : 0;
+
         for (int i = 0; i < window; ++i)
         {
-            const auto d = latency + window - 1 - i;
+            const auto d = std::max (0, latency - ahead + centre - 1 - i);
             monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
         }
 
@@ -458,11 +506,15 @@ namespace dooblrvocals::dsp
         const auto mixCoeff = 1.0f - std::exp (-1.0f / (0.005f * (float) sampleRate));
         const auto voiceCoeff = 1.0f - std::exp (-1.0f / (0.008f * (float) sampleRate));
 
+        const auto period = [this] { return lastEstimate.hz > 20.0f ? (float) sampleRate / lastEstimate.hz
+                                                                    : (float) sampleRate / 200.0f; };
+
         for (int i = 0; i < n; ++i)
         {
             delayL[(size_t) writePos] = left[i];
             delayR[(size_t) writePos] = right[i];
             writePos = wrap (writePos + 1, delaySize);
+            ++inputCount;
 
             if (++hopCounter >= hop)
             {
@@ -474,26 +526,21 @@ namespace dooblrvocals::dsp
             }
 
             mixSmoothed += (mixTarget - mixSmoothed) * mixCoeff;
-            ratioScratch[(size_t) i] = lastRatio;
-            voicedScratch[(size_t) i] = (char) (lastVoiced && s.enabled);
-            periodScratch[(size_t) i] = lastEstimate.hz > 20.0f ? (float) sampleRate / lastEstimate.hz
-                                                                : (float) sampleRate / 200.0f;
-        }
+            const auto voicedNow = lastVoiced && s.enabled;
 
-        shifter.setDelayBuffers (delayL.data(), delayR.data(), delaySize, writePos);
-        shifter.process (wetL.data(), wetR.data(), n, latency, ratioScratch.data(),
-                         voicedScratch.data(), periodScratch.data(), s.formant);
+            // Output time: the input sample written latency samples ago.
+            const auto newest = inputCount - 1;
+            float wetL = 0.0f, wetR = 0.0f;
+            shifter.processSample (newest - latency, newest, lastRatio, period(), voicedNow, s.formant, wetL, wetR);
 
-        for (int i = 0; i < n; ++i)
-        {
-            const auto dryL = readDelay (delayL, latency + (n - 1 - i));
-            const auto dryR = readDelay (delayR, latency + (n - 1 - i));
-            const auto want = (voicedScratch[(size_t) i] && mixSmoothed > 1.0e-4f) ? 1.0f : 0.0f;
+            const auto dryL = readDelay (delayL, latency);
+            const auto dryR = readDelay (delayR, latency);
+            const auto want = (voicedNow && mixSmoothed > 1.0e-4f) ? 1.0f : 0.0f;
             voiceEnv += (want - voiceEnv) * voiceCoeff;
             const auto wetAmt = voiceEnv * mixSmoothed;
-            left[i] = dryL + wetAmt * (wetL[(size_t) i] - dryL);
+            left[i] = dryL + wetAmt * (wetL - dryL);
             if (channels > 1)
-                right[i] = dryR + wetAmt * (wetR[(size_t) i] - dryR);
+                right[i] = dryR + wetAmt * (wetR - dryR);
         }
     }
 }

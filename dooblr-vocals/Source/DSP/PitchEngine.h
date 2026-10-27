@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstdint>
 #include <vector>
 
 #include <juce_audio_basics/juce_audio_basics.h>
@@ -34,7 +35,7 @@ namespace dooblrvocals::dsp
 
     private:
         double sampleRate = 48000.0;
-        mutable std::vector<float> diff;
+        mutable std::vector<float> diff, rawDiff;
     };
 
     /**
@@ -65,34 +66,44 @@ namespace dooblrvocals::dsp
     };
 
     /**
-        Formant-aware TD-PSOLA shifter (formant on) or resampled-grain shifter (formant off).
-        Reads from a stereo delay line; process() does not allocate.
+        Pitch-synchronous overlap-add (TD-PSOLA) shifter on an absolute time line.
+
+        The engine writes input sample number t into a ring buffer (index t mod size) and asks
+        for one wet sample per output time tOut = newest - latency. For each synthesis mark
+        (spaced T / ratio apart, T the detected period) the shifter takes a Hann grain centred
+        on the analysis epoch nearest the mark (epochs are spaced T apart, so every grain has
+        the same phase) and overlap-adds it around the mark:
+        - formant on: the grain is copied 1:1 (spectral envelope kept, pitch moves)
+        - formant off: the grain is resampled by the ratio (envelope moves with the pitch)
+        Where the grains' windows sum to less than 1 (voicing on / off) the dry input fills
+        the rest, so voiced/unvoiced transitions cross-fade. process() does not allocate.
     */
     class PitchShifter
     {
     public:
-        void prepare (double sampleRate, int delaySize);
+        void prepare (double sampleRate, int maxGrainHalf);
         void reset() noexcept;
 
-        void setDelayBuffers (const float* left, const float* right, int size, int writePos) noexcept;
+        void setDelayBuffers (const float* left, const float* right, int size) noexcept;
 
-        /** Writes n wet samples corresponding to delay[writePos - latency]. */
-        void process (float* outL, float* outR, int n, int latency, const float* ratios,
-                      const char* voiced, const float* periods, bool formant) noexcept;
+        /** One wet sample for output time tOut (input sample number); newest is the last
+            input sample number written to the delay buffers. */
+        void processSample (std::int64_t tOut, std::int64_t newest, float ratio, float period,
+                            bool voiced, bool formant, float& outL, float& outR) noexcept;
 
     private:
-        float readAt (const float* buf, float delay) const noexcept;
-        void addGrain (int latency, float period, float ratio, bool formant) noexcept;
+        float readAbs (const float* buf, double t) const noexcept;
+        void addGrain (float period, float ratio, bool formant) noexcept;
 
         double sampleRate = 48000.0;
         const float* delayL = nullptr;
         const float* delayR = nullptr;
-        int delaySize = 0, writePos = 0;
-        std::vector<float> olaL, olaR;
-        int olaWrite = 0, olaSize = 0;
-        float synthPhase = 0.0f;
-        float lastPeriod = 100.0f;
-        float resamplePos = 0.0f;
+        int delaySize = 0;
+        std::int64_t newestInput = 0, lastOut = -1;
+        std::vector<float> olaL, olaR, olaW;
+        int olaSize = 0, olaMask = 0, maxHalf = 0;
+        bool marking = false;
+        double synthMark = 0.0, analysisEpoch = 0.0;
     };
 
     /**
@@ -124,9 +135,8 @@ namespace dooblrvocals::dsp
         int latency = 2048;
         int delaySize = 0, writePos = 0;
         int hop = 64, hopCounter = 0;
-        std::vector<float> delayL, delayR, monoScratch, ratioScratch, wetL, wetR;
-        std::vector<char> voicedScratch;
-        std::vector<float> periodScratch;
+        std::vector<float> delayL, delayR, monoScratch;
+        std::int64_t inputCount = 0; // input samples written so far (absolute time line)
         float voiceEnv = 0.0f;
 
         PitchDetector detector;
