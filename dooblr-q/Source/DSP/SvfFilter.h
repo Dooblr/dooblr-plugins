@@ -26,16 +26,24 @@ namespace dooblrq::dsp
 
     inline constexpr int numFilterTypes = 7;
 
-    /** Dynamics are meaningful only for types that have a gain. */
-    constexpr bool supportsDynamics (FilterType type) noexcept
+    /** Types with a gain control (bell, shelves, tilt): dynamics move their gain. */
+    constexpr bool hasGain (FilterType type) noexcept
     {
         return type == FilterType::bell || type == FilterType::lowShelf || type == FilterType::highShelf
             || type == FilterType::tilt;
     }
 
-    constexpr bool hasGain (FilterType type) noexcept
+    /** Low Cut (high-pass) and High Cut (low-pass). */
+    constexpr bool isCut (FilterType type) noexcept
     {
-        return supportsDynamics (type);
+        return type == FilterType::lowCut || type == FilterType::highCut;
+    }
+
+    /** Dynamics: gain types move their gain; since 0.9.0 the cuts move their cutoff
+        (see DynamicEQBand::dynamicCutFrequency). Notch has no dynamics. */
+    constexpr bool supportsDynamics (FilterType type) noexcept
+    {
+        return hasGain (type) || isCut (type);
     }
 
 

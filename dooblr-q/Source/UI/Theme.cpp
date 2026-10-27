@@ -43,15 +43,38 @@ namespace dooblrq::ui
         setColour (juce::CaretComponent::caretColourId, Palette::textPrimary);
     }
 
+    KnobGeometry knobGeometry (juce::Slider& slider)
+    {
+        // The same rectangle JUCE passes to drawRotarySlider (the slider minus its text box).
+        const auto bounds = slider.getLookAndFeel().getSliderLayout (slider).sliderBounds.toFloat().reduced (4.0f);
+        // A slider in a wider column (Width, for its long readout) can cap its knob so every knob matches.
+        const auto maxDiameter = (float) (double) slider.getProperties().getWithDefault ("maxKnobDiameter", 1.0e6);
+
+        KnobGeometry g;
+        g.centre = bounds.getCentre();
+        g.outerRadius = juce::jmax (0.0f, juce::jmin (bounds.getWidth(), bounds.getHeight(), maxDiameter - 8.0f) * 0.5f);
+        g.knobRadius = g.outerRadius;
+
+        if ((bool) slider.getProperties().getWithDefault ("rangeRing", false))
+        {
+            // Give up a little of the knob for a ring that reaches a few pixels into the padding.
+            const auto inset = juce::jlimit (5.0f, 10.0f, g.outerRadius * 0.25f);
+            g.knobRadius = g.outerRadius - inset;
+            g.ringWidth = juce::jmax (3.5f, inset * 0.6f);
+            g.ringRadius = g.knobRadius + 3.0f + g.ringWidth * 0.5f;
+        }
+
+        return g;
+    }
+
     void DooblrLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
                                               float sliderPos, float startAngle, float endAngle,
                                               juce::Slider& slider)
     {
-        const auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (4.0f);
-        // A slider in a wider column (Width, for its long readout) can cap its knob so every knob matches.
-        const auto maxDiameter = (float) (double) slider.getProperties().getWithDefault ("maxKnobDiameter", 1.0e6);
-        const auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight(), maxDiameter - 8.0f) * 0.5f;
-        const auto centre = bounds.getCentre();
+        juce::ignoreUnused (x, y, width, height); // knobGeometry derives the same rectangle from the slider
+        const auto geometry = knobGeometry (slider);
+        const auto radius = geometry.knobRadius;
+        const auto centre = geometry.centre;
         const auto lineWidth = juce::jmax (2.0f, radius * 0.12f);
         const auto arcRadius = radius - lineWidth * 0.5f;
         const auto angle = startAngle + sliderPos * (endAngle - startAngle);

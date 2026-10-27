@@ -22,6 +22,19 @@ namespace dooblrq::ui
     /** Colour used to identify a band in the display and band selector. */
     juce::Colour bandColour (int bandIndex);
 
+    /** Where a rotary knob is drawn inside its slider (slider coordinates). A knob carrying
+        the "rangeRing" property (0.9.0) is drawn smaller so the outer Range ring fits around it. */
+    struct KnobGeometry
+    {
+        juce::Point<float> centre;
+        float outerRadius = 0.0f;  // the space the knob had before 0.9.0
+        float knobRadius  = 0.0f;  // the knob as drawn
+        float ringRadius  = 0.0f;  // centre line of the Range ring (when present)
+        float ringWidth   = 0.0f;  // stroke width of the Range ring
+    };
+
+    KnobGeometry knobGeometry (juce::Slider& slider);
+
     /** Flat, understated look for knobs, buttons and combo boxes. */
     class DooblrLookAndFeel final : public juce::LookAndFeel_V4
     {

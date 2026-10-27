@@ -199,7 +199,14 @@ void DooblrQAudioProcessor::updateKernel (bool immediate) noexcept
         // With stereo link off, the louder channel's gain is used for both.
         auto gain = (double) s.gainDb;
         if (s.dynamicsEnabled && dsp::supportsDynamics (s.type))
-            gain += (double) bands[(size_t) b].getDynamicGainDb();
+        {
+            const auto dynamicDb = (double) bands[(size_t) b].getDynamicGainDb();
+
+            if (dsp::isCut (s.type)) // 0.9.0: dynamic cuts move their cutoff
+                k.frequency = dsp::DynamicEQBand::dynamicCutFrequency (s.type, k.frequency, dynamicDb);
+            else
+                gain += dynamicDb;
+        }
         k.gainDb = juce::jlimit (-(double) dsp::DynamicEQBand::maxTotalGainDb, (double) dsp::DynamicEQBand::maxTotalGainDb, gain);
     }
 

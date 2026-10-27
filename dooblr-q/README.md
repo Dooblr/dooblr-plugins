@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.8.0:** six-band dynamic EQ with per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.9.0:** six-band dynamic EQ with dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -16,7 +16,8 @@ cuts and notches, Q. 0.6.1 colours dynamic activity per band, only over the rang
 moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-band
 **Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt. 0.7.1 extends
 Slope to Bell and Notch, so it applies to every band type. 0.8.0 adds the per-band Model,
-Stepped, Drive and Atten controls; see [Models](#models-080).)
+Stepped, Drive and Atten controls; see [Models](#models-080). 0.9.0 adds dynamics to Low /
+High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090).)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -115,6 +116,49 @@ band was a cut, shelf or tilt.
   length limits how steep a very low corner can be (5.9 / 11.7 Hz bins), and the long
   impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
   the ringing is pre- and post-).
+
+## Dynamic cuts and the Range ring (0.9.0)
+
+**No new parameters.** The ring and the cut dynamics use the existing per-band
+`bN_dyn_on`, `bN_dyn_range`, `bN_dyn_threshold`, `bN_dyn_attack`, `bN_dyn_release`;
+parameter IDs, order and `stateVersion` are unchanged, and sessions load as before.
+
+### Range ring
+
+- A concentric outer ring around the band's **Gain** knob (bells, shelves, tilt) or, for
+  **Low / High Cut**, around its **Frequency** knob. The knob it surrounds is drawn a little
+  smaller to make room; other knobs are unchanged.
+- It is the same parameter as the **Range** knob (Dynamic section), so both always show the
+  same value (two-way, through the parameter).
+- Its arc, in the band colour, runs from the knob's current value to where the dynamics can
+  take it (gain + Range, or the moved cutoff for cuts), with a tick at the limit, a mark at
+  0 dB Range and a white dot for the live position while the band is moving.
+- Only the ring (an annulus about 14 px wide) takes clicks; the knob inside works as before.
+- Drag **up/down** (0.2 dB per pixel, 240 px = full ±24 dB span) or **around the ring**
+  (clockwise = more; the knob's full sweep = 48 dB). The first ~4 px of a drag pick the mode:
+  mostly vertical or radial movement = up/down, movement along the ring = rotation.
+  **Shift** = fine (×0.1), **double-click** = 0 dB, hover highlight, tooltip. Each drag (or
+  reset) is one undo step.
+- Dimmed and disabled when the band's Dynamic switch is off or the type has no dynamics (Notch).
+
+### Dynamic Low / High Cut
+
+- Range moves the **cutoff** instead of a gain: **1 dB of dynamic amount = 1/6 octave**
+  (±24 dB = ±4 octaves), clamped to 20 Hz – 20 kHz.
+- **Positive Range: more signal moves the cutoff into the passband**, closing the filter
+  (High-pass/Low Cut moves **up**, Low-pass/High Cut moves **down**).
+  **Negative Range: more signal opens the filter** (Low Cut moves down, High Cut moves up).
+- Detector: as for bells, a band-pass on the band's input at the **static** cutoff (Q from the
+  band), so it measures the level around the corner; then threshold, 6 dB knee, attack/release
+  as for the other types.
+- Works with every slope (12–60 dB/oct, Brickwall), every phase mode (in Natural / Linear
+  Phase the kernel is rebuilt from the moved cutoff) and every model (analogue models keep
+  their own cut shapes at the moved frequency). The shift is slewed (≈1.5 ms); in Zero Latency the cascade is
+  redesigned every 16 samples, in Natural / Linear the kernel crossfades as before, so
+  moving cutoffs don't zipper or click (tested).
+- Display: dashed line = static cutoff, faint line + thin arrow = the full-Range limit, solid
+  line + bold arrow = the live cutoff while it moves; the dynamic colouring covers the
+  frequencies between the static and moved curves.
 
 ## Models (0.8.0)
 
@@ -215,7 +259,7 @@ take part in undo / redo.
 - Coefficients are recomputed every 16 samples from smoothed parameters
   (30 ms smoothing; frequency and Q in the log domain). Enabling/disabling a
   band crossfades over 10 ms.
-- Dynamics (Bell, Low Shelf, High Shelf and Tilt): the band's input feeds a
+- Dynamics (Bell, Low Shelf, High Shelf, Tilt and, since 0.9.0, Low / High Cut, which move their cutoff instead; see above): the band's input feeds a
   side-chain detector filter (band-pass at the band's frequency/Q for bells,
   low-pass/high-pass at the corner for shelves, and the unfiltered (broadband) input for
   Tilt, so a dynamic tilt follows the overall level), then a peak envelope follower

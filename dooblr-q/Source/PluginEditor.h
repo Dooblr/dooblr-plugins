@@ -6,6 +6,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "Parameters.h"
+#include "UI/RangeRing.h"
 #include "UI/ResponseCurveComponent.h"
 #include "UI/Theme.h"
 
@@ -48,6 +49,9 @@ public:
 
     /** Enables the Undo / Redo buttons to match the history (public for tests). */
     void updateUndoButtons();
+
+    /** The outer Range ring (public for tests). */
+    dooblrq::ui::RangeRing& getRangeRing() noexcept { return rangeRing; }
 
     static constexpr int defaultWidth  = 1080;
     static constexpr int defaultHeight = 660;
@@ -107,6 +111,10 @@ private:
 
     juce::ToggleButton dynamicsButton { "Dynamic" };
     Knob rangeKnob, thresholdKnob, attackKnob, releaseKnob;
+
+    // 0.9.0: the outer ring around Gain (or Frequency for Low / High Cut) that edits the same Range.
+    dooblrq::ui::RangeRing rangeRing;
+    void updateRangeRing (const dooblrq::dsp::BandSettings& settings);
 
     juce::TooltipWindow tooltipWindow { this, 600 };
 

@@ -124,7 +124,18 @@ namespace dooblrq::ui
             threshold, sampled per 2 px as painted). Empty when its dynamics are idle. */
         std::vector<juce::Range<double>> dynamicRegions (int bandIndex) const;
 
-        /** Pulls new audio from the processor's analyzer FIFO into the analyzer (called by the
+        /** 0.9.0: a Low / High Cut band with dynamics shows its static cutoff (dashed), the live
+            moved cutoff (solid, with an arrow from the static one) and, faintly, how far the full
+            Range takes it, so the direction is visible even while idle. */
+        struct CutMarker
+        {
+            bool visible = false;
+            double staticHz = 0.0, liveHz = 0.0, limitHz = 0.0;
+        };
+
+        CutMarker cutMarker (int bandIndex) const;
+
+                /** Pulls new audio from the processor's analyzer FIFO into the analyzer (called by the
             timer; public so tests can drive it). Returns the number of new FFT frames. */
         int updateAnalyzer();
 

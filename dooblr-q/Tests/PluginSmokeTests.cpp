@@ -4443,6 +4443,498 @@ namespace
     }
 
 
+    //==============================================================================
+    // 0.9.0: dynamic Low / High Cut and the outer Range ring
+    void configureDynamicCut (DooblrQAudioProcessor& processor, int b, dsp::FilterType type, float frequency,
+                              dsp::Slope slope, float rangeDb, bool dynamics = true)
+    {
+        setBand (processor, b, params::band::enabled, 1.0f);
+        setBand (processor, b, params::band::type, (float) type);
+        setBand (processor, b, params::band::frequency, frequency);
+        setBand (processor, b, params::band::q, 0.707f);
+        setBand (processor, b, params::band::slope, (float) slope);
+        setBand (processor, b, params::band::dynamicsEnabled, dynamics ? 1.0f : 0.0f);
+        setBand (processor, b, params::band::range, rangeDb);
+        setBand (processor, b, params::band::threshold, -40.0f);
+        setBand (processor, b, params::band::attack, 1.0f);
+        setBand (processor, b, params::band::release, 100.0f);
+    }
+
+    void testDynamicCuts()
+    {
+        using Band = dsp::DynamicEQBand;
+        using T = dsp::FilterType;
+        constexpr double sampleRate = 48000.0;
+
+        // The mapping: 1 dB = 1/6 octave, positive = into the passband, clamped to 20 Hz - 20 kHz.
+        check (std::abs (Band::dynamicCutFrequency (T::lowCut, 1000.0, 6.0) - 2000.0) < 1.0e-6, "Low Cut +6 dB moves the cutoff up 1 octave");
+        check (std::abs (Band::dynamicCutFrequency (T::lowCut, 1000.0, -6.0) - 500.0) < 1.0e-6, "Low Cut -6 dB moves it down 1 octave");
+        check (std::abs (Band::dynamicCutFrequency (T::highCut, 1000.0, 6.0) - 500.0) < 1.0e-6, "High Cut +6 dB moves the cutoff down 1 octave");
+        check (std::abs (Band::dynamicCutFrequency (T::highCut, 1000.0, -12.0) - 4000.0) < 1.0e-6, "High Cut -12 dB moves it up 2 octaves");
+        check (Band::dynamicCutFrequency (T::lowCut, 15000.0, 24.0) == 20000.0
+                   && Band::dynamicCutFrequency (T::highCut, 30.0, 24.0) == 20.0, "the moved cutoff is clamped to 20 Hz - 20 kHz");
+        check (Band::dynamicCutFrequency (T::bell, 1000.0, 6.0) == 1000.0, "non-cut types keep their frequency");
+        check (Band::dynamicCutFrequency (T::lowCut, 1000.0, std::numeric_limits<double>::quiet_NaN()) == 1000.0,
+               "a non-finite amount leaves the cutoff alone");
+        check (dsp::supportsDynamics (T::lowCut) && dsp::supportsDynamics (T::highCut) && ! dsp::supportsDynamics (T::notch),
+               "Low / High Cut support dynamics (Notch still does not)");
+
+        // Direction in the audio, per mode and slope: a loud tone at the cutoff. Positive Range
+        // closes the filter on it (more attenuation), negative Range opens it (less).
+        const dsp::Slope slopes[] { dsp::Slope::db12, dsp::Slope::db24, dsp::Slope::brickwall };
+        std::string table = "gain at the 1 kHz cutoff with a loud 1 kHz tone (static / +12 / -12 dB Range):";
+
+        for (const auto mode : allPhaseModes)
+            for (const auto type : { T::lowCut, T::highCut })
+                for (const auto slope : slopes)
+                {
+                    double gains[3] {};
+                    double liveHz[3] {};
+                    const float ranges[] { 0.0f, 12.0f, -12.0f };
+
+                    for (int r = 0; r < 3; ++r)
+                    {
+                        DooblrQAudioProcessor processor;
+                        setParameter (processor, params::phaseMode, (float) mode);
+                        configureDynamicCut (processor, 0, type, 1000.0f, slope, ranges[r], r != 0);
+                        prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+                        gains[r] = measureSineGainDb (processor, 1000.0, 0.5f, sampleRate, 1.0);
+
+                        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+                        if (auto* curve = dynamic_cast<dooblrq::ui::ResponseCurveComponent*> (findById (*editor, "responseCurve")))
+                        {
+                            const auto marker = curve->cutMarker (0);
+                            liveHz[r] = marker.visible ? marker.liveHz : 1000.0;
+                            if (r != 0)
+                                check (marker.visible && std::abs (marker.limitHz - Band::dynamicCutFrequency (type, 1000.0, ranges[r])) < 1.0e-3,
+                                       "display marks the full-Range limit");
+                        }
+                        processor.editorBeingDeleted (editor.get());
+                    }
+
+                    const auto label = std::string (phaseName (mode)) + ", " + (type == T::lowCut ? "Low Cut" : "High Cut")
+                                     + ", slope " + std::to_string ((int) slope);
+                    table += "\n      " + label + ": " + format (gains[0]) + " / " + format (gains[1]) + " / " + format (gains[2]) + " dB";
+                    check (std::isfinite (gains[1]) && gains[1] < gains[0] - 1.5, label + ": +Range closes the filter on a loud signal");
+                    check (std::isfinite (gains[2]) && gains[2] > gains[0] + 1.0, label + ": -Range opens the filter on a loud signal");
+
+                    // Display: HP rises / LP falls for +Range, the reverse for -Range.
+                    const auto intoPassband = type == T::lowCut ? liveHz[1] > 1050.0 : liveHz[1] < 950.0;
+                    const auto opening = type == T::lowCut ? liveHz[2] < 950.0 : liveHz[2] > 1050.0;
+                    check (intoPassband && opening, label + ": live cutoff marker moves the right way for both signs");
+                }
+
+        note (table);
+
+        // A quiet signal leaves a dynamic cut at its static setting.
+        {
+            DooblrQAudioProcessor processor;
+            configureDynamicCut (processor, 0, T::lowCut, 1000.0f, dsp::Slope::db24, 12.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+            const auto quiet = measureSineGainDb (processor, 1000.0, 0.001f, sampleRate, 0.5);
+            check (std::abs (quiet + 3.01) < 0.5, "below threshold the cut stays at its static -3 dB corner (" + format (quiet) + " dB)");
+        }
+
+        // No zipper / clicks: fastest attack, a 1 kHz tone with a fast level swing moving a steep
+        // Low Cut back and forth. The output's sample-to-sample curvature must stay in proportion
+        // to the input's (a stepped or clicking filter would spike it).
+        for (const auto mode : allPhaseModes)
+            for (const auto slope : { dsp::Slope::db24, dsp::Slope::brickwall })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                configureDynamicCut (processor, 0, T::lowCut, 400.0f, slope, 12.0f);
+                setBand (processor, 0, params::band::attack, params::minAttackMs);
+                setBand (processor, 0, params::band::release, params::minReleaseMs);
+                setBand (processor, 0, params::band::threshold, -30.0f);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+                const int numSamples = (int) sampleRate * 2;
+                juce::AudioBuffer<float> buffer (2, numSamples);
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    const auto t = i / sampleRate;
+                    const auto envelope = 0.02 + 0.7 * (0.5 + 0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 6.0 * t));
+                    const auto value = (float) (envelope * std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * t));
+                    buffer.setSample (0, i, value);
+                    buffer.setSample (1, i, value);
+                }
+
+                const auto curvature = [] (const juce::AudioBuffer<float>& b, int from)
+                {
+                    double maximum = 0.0;
+                    for (int i = from + 1; i < b.getNumSamples() - 1; ++i)
+                        maximum = std::max (maximum, (double) std::abs (b.getSample (0, i + 1) - 2.0f * b.getSample (0, i) + b.getSample (0, i - 1)));
+                    return maximum;
+                };
+
+                const auto inputCurvature = curvature (buffer, 0);
+                processInBlocks (processor, buffer, { 512, 64, 333 });
+                const auto outputCurvature = curvature (buffer, numSamples / 4);
+                check (allFinite (buffer) && outputCurvature < 1.6 * inputCurvature,
+                       std::string (phaseName (mode)) + ", slope " + std::to_string ((int) slope)
+                           + ": moving cutoff is smooth (curvature " + format (outputCurvature, 4) + " vs input " + format (inputCurvature, 4) + ")");
+            }
+
+        // No NaNs: extreme automation of the range, frequency and slope on both cut types, every
+        // mode and model, with loud noise.
+        for (const auto mode : allPhaseModes)
+            for (const auto model : { dsp::Model::digital, dsp::Model::neve, dsp::Model::helios })
+            {
+                DooblrQAudioProcessor processor;
+                setParameter (processor, params::phaseMode, (float) mode);
+                configureDynamicCut (processor, 0, T::lowCut, 25.0f, dsp::Slope::brickwall, 24.0f);
+                configureDynamicCut (processor, 5, T::highCut, 19000.0f, dsp::Slope::brickwall, -24.0f);
+                setBand (processor, 0, params::band::model, (float) model);
+                setBand (processor, 5, params::band::model, (float) model);
+                setBand (processor, 0, params::band::attack, params::minAttackMs);
+                prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 256);
+                juce::AudioBuffer<float> buffer (2, 256);
+                juce::MidiBuffer midi;
+                auto finite = true;
+
+                for (int block = 0; block < 300; ++block)
+                {
+                    fillWithNoise (buffer, block, block % 7 == 0 ? 4.0f : 0.8f);
+                    if (block % 10 == 0)
+                    {
+                        setBand (processor, 0, params::band::range, (block / 10) % 2 == 0 ? 24.0f : -24.0f);
+                        setBand (processor, 5, params::band::range, (block / 10) % 2 == 0 ? -24.0f : 24.0f);
+                        setBand (processor, 0, params::band::frequency, (block / 10) % 3 == 0 ? 20.0f : 18000.0f);
+                        setBand (processor, 0, params::band::slope, (float) ((block / 10) % dsp::numSlopes));
+                    }
+                    processor.processBlock (buffer, midi);
+                    finite = finite && allFinite (buffer);
+                }
+
+                check (finite, std::string (phaseName (mode)) + ", " + dsp::modelName (model) + ": dynamic cuts stay finite under extreme automation");
+            }
+
+        // CPU: all six bands dynamic Brickwall cuts (every cascade redesigned as the cutoff moves).
+        std::string cpu = "CPU, 6 dynamic Brickwall cuts, stereo @ 48 kHz, 512-sample blocks:";
+        for (const auto mode : allPhaseModes)
+        {
+            constexpr int seconds = 10;
+            DooblrQAudioProcessor processor;
+            setParameter (processor, params::phaseMode, (float) mode);
+            const float freqs[] { 40.0f, 120.0f, 400.0f, 2000.0f, 8000.0f, 15000.0f };
+            for (int b = 0; b < params::numBands; ++b)
+                configureDynamicCut (processor, b, b < 3 ? T::lowCut : T::highCut, freqs[b], dsp::Slope::brickwall, b % 2 == 0 ? 9.0f : -9.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sampleRate, 512);
+
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            juce::Random random (17);
+            const auto start = juce::Time::getMillisecondCounterHiRes();
+            for (int block = 0; block < seconds * 48000 / 512; ++block)
+            {
+                for (int ch = 0; ch < 2; ++ch)
+                    for (int i = 0; i < 512; ++i)
+                        buffer.setSample (ch, i, (random.nextFloat() - 0.5f) * ((block / 40) % 2 == 0 ? 1.0f : 0.05f));
+                processor.processBlock (buffer, midi);
+            }
+            const auto elapsed = juce::Time::getMillisecondCounterHiRes() - start;
+            cpu += std::string (" ") + phaseName (mode) + " " + format (100.0 * elapsed / (seconds * 1000.0), 2) + " %";
+            check (elapsed < 0.5 * seconds * 1000.0 && allFinite (buffer),
+                   std::string (phaseName (mode)) + ": 6 dynamic Brickwall cuts use under half a core, finite output");
+        }
+        note (cpu + " (of one core)");
+    }
+
+    juce::MouseEvent makeMouseEventWithMods (juce::Component& component, juce::Point<float> position,
+                                             juce::Point<float> downPosition, int clicks, bool dragged,
+                                             juce::ModifierKeys mods)
+    {
+        using Source = juce::MouseInputSource;
+        const auto now = juce::Time::getCurrentTime();
+        return { juce::Desktop::getInstance().getMainMouseSource(), position, mods,
+                 Source::defaultPressure, Source::defaultOrientation, Source::defaultRotation,
+                 Source::defaultTiltX, Source::defaultTiltY,
+                 &component, &component, now, downPosition, now, clicks, dragged };
+    }
+
+    /** Drags through the given points (each one a mouseDrag) with the given modifiers. */
+    void simulatePathDrag (juce::Component& component, const std::vector<juce::Point<float>>& points, bool shift = false)
+    {
+        const auto mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier
+                                              | (shift ? juce::ModifierKeys::shiftModifier : 0));
+        component.mouseDown (makeMouseEventWithMods (component, points.front(), points.front(), 1, false, mods));
+        for (size_t i = 1; i < points.size(); ++i)
+            component.mouseDrag (makeMouseEventWithMods (component, points[i], points.front(), 1, true, mods));
+        component.mouseUp (makeMouseEventWithMods (component, points.back(), points.front(), 1, true, mods));
+    }
+
+    void testRangeRing()
+    {
+        using Ring = dooblrq::ui::RangeRing;
+        using T = dsp::FilterType;
+        constexpr auto pi = juce::MathConstants<double>::pi;
+
+        // Drag math.
+        check (std::abs (Ring::verticalDeltaDb (-10.0, false) - 2.0) < 1.0e-9, "vertical: 10 px up = +2 dB (240 px = 48 dB)");
+        check (std::abs (Ring::verticalDeltaDb (10.0, true) + 0.2) < 1.0e-9, "vertical fine (Shift): 10 px down = -0.2 dB");
+        const juce::Point<float> o;
+        check (std::abs (Ring::clockwiseAngle (o, { 0.0f, -10.0f }, { 10.0f, 0.0f }) - pi / 2.0) < 1.0e-6, "angle: top to right = +90 degrees (clockwise)");
+        check (std::abs (Ring::clockwiseAngle (o, { 10.0f, 0.0f }, { 0.0f, -10.0f }) + pi / 2.0) < 1.0e-6, "angle: right to top = -90 degrees");
+        check (std::abs (Ring::clockwiseAngle (o, { -1.0f, 10.0f }, { 1.0f, 10.0f }) + 0.2) < 0.01, "angle unwraps across 6 o'clock");
+        check (std::abs (Ring::rotaryDeltaDb (pi * 0.8, pi * 1.6, false) - 24.0) < 1.0e-9, "rotary: half the knob's sweep = 24 dB");
+        check (std::abs (Ring::rotaryDeltaDb (pi * 0.8, pi * 1.6, true) - 2.4) < 1.0e-9, "rotary fine (Shift) = x0.1");
+        check (Ring::chooseDragMode (o, { 0.0f, -30.0f }, { 1.0f, -31.0f }) == Ring::DragMode::undecided, "a 1.4 px move is undecided");
+        check (Ring::chooseDragMode (o, { 0.0f, -30.0f }, { 0.0f, -36.0f }) == Ring::DragMode::vertical, "up at the top = vertical");
+        check (Ring::chooseDragMode (o, { 0.0f, -30.0f }, { 6.0f, 0.5f - 30.0f }) == Ring::DragMode::rotary, "sideways at the top = rotation");
+        check (Ring::chooseDragMode (o, { 30.0f, 0.0f }, { 30.0f, -6.0f }) == Ring::DragMode::vertical, "up at the right = vertical (up/down always wins)");
+        check (Ring::chooseDragMode (o, { 30.0f, 0.0f }, { 36.0f, 1.0f }) == Ring::DragMode::vertical, "radial (outwards) = vertical");
+        check (Ring::chooseDragMode (o, { -21.0f, -21.0f }, { -16.0f, -26.0f }) == Ring::DragMode::rotary, "along the ring at 10:30 = rotation");
+
+        // In the editor.
+        DooblrQAudioProcessor processor;
+        constexpr int bell = 2;
+        setBand (processor, bell, params::band::enabled, 1.0f);
+        setBand (processor, bell, params::band::type, (float) T::bell);
+        setBand (processor, bell, params::band::gain, 3.0f);
+        setBand (processor, bell, params::band::dynamicsEnabled, 1.0f);
+        setBand (processor, bell, params::band::range, -9.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        auto* gainKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::gain));
+        auto* frequencyKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::frequency));
+        auto* rangeKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::range));
+        check (dooblrEditor && gainKnob && frequencyKnob && rangeKnob, "editor and knobs exist");
+        if (! (dooblrEditor && gainKnob && frequencyKnob && rangeKnob))
+            return;
+
+        editor->setSize (DooblrQAudioProcessorEditor::defaultWidth, DooblrQAudioProcessorEditor::defaultHeight);
+        dooblrEditor->selectBand (bell);
+        auto& ring = dooblrEditor->getRangeRing();
+        const auto rangeId = params::bandId (bell, params::band::range);
+
+        check (ring.getTarget() == gainKnob, "bell: the ring surrounds the Gain knob");
+        check (ring.isEnabled() && ring.isVisible(), "ring is enabled with dynamics on");
+        check (std::abs (ring.getRangeDb() + 9.0) < 1.0e-4, "ring shows the band's Range");
+
+        // Two-way sync through the parameter.
+        setParameter (processor, rangeId, 6.0f);
+        check (std::abs (ring.getRangeDb() - 6.0) < 0.01 && std::abs (rangeKnob->getValue() - 6.0) < 0.01, "parameter -> ring and Range knob");
+        rangeKnob->setValue (-9.0, juce::sendNotificationSync);
+        check (std::abs (ring.getRangeDb() + 9.0) < 0.01, "Range knob -> ring");
+
+        // Geometry: ring outside the (smaller) knob, inside the editor, hit only on the annulus.
+        const auto geometry = dooblrq::ui::knobGeometry (*gainKnob);
+        auto* thresholdKnob = dynamic_cast<juce::Slider*> (findById (*editor, params::band::threshold));
+        check (thresholdKnob != nullptr, "threshold knob exists");
+        if (thresholdKnob == nullptr)
+            return;
+        const auto plainGeometry = dooblrq::ui::knobGeometry (*thresholdKnob);
+        check (geometry.knobRadius < geometry.outerRadius && geometry.ringRadius > geometry.knobRadius + 2.0f,
+               "the Gain knob shrinks to make room for its ring");
+        check (std::abs (plainGeometry.knobRadius - plainGeometry.outerRadius) < 1.0e-4f, "knobs without a ring are unchanged");
+        const auto centre = ring.getCentre();
+        const auto r = ring.getRingRadius();
+        check (! ring.hitTest ((int) centre.x, (int) centre.y), "centre of the knob is not the ring (the knob keeps its clicks)");
+        check (ring.hitTest ((int) centre.x, (int) (centre.y - r)), "the ring itself takes clicks");
+        check (! ring.hitTest ((int) centre.x, (int) (centre.y - r - 20.0f)), "outside the ring does not");
+        check (ring.getOuterHitRadius() - ring.getInnerHitRadius() >= 10.0f,
+               "ring hit area is generous (" + format (ring.getOuterHitRadius() - ring.getInnerHitRadius(), 1) + " px wide)");
+        const auto ringInEditor = editor->getLocalPoint (&ring, centre);
+        const auto knobInEditor = editor->getLocalPoint (gainKnob, geometry.centre);
+        check (ringInEditor.getDistanceFrom (knobInEditor) < 0.01f, "ring is concentric with the knob");
+
+        auto& history = processor.getUndoHistory();
+        const auto top = centre + juce::Point<float> (0.0f, -r);
+
+        // Vertical drag: 40 px up = +8 dB, one undo step.
+        history.clear();
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 10; ++i)
+                path.push_back (top + juce::Point<float> (0.0f, -4.0f * (float) i));
+            simulatePathDrag (ring, path);
+        }
+        check (std::abs (getParameter (processor, rangeId) + 1.0f) < 0.1f,
+               "vertical drag up 40 px: -9 -> -1 dB (got " + format (getParameter (processor, rangeId)) + ")");
+        check (std::abs (rangeKnob->getValue() + 1.0) < 0.1, "Range knob follows the ring");
+        history.undo();
+        check (std::abs (getParameter (processor, rangeId) + 9.0f) < 0.01f && ! history.canUndo(), "the drag is one undo step");
+
+        // Fine vertical drag with Shift.
+        history.clear();
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 10; ++i)
+                path.push_back (top + juce::Point<float> (0.0f, -4.0f * (float) i));
+            simulatePathDrag (ring, path, true);
+        }
+        check (std::abs (getParameter (processor, rangeId) + 8.2f) < 0.05f,
+               "Shift drag is fine: 40 px = +0.8 dB (got " + format (getParameter (processor, rangeId)) + ")");
+        history.undo();
+
+        // Rotation: around the ring, clockwise a quarter turn from the top.
+        history.clear();
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 24; ++i)
+                path.push_back (centre.getPointOnCircumference (r, (float) (pi / 2.0 * i / 24.0)));
+            simulatePathDrag (ring, path);
+        }
+        const auto rotary = gainKnob->getRotaryParameters();
+        const auto expected = -9.0 + 48.0 * (pi / 2.0) / (double) (rotary.endAngleRadians - rotary.startAngleRadians);
+        check (std::abs (getParameter (processor, rangeId) - (float) expected) < 0.3f,
+               "rotation drag a quarter turn clockwise: -9 -> " + format (expected) + " dB (got " + format (getParameter (processor, rangeId)) + ")");
+        check (std::abs (rangeKnob->getValue() - expected) < 0.3, "Range knob follows the rotation");
+        history.undo();
+        check (std::abs (getParameter (processor, rangeId) + 9.0f) < 0.01f && ! history.canUndo(), "the rotation is one undo step");
+
+        // Anticlockwise lowers it, and it clamps at the range limits.
+        {
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 48; ++i)
+                path.push_back (centre.getPointOnCircumference (r, (float) (-pi * i / 48.0)));
+            simulatePathDrag (ring, path);
+        }
+        check (std::abs (getParameter (processor, rangeId) + 24.0f) < 0.01f, "anticlockwise half turn lowers Range to its -24 dB limit");
+
+        // Double-click resets to 0 dB (one undo step).
+        history.clear();
+        simulateDoubleClick (ring, top);
+        check (std::abs (getParameter (processor, rangeId)) < 0.01f && std::abs (ring.getRangeDb()) < 0.01, "double-click resets to 0 dB");
+        history.undo();
+        check (std::abs (getParameter (processor, rangeId) + 24.0f) < 0.01f, "double-click reset is undoable");
+
+        // Hover highlight and tooltip.
+        ring.mouseEnter (makeMouseEvent (ring, top, top, 0, false));
+        check (ring.isHovered(), "hover highlights the ring");
+        ring.mouseExit (makeMouseEvent (ring, top, top, 0, false));
+        check (! ring.isHovered(), "the highlight goes on exit");
+        check (ring.getTooltip().contains ("Dynamic Range") && ring.getTooltip().contains ("Shift"), "ring has a tooltip");
+
+        // Paint: the excursion arc is drawn in the band colour, on the ring, around the knob.
+        setParameter (processor, rangeId, 12.0f);
+        dooblrEditor->selectBand (bell);
+        {
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+            const auto from = gainKnob->getRotaryParameters();
+            const auto proportionFor = [&] (double v) { return (float) gainKnob->valueToProportionOfLength (v); };
+            const auto mid = from.startAngleRadians + 0.5f * (proportionFor (3.0) + proportionFor (15.0)) * (from.endAngleRadians - from.startAngleRadians);
+            const auto onArc = ringInEditor.getPointOnCircumference (r, mid);
+            const auto pixel = image.getPixelAt ((int) onArc.x, (int) onArc.y);
+            const auto colour = dooblrq::ui::bandColour (bell);
+            const auto distance = std::abs (pixel.getRed() - colour.getRed()) + std::abs (pixel.getGreen() - colour.getGreen())
+                                + std::abs (pixel.getBlue() - colour.getBlue());
+            check (distance < 80, "the ring's excursion arc is painted in the band colour (distance " + std::to_string (distance) + ")");
+        }
+
+        // Dynamics off (or a type without dynamics): the ring is disabled, so no dead control.
+        setBand (processor, bell, params::band::dynamicsEnabled, 0.0f);
+        dooblrEditor->selectBand (bell);
+        check (! ring.isEnabled(), "dynamics off: the ring is disabled (dimmed)");
+        setBand (processor, bell, params::band::dynamicsEnabled, 1.0f);
+        setBand (processor, bell, params::band::type, (float) T::notch);
+        dooblrEditor->selectBand (bell);
+        check (! ring.isEnabled(), "Notch (no dynamics): the ring is disabled");
+
+        // Low / High Cut: the ring moves to the Frequency knob, mapping Range to the cutoff.
+        setBand (processor, bell, params::band::type, (float) T::lowCut);
+        setBand (processor, bell, params::band::frequency, 1000.0f);
+        dooblrEditor->selectBand (bell);
+        check (ring.getTarget() == frequencyKnob && ring.isEnabled(), "Low Cut: the ring surrounds the Frequency knob, enabled");
+        check (! (bool) gainKnob->getProperties().getWithDefault ("rangeRing", false)
+                   && (bool) frequencyKnob->getProperties().getWithDefault ("rangeRing", false),
+               "only the ring's target knob makes room for it");
+        check (ring.getTooltip().contains ("cutoff up") && ring.getTooltip().contains ("1/6 oct"),
+               "Low Cut, +Range: the tooltip says the cutoff moves up (1 dB = 1/6 oct)");
+        setBand (processor, bell, params::band::type, (float) T::highCut);
+        dooblrEditor->selectBand (bell);
+        check (ring.getTooltip().contains ("cutoff down"), "High Cut, +Range: the tooltip says the cutoff moves down");
+
+        // Same parameter, so a ring drag on a cut band still lands on Range.
+        history.clear();
+        {
+            const auto c = ring.getCentre();
+            const auto t = c + juce::Point<float> (0.0f, -ring.getRingRadius());
+            std::vector<juce::Point<float>> path;
+            for (int i = 0; i <= 10; ++i)
+                path.push_back (t + juce::Point<float> (0.0f, 2.0f * (float) i));
+            simulatePathDrag (ring, path);
+        }
+        check (std::abs (getParameter (processor, rangeId) - 8.0f) < 0.1f, "cut band: ring drag down 20 px lowers Range 12 -> 8 dB");
+
+        processor.editorBeingDeleted (editor.get());
+    }
+
+    void testRangeRingSnapshots()
+    {
+        // Visual check (DOOBLRQ_EDITOR_SNAPSHOT): the editor with a moving dynamic Low Cut selected,
+        // plus a close-up of the rings on a dynamic bell and a dynamic High Cut.
+        DooblrQAudioProcessor processor;
+        configureDynamicCut (processor, 0, dsp::FilterType::lowCut, 180.0f, dsp::Slope::db24, 12.0f);
+        setBand (processor, 0, params::band::threshold, -30.0f);
+        setBand (processor, 0, params::band::release, 2000.0f);
+        setBand (processor, 2, params::band::enabled, 1.0f);
+        setBand (processor, 2, params::band::gain, 3.0f);
+        setBand (processor, 2, params::band::frequency, 900.0f);
+        setBand (processor, 2, params::band::dynamicsEnabled, 1.0f);
+        setBand (processor, 2, params::band::range, -9.0f);
+        setBand (processor, 2, params::band::threshold, -40.0f);
+        setBand (processor, 2, params::band::release, 2000.0f);
+        configureDynamicCut (processor, 5, dsp::FilterType::highCut, 9000.0f, dsp::Slope::db24, -12.0f);
+        prepare (processor, juce::AudioChannelSet::stereo(), 48000.0, 512);
+
+        std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+        auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+        auto* curve = dynamic_cast<dooblrq::ui::ResponseCurveComponent*> (findById (*editor, "responseCurve"));
+        check (dooblrEditor != nullptr && curve != nullptr, "editor exists");
+        if (dooblrEditor == nullptr || curve == nullptr)
+            return;
+
+        editor->setSize (1080, 660);
+        // Loud low and mid content and a high tone push all three bands.
+        {
+            const int numSamples = 24000;
+            juce::AudioBuffer<float> buffer (2, numSamples);
+            for (int i = 0; i < numSamples; ++i)
+            {
+                const auto t = i / 48000.0;
+                const auto value = (float) (0.3 * std::sin (2.0 * juce::MathConstants<double>::pi * 180.0 * t)
+                                          + 0.3 * std::sin (2.0 * juce::MathConstants<double>::pi * 900.0 * t)
+                                          + 0.3 * std::sin (2.0 * juce::MathConstants<double>::pi * 9000.0 * t));
+                buffer.setSample (0, i, value);
+                buffer.setSample (1, i, value);
+            }
+            processInBlocks (processor, buffer, { 512 });
+        }
+
+        const auto low = curve->cutMarker (0), high = curve->cutMarker (5);
+        note ("live Low Cut " + format (low.staticHz, 0) + " -> " + format (low.liveHz, 0) + " Hz (limit " + format (low.limitHz, 0)
+              + "), High Cut " + format (high.staticHz, 0) + " -> " + format (high.liveHz, 0) + " Hz (limit " + format (high.limitHz, 0) + ")");
+        check (low.visible && low.liveHz > low.staticHz * 1.2 && high.visible && high.liveHz > high.staticHz * 1.2,
+               "loud signal: Low Cut (+Range) rises, High Cut (-Range) rises (opens)");
+
+        dooblrEditor->selectBand (0);
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.9.0");
+
+        // Close-up: the EQ knob row for the bell (ring on Gain) and the High Cut (ring on Frequency), 2x.
+        const auto closeUp = [&] (int band)
+        {
+            dooblrEditor->selectBand (band);
+            auto* frequencyKnob = findById (*editor, params::band::frequency);
+            auto* widthKnob = findById (*editor, params::band::q);
+            const auto area = frequencyKnob->getBounds().getUnion (widthKnob->getBounds()).expanded (16, 22)
+                                  .withTrimmedRight (widthKnob->getWidth() / 2);
+            return editor->createComponentSnapshot (area, true, 2.0f);
+        };
+        const auto bellImage = closeUp (2), cutImage = closeUp (5);
+        juce::Image combined (juce::Image::ARGB, bellImage.getWidth(), bellImage.getHeight() + cutImage.getHeight(), true);
+        {
+            juce::Graphics g (combined);
+            g.drawImageAt (bellImage, 0, 0);
+            g.drawImageAt (cutImage, 0, bellImage.getHeight());
+        }
+        saveSnapshot (combined, "-v0.9.0-ring");
+        processor.editorBeingDeleted (editor.get());
+    }
+
 }
 
 int main()
@@ -4489,6 +4981,9 @@ int main()
         { "models at extremes, latency, FIR, dynamics", testModelExtremesAndModes },
         { "model state, undo, click-free switch",   testModelStateUndoAndSwitch },
         { "model controls in the editor and menu",  testModelUi },
+        { "dynamic Low / High Cut (0.9.0)",          testDynamicCuts },
+        { "outer Range ring (0.9.0)",                testRangeRing },
+        { "Range ring snapshots (0.9.0)",            testRangeRingSnapshots },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

@@ -212,6 +212,13 @@ DooblrQAudioProcessorEditor::DooblrQAudioProcessorEditor (DooblrQAudioProcessor&
     rangeKnob.slider.setDoubleClickReturnValue (true, 0.0);
     rangeKnob.slider.setColour (juce::Slider::rotarySliderFillColourId, Palette::dynamic);
 
+    rangeKnob.slider.setTooltip ("Dynamic Range: how far the band moves with level (also the outer ring around "
+                                 "Gain, or around Frequency for Low / High Cut)");
+
+    // Added after the knobs so it sits on top; it only takes clicks on the ring itself.
+    addAndMakeVisible (rangeRing);
+    rangeRing.setTarget (&gainKnob.slider);
+
     setUpAnalyzerControls();
 
     selectBand (0);
@@ -424,6 +431,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     gainAttachment.reset();
     qAttachment.reset();
     rangeAttachment.reset();
+    rangeRing.attach (nullptr);
     thresholdAttachment.reset();
     attackAttachment.reset();
     releaseAttachment.reset();
@@ -471,6 +479,7 @@ void DooblrQAudioProcessorEditor::selectBand (int bandIndex)
     thresholdAttachment = std::make_unique<SliderAttachment>   (state, id (params::band::threshold), thresholdKnob.slider);
     attackAttachment    = std::make_unique<SliderAttachment>   (state, id (params::band::attack), attackKnob.slider);
     releaseAttachment   = std::make_unique<SliderAttachment>   (state, id (params::band::release), releaseKnob.slider);
+    rangeRing.attach (state.getParameter (id (params::band::range)));
 
     bandButtons[(size_t) selectedBand].setToggleState (true, juce::dontSendNotification);
     responseCurve.setSelectedBand (selectedBand);
@@ -506,6 +515,8 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
     for (auto* knob : { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob })
         knob->slider.setAlpha (dynamicsUsed ? 1.0f : 0.4f);
 
+    updateRangeRing (settings);
+
     // Slope works for every type; the tooltip says what it does for this one.
     using T = dooblrq::dsp::FilterType;
     const auto slopeTip = [&]() -> juce::String
@@ -530,6 +541,28 @@ void DooblrQAudioProcessorEditor::updateBandIndicators()
     slopeBox.setEnabled (true);
     slopeBox.setTooltip (slopeTip());
     updateModelControls (settings);
+}
+
+void DooblrQAudioProcessorEditor::updateRangeRing (const dooblrq::dsp::BandSettings& settings)
+{
+    namespace dsp = dooblrq::dsp;
+    const auto cut = dsp::isCut (settings.type);
+    auto* target = cut ? &frequencyKnob.slider : &gainKnob.slider;
+
+    if (rangeRing.getTarget() != target)
+        rangeRing.setTarget (target);
+
+    rangeRing.setRingColour (dooblrq::ui::bandColour (selectedBand));
+    rangeRing.setMovesCutoff (cut, settings.type == dsp::FilterType::highCut);
+    rangeRing.setEnabled (settings.dynamicsEnabled && dsp::supportsDynamics (settings.type));
+
+    const auto type = settings.type;
+    const auto frequency = (double) settings.frequency, gain = (double) settings.gainDb;
+    rangeRing.setMapping ([cut, type, frequency, gain] (double dynamicDb)
+    {
+        return cut ? dsp::DynamicEQBand::dynamicCutFrequency (type, frequency, dynamicDb) : gain + dynamicDb;
+    });
+    rangeRing.setLiveAmount (settings.dynamicsEnabled ? (double) audioProcessor.getBandDynamicGainDb (selectedBand) : 0.0);
 }
 
 void DooblrQAudioProcessorEditor::updateModelControls (const dooblrq::dsp::BandSettings& settings)
@@ -718,4 +751,5 @@ void DooblrQAudioProcessorEditor::resized()
     layoutSection (eqSectionArea, switchColumnWidth, { &enabledButton, &typeBox, &slopeBox, &modelBox, &steppedButton },
                    { &frequencyKnob, &gainKnob, &qKnob, &driveKnob, &attenKnob });
     layoutSection (dynamicsSectionArea, dynamicsSwitchWidth, { &dynamicsButton }, { &rangeKnob, &thresholdKnob, &attackKnob, &releaseKnob });
+    rangeRing.placeAround();
 }

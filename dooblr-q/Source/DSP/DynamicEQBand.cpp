@@ -34,6 +34,16 @@ namespace dooblrq::dsp
         return rangeDb < 0.0f ? -magnitude : magnitude;
     }
 
+    double DynamicEQBand::dynamicCutFrequency (FilterType type, double frequency, double dynamicDb) noexcept
+    {
+        const auto direction = type == FilterType::lowCut ? 1.0 : (type == FilterType::highCut ? -1.0 : 0.0);
+
+        if (direction == 0.0 || ! std::isfinite (dynamicDb))
+            return frequency;
+
+        return std::clamp (frequency * std::exp2 (direction * dynamicDb * cutOctavesPerDb), 20.0, 20000.0);
+    }
+
     void DynamicEQBand::prepare (double newSampleRate) noexcept
     {
         sampleRate = newSampleRate > 0.0 ? newSampleRate : 44100.0;
@@ -76,6 +86,7 @@ namespace dooblrq::dsp
         for (auto& state : detectorState) state.reset();
         envelope.fill (0.0f);
         dynamicGainDb.fill (0.0f);
+        cutShiftDb.fill (0.0f);
         dynamicGainForDisplay.store (0.0f, std::memory_order_relaxed);
     }
 
@@ -190,20 +201,43 @@ namespace dooblrq::dsp
             dynamicGainDb.fill (0.0f);
         }
 
+        // Dynamic cuts: slew the applied cutoff shift towards the measured amount (one step
+        // per sub-block), so the cutoff glides instead of jumping with very fast attacks.
+        const auto cutDynamic = dynamic && isCut (type);
+        if (cutDynamic)
+        {
+            const auto coefficient = 1.0f - (float) std::exp (-(double) numSamples / (cutShiftSmoothingSeconds * sampleRate));
+            for (int i = 0; i < numCoefficientSets; ++i)
+                cutShiftDb[(size_t) i] += coefficient * (dynamicGainDb[(size_t) i] - cutShiftDb[(size_t) i]);
+        }
+        else
+        {
+            cutShiftDb.fill (0.0f);
+        }
+
         // Coefficients for this sub-block, using the dynamic gain measured up to its start.
         std::array<BandCoefficients, maxChannels> coefficients;
         std::array<BandCoefficients, maxChannels> fadingCoefficients;
 
         for (int i = 0; i < numCoefficientSets; ++i)
         {
-            const auto totalGain = std::clamp (currentGainDb + dynamicGainDb[(size_t) i],
-                                               -maxTotalGainDb, maxTotalGainDb);
-            makeModelCoefficients (appliedModel, type, appliedSlope, currentFrequency, currentQ,
-                                   (double) totalGain, currentAtten, sampleRate, coefficients[(size_t) i]);
+            const auto dynamicDb = dynamicGainDb[(size_t) i];
+            const auto gainFor = [&] (FilterType t)
+            {
+                return hasGain (t) ? std::clamp (currentGainDb + dynamicDb, -maxTotalGainDb, maxTotalGainDb)
+                                   : currentGainDb;
+            };
+            const auto frequencyFor = [&] (FilterType t)
+            {
+                return cutDynamic && isCut (t) ? dynamicCutFrequency (t, currentFrequency, (double) cutShiftDb[(size_t) i])
+                                               : currentFrequency;
+            };
+
+            makeModelCoefficients (appliedModel, type, appliedSlope, frequencyFor (type), currentQ,
+                                   (double) gainFor (type), currentAtten, sampleRate, coefficients[(size_t) i]);
             if (crossfading)
-                makeModelCoefficients (fadingModel, fadingType, fadingSlope, currentFrequency, currentQ,
-                                       (double) (hasGain (fadingType) ? totalGain : currentGainDb),
-                                       currentAtten, sampleRate, fadingCoefficients[(size_t) i]);
+                makeModelCoefficients (fadingModel, fadingType, fadingSlope, frequencyFor (fadingType), currentQ,
+                                       (double) gainFor (fadingType), currentAtten, sampleRate, fadingCoefficients[(size_t) i]);
         }
 
         const auto runCascade = [] (float input, CascadeState& state, const BandCoefficients& c) noexcept

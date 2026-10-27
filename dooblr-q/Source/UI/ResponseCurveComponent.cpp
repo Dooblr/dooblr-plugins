@@ -471,17 +471,25 @@ namespace dooblrq::ui
                 continue;
 
             auto gain = (double) s.gainDb;
+            auto frequency = (double) s.frequency;
 
             if (includeDynamics && s.dynamicsEnabled && dsp::supportsDynamics (s.type))
-                gain += (double) processor.getBandDynamicGainDb (b);
+            {
+                const auto dynamicDb = (double) processor.getBandDynamicGainDb (b);
+
+                if (dsp::isCut (s.type)) // 0.9.0: the cutoff moves, as in the DSP
+                    frequency = dsp::DynamicEQBand::dynamicCutFrequency (s.type, frequency, dynamicDb);
+                else
+                    gain += dynamicDb;
+            }
 
             gain = juce::jlimit ((double) -dsp::DynamicEQBand::maxTotalGainDb,
                                  (double) dsp::DynamicEQBand::maxTotalGainDb, gain);
 
             model.prototypes[(size_t) b] = dsp::makeModelPrototype (s.model, s.type, s.slope, (double) s.q, gain, (double) s.attenDb);
-            dsp::makeModelCoefficients (s.model, s.type, s.slope, (double) s.frequency, (double) s.q, gain,
+            dsp::makeModelCoefficients (s.model, s.type, s.slope, frequency, (double) s.q, gain,
                                         (double) s.attenDb, model.sampleRate, model.coefficients[(size_t) b]);
-            model.frequencies[(size_t) b] = (double) s.frequency;
+            model.frequencies[(size_t) b] = frequency;
         }
 
         return model;
@@ -648,6 +656,29 @@ namespace dooblrq::ui
         return path;
     }
 
+    ResponseCurveComponent::CutMarker ResponseCurveComponent::cutMarker (int bandIndex) const
+    {
+        CutMarker marker;
+
+        if (bandIndex < 0 || bandIndex >= params::numBands)
+            return marker;
+
+        const auto s = processor.getBandSettings (bandIndex);
+
+        if (! s.enabled || ! s.dynamicsEnabled || ! dsp::isCut (s.type) || std::abs (s.rangeDb) < 1.0e-3f)
+            return marker;
+
+        auto live = (double) processor.getBandDynamicGainDb (bandIndex);
+        if (! std::isfinite (live))
+            live = 0.0;
+
+        marker.visible = true;
+        marker.staticHz = (double) s.frequency;
+        marker.liveHz = dsp::DynamicEQBand::dynamicCutFrequency (s.type, marker.staticHz, live);
+        marker.limitHz = dsp::DynamicEQBand::dynamicCutFrequency (s.type, marker.staticHz, (double) s.rangeDb);
+        return marker;
+    }
+
     void ResponseCurveComponent::paint (juce::Graphics& g)
     {
         repaintPending.store (false);
@@ -727,6 +758,38 @@ namespace dooblrq::ui
                 g.fillPath (region);
                 g.setColour (colour);
                 g.strokePath (live, juce::PathStrokeType (1.8f));
+            }
+        }
+
+        // Dynamic cuts: static cutoff (dashed), full-Range limit (faint) and live cutoff with an arrow.
+        for (int b = 0; b < params::numBands; ++b)
+        {
+            const auto marker = cutMarker (b);
+
+            if (! marker.visible)
+                continue;
+
+            const auto colour = bandColour (b);
+            const auto selected = b == selectedBand;
+            const auto staticX = frequencyToX (marker.staticHz);
+            const auto liveX = frequencyToX (marker.liveHz);
+            const auto limitX = frequencyToX (marker.limitHz);
+            const auto top = area.getY() + 4.0f, bottom = area.getBottom() - 4.0f;
+            const auto arrowY = area.getY() + 14.0f + (float) (b % 3) * 9.0f;
+
+            const float dashes[] { 4.0f, 4.0f };
+            g.setColour (colour.withAlpha (selected ? 0.75f : 0.45f));
+            g.drawDashedLine ({ staticX, top, staticX, bottom }, dashes, 2, 1.2f);
+
+            g.setColour (colour.withAlpha (selected ? 0.35f : 0.2f));
+            g.drawLine (limitX, top, limitX, bottom, 1.0f);
+            g.drawArrow ({ staticX, arrowY, limitX, arrowY }, 1.0f, 6.0f, 6.0f);
+
+            if (std::abs (liveX - staticX) > 0.75f)
+            {
+                g.setColour (colour);
+                g.drawLine (liveX, top, liveX, bottom, 1.8f);
+                g.drawArrow ({ staticX, arrowY, liveX, arrowY }, 2.0f, 8.0f, 8.0f);
             }
         }
 

@@ -40,6 +40,15 @@ namespace dooblrq::dsp
             effective gain = static gain + dynamic gain (clamped to +/- maxTotalGainDb)
             dynamic gain   = sign(range) * min(|range|, slope * over-threshold)
 
+        Low Cut / High Cut (0.9.0) have no gain, so the same signed dynamic amount moves the
+        cutoff instead (dynamicCutFrequency): cutOctavesPerDb octaves per dB, clamped to
+        20 Hz .. 20 kHz. Positive range: a louder band pushes the cutoff into the passband
+        (Low Cut rises, High Cut falls), cutting more. Negative range: a louder band opens
+        the filter (Low Cut falls, High Cut rises). The detector is the band's usual one
+        (a band-pass at the static cutoff, width from Q), so the cutoff's own movement never
+        feeds back into the detection. The applied shift is slewed (cutShiftSmoothingSeconds)
+        so fast attacks do not step the cutoff audibly.
+
         where over-threshold uses a soft knee. The EQ filter itself is a TPT SVF whose
         coefficients are recomputed for every sub-block passed to process(). With a slope
         above 12 dB/oct the filter is a cascade of SVF sections (see makeBandPrototype).
@@ -59,6 +68,16 @@ namespace dooblrq::dsp
         static constexpr float kneeWidthDb = 6.0f;
         static constexpr float maxTotalGainDb = 30.0f;
         static constexpr double topologyFadeSeconds = 0.01;
+
+        /** Dynamic cuts: octaves of cutoff movement per dB of dynamic amount (1 dB = 1/6 oct,
+            so the full 24 dB range moves a cut 4 octaves). */
+        static constexpr double cutOctavesPerDb = 1.0 / 6.0;
+        static constexpr double cutShiftSmoothingSeconds = 0.0015;
+
+        /** Cutoff of a Low Cut / High Cut moved by a dynamic amount (dB, signed like the
+            range): Low Cut f * 2^(+dB/6), High Cut f * 2^(-dB/6), clamped to 20 Hz .. 20 kHz.
+            Other types return the frequency unchanged. */
+        static double dynamicCutFrequency (FilterType type, double frequency, double dynamicDb) noexcept;
 
         /** Maps a detector level to the dynamic gain offset in dB. */
         static float computeDynamicGainDb (float levelDb, float thresholdDb, float rangeDb) noexcept;
@@ -115,6 +134,7 @@ namespace dooblrq::dsp
         Model appliedModel = Model::digital, fadingModel = Model::digital;
         int crossfadeRemaining = 0, crossfadeLength = 1;
         std::array<float, maxChannels> envelope {}, dynamicGainDb {};
+        std::array<float, maxChannels> cutShiftDb {}; // slewed dynamic amount applied to a cut's cutoff
 
         bool active = false;
         std::atomic<float> dynamicGainForDisplay { 0.0f };
