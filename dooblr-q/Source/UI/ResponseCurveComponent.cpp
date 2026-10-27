@@ -4,6 +4,9 @@
 #include "RangeRing.h"
 #include "Theme.h"
 
+#include <algorithm>
+#include <utility>
+
 namespace dooblrq::ui
 {
     namespace
@@ -562,16 +565,23 @@ namespace dooblrq::ui
             if (processor.isBandSoloed (b) && soloBadgeBounds (b).expanded (1.0f).contains (position))
                 return result (Hit::soloBadge, b);
 
-        // The ring belongs to the nearest band only.
-        if (hover >= 0 && hoverRingAvailable (hover))
-        {
-            const auto distance = handlePosition (hover).getDistanceFrom (position);
-
-            if (distance >= hoverRingInnerHit && distance <= hoverRingOuterHit)
-                return result (Hit::rangeRing, hover);
-        }
+        // The ring belongs to the nearest band only. (A drag that starts on an S still reaches
+        // the ring under it: see mouseDown / mouseDrag.)
+        if (const auto ring = ringBandAt (position); ring >= 0)
+            return result (Hit::rangeRing, ring);
 
         return result (Hit::none, -1);
+    }
+
+    int ResponseCurveComponent::ringBandAt (juce::Point<float> position) const
+    {
+        const auto hover = hoverBandAt (position);
+
+        if (hover < 0 || ! hoverRingAvailable (hover))
+            return -1;
+
+        const auto distance = handlePosition (hover).getDistanceFrom (position);
+        return distance >= hoverRingInnerHit && distance <= hoverRingOuterHit ? hover : -1;
     }
 
     void ResponseCurveComponent::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
@@ -991,8 +1001,13 @@ namespace dooblrq::ui
 
         // 0.9.1 Solo: dim the plot and light up each soloed band's region (its region filter's
         // magnitude per column), with the region filter's own response outlined.
-        const auto anySolo = processor.isAnyBandSoloed();
-        const auto dimmed = [&] (int b) { return anySolo && ! processor.isBandSoloed (b); };
+        // One read of the Solo state per paint (it can change from the host mid-paint), so each
+        // band's transparency layer is always begun and ended in pairs.
+        std::array<bool, params::numBands> soloed {};
+        for (int b = 0; b < params::numBands; ++b)
+            soloed[(size_t) b] = processor.isBandSoloed (b);
+        const auto anySolo = std::find (soloed.begin(), soloed.end(), true) != soloed.end();
+        const auto dimmed = [&] (int b) { return anySolo && ! soloed[(size_t) b]; };
 
         if (anySolo)
         {
@@ -1005,7 +1020,7 @@ namespace dooblrq::ui
 
             for (int b = 0; b < params::numBands; ++b)
             {
-                if (! processor.isBandSoloed (b))
+                if (! soloed[(size_t) b])
                     continue;
 
                 const auto region = processor.getSoloRegion (b);
@@ -1150,9 +1165,17 @@ namespace dooblrq::ui
                                     .withCentre (handlePosition (b));
             const auto colour = bandColour (b);
 
-            // Solo: bands that are not soloed are drawn faded.
-            if (dimmed (b))
+            // Solo: bands that are not soloed are drawn faded. The layer is clipped to what this
+            // handle draws (circle, selection outline, Tilt / Q label) so it stays cheap.
+            const auto dim = dimmed (b);
+
+            if (dim)
+            {
+                const auto label = circle.translated (0.0f, -20.0f).withSizeKeepingCentre (90.0f, 14.0f);
+                g.saveState();
+                g.reduceClipRegion (circle.expanded (5.0f).getUnion (label.expanded (2.0f)).getSmallestIntegerContainer());
                 g.beginTransparencyLayer (0.35f);
+            }
 
             if (s.enabled)
             {
@@ -1192,8 +1215,11 @@ namespace dooblrq::ui
                             juce::Justification::centred);
             }
 
-            if (dimmed (b))
+            if (dim)
+            {
                 g.endTransparencyLayer();
+                g.restoreState();
+            }
         }
 
         // 0.9.2: the blue S (Solo) on top: always for soloed bands, fading with the ring on hover.
@@ -1349,7 +1375,7 @@ namespace dooblrq::ui
         // 0.9.2: the blue S and the hover ring (handles keep priority, see hitAt).
         updateHover (event.position);
         ringBand = -1;
-        soloClickPending = false;
+        soloPressBand = -1;
 
         {
             int band = -1;
@@ -1361,31 +1387,35 @@ namespace dooblrq::ui
                 widthDragSide = 0;
                 qDrag = false;
 
+                // 0.9.3: the S is a click target only. Nothing toggles on the press: a release
+                // without a drag toggles Solo (mouseUp); a drag goes to the ring under the S, if
+                // there is one, so an always-visible soloed S never swallows a ring drag.
+                // The S sits on its band's ring edge: a drag from it edits the ring under the
+                // pointer (a neighbour's, if one is there), otherwise the S's own band's ring.
+                auto ring = hit == Hit::rangeRing ? band : ringBandAt (event.position);
+
+                if (ring < 0 && hit == Hit::soloBadge && hoverRingAvailable (band))
+                    ring = band;
+
                 if (hit == Hit::soloBadge)
                 {
-                    soloClickPending = true;
-
-                    if (onSoloClicked != nullptr)
-                        onSoloClicked (band, event.mods.isAltDown());
-                    else if (auto* solo = bandParameter (band, params::band::solo))
-                    {
-                        solo->beginChangeGesture();
-                        solo->setValueNotifyingHost (solo->getValue() >= 0.5f ? 0.0f : 1.0f);
-                        solo->endChangeGesture();
-                    }
+                    soloPressBand = band;
+                    soloPressAlt = event.mods.isAltDown();
+                    soloPressPosition = event.position;
                 }
-                else
+
+                if (ring >= 0)
                 {
-                    const auto s = processor.getBandSettings (band);
-                    ringBand = band;
+                    const auto s = processor.getBandSettings (ring);
+                    ringBand = ring;
                     ringDragMode = 0;
                     ringDownPosition = ringLastPosition = event.position;
                     ringAmount = dsp::DynamicEQBand::upwardSign (s.type) * (double) s.rangeDb;
                     ringGesture = false;
                     ringEngagedDynamics = false;
 
-                    if (onBandSelected != nullptr)
-                        onBandSelected (band);
+                    if (hit == Hit::rangeRing && onBandSelected != nullptr)
+                        onBandSelected (ring);
                 }
 
                 repaint();
@@ -1446,6 +1476,14 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::mouseDrag (const juce::MouseEvent& event)
     {
+        // A press on the S that moves is a drag, not a click: it never toggles Solo.
+        if (soloPressBand >= 0 && (event.mouseWasDraggedSinceMouseDown()
+                                   || event.position.getDistanceFrom (soloPressPosition) > soloClickSlop))
+            soloPressBand = -1;
+
+        if (soloPressBand >= 0)
+            return;
+
         if (ringBand >= 0)
         {
             const auto centre = handlePosition (ringBand);
@@ -1597,7 +1635,21 @@ namespace dooblrq::ui
 
     void ResponseCurveComponent::mouseUp (const juce::MouseEvent& event)
     {
-        soloClickPending = false;
+        if (const auto band = std::exchange (soloPressBand, -1);
+            band >= 0 && ! event.mouseWasDraggedSinceMouseDown()
+                && event.position.getDistanceFrom (soloPressPosition) <= soloClickSlop)
+        {
+            if (onSoloClicked != nullptr)
+                onSoloClicked (band, soloPressAlt);
+            else if (auto* solo = bandParameter (band, params::band::solo))
+            {
+                solo->beginChangeGesture();
+                solo->setValueNotifyingHost (solo->getValue() >= 0.5f ? 0.0f : 1.0f);
+                solo->endChangeGesture();
+            }
+
+            repaint();
+        }
 
         if (ringBand >= 0)
         {

@@ -83,6 +83,12 @@ namespace dooblrq::ui
         /** What a click at this position would grab, and for which band. */
         Hit hitAt (juce::Point<float> position, int* bandOut = nullptr) const;
 
+        /** The band whose ring annulus is under this position, ignoring any S (-1 none). */
+        int ringBandAt (juce::Point<float> position) const;
+
+        /** Max pointer travel (px) for a press on the S to count as a click. */
+        static constexpr float soloClickSlop = 3.0f;
+
         /** The band whose ring the pointer at this position would show (-1 none). */
         int hoverBandAt (juce::Point<float> position) const;
 
@@ -287,7 +293,11 @@ namespace dooblrq::ui
         juce::Point<float> ringDownPosition, ringLastPosition;
         double ringAmount = 0.0;                            // upward amount (dB) while dragging
         bool ringGesture = false, ringEngagedDynamics = false;
-        bool soloClickPending = false;                      // a press on the S: no drag follows
+        // 0.9.3: a press on the S toggles Solo on release, and only if it was a click (no drag);
+        // a drag that starts on it goes to the ring under it (if any) instead.
+        int soloPressBand = -1;
+        bool soloPressAlt = false;
+        juce::Point<float> soloPressPosition;
         double lastVBlankTime = 0.0;
         std::unique_ptr<juce::VBlankAttachment> vblank;
 

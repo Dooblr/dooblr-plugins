@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.9.2:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle, per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.9.3:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle, per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -116,6 +116,23 @@ band was a cut, shelf or tilt.
   length limits how steep a very low corner can be (5.9 / 11.7 Hz bins), and the long
   impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
   the ringing is pre- and post-).
+
+## Editing while soloed (0.9.3)
+
+Every band parameter stays editable while any band is soloed, for soloed and non-soloed bands
+alike: graph handle drags (frequency / gain), Alt/Option-drag and the wheel (Q), the Width
+handles, the hover ring, the panel knobs and the outer Range ring. The audition follows live
+(the solo region glides, so moving a soloed band is click-free).
+
+- The blue **S** on the graph now toggles Solo on **release, and only for a click** (the
+  pointer moved no more than 3 px). A drag that starts on an S edits a ring instead: a
+  neighbouring band's ring if the pointer is on it (a soloed band's always-visible S can sit
+  on one), otherwise the S's own band's ring (the S sits on its edge). Before 0.9.3 the S toggled on the press and swallowed the
+  drag, so grabbing a ring near an S un-soloed (or soloed) the band and edited nothing.
+- Handles still take priority over every S and ring, so dragging a soloed band's handle
+  never touches Solo.
+- Faded (non-soloed) handles are drawn through a transparency layer clipped to the handle,
+  not the whole graph, so painting with Solo on stays cheap.
 
 ## Hover ring and blue S (0.9.2)
 
