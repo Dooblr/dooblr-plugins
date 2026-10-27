@@ -36,6 +36,9 @@ namespace dooblrkick::ui
         /** Selects a side; notify calls onChange (only when it changed). */
         void setRight (bool shouldBeRight, bool notify, bool animate = true);
         std::function<void()> onChange;
+        /** v0.3.6: the side colours (the layer pages tint AMP in the layer's curve colour). */
+        void setColours (juce::Colour newLeft, juce::Colour newRight);
+        juce::Colour getRightColour() const noexcept { return rightColour; }
 
         float getThumbPosition() const noexcept { return thumb.position; } // 0 left .. 1 right
         bool isAnimating() const noexcept { return thumb.running; }

@@ -74,9 +74,10 @@ namespace dooblrkick::dsp
     void KickEngine::setSettings (const KickSettings& newSettings) noexcept
     {
         target = newSettings;
-        target.body.pitch.sanitise();
-        target.body.amp.sanitise();
-        target.master.envelope.sanitise();
+        for (auto* e : { &target.body.pitch, &target.body.amp, &target.click.pitch, &target.click.amp, &target.sub.pitch,
+                         &target.sub.amp, &target.tail.pitch, &target.tail.amp, &target.noise.pitch, &target.noise.amp,
+                         &target.master.envelope })
+            e->sanitise();
 
         // Nothing is sounding, so there is nothing to smooth: jump straight to the new values.
         const auto sounding = std::any_of (voices.begin(), voices.end(), [] (const KickVoice& v) { return v.isActive(); });
@@ -91,7 +92,7 @@ namespace dooblrkick::dsp
     void KickEngine::advanceSmoothing (int numSamples) noexcept
     {
         const auto previous = settings;
-        settings = target; // switches, choices, envelopes and samples change immediately
+        settings = target; // switches, choices, point counts and samples change immediately
 
         const auto a = 1.0f - std::exp (-(float) numSamples / (smoothingMs * 0.001f * (float) sampleRate));
 
@@ -122,6 +123,35 @@ namespace dooblrkick::dsp
             lin (c.resonance, p.resonance);
         };
 
+        // v0.3.6: the layer envelopes' points glide too (time, value and curve), so automating a
+        // point while a hit sounds does not step. A changed point count jumps. Settings that
+        // do not change are left bit for bit as they are.
+        const auto envelope = [&] (MultiPointEnvelope& e, const MultiPointEnvelope& p, float valueTolerance)
+        {
+            if (e.numNodes != p.numNodes)
+                return;
+
+            for (size_t n = 0; n < (size_t) e.numNodes; ++n)
+            {
+                lin (e.nodes[n].timeMs, p.nodes[n].timeMs, 1.0e-3f);
+                lin (e.nodes[n].value, p.nodes[n].value, valueTolerance);
+                lin (e.nodes[n].curve, p.nodes[n].curve);
+            }
+
+            e.sanitise();
+        };
+
+        envelope (settings.body.pitch, previous.body.pitch, 1.0e-4f); // log2 Hz
+        envelope (settings.body.amp, previous.body.amp, 1.0e-5f);
+        envelope (settings.click.pitch, previous.click.pitch, 1.0e-3f); // semitones
+        envelope (settings.click.amp, previous.click.amp, 1.0e-5f);
+        envelope (settings.sub.pitch, previous.sub.pitch, 1.0e-3f);
+        envelope (settings.sub.amp, previous.sub.amp, 1.0e-5f);
+        envelope (settings.tail.pitch, previous.tail.pitch, 1.0e-3f);
+        envelope (settings.tail.amp, previous.tail.amp, 1.0e-5f);
+        envelope (settings.noise.pitch, previous.noise.pitch, 1.0e-3f);
+        envelope (settings.noise.amp, previous.noise.amp, 1.0e-5f);
+
         common (settings.click.common, previous.click.common);
         common (settings.body.common, previous.body.common);
         common (settings.sub.common, previous.sub.common);
@@ -134,6 +164,9 @@ namespace dooblrkick::dsp
         lin (settings.body.harmonics, previous.body.harmonics);
         lin (settings.body.drive, previous.body.drive);
         lin (settings.body.sampleEnvAmount, previous.body.sampleEnvAmount);
+        lin (settings.click.sampleEnvAmount, previous.click.sampleEnvAmount);
+        lin (settings.tail.sampleEnvAmount, previous.tail.sampleEnvAmount);
+        lin (settings.noise.sampleEnvAmount, previous.noise.sampleEnvAmount);
         lin (settings.sub.tuneSt, previous.sub.tuneSt, 1.0e-4f);
         lin (settings.sub.fineCents, previous.sub.fineCents, 1.0e-3f);
         lin (settings.sub.envAmount, previous.sub.envAmount);

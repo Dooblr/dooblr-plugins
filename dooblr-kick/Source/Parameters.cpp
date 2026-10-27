@@ -113,7 +113,9 @@ namespace dooblrkick::params
 
         const char* envelopePrefix (Envelope e)
         {
-            return e == Envelope::pitch ? "penv" : e == Envelope::amp ? "aenv" : "menv";
+            constexpr std::array<const char*, numEnvelopes> prefixes { "penv", "aenv", "menv", "cpenv", "caenv", "spenv",
+                                                                       "saenv", "tpenv", "taenv", "npenv", "naenv" };
+            return prefixes[(size_t) e];
         }
 
         struct DefaultNode { float timeMs, value, curve; };
@@ -130,6 +132,68 @@ namespace dooblrkick::params
         constexpr std::array<DefaultNode, maxNodes> defaultMasterNodes { {
             { 0.0f, 1.0f, 0.0f }, { 1000.0f, 1.0f, 0.0f }, { 1200.0f, 1.0f, 0.0f }, { 1400.0f, 1.0f, 0.0f },
             { 1600.0f, 1.0f, 0.0f }, { 1800.0f, 1.0f, 0.0f }, { 1900.0f, 1.0f, 0.0f }, { 2000.0f, 1.0f, 0.0f } } };
+
+        /** v0.3.6 layer envelope defaults (dsp::defaultLayerEnvelope), padded to 8 nodes: an unused
+            node sits after the last one at the last value, so adding a point keeps the shape. */
+        std::array<DefaultNode, maxNodes> layerDefaultNodes (int layer, bool amp, int& count)
+        {
+            const auto e = dsp::defaultLayerEnvelope (layer, amp);
+            count = e.numNodes;
+            std::array<DefaultNode, maxNodes> nodes {};
+            const auto step = std::max (10.0f, e.getEndTimeMs() * 0.25f);
+
+            for (int i = 0; i < maxNodes; ++i)
+            {
+                if (i < e.numNodes)
+                    nodes[(size_t) i] = { e.nodes[(size_t) i].timeMs, e.nodes[(size_t) i].value, e.nodes[(size_t) i].curve };
+                else
+                    nodes[(size_t) i] = { std::min (e.getEndTimeMs() + step * (float) (i - e.numNodes + 1), maxNodeTimeFor (layerEnvelope (layer, amp))),
+                                          e.getEndValue(), 0.0f };
+            }
+
+            return nodes;
+        }
+
+        /** "<Layer> Pitch Env 3 Time", "Click Amp Env 2 Level", "Master Env 1 Curve" ... */
+        juce::String envelopeName (Envelope e)
+        {
+            const auto layer = envelopeLayer (e);
+
+            if (layer < 0)
+                return "Master Env";
+
+            return juce::String (layerNames[(size_t) layer]) + (isAmpEnvelope (e) ? " Amp Env" : " Pitch Env");
+        }
+
+        void addEnvelope (Layout& layout, Envelope e, const std::array<DefaultNode, maxNodes>& defaults, int defaultCount)
+        {
+            const auto name = envelopeName (e);
+            const auto maxTime = maxNodeTimeFor (e);
+            const auto timeCentre = envelopeLayer (e) == dsp::clickLayer ? 40.0f : 200.0f;
+
+            layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { envelopeCountId (e), parameterVersion },
+                                                                   name + " Points", 2, maxNodes, defaultCount));
+
+            for (int node = 0; node < maxNodes; ++node)
+            {
+                const auto& d = defaults[(size_t) node];
+                const auto n = " " + juce::String (node + 1);
+
+                if (node > 0)
+                    addFloat (layout, nodeTimeId (e, node), name + n + " Time", range (0.0f, maxTime, timeCentre), d.timeMs, msString(), "ms");
+
+                if (e == Envelope::pitch)
+                    addFloat (layout, nodeValueId (e, node), name + n + " Freq", logRange (minPitchHz, maxPitchHz), d.value, hzString(), "Hz");
+                else if (isSemitoneEnvelope (e))
+                    addFloat (layout, nodeValueId (e, node), name + n + " St", range (minEnvSemitones, maxEnvSemitones), d.value,
+                              [] (float v, int) { return formatSemitones (v); }, "st");
+                else
+                    addFloat (layout, nodeValueId (e, node), name + n + " Level", range (0.0f, 1.0f), d.value, percentString());
+
+                if (node < maxNodes - 1)
+                    addFloat (layout, nodeCurveId (e, node), name + n + " Curve", range (-1.0f, 1.0f), d.curve, curveString());
+            }
+        }
     }
 
     juce::StringArray chainOrderChoices()
@@ -171,7 +235,8 @@ namespace dooblrkick::params
 
     juce::String nodeValueId (Envelope e, int node)
     {
-        return juce::String (envelopePrefix (e)) + juce::String (node) + (e == Envelope::pitch ? "_freq" : "_level");
+        return juce::String (envelopePrefix (e)) + juce::String (node)
+             + (e == Envelope::pitch ? "_freq" : isSemitoneEnvelope (e) ? "_st" : "_level");
     }
 
     juce::String noteName (int midiNote)
@@ -223,6 +288,11 @@ namespace dooblrkick::params
             return juce::String (hz / 1000.0f, hz >= 10000.0f ? 1 : 2) + " kHz";
 
         return juce::String (hz, hz >= 100.0f ? 0 : 1) + " Hz";
+    }
+
+    juce::String formatSemitones (float st)
+    {
+        return (st > 0.0f ? "+" : "") + juce::String (st, 1) + " st";
     }
 
     juce::String formatTune (float semitones)
@@ -296,7 +366,6 @@ namespace dooblrkick::params
         //== Click ===========================================================================
         addChoice (layout, "click_type", "Click Type", { "Chirp", "Noise burst", "Snap", "Tick", "Knock" }, 0);
         addTune (layout, "click_pitch", "Click Pitch");
-        addFloat (layout, "click_length", "Click Length", range (1.0f, 200.0f, 20.0f), 12.0f, msString(), "ms");
         addFloat (layout, "click_tone", "Click Tone", range (-1.0f, 1.0f), 0.0f, bipolarPercent());
         addBool (layout, "click_keytrack", "Click Key Track", false);
 
@@ -310,62 +379,26 @@ namespace dooblrkick::params
         addFloat (layout, "body_smp_penv", "Body Sample Pitch Env", range (0.0f, 1.0f), 0.0f, percentString());
 
         //== Envelopes =======================================================================
-        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { envelopeCountId (Envelope::pitch), parameterVersion },
-                                                               "Pitch Env Points", 2, maxNodes, 4));
-        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { envelopeCountId (Envelope::amp), parameterVersion },
-                                                               "Amp Env Points", 2, maxNodes, 4));
-
-        for (int node = 0; node < maxNodes; ++node)
-        {
-            const auto& p = defaultPitchNodes[(size_t) node];
-            const auto& a = defaultAmpNodes[(size_t) node];
-            const auto n = juce::String (node + 1);
-
-            if (node > 0)
-            {
-                addFloat (layout, nodeTimeId (Envelope::pitch, node), "Pitch Env " + n + " Time", range (0.0f, maxNodeTimeMs, 200.0f), p.timeMs, msString(), "ms");
-                addFloat (layout, nodeTimeId (Envelope::amp, node), "Amp Env " + n + " Time", range (0.0f, maxNodeTimeMs, 200.0f), a.timeMs, msString(), "ms");
-            }
-
-            addFloat (layout, nodeValueId (Envelope::pitch, node), "Pitch Env " + n + " Freq", logRange (minPitchHz, maxPitchHz), p.value, hzString(), "Hz");
-            addFloat (layout, nodeValueId (Envelope::amp, node), "Amp Env " + n + " Level", range (0.0f, 1.0f), a.value, percentString());
-
-            if (node < maxNodes - 1)
-            {
-                addFloat (layout, nodeCurveId (Envelope::pitch, node), "Pitch Env " + n + " Curve", range (-1.0f, 1.0f), p.curve, curveString());
-                addFloat (layout, nodeCurveId (Envelope::amp, node), "Amp Env " + n + " Curve", range (-1.0f, 1.0f), a.curve, curveString());
-            }
-        }
+        addEnvelope (layout, Envelope::pitch, defaultPitchNodes, 4);
+        addEnvelope (layout, Envelope::amp, defaultAmpNodes, 4);
 
         //== Sub =============================================================================
         addFloat (layout, "sub_tune", "Sub Tune", range (-24.0f, 24.0f), 0.0f, semitoneString(), "st");
         addFloat (layout, "sub_fine", "Sub Fine", range (-100.0f, 100.0f), 0.0f, suffixed (" ct", 0), "ct");
         addFloat (layout, "sub_phase", "Sub Start Phase", range (0.0f, 360.0f), 0.0f, suffixed (juce::String (juce::CharPointer_UTF8 ("\xc2\xb0")), 0));
-        addFloat (layout, "sub_envamt", "Sub Pitch Env", range (0.0f, 1.0f), 0.0f, percentString());
-        addFloat (layout, "sub_attack", "Sub Attack", range (0.0f, 100.0f, 5.0f), 1.0f, msString(), "ms");
-        addFloat (layout, "sub_hold", "Sub Hold", range (0.0f, 1000.0f, 100.0f), 60.0f, msString(), "ms");
-        addFloat (layout, "sub_decay", "Sub Decay", range (1.0f, 3000.0f, 300.0f), 350.0f, msString(), "ms");
-        addFloat (layout, "sub_curve", "Sub Decay Curve", range (-1.0f, 1.0f), 0.4f, curveString());
+        addFloat (layout, "sub_envamt", "Sub Follow Body Pitch", range (0.0f, 1.0f), 0.0f, percentString());
 
         //== Tail ============================================================================
         addChoice (layout, "tail_wave", "Tail Wave", { "Sine", "Triangle", "Saturated" }, 0);
         addTune (layout, "tail_tune", "Tail Tune");
         addFloat (layout, "tail_spread", "Tail Spread", range (0.0f, 50.0f), 8.0f, suffixed (" ct", 1), "ct");
         addFloat (layout, "tail_phase", "Tail Start Phase", range (0.0f, 360.0f), 0.0f, suffixed (juce::String (juce::CharPointer_UTF8 ("\xc2\xb0")), 0));
-        addFloat (layout, "tail_attack", "Tail Attack", range (0.0f, 500.0f, 30.0f), 30.0f, msString(), "ms");
-        addFloat (layout, "tail_hold", "Tail Hold", range (0.0f, 2000.0f, 200.0f), 0.0f, msString(), "ms");
-        addFloat (layout, "tail_decay", "Tail Decay", range (1.0f, 5000.0f, 600.0f), 900.0f, msString(), "ms");
-        addFloat (layout, "tail_curve", "Tail Decay Curve", range (-1.0f, 1.0f), 0.5f, curveString());
         addFloat (layout, "tail_drive", "Tail Drive", range (0.0f, 1.0f), 0.3f, percentString());
         addBool (layout, "tail_keytrack", "Tail Key Track", false);
 
         //== Noise ===========================================================================
         addChoice (layout, "noise_color", "Noise Colour", { "White", "Pink", "Brown" }, 0);
         addFloat (layout, "noise_width", "Noise Width", range (0.0f, 1.0f), 0.5f, percentString());
-        addFloat (layout, "noise_attack", "Noise Attack", range (0.0f, 100.0f, 5.0f), 0.5f, msString(), "ms");
-        addFloat (layout, "noise_hold", "Noise Hold", range (0.0f, 1000.0f, 100.0f), 5.0f, msString(), "ms");
-        addFloat (layout, "noise_decay", "Noise Decay", range (1.0f, 3000.0f, 300.0f), 150.0f, msString(), "ms");
-        addFloat (layout, "noise_curve", "Noise Decay Curve", range (-1.0f, 1.0f), 0.6f, curveString());
         addTune (layout, "noise_tune", "Noise Sample Tune");
 
         //== Play ============================================================================
@@ -424,22 +457,7 @@ namespace dooblrkick::params
 
         //== Envelope page (0.3.0): master envelope, dry / wet, chain order ===================
         addBool (layout, "menv_on", "Master Env On", true);
-        layout.add (std::make_unique<juce::AudioParameterInt> (juce::ParameterID { envelopeCountId (Envelope::master), parameterVersion },
-                                                               "Master Env Points", 2, maxNodes, 2));
-
-        for (int node = 0; node < maxNodes; ++node)
-        {
-            const auto& m = defaultMasterNodes[(size_t) node];
-            const auto n = juce::String (node + 1);
-
-            if (node > 0)
-                addFloat (layout, nodeTimeId (Envelope::master, node), "Master Env " + n + " Time", range (0.0f, maxMasterNodeTimeMs, 200.0f), m.timeMs, msString(), "ms");
-
-            addFloat (layout, nodeValueId (Envelope::master, node), "Master Env " + n + " Level", range (0.0f, 1.0f), m.value, percentString());
-
-            if (node < maxNodes - 1)
-                addFloat (layout, nodeCurveId (Envelope::master, node), "Master Env " + n + " Curve", range (-1.0f, 1.0f), m.curve, curveString());
-        }
+        addEnvelope (layout, Envelope::master, defaultMasterNodes, 2);
 
         addFloat (layout, "mix_drywet", "Dry/Wet", range (0.0f, 1.0f), 1.0f, percentString());
         addChoice (layout, "chain_order", "Chain Order", chainOrderChoices(), 0);
@@ -454,6 +472,20 @@ namespace dooblrkick::params
         addBool (layout, "sub_keytrack", "Sub Key Track", false);
         addBool (layout, "noise_keytrack", "Noise Key Track", false);
 
+        // 0.3.6: a pitch and an amp envelope on every layer (the Body's are above), and on every
+        // sample layer an amount for how far the pitch envelope bends the sample (as the Body's).
+        for (const auto layer : { dsp::clickLayer, dsp::subLayer, dsp::tailLayer, dsp::noiseLayer })
+            for (const auto amp : { false, true })
+            {
+                int count = 2;
+                const auto defaults = layerDefaultNodes (layer, amp, count);
+                addEnvelope (layout, layerEnvelope (layer, amp), defaults, count);
+            }
+
+        addFloat (layout, "click_smp_penv", "Click Sample Pitch Env", range (0.0f, 1.0f), 1.0f, percentString());
+        addFloat (layout, "tail_smp_penv", "Tail Sample Pitch Env", range (0.0f, 1.0f), 1.0f, percentString());
+        addFloat (layout, "noise_smp_penv", "Noise Sample Pitch Env", range (0.0f, 1.0f), 1.0f, percentString());
+
         return layout;
     }
 
@@ -464,46 +496,25 @@ namespace dooblrkick::params
         for (int layer = 0; layer < numLayers; ++layer)
             common[(size_t) layer] = getCommon (layer);
 
-        clickType = get ("click_type"); clickPitch = get ("click_pitch"); clickLength = get ("click_length");
-        clickTone = get ("click_tone"); clickKeyTrack = get ("click_keytrack");
+        clickType = get ("click_type"); clickPitch = get ("click_pitch");
+        clickTone = get ("click_tone"); clickKeyTrack = get ("click_keytrack"); clickSampleEnv = get ("click_smp_penv");
 
         bodyWave = get ("body_wave"); bodyHarmonics = get ("body_harm"); bodyTune = get ("body_tune");
         bodyPhase = get ("body_phase"); bodyDrive = get ("body_drive"); bodyKeyTrack = get ("body_keytrack");
         bodySampleEnv = get ("body_smp_penv");
 
-        pitchCount = get (envelopeCountId (Envelope::pitch));
-        ampCount = get (envelopeCountId (Envelope::amp));
-
-        for (int node = 0; node < maxNodes; ++node)
-        {
-            if (node > 0)
-            {
-                pitchTime[(size_t) node] = get (nodeTimeId (Envelope::pitch, node));
-                ampTime[(size_t) node] = get (nodeTimeId (Envelope::amp, node));
-            }
-
-            pitchFreq[(size_t) node] = get (nodeValueId (Envelope::pitch, node));
-            ampLevel[(size_t) node] = get (nodeValueId (Envelope::amp, node));
-
-            if (node < maxNodes - 1)
-            {
-                pitchCurve[(size_t) node] = get (nodeCurveId (Envelope::pitch, node));
-                ampCurve[(size_t) node] = get (nodeCurveId (Envelope::amp, node));
-            }
-        }
+        for (int e = 0; e < numEnvelopes; ++e)
+            envelopes[(size_t) e] = getEnvelope ((Envelope) e);
 
         subTune = get ("sub_tune"); subFine = get ("sub_fine"); subPhase = get ("sub_phase");
-        subEnvAmount = get ("sub_envamt"); subAttack = get ("sub_attack"); subHold = get ("sub_hold");
-        subDecay = get ("sub_decay"); subCurve = get ("sub_curve");
+        subEnvAmount = get ("sub_envamt");
 
         tailWave = get ("tail_wave"); tailTune = get ("tail_tune"); tailSpread = get ("tail_spread");
-        tailPhase = get ("tail_phase"); tailAttack = get ("tail_attack"); tailHold = get ("tail_hold");
-        tailDecay = get ("tail_decay"); tailCurve = get ("tail_curve"); tailDrive = get ("tail_drive");
-        tailKeyTrack = get ("tail_keytrack");
+        tailPhase = get ("tail_phase"); tailDrive = get ("tail_drive");
+        tailKeyTrack = get ("tail_keytrack"); tailSampleEnv = get ("tail_smp_penv");
 
-        noiseColour = get ("noise_color"); noiseWidth = get ("noise_width"); noiseAttack = get ("noise_attack");
-        noiseHold = get ("noise_hold"); noiseDecay = get ("noise_decay"); noiseCurve = get ("noise_curve");
-        noiseTune = get ("noise_tune"); noiseKeyTrack = get ("noise_keytrack");
+        noiseColour = get ("noise_color"); noiseWidth = get ("noise_width");
+        noiseTune = get ("noise_tune"); noiseKeyTrack = get ("noise_keytrack"); noiseSampleEnv = get ("noise_smp_penv");
         subKeyTrack = get ("sub_keytrack");
 
         keyNote = get ("root_note");
@@ -524,20 +535,24 @@ namespace dooblrkick::params
         limMode = get ("lim_mode"); limCeiling = get ("lim_ceiling"); limRelease = get ("lim_release");
         outputGain = get ("output_gain");
 
-        masterOn = get ("menv_on"); masterCount = get (envelopeCountId (Envelope::master));
+        masterOn = get ("menv_on");
         dryWet = get ("mix_drywet"); chainOrder = get ("chain_order");
         masterTimeScale = get ("menv_tscale"); masterDepth = get ("menv_depth");
+    }
+
+    SettingsReader::EnvelopeValues SettingsReader::getEnvelope (Envelope e) const
+    {
+        EnvelopeValues v;
+        v.count = get (envelopeCountId (e));
 
         for (int node = 0; node < maxNodes; ++node)
         {
-            if (node > 0)
-                masterTime[(size_t) node] = get (nodeTimeId (Envelope::master, node));
-
-            masterLevel[(size_t) node] = get (nodeValueId (Envelope::master, node));
-
-            if (node < maxNodes - 1)
-                masterCurve[(size_t) node] = get (nodeCurveId (Envelope::master, node));
+            v.time[(size_t) node] = node > 0 ? get (nodeTimeId (e, node)) : nullptr;
+            v.value[(size_t) node] = get (nodeValueId (e, node));
+            v.curve[(size_t) node] = node < maxNodes - 1 ? get (nodeCurveId (e, node)) : nullptr;
         }
+
+        return v;
     }
 
     SettingsReader::Value SettingsReader::get (const juce::String& id) const
@@ -563,6 +578,26 @@ namespace dooblrkick::params
         const auto f = [] (Value v) { return v->load (std::memory_order_relaxed); };
         const auto b = [&f] (Value v) { return f (v) >= 0.5f; };
         const auto i = [&f] (Value v) { return juce::roundToInt (f (v)); };
+
+        // valueMap: Body pitch Hz -> log2 Hz; every other envelope stores its value as is.
+        const auto readEnvelope = [&] (Envelope e, dsp::MultiPointEnvelope& out)
+        {
+            const auto& v = envelopes[(size_t) e];
+            out.numNodes = i (v.count);
+
+            for (int node = 0; node < maxNodes; ++node)
+            {
+                auto& n = out.nodes[(size_t) node];
+                n.timeMs = node > 0 ? f (v.time[(size_t) node]) : 0.0f;
+                n.value = f (v.value[(size_t) node]);
+                n.curve = node < maxNodes - 1 ? f (v.curve[(size_t) node]) : 0.0f;
+
+                if (e == Envelope::pitch)
+                    n.value = std::log2 (juce::jmax (1.0f, n.value));
+            }
+
+            out.sanitise();
+        };
 
         const auto readCommon = [&] (int layer, dsp::LayerCommon& c)
         {
@@ -599,7 +634,9 @@ namespace dooblrkick::params
 
         s.click.type = i (clickType);
         s.click.pitchSt = f (clickPitch);
-        s.click.lengthMs = f (clickLength);
+        s.click.sampleEnvAmount = f (clickSampleEnv);
+        readEnvelope (Envelope::clickPitch, s.click.pitch);
+        readEnvelope (Envelope::clickAmp, s.click.amp);
         s.click.tone = f (clickTone);
         s.click.keyTrack = b (clickKeyTrack);
 
@@ -611,36 +648,24 @@ namespace dooblrkick::params
         s.body.keyTrack = b (bodyKeyTrack);
         s.body.sampleEnvAmount = f (bodySampleEnv);
 
-        s.body.pitch.numNodes = i (pitchCount);
-        s.body.amp.numNodes = i (ampCount);
-
-        for (int node = 0; node < maxNodes; ++node)
-        {
-            auto& p = s.body.pitch.nodes[(size_t) node];
-            auto& a = s.body.amp.nodes[(size_t) node];
-            p.timeMs = node > 0 ? f (pitchTime[(size_t) node]) : 0.0f;
-            a.timeMs = node > 0 ? f (ampTime[(size_t) node]) : 0.0f;
-            p.value = std::log2 (juce::jmax (1.0f, f (pitchFreq[(size_t) node])));
-            a.value = f (ampLevel[(size_t) node]);
-            p.curve = node < maxNodes - 1 ? f (pitchCurve[(size_t) node]) : 0.0f;
-            a.curve = node < maxNodes - 1 ? f (ampCurve[(size_t) node]) : 0.0f;
-        }
-
-        s.body.pitch.sanitise();
-        s.body.amp.sanitise();
+        readEnvelope (Envelope::pitch, s.body.pitch);
+        readEnvelope (Envelope::amp, s.body.amp);
 
         s.sub.tuneSt = f (subTune);
         s.sub.fineCents = f (subFine);
         s.sub.phaseDeg = f (subPhase);
         s.sub.envAmount = f (subEnvAmount);
         s.sub.keyTrack = b (subKeyTrack);
-        s.sub.amp = { f (subAttack), f (subHold), f (subDecay), f (subCurve) };
+        readEnvelope (Envelope::subPitch, s.sub.pitch);
+        readEnvelope (Envelope::subAmp, s.sub.amp);
 
         s.tail.wave = i (tailWave);
         s.tail.tuneSt = f (tailTune);
         s.tail.spreadCents = f (tailSpread);
         s.tail.phaseDeg = f (tailPhase);
-        s.tail.amp = { f (tailAttack), f (tailHold), f (tailDecay), f (tailCurve) };
+        readEnvelope (Envelope::tailPitch, s.tail.pitch);
+        readEnvelope (Envelope::tailAmp, s.tail.amp);
+        s.tail.sampleEnvAmount = f (tailSampleEnv);
         s.tail.drive = f (tailDrive);
         s.tail.keyTrack = b (tailKeyTrack);
 
@@ -648,7 +673,9 @@ namespace dooblrkick::params
         s.noise.width = f (noiseWidth);
         s.noise.tuneSt = f (noiseTune);
         s.noise.keyTrack = b (noiseKeyTrack);
-        s.noise.amp = { f (noiseAttack), f (noiseHold), f (noiseDecay), f (noiseCurve) };
+        readEnvelope (Envelope::noisePitch, s.noise.pitch);
+        readEnvelope (Envelope::noiseAmp, s.noise.amp);
+        s.noise.sampleEnvAmount = f (noiseSampleEnv);
 
         s.play.keyNote = i (keyNote);
         s.play.velocitySensitivity = f (velocitySensitivity);
@@ -662,15 +689,14 @@ namespace dooblrkick::params
         s.output = { i (limMode), f (limCeiling), f (limRelease), f (outputGain) };
 
         s.master.envelopeOn = b (masterOn);
-        s.master.envelope.numNodes = i (masterCount);
+        readEnvelope (Envelope::master, s.master.envelope);
 
         for (int node = 0; node < maxNodes; ++node)
         {
             auto& m = s.master.envelope.nodes[(size_t) node];
-            m.timeMs = node > 0 ? f (masterTime[(size_t) node]) : 0.0f;
-            m.value = f (masterLevel[(size_t) node]);
+            const auto curve = m.curve;
             m = applyMasterMacros (m, f (masterTimeScale), f (masterDepth));
-            m.curve = node < maxNodes - 1 ? f (masterCurve[(size_t) node]) : 0.0f;
+            m.curve = curve;
         }
 
         s.master.envelope.sanitise();

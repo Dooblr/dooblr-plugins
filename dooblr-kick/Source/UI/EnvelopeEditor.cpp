@@ -32,8 +32,9 @@ namespace dooblrkick::ui
         setComponentID ("envelopeEditor");
         setOpaque (true);
 
-        for (const auto e : { params::Envelope::pitch, params::Envelope::amp, params::Envelope::master })
+        for (int index = 0; index < params::numEnvelopes; ++index)
         {
+            const auto e = (params::Envelope) index;
             auto& r = raw[(size_t) e];
             r.count = state.getRawParameterValue (params::envelopeCountId (e));
             r.on = e == params::Envelope::master ? state.getRawParameterValue ("menv_on") : nullptr;
@@ -50,35 +51,9 @@ namespace dooblrkick::ui
 
         diamond.addQuadrilateral (0.0f, -4.0f, 4.0f, 0.0f, 0.0f, 4.0f, -4.0f, 0.0f);
         for (int l = 0; l < 5; ++l)
-        {
             layerStart[(size_t) l] = state.getRawParameterValue (params::layerId (l, "start"));
-            auto& lr = layerRaw[(size_t) l];
-            auto maxMs = 0.0f;
 
-            if (l == 0)
-            {
-                lr.length = state.getRawParameterValue ("click_length");
-                lr.type = state.getRawParameterValue ("click_type");
-                lr.source = state.getRawParameterValue (params::layerId (0, "source"));
-                if (auto* p = state.getParameter ("click_length"))
-                    maxMs = p->getNormalisableRange().end;
-            }
-            else if (l >= 2)
-            {
-                const char* names[] { "attack", "hold", "decay", "curve" };
-                for (int k = 0; k < 4; ++k)
-                {
-                    lr.ahd[(size_t) k] = state.getRawParameterValue (params::layerId (l, names[k]));
-                    if (k < 3)
-                        if (auto* p = state.getParameter (params::layerId (l, names[k])))
-                            maxMs += p->getNormalisableRange().end;
-                }
-            }
-
-            lr.maxMs = juce::jmax (50.0f, maxMs);
-        }
-
-        layer = envelope == params::Envelope::master ? -1 : 1;
+        layer = params::envelopeLayer (envelope);
         updateViewRange();
         vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { tick(); });
     }
@@ -86,23 +61,14 @@ namespace dooblrkick::ui
     void EnvelopeEditor::setEnvelope (params::Envelope newEnvelope)
     {
         envelope = newEnvelope;
-        shape = Shape::points;
-        layer = envelope == params::Envelope::master ? -1 : 1;
+        layer = params::envelopeLayer (envelope);
         rebind();
     }
 
     void EnvelopeEditor::setLayerEnvelope (int newLayer)
     {
-        if (newLayer == 1)
-        {
-            setEnvelope (envelope == params::Envelope::master ? params::Envelope::amp : envelope);
-            return;
-        }
-
-        envelope = params::Envelope::amp; // a 0..1 level graph
-        layer = juce::jlimit (0, 4, newLayer);
-        shape = layer == 0 ? Shape::click : Shape::ahd;
-        rebind();
+        // v0.3.6: every layer has a pitch and an amp envelope; keep the kind on show.
+        setEnvelope (params::layerEnvelope (juce::jlimit (0, 4, newLayer), params::isAmpEnvelope (envelope)));
     }
 
     void EnvelopeEditor::rebind()
@@ -131,129 +97,52 @@ namespace dooblrkick::ui
 
     int EnvelopeEditor::getNumNodes() const
     {
-        if (shape == Shape::ahd)
-            return 4;
-        if (shape == Shape::click)
-            return 2;
-
         return juce::jlimit (2, params::maxNodes, juce::roundToInt (raw[(size_t) envelope].count->load()));
     }
 
     EnvelopeEditor::NodeValues EnvelopeEditor::readNode (int node) const
     {
-        if (shape == Shape::ahd)
-        {
-            // Attack (linear) / hold / curved decay as 4 points; the decay segment uses the same
-            // curve law as AhdEnvelope (1 - applyCurve), which is the multi-point segment rule.
-            const auto a = ahdParam (0), h = ahdParam (1), d = ahdParam (2), c = ahdParam (3);
-            switch (juce::jlimit (0, 3, node))
-            {
-                case 0:  return { 0.0f, 0.0f, 0.0f };
-                case 1:  return { a, 1.0f, 0.0f };
-                case 2:  return { a + h, 1.0f, c };
-                default: return { a + h + d, 0.0f, 0.0f };
-            }
-        }
-
-        if (shape == Shape::click)
-        {
-            const auto* length = layerRaw[0].length;
-            return node <= 0 ? NodeValues { 0.0f, 1.0f, 0.0f }
-                             : NodeValues { juce::jmax (0.5f, length != nullptr ? length->load() : 12.0f), 0.0f, 0.0f };
-        }
-
         return readNodeOf (envelope, node);
-    }
-
-    float EnvelopeEditor::ahdParam (int which) const
-    {
-        const auto* p = layer >= 0 ? layerRaw[(size_t) layer].ahd[(size_t) juce::jlimit (0, 3, which)] : nullptr;
-        return p != nullptr ? p->load() : 0.0f;
-    }
-
-    float EnvelopeEditor::clickLevelAt (float ms) const
-    {
-        // The Click's amplitude shape over its Length, as KickVoice::renderClick makes it
-        // (normalised; the oscillator / noise itself is not drawn).
-        const auto& lr = layerRaw[0];
-        const auto lengthMs = juce::jmax (0.5f, lr.length != nullptr ? lr.length->load() : 12.0f);
-
-        if (ms < 0.0f || ms >= lengthMs)
-            return 0.0f;
-
-        const auto x = ms / lengthMs;
-
-        if (lr.source != nullptr && lr.source->load() > 0.5f)
-            return x < 0.6f ? 1.0f : 0.5f + 0.5f * std::cos (juce::MathConstants<float>::pi * (x - 0.6f) / 0.4f);
-
-        const auto taper = 1.0f - x;
-        switch (lr.type != nullptr ? juce::roundToInt (lr.type->load()) : 0)
-        {
-            case 1:  return std::exp (-5.0f * x) * taper;                                // noise burst
-            case 2:  return std::exp (-7.0f * x) * taper;                                // snap
-            case 3:  return juce::jmin (1.0f, ms / 0.1f) * std::exp (-8.0f * x) * taper; // tick
-            case 4:  return juce::jmin (1.0f, ms / 0.5f) * std::exp (-3.0f * x) * taper; // knock
-            default: return std::exp (-4.0f * x) * taper;                                // chirp
-        }
     }
 
     juce::Colour EnvelopeEditor::getCurveColour() const
     {
-        if (shape != Shape::points && layer >= 0)
-            return bandColour (layer);
+        // Pitch envelopes orange (Palette::dynamic) on every layer; the Body amp green, the
+        // other layers' amp envelopes their band colour; the master blue.
+        if (envelope == params::Envelope::master)
+            return Palette::master;
 
-        return envelope == params::Envelope::pitch ? Palette::dynamic
-             : envelope == params::Envelope::master ? Palette::master : Palette::accent;
+        if (params::isPitchEnvelope (envelope))
+            return Palette::dynamic;
+
+        return layer == 1 ? Palette::accent : bandColour (layer);
     }
 
     float EnvelopeEditor::getMaxTimeMs() const
     {
-        if (shape != Shape::points && layer >= 0)
-            return layerRaw[(size_t) layer].maxMs;
-
         return params::maxNodeTimeFor (envelope);
     }
 
     bool EnvelopeEditor::isNodeEditable (int node) const
     {
-        if (shape == Shape::ahd)
-            return node >= 1 && node <= 3;
-        if (shape == Shape::click)
-            return node == 1;
         return node >= 0 && node < getNumNodes();
     }
 
     bool EnvelopeEditor::isHandleEditable (int segment) const
     {
-        if (shape == Shape::ahd)
-            return segment == 2;
-        if (shape == Shape::click)
-            return false;
         return segment >= 0 && segment < getNumNodes() - 1;
     }
 
     juce::StringArray EnvelopeEditor::getBoundParameterIds() const
     {
         juce::StringArray ids;
+        ids.add (params::envelopeCountId (envelope));
 
-        if (shape == Shape::ahd)
+        for (int n = 0; n < getNumNodes(); ++n)
         {
-            for (const auto* name : { "attack", "hold", "decay", "curve" })
-                ids.add (params::layerId (layer, name));
-        }
-        else if (shape == Shape::click)
-        {
-            ids.addArray ({ "click_length", "click_type", params::layerId (0, "source") });
-        }
-        else
-        {
-            ids.add (params::envelopeCountId (envelope));
-            for (int n = 0; n < getNumNodes(); ++n)
-            {
-                if (n > 0) ids.add (params::nodeTimeId (envelope, n));
-                ids.add (params::nodeValueId (envelope, n));
-                if (n < getNumNodes() - 1) ids.add (params::nodeCurveId (envelope, n));
-            }
+            if (n > 0) ids.add (params::nodeTimeId (envelope, n));
+            ids.add (params::nodeValueId (envelope, n));
+            if (n < getNumNodes() - 1) ids.add (params::nodeCurveId (envelope, n));
         }
 
         return ids;
@@ -322,6 +211,8 @@ namespace dooblrkick::ui
     {
         const auto norm = envelope == params::Envelope::pitch
                               ? (std::log2 (juce::jmax (1.0f, value)) - log2Min) / (log2Max - log2Min)
+                          : params::isSemitoneEnvelope (envelope)
+                              ? (value - params::minEnvSemitones) / (params::maxEnvSemitones - params::minEnvSemitones)
                               : value;
         return plot.getBottom() - plot.getHeight() * juce::jlimit (0.0f, 1.0f, norm);
     }
@@ -329,6 +220,9 @@ namespace dooblrkick::ui
     float EnvelopeEditor::yToValue (float y) const noexcept
     {
         const auto norm = juce::jlimit (0.0f, 1.0f, (plot.getBottom() - y) / plot.getHeight());
+        if (params::isSemitoneEnvelope (envelope))
+            return params::minEnvSemitones + norm * (params::maxEnvSemitones - params::minEnvSemitones);
+
         return envelope == params::Envelope::pitch ? std::exp2 (log2Min + norm * (log2Max - log2Min)) : norm;
     }
 
@@ -488,9 +382,6 @@ namespace dooblrkick::ui
     {
         const auto count = getNumNodes();
 
-        if (shape == Shape::click && ms > 0.0f)
-            return valueToY (clickLevelAt (ms));
-
         if (ms <= 0.0f)
             return valueToY (readNode (0).value);
 
@@ -641,16 +532,7 @@ namespace dooblrkick::ui
         else if (drag.kind == HitKind::handle)
             setSelectedNode (drag.index + 1);
 
-        if (drag.kind == HitKind::node && shape == Shape::ahd)
-        {
-            const char* names[] { "attack", "hold", "decay" };
-            beginGesture ({ params::layerId (layer, names[juce::jlimit (1, 3, drag.index) - 1]) });
-        }
-        else if (drag.kind == HitKind::node && shape == Shape::click)
-        {
-            beginGesture ({ "click_length" });
-        }
-        else if (drag.kind == HitKind::node)
+        if (drag.kind == HitKind::node)
         {
             if (drag.index > 0)
                 beginGesture ({ params::nodeTimeId (envelope, drag.index), params::nodeValueId (envelope, drag.index) });
@@ -660,7 +542,7 @@ namespace dooblrkick::ui
         else if (drag.kind == HitKind::handle)
         {
             dragStartCurve = readNode (drag.index).curve;
-            beginGesture ({ shape == Shape::ahd ? params::layerId (layer, "curve") : params::nodeCurveId (envelope, drag.index) });
+            beginGesture ({ params::nodeCurveId (envelope, drag.index) });
         }
         else if (drag.kind == HitKind::zoom)
         {
@@ -681,24 +563,7 @@ namespace dooblrkick::ui
 
     void EnvelopeEditor::mouseDrag (const juce::MouseEvent& e)
     {
-        if (drag.kind == HitKind::node && shape != Shape::points)
-        {
-            // AHD / Click: points move in time only; each sets its own segment's length.
-            const auto n = drag.index;
-            const auto previous = readNode (n - 1).time;
-            const auto t = juce::jlimit (previous, getMaxTimeMs(), xToTime (e.position.x));
-
-            if (shape == Shape::click)
-                setParam ("click_length", t);
-            else
-            {
-                const char* names[] { "attack", "hold", "decay" };
-                setParam (params::layerId (layer, names[juce::jlimit (1, 3, n) - 1]), t - previous);
-            }
-
-            keepTimeVisible (readNode (n).time);
-        }
-        else if (drag.kind == HitKind::node)
+        if (drag.kind == HitKind::node)
         {
             const auto n = drag.index;
             setParam (params::nodeValueId (envelope, n), yToValue (e.position.y));
@@ -717,7 +582,7 @@ namespace dooblrkick::ui
             // Dragging the handle towards the next node's value makes the segment move there faster.
             const auto towardsEnd = b.value < a.value ? 1.0f : -1.0f;
             const auto delta = (e.position.y - dragStart.y) / 120.0f * towardsEnd;
-            setParam (shape == Shape::ahd ? params::layerId (layer, "curve") : params::nodeCurveId (envelope, drag.index),
+            setParam (params::nodeCurveId (envelope, drag.index),
                       juce::jlimit (-1.0f, 1.0f, dragStartCurve + delta));
         }
         else if (drag.kind == HitKind::zoom)
@@ -877,8 +742,8 @@ namespace dooblrkick::ui
         if (envelope == params::Envelope::master)
             return getEffectiveEnvelope();
 
-        // Body graphs: the Body amp envelope (as drawn; it has no macros).
-        constexpr auto amp = params::Envelope::amp;
+        // A layer's graphs (pitch or amp): that layer's amp envelope (as drawn; no macros).
+        const auto amp = params::layerEnvelope (layer, true);
         dsp::MultiPointEnvelope env;
         env.numNodes = juce::jlimit (2, params::maxNodes, juce::roundToInt (raw[(size_t) amp].count->load()));
 
@@ -896,12 +761,6 @@ namespace dooblrkick::ui
     {
         if (envelope == params::Envelope::master && isBypassedLook())
             return 1.0f; // envelope off: unity gain, so the playhead stays at full brightness
-
-        if (shape == Shape::ahd)
-            return dsp::AhdEnvelope { ahdParam (0), ahdParam (1), ahdParam (2), ahdParam (3) }.evaluate (juce::jmax (0.0f, ms));
-
-        if (shape == Shape::click)
-            return clickLevelAt (juce::jmax (0.0f, ms));
 
         return getPlayheadLevelEnvelope().evaluate (juce::jmax (0.0f, ms));
     }
@@ -961,7 +820,7 @@ namespace dooblrkick::ui
 
         if (hit.kind == HitKind::node)
             removeNode (hit.index);
-        else if ((hit.kind == HitKind::zoom || hit.kind == HitKind::line) && plot.contains (e.position) && shape == Shape::points)
+        else if ((hit.kind == HitKind::zoom || hit.kind == HitKind::line) && plot.contains (e.position))
             addNodeAt (e.position);
         else if (hit.kind == HitKind::none && getRulerArea().contains (e.position))
             resetView(); // double-click the time ruler: fit the envelope again
@@ -971,7 +830,7 @@ namespace dooblrkick::ui
     {
         const auto count = getNumNodes();
 
-        if (count >= params::maxNodes || shape != Shape::points)
+        if (count >= params::maxNodes)
             return false;
 
         const auto time = juce::jlimit (0.0f, getMaxTimeMs(), xToTime (position.x));
@@ -1018,7 +877,7 @@ namespace dooblrkick::ui
     {
         const auto count = getNumNodes();
 
-        if (count <= 2 || node <= 0 || node >= count || shape != Shape::points)
+        if (count <= 2 || node <= 0 || node >= count)
             return false;
 
         std::vector<NodeValues> nodes;
@@ -1049,11 +908,7 @@ namespace dooblrkick::ui
     juce::uint64 EnvelopeEditor::computeHash() const noexcept
     {
         juce::uint64 hash = (juce::uint64) getNumNodes() * 31u + (juce::uint64) envelope;
-        hash = hash * 1000003u ^ (juce::uint64) ((int) shape * 16 + layer + 1);
-
-        if (shape == Shape::click)
-            for (const auto* p : { layerRaw[0].type, layerRaw[0].source })
-                hash = hash * 1000003u ^ (juce::uint64) (juce::int64) juce::roundToInt (p != nullptr ? p->load() * 10.0f : 0.0f);
+        hash = hash * 1000003u ^ (juce::uint64) (layer + 1);
         hash = hash * 1000003u ^ (isBypassedLook() ? 7u : 3u);
 
         if (const auto& r = raw[(size_t) envelope]; r.timeScale != nullptr)
@@ -1112,7 +967,16 @@ namespace dooblrkick::ui
         valueLines.clear();
         valueLabels.clear();
 
-        if (envelope == params::Envelope::pitch)
+        if (params::isSemitoneEnvelope (envelope))
+        {
+            // v0.3.6 layer pitch envelopes: semitone offsets, a line every octave and one at 0.
+            for (auto st : { -36.0f, -24.0f, -12.0f, 0.0f, 12.0f, 24.0f, 36.0f })
+            {
+                valueLines.push_back (valueToY (st));
+                valueLabels.push_back ({ valueToY (st), (st > 0.0f ? "+" : "") + juce::String (juce::roundToInt (st)) + "st" });
+            }
+        }
+        else if (envelope == params::Envelope::pitch)
         {
             for (auto hz : { 30.0f, 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
             {
@@ -1161,9 +1025,11 @@ namespace dooblrkick::ui
         const auto right = juce::jmax (plot.getRight(), getNodePosition (count - 1).x);
         curvePath.lineTo (right, getNodePosition (count - 1).y);
 
+        // Levels and the Body's Hz fill down to the floor; a semitone envelope fills to 0 st.
+        const auto baseline = params::isSemitoneEnvelope (envelope) ? valueToY (0.0f) : plot.getBottom();
         fillPath = curvePath;
-        fillPath.lineTo (right, plot.getBottom());
-        fillPath.lineTo (left, plot.getBottom());
+        fillPath.lineTo (right, baseline);
+        fillPath.lineTo (left, baseline);
         fillPath.closeSubPath();
 
         // Master with Time Scale / Depth away from 100 %: the envelope as it plays.
@@ -1285,7 +1151,8 @@ namespace dooblrkick::ui
                 const auto v = readNode (n);
                 const auto text = juce::String (v.time, 1) + " ms  "
                                   + (envelope == params::Envelope::pitch ? params::formatHz (v.value)
-                                                                         : juce::String (juce::roundToInt (v.value * 100.0f)) + " %");
+                                     : params::isSemitoneEnvelope (envelope) ? params::formatSemitones (v.value)
+                                                                             : juce::String (juce::roundToInt (v.value * 100.0f)) + " %");
                 g.setFont (juce::FontOptions (11.0f));
                 g.setColour (Palette::textPrimary);
                 const auto box = juce::Rectangle<float> (130.0f, 16.0f).withPosition (juce::jmin (p.x + 8.0f, plot.getRight() - 130.0f), juce::jmax (plot.getY(), p.y - 22.0f));

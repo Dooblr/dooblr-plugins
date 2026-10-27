@@ -57,11 +57,13 @@ namespace dooblrkick::dsp
         double sampleRatio (bool keyTrack, float tuneSt) const noexcept;
 
         float nextNoise (std::uint32_t& state) noexcept;
-        float renderClick (const ClickSettings&, float tMs) noexcept;
-        float renderBody (const BodySettings&, float tMs, bool held) noexcept;
-        float renderSub (const KickSettings&, float tMs) noexcept;
-        void renderTail (const TailSettings&, float tMs, float keyNote, float& left, float& right) noexcept;
-        void renderNoise (const NoiseSettings&, float tMs, float& left, float& right) noexcept;
+        // pitchOn: the layer's pitch envelope is not flat at 0 st (v0.3.6; checked once per block,
+        // so a flat envelope costs nothing). sustain: a gated note holds the amp envelope's end.
+        float renderClick (const ClickSettings&, float tMs, bool pitchOn) noexcept;
+        float renderBody (const BodySettings&, float tMs, bool sustain) noexcept;
+        float renderSub (const KickSettings&, float tMs, bool pitchOn, bool sustain) noexcept;
+        void renderTail (const TailSettings&, float tMs, float keyNote, bool pitchOn, bool sustain, float& left, float& right) noexcept;
+        void renderNoise (const NoiseSettings&, float tMs, bool pitchOn, bool sustain, float& left, float& right) noexcept;
 
         double sampleRate = 48000.0;
         bool active = false;
@@ -84,5 +86,11 @@ namespace dooblrkick::dsp
         std::array<SampleReader, numLayers> readers {};
         SvfFilter clickBand;
         float clickTone = 0.0f;
+
+        // v0.3.6: the synth Noise's pitch envelope drives this tone filter pair (low-pass below
+        // 0 st, high-pass above); coefficients are updated every noiseToneInterval samples.
+        static constexpr int noiseToneInterval = 8;
+        std::array<SvfFilter, 2> noiseLow {}, noiseHigh {};
+        int noiseToneCountdown = 0;
     };
 }

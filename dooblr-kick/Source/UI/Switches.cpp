@@ -77,6 +77,16 @@ namespace dooblrkick::ui
 
     SlideToggle::~SlideToggle() = default;
 
+    void SlideToggle::setColours (juce::Colour newLeft, juce::Colour newRight)
+    {
+        if (newLeft == leftColour && newRight == rightColour)
+            return;
+
+        leftColour = newLeft;
+        rightColour = newRight;
+        repaint();
+    }
+
     void SlideToggle::setRight (bool shouldBeRight, bool notify, bool animate)
     {
         const auto changed = shouldBeRight != right;

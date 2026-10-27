@@ -36,19 +36,61 @@ namespace dooblrkick::params
     /** e.g. layerId (1, "level") == "body_level". */
     juce::String layerId (int layer, const char* suffix);
 
-    enum class Envelope { pitch, amp, master };
+    /** Multi-point envelopes. pitch / amp are the Body's (penv / aenv, kept from v0.1), master is
+        the Envelope page's (menv). v0.3.6: every other layer has its own pitch and amp envelope too
+        (cpenv / caenv: Click, spenv / saenv: Sub, tpenv / taenv: Tail, npenv / naenv: Noise). */
+    enum class Envelope { pitch, amp, master, clickPitch, clickAmp, subPitch, subAmp, tailPitch, tailAmp, noisePitch, noiseAmp };
+    inline constexpr int numEnvelopes = 11;
 
-    /** Envelope node parameters: penv0_freq, penv3_time, aenv2_level, aenv1_curve, menv1_level ...
-        (penv / aenv: body pitch / amp; menv: the master envelope on the Envelope page, 0..1). */
+    /** The pitch or amp envelope of a layer (dsp::LayerIndex). */
+    constexpr Envelope layerEnvelope (int layer, bool amp) noexcept
+    {
+        if (layer == dsp::bodyLayer)
+            return amp ? Envelope::amp : Envelope::pitch;
+
+        const auto slot = layer == dsp::clickLayer ? 0 : layer - 1; // click 0, sub 1, tail 2, noise 3
+        return (Envelope) (3 + 2 * slot + (amp ? 1 : 0));
+    }
+
+    /** The layer an envelope belongs to, or -1 for the master envelope. */
+    constexpr int envelopeLayer (Envelope e) noexcept
+    {
+        if (e == Envelope::master) return -1;
+        if (e == Envelope::pitch || e == Envelope::amp) return dsp::bodyLayer;
+        const auto slot = ((int) e - 3) / 2;
+        return slot == 0 ? dsp::clickLayer : slot + 1;
+    }
+
+    /** Level envelopes (0..1): a layer's amp envelope or the master envelope. */
+    constexpr bool isAmpEnvelope (Envelope e) noexcept
+    {
+        return e == Envelope::amp || e == Envelope::master || ((int) e >= 3 && ((int) e - 3) % 2 == 1);
+    }
+
+    constexpr bool isPitchEnvelope (Envelope e) noexcept { return ! isAmpEnvelope (e); }
+
+    /** Pitch envelopes stored as a semitone offset (every layer but the Body, whose pitch envelope
+        is absolute, in Hz). */
+    constexpr bool isSemitoneEnvelope (Envelope e) noexcept { return isPitchEnvelope (e) && e != Envelope::pitch; }
+
+    /** Envelope node parameters: penv0_freq, penv3_time, aenv2_level, aenv1_curve, menv1_level,
+        spenv2_st, caenv1_time ... (Body pitch: Hz; other pitch envelopes: semitones; amp: 0..1). */
     juce::String envelopeCountId (Envelope envelope);
     juce::String nodeTimeId (Envelope envelope, int node);   // nodes 1 .. 7 (node 0 is fixed at 0 ms)
-    juce::String nodeValueId (Envelope envelope, int node);  // nodes 0 .. 7 (pitch: Hz, amp: 0..1)
+    juce::String nodeValueId (Envelope envelope, int node);  // nodes 0 .. 7
     juce::String nodeCurveId (Envelope envelope, int node);  // nodes 0 .. 6 (segment to the next node)
 
     inline constexpr float minPitchHz = 20.0f, maxPitchHz = 16000.0f, maxNodeTimeMs = 2000.0f;
-    /** v0.3.3: master envelope (Envelope tab) points reach 6 s; the Body pitch / amp ones stay at 2 s. */
+    /** v0.3.6: layer pitch envelopes (not the Body's) are offsets of -48 .. +48 semitones. */
+    inline constexpr float minEnvSemitones = -48.0f, maxEnvSemitones = 48.0f;
+    /** v0.3.3: master envelope (Envelope tab) points reach 6 s; the Body (and v0.3.6 Click)
+        pitch / amp ones stay at 2 s; the Sub, Tail and Noise ones reach 6 s. */
     inline constexpr float maxMasterNodeTimeMs = 6000.0f;
-    constexpr float maxNodeTimeFor (Envelope e) noexcept { return e == Envelope::master ? maxMasterNodeTimeMs : maxNodeTimeMs; }
+    constexpr float maxNodeTimeFor (Envelope e) noexcept
+    {
+        const auto layer = envelopeLayer (e);
+        return layer == dsp::bodyLayer || layer == dsp::clickLayer ? maxNodeTimeMs : maxMasterNodeTimeMs;
+    }
 
     /** v0.3.3 master envelope macros: "Master Env Time Scale" (menv_tscale, 25 % .. 400 %) stretches
         every point's time (capped at 6000 ms) and "Master Env Depth" (menv_depth, 0 .. 100 %) blends
@@ -86,6 +128,8 @@ namespace dooblrkick::params
 
     /** Formats a frequency as "48.0 Hz" / "1.25 kHz". */
     juce::String formatHz (float hz);
+    /** A semitone offset, e.g. "+12.0 st" (the layer pitch envelopes, v0.3.6). */
+    juce::String formatSemitones (float st);
 
     /** Sample-layer tune text: the nearest semitone plus signed cents, e.g. "-12 st -25 ct". */
     juce::String formatTune (float semitones);
@@ -111,21 +155,27 @@ namespace dooblrkick::params
         juce::AudioProcessorValueTreeState& state;
         std::array<Common, numLayers> common;
 
-        Value clickType, clickPitch, clickLength, clickTone, clickKeyTrack;
+        struct EnvelopeValues
+        {
+            Value count = nullptr;
+            std::array<Value, maxNodes> time {}, value {}, curve {};
+        };
+
+        EnvelopeValues getEnvelope (Envelope e) const;
+
+        Value clickType, clickPitch, clickTone, clickKeyTrack, clickSampleEnv;
         Value bodyWave, bodyHarmonics, bodyTune, bodyPhase, bodyDrive, bodyKeyTrack, bodySampleEnv;
-        Value pitchCount, ampCount;
-        std::array<Value, maxNodes> pitchTime {}, pitchFreq {}, pitchCurve {}, ampTime {}, ampLevel {}, ampCurve {};
+        std::array<EnvelopeValues, numEnvelopes> envelopes {}; // indexed by Envelope (master included)
         Value subKeyTrack, noiseKeyTrack;
-        Value subTune, subFine, subPhase, subEnvAmount, subAttack, subHold, subDecay, subCurve;
-        Value tailWave, tailTune, tailSpread, tailPhase, tailAttack, tailHold, tailDecay, tailCurve, tailDrive, tailKeyTrack;
-        Value noiseColour, noiseWidth, noiseAttack, noiseHold, noiseDecay, noiseCurve, noiseTune;
+        Value subTune, subFine, subPhase, subEnvAmount;
+        Value tailWave, tailTune, tailSpread, tailPhase, tailDrive, tailKeyTrack, tailSampleEnv;
+        Value noiseColour, noiseWidth, noiseTune, noiseSampleEnv;
         Value keyNote, velocitySensitivity, gate, release;
         Value distOn, distType, distDrive, distTone, distBits, distRate, distOut, distMix;
         Value eqOn, eqLowFreq, eqLowGain, eqMidFreq, eqMidGain, eqMidQ, eqHighFreq, eqHighGain;
         Value shapeOn, shapeAttack, shapeSustain;
         Value compOn, compThreshold, compRatio, compAttack, compRelease, compMakeup;
         Value limMode, limCeiling, limRelease, outputGain;
-        Value masterCount, masterOn, dryWet, chainOrder, masterTimeScale, masterDepth;
-        std::array<Value, maxNodes> masterTime {}, masterLevel {}, masterCurve {};
+        Value masterOn, dryWet, chainOrder, masterTimeScale, masterDepth;
     };
 }

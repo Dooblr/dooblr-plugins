@@ -73,13 +73,17 @@ namespace
     {
         switch (layer)
         {
-            case dooblrkick::dsp::clickLayer: return { slotB, "click_pitch" };
+            case dooblrkick::dsp::clickLayer: return { slotB, "click_smp_penv" };
             case dooblrkick::dsp::bodyLayer:  return { slotD, "body_tune" };
             case dooblrkick::dsp::tailLayer:  return { slotC, "tail_tune" };
-            default:                          return { slotC, "noise_attack" };
+            default:                          return { slotC, "noise_smp_penv" };
         }
     }
 
+    // v0.3.6: each layer's level shape and pitch movement live in its Pitch / Amp envelope
+    // graph, so the Click's Length and the Sub / Tail / Noise Attack / Hold / Decay / Curve knobs
+    // are gone (the amp envelope's points are those times). Every sample layer has a
+    // "Smp pitch env" knob: how far the pitch envelope bends the sample's playback rate.
     Specs layerSoundSpecs (int layer)
     {
         switch (layer)
@@ -87,7 +91,8 @@ namespace
             case dooblrkick::dsp::clickLayer:
                 return { { "click_type", "Type", K::combo, 0, 0, slotA }, { "click_sample", "Sample", K::combo, 0, 0, slotA },
                          /* slot B: Load file (sample) */
-                         { "click_pitch", "Pitch", K::knob }, { "click_length", "Length", K::knob }, { "click_tone", "Tone", K::knob } };
+                         { "click_smp_penv", "Smp pitch env", K::knob, 0, 0, slotC },
+                         { "click_pitch", "Pitch", K::knob }, { "click_tone", "Tone", K::knob } };
             case dooblrkick::dsp::bodyLayer:
                 return { { "body_wave", "Wave", K::combo, 0, 0, slotA }, { "body_sample", "Sample", K::combo, 0, 0, slotA },
                          { "body_harm", "Harmonics", K::knob, 0, 0, slotB }, { "body_smp_penv", "Smp pitch env", K::knob, 0, 0, slotB },
@@ -96,20 +101,17 @@ namespace
                          { "body_tune", "Tune", K::knob }, { "body_drive", "Drive", K::knob } };
             case dooblrkick::dsp::subLayer:
                 return { { "sub_tune", "Tune", K::knob }, { "sub_fine", "Fine", K::knob }, { "sub_phase", "Start phase", K::knob },
-                         { "sub_envamt", "Pitch env", K::knob }, { "sub_attack", "Attack", K::knob }, { "sub_hold", "Hold", K::knob },
-                         { "sub_decay", "Decay", K::knob }, { "sub_curve", "Curve", K::knob } };
+                         { "sub_envamt", "Body pitch", K::knob } };
             case dooblrkick::dsp::tailLayer:
                 return { { "tail_wave", "Wave", K::combo, 0, 0, slotA }, { "tail_sample", "Sample", K::combo, 0, 0, slotA },
-                         { "tail_spread", "Spread", K::knob, 0, 0, slotB },
+                         { "tail_spread", "Spread", K::knob, 0, 0, slotB }, { "tail_smp_penv", "Smp pitch env", K::knob, 0, 0, slotB },
                          { "tail_phase", "Start phase", K::knob, 0, 0, slotC }, /* + Load file (sample) */
-                         { "tail_tune", "Tune", K::knob }, { "tail_attack", "Attack", K::knob }, { "tail_hold", "Hold", K::knob },
-                         { "tail_decay", "Decay", K::knob }, { "tail_curve", "Curve", K::knob }, { "tail_drive", "Drive", K::knob } };
+                         { "tail_tune", "Tune", K::knob }, { "tail_drive", "Drive", K::knob } };
             default:
                 return { { "noise_color", "Colour", K::combo, 0, 0, slotA }, { "noise_sample", "Sample", K::combo, 0, 0, slotA },
                          { "noise_width", "Width", K::knob, 0, 0, slotB }, { "noise_tune", "Smp tune", K::knob, 0, 0, slotB },
                          /* slot C: Load file (sample) */
-                         { "noise_attack", "Attack", K::knob }, { "noise_hold", "Hold", K::knob }, { "noise_decay", "Decay", K::knob },
-                         { "noise_curve", "Curve", K::knob } };
+                         { "noise_smp_penv", "Smp pitch env", K::knob, 0, 0, slotD } };
         }
     }
 
@@ -122,11 +124,11 @@ namespace
     {
         switch (layer)
         {
-            case dooblrkick::dsp::clickLayer: return { { "click_type" }, { "click_sample" } };
+            case dooblrkick::dsp::clickLayer: return { { "click_type" }, { "click_sample", "click_smp_penv" } };
             case dooblrkick::dsp::bodyLayer:  return { { "body_wave", "body_harm", "body_phase" },
                                                        { "body_sample", "body_smp_penv" } };
-            case dooblrkick::dsp::tailLayer:  return { { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample" } };
-            case dooblrkick::dsp::noiseLayer: return { { "noise_color", "noise_width" }, { "noise_sample", "noise_tune" } };
+            case dooblrkick::dsp::tailLayer:  return { { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_smp_penv" } };
+            case dooblrkick::dsp::noiseLayer: return { { "noise_color", "noise_width" }, { "noise_sample", "noise_tune", "noise_smp_penv" } };
             default: return {};
         }
     }
@@ -538,14 +540,18 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
 
     shownOrder = chainOrderParameter();
 
-    // Envelope editor (Body pitch / amp) and the rendered waveform.
-    // v0.3.5: one sliding switch for the Body's Pitch / Amp view; the graph cross-fades.
+    // Envelope editor (the selected layer's pitch / amp envelope) and the rendered waveform.
+    // v0.3.5: one sliding switch for the Pitch / Amp view; the graph cross-fades.
+    // v0.3.6: the switch is on every layer page (each layer has both envelopes).
     envelopeToggle.setComponentID ("envelopeView");
-    envelopeToggle.setTooltip ("Show the Body pitch or amp envelope");
+    envelopeToggle.setTooltip ("Show this layer's pitch or amp envelope");
     envelopeToggle.onChange = [this]
     {
+        if (selectedPage >= params::numLayers)
+            return;
+
         envelopeEditor.startCrossfade();
-        showEnvelope (envelopeToggle.isRight() ? params::Envelope::amp : params::Envelope::pitch);
+        showEnvelope (params::layerEnvelope (selectedPage, envelopeToggle.isRight()));
     };
     addAndMakeVisible (envelopeToggle);
     addAndMakeVisible (envelopeEditor);
@@ -735,7 +741,7 @@ void DooblrKickAudioProcessorEditor::selectPage (int page)
     const auto visual = showsVisual();
     envelopeEditor.setVisible (! visual);
     // Only the Body has a pitch envelope: the switch is offered there alone.
-    envelopeToggle.setVisible (selectedPage == dooblrkick::dsp::bodyLayer);
+    envelopeToggle.setVisible (selectedPage < params::numLayers);
     bindEnvelopeToPage();
     masterEditor.setVisible (selectedPage == envelopePage);
     mixDisplay.setVisible (selectedPage == envelopePage);
@@ -765,42 +771,42 @@ void DooblrKickAudioProcessorEditor::selectPage (int page)
 
 void DooblrKickAudioProcessorEditor::showEnvelope (params::Envelope envelope)
 {
-    // The Body's view choice (remembered while other pages are shown).
-    if (envelope == params::Envelope::master)
+    // A layer's view choice (each layer page remembers its own while other pages are shown).
+    const auto layer = params::envelopeLayer (envelope);
+
+    if (layer < 0)
         return;
 
-    bodyEnvelope = envelope;
-    if (envelopeToggle.isRight() != (envelope == params::Envelope::amp)) // leave a running slide alone
-        envelopeToggle.setRight (envelope == params::Envelope::amp, false, envelopeToggle.isShowing());
+    layerShowsAmp[(size_t) layer] = params::isAmpEnvelope (envelope);
     bindEnvelopeToPage();
     repaint();
 }
 
 void DooblrKickAudioProcessorEditor::bindEnvelopeToPage()
 {
-    // v0.3.5 fix: the one graph used to stay bound to the Body pitch / amp envelope on every
-    // layer page. Each layer page now shows its own envelope: Body pitch / amp (the switch),
-    // the Click's Length shape, and Sub / Tail / Noise Attack-Hold-Decay-Curve.
-    if (selectedPage == dooblrkick::dsp::bodyLayer)
-    {
-        if (envelopeEditor.getLayer() != dooblrkick::dsp::bodyLayer || envelopeEditor.getShape() != dooblrkick::ui::EnvelopeEditor::Shape::points
-            || envelopeEditor.getEnvelope() != bodyEnvelope)
-            envelopeEditor.setEnvelope (bodyEnvelope);
-    }
-    else if (selectedPage < params::numLayers && envelopeEditor.getLayer() != selectedPage)
-    {
-        envelopeEditor.setLayerEnvelope (selectedPage);
-    }
+    // v0.3.5 fix: each layer page shows its own envelope. v0.3.6: every layer has a Pitch and
+    // an Amp envelope, picked with the switch (remembered per layer).
+    if (selectedPage >= params::numLayers)
+        return;
+
+    const auto showAmp = layerShowsAmp[(size_t) selectedPage];
+    const auto wanted = params::layerEnvelope (selectedPage, showAmp);
+
+    if (envelopeToggle.isRight() != showAmp) // leave a running slide alone
+        envelopeToggle.setRight (showAmp, false, envelopeToggle.isShowing());
+
+    envelopeToggle.setColours (Palette::dynamic, selectedPage == dooblrkick::dsp::bodyLayer ? Palette::accent
+                                                                                            : dooblrkick::ui::bandColour (selectedPage));
+
+    if (envelopeEditor.getEnvelope() != wanted)
+        envelopeEditor.setEnvelope (wanted);
 }
 
 juce::String DooblrKickAudioProcessorEditor::getEnvelopeTitle() const
 {
-    if (selectedPage == dooblrkick::dsp::bodyLayer)
-        return bodyEnvelope == params::Envelope::pitch ? "BODY PITCH ENVELOPE" : "BODY AMP ENVELOPE";
-    if (selectedPage == dooblrkick::dsp::clickLayer)
-        return "CLICK AMP (LENGTH)";
     if (selectedPage < params::numLayers)
-        return juce::String (params::layerNames[(size_t) selectedPage]).toUpperCase() + " AMP ENVELOPE";
+        return juce::String (params::layerNames[(size_t) selectedPage]).toUpperCase()
+               + (layerShowsAmp[(size_t) selectedPage] ? " AMP ENVELOPE" : " PITCH ENVELOPE");
     return {};
 }
 

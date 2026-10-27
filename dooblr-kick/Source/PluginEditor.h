@@ -236,12 +236,14 @@ private:
     std::array<std::unique_ptr<dooblrkick::ui::LevelFader>, dooblrkick::params::numLayers> levelFaders;
     std::unique_ptr<dooblrkick::ui::EnvelopePointKnobs> envelopePointKnobs;
 
-    // v0.3.5: the Body Pitch / Amp view switch, per-layer Key Track switches, the splitter.
+    // v0.3.5: the Pitch / Amp view switch (v0.3.6: on every layer page), per-layer Key Track switches, the splitter.
     dooblrkick::ui::SlideToggle envelopeToggle { "PITCH", "AMP", dooblrkick::ui::Palette::dynamic, dooblrkick::ui::Palette::accent };
     std::array<std::unique_ptr<dooblrkick::ui::KeyTrackSwitch>, dooblrkick::params::numLayers> keyTrackSwitches;
     dooblrkick::ui::SplitterBar splitter;
     int splitDragStartWidth = 0;
-    dooblrkick::params::Envelope bodyEnvelope = dooblrkick::params::Envelope::pitch;
+    // v0.3.6: every layer page has the Pitch / Amp switch; each page remembers its view
+    // (Body opens on Pitch, the others on Amp).
+    std::array<bool, dooblrkick::params::numLayers> layerShowsAmp { false, true, true, true, true };
     void bindEnvelopeToPage();
     dooblrkick::ui::EnvelopeEditor envelopeEditor;
     dooblrkick::ui::WaveformView waveform;

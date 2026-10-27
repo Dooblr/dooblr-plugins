@@ -32,6 +32,25 @@ namespace dooblrkick::presets
             }
         }
 
+        // v0.3.6: the Click's Length and the Sub / Tail / Noise Attack / Hold / Decay / Curve
+        // became each layer's amp envelope. These write the same shapes as points.
+        void addClickLength (ValueList& v, float lengthMs, bool sampled)
+        {
+            if (sampled) // the old sample click: full level, then a raised-cosine fade over the last 40 %
+                addEnvelope (v, params::Envelope::clickAmp, { { 0, 1, 0 }, { 0.6f * lengthMs, 1, -0.25f },
+                                                              { 0.8f * lengthMs, 0.5f, 0.25f }, { lengthMs, 0, 0 } });
+            else // the old synth click taper: linear over the Length
+                addEnvelope (v, params::Envelope::clickAmp, { { 0, 1, 0 }, { lengthMs, 0, 0 } });
+        }
+
+        void addAhd (ValueList& v, params::Envelope e, float attackMs, float holdMs, float decayMs, float curve)
+        {
+            if (holdMs > 0.0f)
+                addEnvelope (v, e, { { 0, 0, 0 }, { attackMs, 1, 0 }, { attackMs + holdMs, 1, curve }, { attackMs + holdMs + decayMs, 0, 0 } });
+            else
+                addEnvelope (v, e, { { 0, 0, 0 }, { attackMs, 1, curve }, { attackMs + decayMs, 0, 0 } });
+        }
+
         void addLayer (ValueList& v, const char* layer, std::initializer_list<std::pair<const char*, float>> values)
         {
             for (const auto& [suffix, value] : values)
@@ -63,9 +82,11 @@ namespace dooblrkick::presets
                           { "eq_on", 1 }, { "eq_low_freq", 55 }, { "eq_low_gain", 2 }, { "eq_mid_freq", 420 }, { "eq_mid_gain", -4 },
                           { "eq_mid_q", 1.2f }, { "eq_high_freq", 6000 }, { "eq_high_gain", 2 },
                           { "lim_mode", 1 }, { "lim_ceiling", -0.5f } });
-                addLayer (v, "click", { { "on", 1 }, { "source", sample }, { "sample", slapstick }, { "level", -9 }, { "length", 30 },
+                addLayer (v, "click", { { "on", 1 }, { "source", sample }, { "sample", slapstick }, { "level", -9 },
                                         { "send", 0.2f }, { "ftype", 2 }, { "cutoff", 900 }, { "reso", 0.1f } });
-                addLayer (v, "sub", { { "on", 1 }, { "level", -14 }, { "decay", 500 }, { "hold", 120 }, { "send", 0 } });
+                addClickLength (v, 30, true);
+                addLayer (v, "sub", { { "on", 1 }, { "level", -14 }, { "send", 0 } });
+                addAhd (v, params::Envelope::subAmp, 1, 120, 500, 0.4f);
                 addLayer (v, "noise", { { "on", 0 } });
                 presets.push_back ({ "Hardstyle", std::move (v) });
             }
@@ -78,11 +99,13 @@ namespace dooblrkick::presets
                           { "dist_on", 1 }, { "dist_type", 0 }, { "dist_drive", 14 }, { "dist_tone", 0.45f }, { "dist_out", -4 },
                           { "comp_on", 1 }, { "comp_threshold", -16 }, { "comp_ratio", 3 }, { "comp_attack", 10 }, { "comp_release", 120 },
                           { "comp_makeup", 3 } });
-                addLayer (v, "click", { { "on", 1 }, { "type", 3 }, { "level", -14 }, { "length", 6 } });
+                addLayer (v, "click", { { "on", 1 }, { "type", 3 }, { "level", -14 } });
+                addClickLength (v, 6, false);
                 addLayer (v, "sub", { { "on", 0 } });
                 addLayer (v, "tail", { { "on", 1 }, { "source", sample }, { "sample", bdBoom }, { "level", -8 }, { "start", 25 },
-                                       { "attack", 40 }, { "hold", 80 }, { "decay", 1100 }, { "curve", 0.3f }, { "drive", 0.5f },
+                                       { "drive", 0.5f },
                                        { "ftype", 1 }, { "cutoff", 320 }, { "reso", 0.25f }, { "send", 1 }, { "tune", -2 } });
+                addAhd (v, params::Envelope::tailAmp, 40, 80, 1100, 0.3f);
                 presets.push_back ({ "Techno Rumble", std::move (v) });
             }
 
@@ -95,8 +118,10 @@ namespace dooblrkick::presets
                           { "comp_on", 1 }, { "comp_threshold", -14 }, { "comp_ratio", 4 }, { "comp_attack", 3 }, { "comp_release", 90 },
                           { "comp_makeup", 2 }, { "eq_on", 1 }, { "eq_mid_freq", 300 }, { "eq_mid_gain", -3 }, { "eq_high_gain", 3 } });
                 addLayer (v, "body", { { "source", sample }, { "sample", kitClose }, { "level", -2 } });
-                addLayer (v, "click", { { "on", 1 }, { "type", 2 }, { "level", -10 }, { "length", 10 }, { "tone", 0.2f } });
-                addLayer (v, "sub", { { "on", 1 }, { "level", -4 }, { "attack", 2 }, { "hold", 90 }, { "decay", 450 }, { "envamt", 0.2f } });
+                addLayer (v, "click", { { "on", 1 }, { "type", 2 }, { "level", -10 }, { "tone", 0.2f } });
+                addClickLength (v, 10, false);
+                addLayer (v, "sub", { { "on", 1 }, { "level", -4 }, { "envamt", 0.2f } });
+                addAhd (v, params::Envelope::subAmp, 2, 90, 450, 0.4f);
                 presets.push_back ({ "Dubstep Punch", std::move (v) });
             }
 
@@ -107,11 +132,12 @@ namespace dooblrkick::presets
                 add (v, { { "root_note", 33 }, { "body_wave", 1 }, { "body_harm", 0.05f },
                           { "dist_on", 1 }, { "dist_type", 0 }, { "dist_drive", 6 }, { "dist_out", -2 },
                           { "eq_on", 1 }, { "eq_low_freq", 70 }, { "eq_low_gain", 2 } });
-                addLayer (v, "click", { { "on", 1 }, { "source", sample }, { "sample", kitMid }, { "level", -8 }, { "length", 45 },
+                addLayer (v, "click", { { "on", 1 }, { "source", sample }, { "sample", kitMid }, { "level", -8 },
                                         { "ftype", 2 }, { "cutoff", 250 } });
+                addClickLength (v, 45, true);
                 addLayer (v, "sub", { { "on", 0 } });
-                addLayer (v, "noise", { { "on", 1 }, { "source", sample }, { "sample", shaker }, { "level", -26 }, { "decay", 120 },
-                                        { "hold", 10 } });
+                addLayer (v, "noise", { { "on", 1 }, { "source", sample }, { "sample", shaker }, { "level", -26 } });
+                addAhd (v, params::Envelope::noiseAmp, 0.5f, 10, 120, 0.6f);
                 presets.push_back ({ "House Thump", std::move (v) });
             }
 
@@ -122,9 +148,10 @@ namespace dooblrkick::presets
                 add (v, { { "root_note", 29 }, { "gate", 0 },
                           { "dist_on", 1 }, { "dist_type", 0 }, { "dist_drive", 9 }, { "dist_out", -3 } });
                 addLayer (v, "body", { { "level", -6 } });
-                addLayer (v, "click", { { "on", 1 }, { "type", 3 }, { "level", -18 }, { "length", 4 } });
-                addLayer (v, "sub", { { "on", 1 }, { "level", 0 }, { "attack", 2 }, { "hold", 300 }, { "decay", 1800 },
-                                      { "curve", 0.2f }, { "envamt", 0.35f } });
+                addLayer (v, "click", { { "on", 1 }, { "type", 3 }, { "level", -18 } });
+                addClickLength (v, 4, false);
+                addLayer (v, "sub", { { "on", 1 }, { "level", 0 }, { "envamt", 0.35f } });
+                addAhd (v, params::Envelope::subAmp, 2, 300, 1800, 0.2f);
                 presets.push_back ({ "Trap 808-ish", std::move (v) });
             }
 
@@ -137,9 +164,11 @@ namespace dooblrkick::presets
                           { "comp_on", 1 }, { "comp_threshold", -12 }, { "comp_ratio", 5 }, { "comp_attack", 2 }, { "comp_release", 60 },
                           { "comp_makeup", 3 }, { "eq_on", 1 }, { "eq_high_freq", 5000 }, { "eq_high_gain", 4 } });
                 addLayer (v, "body", { { "source", sample }, { "sample", kitMid }, { "level", -3 } });
-                addLayer (v, "click", { { "on", 1 }, { "source", sample }, { "sample", cajon }, { "level", -10 }, { "length", 25 },
+                addLayer (v, "click", { { "on", 1 }, { "source", sample }, { "sample", cajon }, { "level", -10 },
                                         { "ftype", 2 }, { "cutoff", 600 } });
-                addLayer (v, "sub", { { "on", 1 }, { "level", -10 }, { "hold", 40 }, { "decay", 220 } });
+                addClickLength (v, 25, true);
+                addLayer (v, "sub", { { "on", 1 }, { "level", -10 } });
+                addAhd (v, params::Envelope::subAmp, 1, 40, 220, 0.4f);
                 presets.push_back ({ "DnB", std::move (v) });
             }
 
@@ -268,29 +297,75 @@ namespace dooblrkick::presets
         // percussive sample. Its key tracking (click_keytrack) is left as the user set it.
         {
             const auto clickSample = chance (0.4f);
+            const auto clickType = r.nextInt (5);
             static constexpr float clickSamples[] { 5, 6, 7, 8, 14 }; // cajon, frame drum, slapstick, woodblock, synth click
             add (v, { { "click_on", clickOn }, { "click_level", uni (-20.0f, -6.0f) }, { "click_pan", 0 }, { "click_start", 0 },
                       { "click_send", uni (0.3f, 1.0f) }, { "click_source", clickSample },
                       { "click_sample", clickSamples[r.nextInt ((int) std::size (clickSamples))] },
-                      { "click_type", (float) r.nextInt (5) },
+                      { "click_type", (float) clickType },
                       { "click_pitch", clickSample > 0.5f ? uni (-5.0f, 5.0f) : uni (-7.0f, 7.0f) },
-                      { "click_length", clickSample > 0.5f ? logUni (15.0f, 80.0f) : logUni (3.0f, 40.0f) },
-                      { "click_tone", uni (-0.4f, 0.4f) } });
+                      { "click_tone", uni (-0.4f, 0.4f) }, { "click_smp_penv", uni (0.5f, 1.0f) } });
+
+            // v0.3.6: the click's amp envelope (its length and shape): a short attack-free
+            // transient, sometimes with a held top, always ending at silence; and a pitch
+            // envelope that mostly drops a little into the hit (a "zap"), sometimes stays flat.
+            const auto length = clickSample > 0.5f ? logUni (15.0f, 80.0f) : logUni (3.0f, 40.0f);
+            if (chance (0.5f) > 0.5f)
+                addEnvelope (v, params::Envelope::clickAmp, { { 0, 1, uni (-0.3f, 0.3f) }, { length, 0, 0 } });
+            else
+                addEnvelope (v, params::Envelope::clickAmp, { { 0, 1, uni (-0.2f, 0.2f) }, { length * uni (0.2f, 0.5f), uni (0.6f, 1.0f), uni (-0.2f, 0.3f) },
+                                                              { length, 0, 0 } });
+
+            // Deep drops suit the low synth types (chirp, knock) and samples; the bright ones
+            // (noise burst, snap, tick) only get a small one, so they are not pushed up into the
+            // top octave where a dark Drive tone or filter would swallow them.
+            const auto lowClick = clickSample > 0.5f || clickType == 0 || clickType == 4;
+            if (chance (0.6f) > 0.5f)
+                addEnvelope (v, params::Envelope::clickPitch, { { 0, lowClick ? uni (2.0f, 12.0f) : uni (1.0f, 4.0f), uni (0.2f, 0.8f) }, { length * uni (0.3f, 1.0f), 0, 0 } });
+            else
+                addEnvelope (v, params::Envelope::clickPitch, { { 0, 0, 0 }, { length, 0, 0 } });
 
             const auto highPass = chance (0.3f);
             add (v, { { "click_ftype", highPass > 0.5f ? 2.0f : 0.0f }, { "click_cutoff", logUni (300.0f, 3000.0f) },
                       { "click_reso", uni (0.0f, 0.3f) } });
         }
 
-        add (v, { { "sub_on", on[2] }, { "sub_level", uni (-14.0f, -4.0f) }, { "sub_hold", uni (20.0f, 200.0f) },
-                  { "sub_decay", uni (150.0f, 900.0f) }, { "sub_envamt", uni (0.0f, 0.3f) } });
+        // Sub, Tail and Noise (v0.3.6): mild amp envelopes in the old Attack / Hold / Decay
+        // ranges and flat or very gentle pitch envelopes (a semitone or two at most).
+        const auto mildPitch = [&] (params::Envelope e, float spanMs)
+        {
+            if (chance (0.25f) > 0.5f)
+                addEnvelope (v, e, { { 0, uni (-2.0f, 2.0f), uni (0.0f, 0.5f) }, { spanMs, 0, 0 } });
+            else
+                addEnvelope (v, e, { { 0, 0, 0 }, { spanMs, 0, 0 } });
+        };
+
+        add (v, { { "sub_on", on[2] }, { "sub_level", uni (-14.0f, -4.0f) }, { "sub_envamt", uni (0.0f, 0.3f) } });
+        {
+            const auto attack = uni (0.5f, 3.0f), hold = uni (20.0f, 200.0f), decay = uni (150.0f, 900.0f);
+            addAhd (v, params::Envelope::subAmp, attack, hold, decay, uni (0.2f, 0.6f));
+            mildPitch (params::Envelope::subPitch, attack + hold + decay);
+        }
 
         add (v, { { "tail_on", on[3] }, { "tail_level", uni (-18.0f, -8.0f) }, { "tail_source", chance (0.5f) },
-                  { "tail_sample", (float) (2 + r.nextInt (3)) }, { "tail_decay", uni (400.0f, 1500.0f) },
+                  { "tail_sample", (float) (2 + r.nextInt (3)) }, { "tail_smp_penv", uni (0.5f, 1.0f) },
                   { "tail_drive", uni (0.0f, 0.6f) }, { "tail_start", uni (0.0f, 40.0f) } });
+        {
+            const auto attack = uni (10.0f, 50.0f), decay = uni (400.0f, 1500.0f);
+            addAhd (v, params::Envelope::tailAmp, attack, 0, decay, uni (0.3f, 0.7f));
+            mildPitch (params::Envelope::tailPitch, attack + decay);
+        }
 
-        add (v, { { "noise_on", on[4] }, { "noise_level", uni (-30.0f, -16.0f) }, { "noise_decay", uni (30.0f, 200.0f) },
-                  { "noise_color", (float) r.nextInt (3) } });
+        add (v, { { "noise_on", on[4] }, { "noise_level", uni (-30.0f, -16.0f) }, { "noise_color", (float) r.nextInt (3) },
+                  { "noise_smp_penv", uni (0.5f, 1.0f) } });
+        {
+            const auto hold = uni (0.0f, 10.0f), decay = uni (30.0f, 200.0f);
+            addAhd (v, params::Envelope::noiseAmp, 0.5f, hold, decay, uni (0.4f, 0.8f));
+            if (chance (0.25f) > 0.5f) // a gentle sweep of the noise's tone filter
+                addEnvelope (v, params::Envelope::noisePitch, { { 0, uni (-12.0f, 12.0f), uni (0.0f, 0.5f) }, { 0.5f + hold + decay, 0, 0 } });
+            else
+                addEnvelope (v, params::Envelope::noisePitch, { { 0, 0, 0 }, { 0.5f + hold + decay, 0, 0 } });
+        }
 
         const auto drive = chance (0.6f);
         add (v, { { "dist_on", drive }, { "dist_type", (float) r.nextInt (4) }, { "dist_drive", uni (4.0f, 24.0f) },

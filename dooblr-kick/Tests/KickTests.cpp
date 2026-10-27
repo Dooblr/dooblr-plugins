@@ -285,6 +285,43 @@ namespace
         setParam (p, "body_source", 0.0f);
     }
 
+    /** v0.3.6: writes an envelope's points (count and every node's time / value / curve). */
+    struct EnvNode { float timeMs, value, curve; };
+    void setEnvelopeNodes (Processor& p, params::Envelope e, std::initializer_list<EnvNode> nodes)
+    {
+        setParam (p, params::envelopeCountId (e), (float) nodes.size());
+        int n = 0;
+
+        for (const auto& node : nodes)
+        {
+            if (n > 0) setParam (p, params::nodeTimeId (e, n), node.timeMs);
+            setParam (p, params::nodeValueId (e, n), node.value);
+            if (n < params::maxNodes - 1) setParam (p, params::nodeCurveId (e, n), node.curve);
+            ++n;
+        }
+    }
+
+    /** The old Attack / Hold / Decay / Curve of a layer (Sub, Tail, Noise) as its amp envelope. */
+    void setLayerAhd (Processor& p, int layer, float attackMs, float holdMs, float decayMs, float curve = 0.5f)
+    {
+        setEnvelopeNodes (p, params::layerEnvelope (layer, true),
+                          { { 0, 0, 0 }, { attackMs, 1, 0 }, { attackMs + holdMs, 1, curve }, { attackMs + holdMs + decayMs, 0, 0 } });
+    }
+
+    /** The old Click Length: full level falling linearly to silence at lengthMs. */
+    void setClickLength (Processor& p, float lengthMs)
+    {
+        setEnvelopeNodes (p, params::Envelope::clickAmp, { { 0, 1, 0 }, { lengthMs, 0, 0 } });
+    }
+
+    /** The end time of a layer's amp envelope (its last point). */
+    float ampEndMs (Processor& p, int layer)
+    {
+        const auto e = params::layerEnvelope (layer, true);
+        const auto count = juce::roundToInt (getPlain (p, params::envelopeCountId (e)));
+        return getPlain (p, params::nodeTimeId (e, count - 1));
+    }
+
     juce::File makeTempFile (const juce::String& extension)
     {
         return juce::File::getSpecialLocation (juce::File::tempDirectory)
@@ -435,7 +472,29 @@ namespace
         return ids;
     }
 
-    bool isEnvelopeParam (const juce::String& id) { return id.startsWith ("penv") || id.startsWith ("aenv") || id.startsWith ("menv"); }
+    /** Which envelope (and node) an envelope parameter id belongs to; node is -1 for a count. */
+    struct EnvelopeParamInfo { bool isEnvelope = false; params::Envelope envelope {}; int node = -1; bool isCurve = false; };
+    EnvelopeParamInfo envelopeParamInfo (const juce::String& id)
+    {
+        for (int i = 0; i < params::numEnvelopes; ++i)
+        {
+            const auto e = (params::Envelope) i;
+            if (id == params::envelopeCountId (e))
+                return { true, e, -1, false };
+
+            for (int node = 0; node < params::maxNodes; ++node)
+            {
+                if (id == params::nodeValueId (e, node) || (node > 0 && id == params::nodeTimeId (e, node)))
+                    return { true, e, node, false };
+                if (node < params::maxNodes - 1 && id == params::nodeCurveId (e, node))
+                    return { true, e, node, true };
+            }
+        }
+
+        return {};
+    }
+
+    bool isEnvelopeParam (const juce::String& id) { return envelopeParamInfo (id).isEnvelope; }
 
     void saveSnapshot (const juce::Image& image, const juce::String& suffix)
     {
@@ -465,7 +524,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.5", "version 0.3.5");
+        check (juce::String (JucePlugin_VersionString) == "0.3.6", "version 0.3.6");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -566,7 +625,7 @@ namespace
             auto p = makeProcessor();
             isolateLayer (*p, layer);
             setParam (*p, params::layerId (layer, "level"), 0.0f);
-            setParam (*p, "noise_decay", 400.0f);
+            setLayerAhd (*p, dsp::noiseLayer, 0.5f, 5.0f, 400.0f, 0.6f);
             compareNotes (*p, std::string (params::layerNames[(size_t) layer]) + " synth");
         }
 
@@ -623,7 +682,7 @@ namespace
                 auto p = makeProcessor();
                 isolateLayer (*p, dsp::subLayer);
                 setParam (*p, "sub_level", 0.0f);
-                setParam (*p, "sub_hold", 800.0f);
+                setLayerAhd (*p, dsp::subLayer, 1.0f, 800.0f, 350.0f, 0.4f);
                 setParam (*p, "sub_envamt", 0.0f);
                 setParam (*p, "root_note", (float) key);
                 setParam (*p, "sub_tune", tune);
@@ -711,9 +770,7 @@ namespace
 
             if (layer != dsp::bodyLayer)
             {
-                setParam (*p, "tail_attack", 0.0f);
-                setParam (*p, "tail_hold", 2500.0f);
-                setParam (*p, "tail_decay", 5.0f);
+                setLayerAhd (*p, dsp::tailLayer, 0.0f, 2500.0f, 5.0f);
                 setParam (*p, "tail_start", 0.0f);
                 setParam (*p, "tail_ftype", 0.0f);
                 setParam (*p, "tail_spread", 0.0f);
@@ -1101,8 +1158,11 @@ namespace
     {
         using dooblrkick::presets::ValueList;
         const juce::StringArray clickIds { "click_on", "click_level", "click_pan", "click_start", "click_send", "click_source",
-                                           "click_sample", "click_type", "click_pitch", "click_length", "click_tone",
-                                           "click_ftype", "click_cutoff", "click_reso" };
+                                           "click_sample", "click_type", "click_pitch", "click_tone", "click_smp_penv",
+                                           "click_ftype", "click_cutoff", "click_reso",
+                                           // v0.3.6: the Click's own envelopes (its amp envelope is its length)
+                                           params::envelopeCountId (params::Envelope::clickAmp), params::nodeTimeId (params::Envelope::clickAmp, 1),
+                                           params::envelopeCountId (params::Envelope::clickPitch), params::nodeValueId (params::Envelope::clickPitch, 0) };
         const juce::StringArray bodyIds { "body_on", "body_level", "body_pan", "body_start", "body_send", "body_source",
                                           "body_sample", "body_wave", "body_harm", "body_drive", "body_phase", "body_tune",
                                           "body_smp_penv", "body_ftype", "body_cutoff", "body_reso" };
@@ -1271,7 +1331,18 @@ namespace
                     q->randomise (soloRandom);
                     keptOn = keptOn && getPlain (*q, params::layerId (layer, "on")) > 0.5f;
                     const auto b = renderNote (*q, (int) getPlain (*q, "root_note"), 1.0f, 1.0);
-                    audible = audible && allFinite (b) && peakOf (b) > 0.1f && peakOf (b) <= 1.0f;
+                    const auto ok = allFinite (b) && peakOf (b) > 0.1f && peakOf (b) <= 1.0f;
+                    if (! ok)
+                        note ("  " + std::string (params::layerNames[(size_t) layer]) + " soloed draw " + std::to_string (i) + ": peak "
+                              + format (peakOf (b), 3) + ", source " + format (getPlain (*q, params::layerId (layer, "source")), 0)
+                              + ", level " + format (getPlain (*q, params::layerId (layer, "level")), 1) + " dB"
+                              + (layer == dsp::clickLayer ? ", type " + format (getPlain (*q, "click_type"), 0) + ", amp end "
+                                    + format (ampEndMs (*q, layer), 2) + " ms, pitch0 "
+                                    + format (getPlain (*q, params::nodeValueId (params::Envelope::clickPitch, 0)), 2) + " st, ftype "
+                                    + format (getPlain (*q, "click_ftype"), 0) + ", cutoff " + format (getPlain (*q, "click_cutoff"), 0)
+                                    + ", tune " + format (getPlain (*q, "click_pitch"), 2) + ", start " + format (getPlain (*q, "click_start"), 1)
+                                    + ", tone " + format (getPlain (*q, "click_tone"), 2) : std::string()));
+                    audible = audible && ok;
                 }
                 check (keptOn && audible, std::string (params::layerNames[(size_t) layer]) + " soloed: Random keeps it on and it is audible");
             }
@@ -1532,7 +1603,7 @@ namespace
             auto q = makeProcessor();
             setParam (*q, "gate", gate ? 1.0f : 0.0f);
             setParam (*q, "release", 30.0f);
-            setParam (*q, "sub_hold", 1000.0f);
+            setLayerAhd (*q, dsp::subLayer, 1.0f, 1000.0f, 350.0f, 0.4f);
             return renderMidi (*q, { { 0, juce::MidiMessage::noteOn (1, 36, 1.0f) },
                                      { 4800, juce::MidiMessage::noteOff (1, 36) } }, 24000);
         };
@@ -1635,7 +1706,7 @@ namespace
                 setParam (*p, params::layerId (layer, "level"), 0.0f);
                 setParam (*p, params::layerId (layer, "source"), 1.0f);
                 setParam (*p, params::layerId (layer, "sample"), (float) i);
-                setParam (*p, "noise_decay", 1000.0f);
+                setLayerAhd (*p, dsp::noiseLayer, 0.5f, 5.0f, 1000.0f, 0.6f);
                 const auto b = renderNote (*p, 29, 1.0f, 1.0);
 
                 if (! allFinite (b) || peakOf (b) < 1.0e-3f)
@@ -1787,7 +1858,29 @@ namespace
             if (id == "noise_tune" || id == "noise_keytrack") return { { "noise_source", 1 } };
             if (id == "release") return { { "gate", 1 } };
             if (id == "lim_release") return { { "comp_on", 0 }, { "lim_ceiling", -12 } };
-            if (id == "noise_hold" || id == "noise_attack") return { { "noise_level", 0 } };
+            // v0.3.6 layer envelopes. The semitone envelopes are flat at 0 st by default: give them
+            // a drop so their other points (and the sample amount) matter; Sample-only amounts
+            // need the sample source. The short Noise attack needs the noise louder.
+            const auto info = envelopeParamInfo (id);
+            for (int l = 0; l < params::numLayers; ++l)
+            {
+                if (l == dsp::bodyLayer)
+                    continue;
+
+                const auto pitch = params::layerEnvelope (l, false);
+                ValueList drop { { params::nodeValueId (pitch, 0), 12.0f } };
+
+                if (id == params::layerId (l, "smp_penv"))
+                    return { { params::layerId (l, "source"), 1 }, drop[0] };
+
+                if (info.isEnvelope && info.envelope == pitch && id != params::nodeValueId (pitch, 0))
+                    return drop;
+            }
+            // Flat hold segments (Sub's and Noise's default hold): bend the hold so its curve matters.
+            for (const auto e : { params::Envelope::subAmp, params::Envelope::noiseAmp })
+                if (id == params::nodeCurveId (e, 1))
+                    return { { params::nodeValueId (e, 2), 0.5f }, { "noise_level", 0 } };
+            if (info.isEnvelope && info.envelope == params::Envelope::noiseAmp) return { { "noise_level", 0 } };
             // The master envelope is flat at 100 % by default: give it a slope so its other points matter.
             if (id.startsWith ("menv") && id != params::nodeValueId (params::Envelope::master, 1))
                 return { { params::nodeValueId (params::Envelope::master, 1), 0.2f } };
@@ -1811,9 +1904,6 @@ namespace
         };
 
         auto probe = makeProcessor();
-        const auto pitchCount = (int) getPlain (*probe, params::envelopeCountId (params::Envelope::pitch));
-        const auto ampCount = (int) getPlain (*probe, params::envelopeCountId (params::Envelope::amp));
-        const auto masterCount = (int) getPlain (*probe, params::envelopeCountId (params::Envelope::master));
         int tested = 0;
         juce::StringArray dead;
 
@@ -1826,10 +1916,10 @@ namespace
                 if (id.endsWith ("_count"))
                     continue;
 
-                const auto count = id.startsWith ("penv") ? pitchCount : id.startsWith ("aenv") ? ampCount : masterCount;
-                const auto node = id.substring (4).getIntValue();
+                const auto info = envelopeParamInfo (id);
+                const auto count = juce::roundToInt (getPlain (*probe, params::envelopeCountId (info.envelope)));
 
-                if (node >= (id.endsWith ("_curve") ? count - 1 : count))
+                if (info.node >= (info.isCurve ? count - 1 : count))
                     continue;
             }
 
@@ -2016,6 +2106,10 @@ namespace
                     if (id == powerId)
                         for (const auto& paramId : paramIds)
                             reachable.insert (paramId);
+
+                // v0.3.3: the Envelope tab's power toggle is the master envelope's on switch.
+                if (id == "power_envelope")
+                    reachable.insert ("menv_on");
             }
 
             // Nothing visible is cut off by its parent.
@@ -2672,7 +2766,17 @@ namespace
             const auto diff = maxDifference (renders[(size_t) r], reference);
             worst = std::max (worst, diff);
             identical += diff == 0.0f ? 1 : 0;
-            check (diff <= 1.0e-6f, "render " + std::to_string (r) + " matches v0.2.0 (max diff " + std::to_string (diff) + ")");
+            // v0.3.6: the Click length and the Sub / Tail / Noise AHD became multi-point amp
+            // envelopes; presets that used a Click sample with a length shape are now a 4-point
+            // approximation, and node times / curves go through the envelope parameters. Bit
+            // identity with v0.2.0 no longer holds, so each render is held to within -46 dBFS
+            // (5e-3 peak sample difference) and its exact difference is printed.
+            if (diff > 0.0f)
+                note ("render " + std::to_string (r) + ": max diff vs v0.2.0 " + std::to_string (diff)
+                      + " (" + format (juce::Decibels::gainToDecibels (diff, -200.0f), 1) + " dBFS)");
+            check (allFinite (renders[(size_t) r]) && renders[(size_t) r].getNumSamples() == n,
+                   "render " + std::to_string (r) + " is finite and as long as v0.2.0's");
+            check (diff <= 5.0e-3f, "render " + std::to_string (r) + " within 5e-3 of v0.2.0 (max diff " + std::to_string (diff) + ")");
         }
 
         note (std::to_string (identical) + "/" + std::to_string (count) + " renders bit-identical to v0.2.0, worst diff " + std::to_string (worst));
@@ -3261,7 +3365,8 @@ namespace
         check (otherRange, "Body pitch / amp envelope points still reach 2000 ms");
 
         // A 6 s master envelope over a long Tail renders to its end and stops there.
-        setValues (*p, { { "tail_on", 1.0f }, { "tail_hold", 2000.0f }, { "tail_decay", 5000.0f },
+        setLayerAhd (*p, dsp::tailLayer, 30.0f, 2000.0f, 3970.0f); // the Tail's amp envelope reaches 6000 ms too
+        setValues (*p, { { "tail_on", 1.0f },
                          { params::envelopeCountId (Envelope::master), 3.0f },
                          { params::nodeValueId (Envelope::master, 0), 1.0f },
                          { params::nodeTimeId (Envelope::master, 1), 3000.0f }, { params::nodeValueId (Envelope::master, 1), 1.0f },
@@ -3764,9 +3869,7 @@ namespace
             isolateLayer (*p, layer);
             const auto id = [&] (const char* s) { return params::layerId (layer, s); };
             setParam (*p, id ("level"), 0.0f);
-            setParam (*p, id ("attack"), 0.0f);
-            setParam (*p, id ("hold"), 600.0f);
-            setParam (*p, id ("decay"), 1000.0f);
+            setLayerAhd (*p, layer, 0.0f, 600.0f, 1000.0f);
             if (layer == dsp::subLayer)
                 setParam (*p, "sub_envamt", 0.0f);
             else
@@ -3857,7 +3960,8 @@ namespace
     }
 
     //==============================================================================
-    // v0.3.5 fix: each layer page shows its own envelope.
+    // v0.3.5 fix: each layer page shows its own envelope. v0.3.6: every layer page has its own
+    // Pitch and Amp envelopes, picked with the switch and remembered per layer.
     void testLayerEnvelopes()
     {
         EditorHolder h;
@@ -3866,105 +3970,386 @@ namespace
         auto& editor = *h.editor;
         auto& p = *h.processor;
         auto& env = editor.getEnvelopeEditor();
+        auto& toggle = editor.getEnvelopeToggle();
         editor.setSize (1080, 660);
-        using Shape = dooblrkick::ui::EnvelopeEditor::Shape;
+        using params::Envelope;
 
-        setValues (p, { { "sub_attack", 3 }, { "sub_hold", 80 }, { "sub_decay", 420 }, { "tail_attack", 12 }, { "tail_hold", 30 }, { "tail_decay", 900 },
-                        { "noise_attack", 1 }, { "noise_hold", 5 }, { "noise_decay", 150 }, { "click_length", 18 } });
+        // Distinct shapes per layer, so a wrong binding shows up in the point count / positions.
+        setLayerAhd (p, dsp::subLayer, 3, 80, 420);
+        setLayerAhd (p, dsp::tailLayer, 12, 30, 900);
+        setLayerAhd (p, dsp::noiseLayer, 1, 5, 150);
+        setClickLength (p, 18);
+        setEnvelopeNodes (p, Envelope::clickPitch, { { 0, 12, 0.5f }, { 9, 0, 0 } });
+        setEnvelopeNodes (p, Envelope::subPitch, { { 0, 7, 0.3f }, { 40, 2, 0 }, { 300, 0, 0 } });
+        setEnvelopeNodes (p, Envelope::tailPitch, { { 0, -5, 0 }, { 120, 3, 0.2f }, { 500, 1, 0 }, { 800, 0, 0 } });
+        setEnvelopeNodes (p, Envelope::noisePitch, { { 0, -24, 0.4f }, { 60, 0, 0 } });
 
-        const auto expectedTimes = [&] (int layer) -> std::vector<float>
+        const auto showFor = [&] (int layer, bool amp)
         {
-            if (layer == dsp::clickLayer)
-                return { 0.0f, std::max (0.5f, getPlain (p, "click_length")) };
-            const auto a = getPlain (p, params::layerId (layer, "attack")), hh = getPlain (p, params::layerId (layer, "hold")),
-                       d = getPlain (p, params::layerId (layer, "decay"));
-            return { 0.0f, a, a + hh, a + hh + d };
+            editor.selectPage (layer);
+            editor.showEnvelope (params::layerEnvelope (layer, amp));
         };
 
-        std::vector<int> order { 0, 1, 2, 3, 4 };
+        // Three per-layer view choices: all Pitch, all Amp, and mixed (odd layers on Amp).
         int orders = 0, wrong = 0;
-        do
+        for (const auto mode : { 0, 1, 2 })
         {
-            for (const auto page : order)
+            const auto wantsAmp = [mode] (int layer) { return mode == 1 || (mode == 2 && layer % 2 == 1); };
+            for (int l = 0; l < params::numLayers; ++l)
+                showFor (l, wantsAmp (l));
+
+            std::vector<int> order { 0, 1, 2, 3, 4 };
+            do
             {
-                editor.selectPage (page);
-                bool ok = env.getLayer() == page && editor.getEnvelopeToggle().isVisible() == (page == dsp::bodyLayer);
-                const auto ids = env.getBoundParameterIds();
+                for (const auto page : order)
+                {
+                    editor.selectPage (page);
+                    const auto e = params::layerEnvelope (page, wantsAmp (page));
+                    const auto ids = env.getBoundParameterIds();
+                    const auto count = juce::roundToInt (getPlain (p, params::envelopeCountId (e)));
+                    bool ok = env.getLayer() == page && env.getEnvelope() == e && toggle.isVisible() && toggle.isRight() == wantsAmp (page)
+                              && env.getNumNodes() == count && ids.contains (params::nodeTimeId (e, count - 1));
 
-                if (page == dsp::bodyLayer)
-                {
-                    const auto e = env.getEnvelope();
-                    ok = ok && env.getShape() == Shape::points && (e == params::Envelope::pitch || e == params::Envelope::amp)
-                         && ids.contains (params::nodeTimeId (e, 1)) && ! ids.contains ("sub_decay");
-                }
-                else
-                {
-                    ok = ok && env.getShape() == (page == dsp::clickLayer ? Shape::click : Shape::ahd);
-                    const auto times = expectedTimes (page);
-                    ok = ok && env.getNumNodes() == (int) times.size();
-                    for (int n = 1; ok && n < (int) times.size(); ++n)
-                        ok = std::abs (env.getNodePosition (n).x - env.getNodePosition (0).x
-                                       - (env.getPlotArea().getWidth() * (times[(size_t) n] - env.getViewStartMs()) / env.getViewSpanMs())) < 1.5f;
-                    ok = ok && (page == dsp::clickLayer ? ids.contains ("click_length") : ids.contains (params::layerId (page, "decay")))
-                         && ! ids.contains (params::nodeTimeId (params::Envelope::amp, 1));
-                    ok = ok && editor.getEnvelopeTitle().containsIgnoreCase (params::layerNames[(size_t) page]);
-                }
-                if (! ok)
-                {
-                    ++wrong;
-                    if (wrong < 4)
-                        note ("  page " + std::to_string (page) + " shows layer " + std::to_string (env.getLayer()));
-                }
-            }
-            ++orders;
-        } while (std::next_permutation (order.begin(), order.end()));
-        check (orders == 120 && wrong == 0, "every page shows its own envelope in all " + std::to_string (orders) + " tab orders");
+                    // Not bound to any other envelope.
+                    for (int other = 0; other < params::numEnvelopes; ++other)
+                        if ((Envelope) other != e)
+                            ok = ok && ! ids.contains (params::nodeTimeId ((Envelope) other, 1));
 
-        // The Body keeps its pitch / amp choice across pages.
-        editor.selectPage (dsp::bodyLayer);
-        editor.showEnvelope (params::Envelope::amp);
+                    // Points at their parameter times (relative to the 0 ms point).
+                    for (int n = 1; ok && n < count; ++n)
+                    {
+                        const auto t = getPlain (p, params::nodeTimeId (e, n));
+                        ok = std::abs (env.getNodePosition (n).x - env.getNodePosition (0).x - env.getPlotArea().getWidth() * t / env.getViewSpanMs()) < 1.5f;
+                    }
+
+                    const auto title = editor.getEnvelopeTitle();
+                    ok = ok && title.containsIgnoreCase (params::layerNames[(size_t) page])
+                         && title.containsIgnoreCase (wantsAmp (page) ? "AMP" : "PITCH");
+
+                    if (! ok && ++wrong < 4)
+                        note ("  mode " + std::to_string (mode) + " page " + std::to_string (page) + " shows envelope "
+                              + std::to_string ((int) env.getEnvelope()) + " / layer " + std::to_string (env.getLayer()) + ", title " + title.toStdString());
+                }
+                ++orders;
+            } while (std::next_permutation (order.begin(), order.end()));
+        }
+        check (orders == 360 && wrong == 0, "every page shows its own Pitch or Amp envelope in all 120 tab orders x 3 view choices ("
+               + std::to_string (orders) + " orders, " + std::to_string (wrong) + " wrong)");
+
+        // Each layer remembers its own view while the others change.
+        showFor (dsp::subLayer, false);
+        showFor (dsp::tailLayer, true);
+        showFor (dsp::clickLayer, true);
         editor.selectPage (dsp::subLayer);
-        editor.selectPage (dsp::bodyLayer);
-        check (env.getEnvelope() == params::Envelope::amp && editor.getEnvelopeToggle().isRight(), "the Body page remembers Amp after visiting Sub");
-        editor.showEnvelope (params::Envelope::pitch);
+        check (env.getEnvelope() == Envelope::subPitch && ! toggle.isRight(), "the Sub page remembers Pitch after Tail and Click switched to Amp");
+        editor.selectPage (dsp::clickLayer);
+        check (env.getEnvelope() == Envelope::clickAmp && toggle.isRight(), "the Click page remembers Amp");
 
-        // Editing on the Sub page edits the Sub: drag its decay end right.
-        editor.selectPage (dsp::subLayer);
-        const auto bodyAmp = getPlain (p, params::nodeTimeId (params::Envelope::amp, 1));
-        const auto decayBefore = getPlain (p, "sub_decay");
+        // Editing on the Sub amp page edits the Sub: drag its last point right.
+        showFor (dsp::subLayer, true);
+        const auto bodyAmp = getPlain (p, params::nodeTimeId (Envelope::amp, 1));
+        const auto tailEnd = ampEndMs (p, dsp::tailLayer);
+        const auto endBefore = ampEndMs (p, dsp::subLayer);
         p.getUndoHistory().clear();
         const auto end = env.getNodePosition (3);
         env.checkForChanges();
         const auto fitBefore = env.getFitSpanMs();
         simulateDrag (env, end, end + juce::Point<float> (40.0f, 0.0f));
-        const auto decayAfter = getPlain (p, "sub_decay");
-        check (decayAfter > decayBefore + 1.0f && std::abs (getPlain (p, params::nodeTimeId (params::Envelope::amp, 1)) - bodyAmp) < 1.0e-4f,
-               "dragging the Sub decay point edits sub_decay (" + format (decayBefore, 0) + " -> " + format (decayAfter, 0) + " ms), not the Body");
-        // The graph auto-fits to the envelope (v0.3.4), so the dragged end stays near the right edge;
-        // what must follow is the fitted span, which tracks the Sub's own length.
+        const auto endAfter = ampEndMs (p, dsp::subLayer);
+        check (endAfter > endBefore + 1.0f && std::abs (getPlain (p, params::nodeTimeId (Envelope::amp, 1)) - bodyAmp) < 1.0e-4f
+                   && std::abs (ampEndMs (p, dsp::tailLayer) - tailEnd) < 1.0e-4f,
+               "dragging the Sub amp end point edits the Sub Amp Env (" + format (endBefore, 0) + " -> " + format (endAfter, 0) + " ms), not the Body or Tail");
         env.checkForChanges();
         const auto fitAfter = env.getFitSpanMs();
         check (fitAfter > fitBefore, "the graph follows the drag (fit span " + format (fitBefore, 0) + " -> " + format (fitAfter, 0) + " ms)");
         p.getUndoHistory().undo();
-        check (std::abs (getPlain (p, "sub_decay") - decayBefore) < 0.5f, "undo restores the Sub decay");
+        check (std::abs (ampEndMs (p, dsp::subLayer) - endBefore) < 0.5f, "undo restores the Sub amp end");
         env.checkForChanges();
         check (std::abs (env.getFitSpanMs() - fitBefore) < 1.0f, "the graph follows the undo (fit span " + format (env.getFitSpanMs(), 0) + " ms)");
-        check (! env.isNodeEditable (0) && env.isNodeEditable (3) && ! env.isHandleEditable (0) && env.isHandleEditable (2),
-               "AHD: only the attack / hold / decay points and the decay curve are editable");
+        check (env.isNodeEditable (0) && env.isNodeEditable (3) && env.isHandleEditable (0) && env.isHandleEditable (2),
+               "a layer amp envelope is a full multi-point envelope: every point and curve is editable");
 
-        // A preset load rebinds without a page switch.
-        p.loadFactoryPreset (1, false);
-        const auto afterPreset = expectedTimes (dsp::subLayer);
-        check (env.getLayer() == dsp::subLayer && std::abs (env.getPlayheadLevelGainAt (afterPreset[1] + 0.5f * (afterPreset[2] - afterPreset[1])) - 1.0f) < 1.0e-3f,
-               "after a preset load the Sub graph's playhead level is the Sub's own hold (1)");
-        check (env.getPlayheadLevelGainAt (afterPreset[3] + 1.0f) < 1.0e-3f, "and silent after its decay");
+        // Editing on the Noise pitch page edits the Noise pitch (drag its first point up).
+        showFor (dsp::noiseLayer, false);
+        const auto stBefore = getPlain (p, params::nodeValueId (Envelope::noisePitch, 0));
+        const auto first = env.getNodePosition (0);
+        simulateDrag (env, first, first + juce::Point<float> (0.0f, -30.0f));
+        check (getPlain (p, params::nodeValueId (Envelope::noisePitch, 0)) > stBefore + 0.5f
+                   && std::abs (getPlain (p, params::nodeValueId (Envelope::subPitch, 0)) - 7.0f) < 1.0e-3f,
+               "dragging the Noise pitch start up raises the Noise Pitch Env (" + format (stBefore, 1) + " -> "
+                   + format (getPlain (p, params::nodeValueId (Envelope::noisePitch, 0)), 1) + " st) and nothing else");
 
-        setValues (p, { { "sub_attack", 3 }, { "sub_hold", 80 }, { "sub_decay", 420 }, { "sub_on", 1 }, { "tail_on", 1 } });
-        editor.selectPage (dsp::subLayer);
-        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-layer-envs-a");
-        editor.selectPage (dsp::clickLayer);
-        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.5-layer-envs-b");
-        check (env.getShape() == Shape::click && ! editor.getEnvelopeToggle().isVisible(), "the Click page: its own Length shape, no Pitch / Amp switch");
+        // A preset load rebinds without a page switch; the playhead level follows the layer's amp
+        // envelope on both views.
+        for (const auto amp : { true, false })
+        {
+            showFor (dsp::subLayer, amp);
+            p.loadFactoryPreset (1, false);
+            bool levelsOk = env.getLayer() == dsp::subLayer && env.getEnvelope() == params::layerEnvelope (dsp::subLayer, amp);
+            const auto count = juce::roundToInt (getPlain (p, params::envelopeCountId (Envelope::subAmp)));
+            for (int n = 0; n < count; ++n)
+                levelsOk = levelsOk && std::abs (env.getPlayheadLevelGainAt (n == 0 ? 0.0f : getPlain (p, params::nodeTimeId (Envelope::subAmp, n)))
+                                                 - getPlain (p, params::nodeValueId (Envelope::subAmp, n))) < 1.0e-3f;
+            check (levelsOk, std::string ("after a preset load the Sub ") + (amp ? "Amp" : "Pitch") + " view's playhead level follows the Sub's own amp points");
+        }
+
+        // Snapshots: the Sub in its Pitch view, the Click in its Amp view.
+        p.loadFactoryPreset (0, false);
+        setEnvelopeNodes (p, Envelope::subPitch, { { 0, 12, 0.6f }, { 35, 3, 0.2f }, { 180, 0, 0 } });
+        setValues (p, { { "sub_on", 1 }, { "tail_on", 1 } });
+        showFor (dsp::subLayer, false);
+        env.checkForChanges();
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.6-sub-pitch");
+        showFor (dsp::clickLayer, true);
+        env.checkForChanges();
+        saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.6-click-amp");
+        check (env.getEnvelope() == Envelope::clickAmp && toggle.isVisible() && toggle.isRight()
+                   && editor.getEnvelopeTitle() == "CLICK AMP ENVELOPE",
+               "the Click page: its Amp envelope (its length), with the Pitch / Amp switch");
+    }
+
+    //==============================================================================
+    // v0.3.6: each layer's pitch envelope moves its pitch (or the noise tone filter) and its amp
+    // envelope shapes its level, in Synth and Sample modes.
+    void testLayerPitchAndAmpEnvelopes()
+    {
+        using params::Envelope;
+        const auto prepared = [] (int layer, int source)
+        {
+            auto p = makeProcessor();
+            isolateLayer (*p, layer);
+            setParam (*p, params::layerId (layer, "level"), 0.0f);
+            if (params::layerHasSample (layer))
+                setParam (*p, params::layerId (layer, "source"), (float) source);
+            setValues (*p, { { "click_type", (float) dsp::ClickSettings::knock }, { "tail_spread", 0 }, { "tail_drive", 0 },
+                             { "tail_wave", 0 }, { "sub_envamt", 0 }, { "noise_width", 0 } });
+            // Long, flat amp envelopes so the pitch can be measured.
+            if (layer == dsp::clickLayer)
+                setEnvelopeNodes (*p, Envelope::clickAmp, { { 0, 1, 0 }, { 400, 1, 0 }, { 450, 0, 0 } });
+            else
+                setLayerAhd (*p, layer, 0.0f, 800.0f, 100.0f);
+            return p;
+        };
+        const auto tuneId = [] (int layer) { return juce::String (layer == dsp::clickLayer ? "click_pitch" : params::layerId (layer, "tune")); };
+
+        // 1. A flat +12 st pitch envelope plays exactly like Tune +12 st (synth Click / Sub / Tail,
+        //    sampled Click / Tail / Noise), and a real octave up on the Sub and Tail.
+        for (const auto layer : { dsp::clickLayer, dsp::subLayer, dsp::tailLayer, dsp::noiseLayer })
+        for (const auto source : { 0, 1 })
+        {
+            if ((layer == dsp::subLayer && source == 1) || (layer == dsp::noiseLayer && source == 0))
+                continue;
+            const auto name = std::string (params::layerNames[(size_t) layer]) + (source == 1 ? " sample" : " synth");
+            auto flat = prepared (layer, source);
+            const auto plain = renderNote (*flat, 29, 1.0f, 0.6);
+            auto tuned = prepared (layer, source);
+            setParam (*tuned, tuneId (layer), 12.0f);
+            const auto byTune = renderNote (*tuned, 29, 1.0f, 0.6);
+            auto enveloped = prepared (layer, source);
+            setEnvelopeNodes (*enveloped, params::layerEnvelope (layer, false), { { 0, 12, 0 }, { 100, 12, 0 } });
+            const auto byEnv = renderNote (*enveloped, 29, 1.0f, 0.6);
+            check (peakOf (plain) > 1.0e-3f && maxDifference (plain, byEnv) > 1.0e-2f && maxDifference (byEnv, byTune) < 2.0e-3f,
+                   name + ": a flat +12 st " + params::layerNames[(size_t) layer] + " Pitch Env plays like Tune +12 (diff to Tune "
+                       + format (maxDifference (byEnv, byTune), 5) + ", to 0 st " + format (maxDifference (plain, byEnv), 3) + ")");
+
+            if (source == 0 && layer != dsp::clickLayer)
+            {
+                const auto f0 = measureFrequency (plain, sampleRate, 0.1, 0.5), f1 = measureFrequency (byEnv, sampleRate, 0.1, 0.5);
+                check (f0 > 20.0 && std::abs (f1 / f0 - 2.0) < 0.02, name + ": +12 st doubles the frequency (" + format (f0, 1) + " -> " + format (f1, 1) + " Hz)");
+            }
+
+            if (source == 1)
+            {
+                // The sample amount: 50 % of +24 st is +12 st; 0 % leaves the sample alone.
+                auto half = prepared (layer, source);
+                setParam (*half, params::layerId (layer, "smp_penv"), 0.5f);
+                setEnvelopeNodes (*half, params::layerEnvelope (layer, false), { { 0, 24, 0 }, { 100, 24, 0 } });
+                auto off = prepared (layer, source);
+                setParam (*off, params::layerId (layer, "smp_penv"), 0.0f);
+                setEnvelopeNodes (*off, params::layerEnvelope (layer, false), { { 0, 24, 0 }, { 100, 24, 0 } });
+                check (maxDifference (renderNote (*half, 29, 1.0f, 0.6), byTune) < 2.0e-3f && maxDifference (renderNote (*off, 29, 1.0f, 0.6), plain) < 1.0e-6f,
+                       name + ": Smp Pitch Env 50 % of +24 st = +12 st; 0 % leaves the sample unbent");
+            }
+        }
+
+        // 2. A pitch drop: the Sub starts an octave up and glides to its note.
+        {
+            auto p = prepared (dsp::subLayer, 0);
+            setEnvelopeNodes (*p, Envelope::subPitch, { { 0, 12, 0 }, { 150, 12, 0 }, { 300, 0, 0 } });
+            const auto b = renderNote (*p, 29, 1.0f, 0.8);
+            const auto early = measureFrequency (b, sampleRate, 0.02, 0.14), late = measureFrequency (b, sampleRate, 0.35, 0.7);
+            check (std::abs (early / late - 2.0) < 0.03, "Sub Pitch Env: +12 st early, 0 st late (" + format (early, 1) + " -> " + format (late, 1) + " Hz)");
+        }
+
+        // 3. The synth Noise has no pitch: its pitch envelope moves a tone filter. -36 st closes a
+        //    low-pass to 2.5 kHz (fewer zero crossings, less level); +36 st opens a high-pass to 160 Hz.
+        {
+            const auto zcr = [] (const juce::AudioBuffer<float>& b) { return (double) zeroCrossings (b, 480, 9600).size() / 9120.0; };
+            auto flat = prepared (dsp::noiseLayer, 0);
+            const auto plain = renderNote (*flat, 29, 1.0f, 0.3);
+            auto dark = prepared (dsp::noiseLayer, 0);
+            setEnvelopeNodes (*dark, Envelope::noisePitch, { { 0, -36, 0 }, { 100, -36, 0 } });
+            const auto low = renderNote (*dark, 29, 1.0f, 0.3);
+            auto bright = prepared (dsp::noiseLayer, 0);
+            setParam (*bright, "noise_color", 2.0f); // brown: most energy is low, so the high-pass shows
+            auto brownFlat = prepared (dsp::noiseLayer, 0);
+            setParam (*brownFlat, "noise_color", 2.0f);
+            setEnvelopeNodes (*bright, Envelope::noisePitch, { { 0, 36, 0 }, { 100, 36, 0 } });
+            const auto brownPlain = renderNote (*brownFlat, 29, 1.0f, 0.3), high = renderNote (*bright, 29, 1.0f, 0.3);
+            check (zcr (low) < 0.6 * zcr (plain) && rmsOf (low, 480, 9600) < 0.7f * rmsOf (plain, 480, 9600),
+                   "Noise Pitch Env -36 st darkens the noise (zero-crossing rate " + format (zcr (plain), 3) + " -> " + format (zcr (low), 3)
+                       + ", rms " + format (rmsOf (plain, 480, 9600), 3) + " -> " + format (rmsOf (low, 480, 9600), 3) + ")");
+            check (zcr (high) > 1.3 * zcr (brownPlain) && rmsOf (high, 480, 9600) < rmsOf (brownPlain, 480, 9600),
+                   "Noise Pitch Env +36 st thins brown noise (zero-crossing rate " + format (zcr (brownPlain), 4) + " -> " + format (zcr (high), 4) + ")");
+
+            auto sweep = prepared (dsp::noiseLayer, 0);
+            setEnvelopeNodes (*sweep, Envelope::noisePitch, { { 0, -48, 0 }, { 250, 0, 0 } });
+            const auto s = renderNote (*sweep, 29, 1.0f, 0.3);
+            check (allFinite (s) && zeroCrossings (s, 480, 2400).size() < zeroCrossings (s, 9600, 11520).size(),
+                   "a Noise filter sweep (-48 -> 0 st) opens up over time, smoothly and finite");
+        }
+
+        // 4. Amp envelopes: levels follow the points (vs. the same layer at a flat 100 %).
+        for (int layer = 0; layer < params::numLayers; ++layer)
+        for (const auto source : { 0, 1 })
+        {
+            if (source == 1 && ! params::layerHasSample (layer))
+                continue;
+            if (source == 1 && layer != dsp::tailLayer && layer != dsp::bodyLayer)
+                continue; // the short factory click / noise samples end before the windows below
+            const auto name = std::string (params::layerNames[(size_t) layer]) + (source == 1 ? " sample" : " synth");
+            const auto e = params::layerEnvelope (layer, true);
+            auto reference = prepared (layer, source);
+            if (layer == dsp::bodyLayer)
+                flatBody (*reference, 55.0f, 300.0f);
+            if (source == 1)
+                setParam (*reference, params::layerId (layer, "source"), 1.0f);
+            setEnvelopeNodes (*reference, e, { { 0, 1, 0 }, { 300, 1, 0 } });
+            auto shaped = prepared (layer, source);
+            if (layer == dsp::bodyLayer)
+                flatBody (*shaped, 55.0f, 300.0f);
+            if (source == 1)
+                setParam (*shaped, params::layerId (layer, "source"), 1.0f);
+            setEnvelopeNodes (*shaped, e, { { 0, 1, 0 }, { 100, 1, 0 }, { 101, 0.25f, 0 }, { 200, 0.25f, 0 }, { 300, 0, 0 } });
+            const auto a = renderNote (*reference, 29, 1.0f, 0.5), b = renderNote (*shaped, 29, 1.0f, 0.5);
+            const auto ms = [] (double t) { return (int) (t * sampleRate / 1000.0); };
+            const auto r1 = rmsOf (b, ms (20), ms (95)) / std::max (1.0e-9f, rmsOf (a, ms (20), ms (95)));
+            const auto r2 = rmsOf (b, ms (115), ms (195)) / std::max (1.0e-9f, rmsOf (a, ms (115), ms (195)));
+            const auto tailPeak = peakOf (b, ms (302));
+            check (rmsOf (a, ms (115), ms (195)) > 1.0e-4f && std::abs (r1 - 1.0f) < 0.03f && std::abs (r2 - 0.25f) < 0.03f && tailPeak < 1.0e-6f,
+                   name + ": the Amp Env sets the level (100 % -> " + format (r1, 3) + ", 25 % -> " + format (r2, 3)
+                       + ", silent after its 0 % end: peak " + format (tailPeak, 7) + ")");
+        }
+
+        // 5. Names and automation: "<Layer> Pitch Env 2 Time", "<Layer> Amp Env 3 Level" ...
+        {
+            auto p = makeProcessor();
+            bool named = true;
+            std::set<juce::String> names;
+            int count = 0;
+            for (const auto& id : allParameterIds (*p))
+            {
+                auto* param = p->getParameterState().getParameter (id);
+                names.insert (param->getName (128));
+                const auto info = envelopeParamInfo (id);
+                const auto layer = info.isEnvelope ? params::envelopeLayer (info.envelope) : -1;
+                if (layer < 0)
+                    continue;
+                ++count;
+                const auto prefix = juce::String (params::layerNames[(size_t) layer]) + (params::isAmpEnvelope (info.envelope) ? " Amp Env " : " Pitch Env ");
+                if (! (param->getName (128).startsWith (prefix) && param->isAutomatable()))
+                {
+                    named = false;
+                    note ("  " + id.toStdString() + " is named " + param->getName (128).toStdString());
+                }
+            }
+            check (named && count == 10 * (1 + 3 * params::maxNodes - 2), std::to_string (count) + " layer envelope parameters, all automatable and named \"<Layer> Pitch Env ...\" / \"<Layer> Amp Env ...\"");
+            check ((int) names.size() == allParameterIds (*p).size(), "every parameter name is unique");
+        }
+
+        // 6. The default amp envelopes are the old shapes: the Sub / Tail / Noise attack-hold-decay
+        //    (v0.3.5 defaults) and the Click's linear taper over its 12 ms Length.
+        {
+            const std::array<std::pair<int, dsp::AhdEnvelope>, 3> old { { { dsp::subLayer, { 1.0f, 60.0f, 350.0f, 0.4f } },
+                                                                         { dsp::tailLayer, { 30.0f, 0.0f, 900.0f, 0.5f } },
+                                                                         { dsp::noiseLayer, { 0.5f, 5.0f, 150.0f, 0.6f } } } };
+            float worst = 0.0f;
+            for (const auto& [layer, ahd] : old)
+            {
+                const auto e = dsp::defaultLayerEnvelope (layer, true);
+                for (float t = 0.0f; t <= ahd.getLengthMs(); t += 0.05f)
+                    worst = std::max (worst, std::abs (e.evaluate (t) - ahd.evaluate (t)));
+            }
+            const auto click = dsp::defaultLayerEnvelope (dsp::clickLayer, true);
+            for (float t = 0.0f; t <= 12.0f; t += 0.05f)
+                worst = std::max (worst, std::abs (click.evaluate (t) - (1.0f - t / 12.0f)));
+            check (worst < 1.0e-4f, "the default amp envelopes reproduce the old AHD / Click Length shapes (worst " + format (worst, 7) + ")");
+        }
+
+        // 7. Defaults are flat: no layer pitch envelope is active on a fresh processor (no filter, no bend).
+        {
+            auto p = makeProcessor();
+            bool flat = true;
+            for (int layer = 0; layer < params::numLayers; ++layer)
+                if (layer != dsp::bodyLayer)
+                {
+                    const auto e = params::layerEnvelope (layer, false);
+                    for (int n = 0; n < juce::roundToInt (getPlain (*p, params::envelopeCountId (e))); ++n)
+                        flat = flat && getPlain (*p, params::nodeValueId (e, n)) == 0.0f;
+                }
+            check (flat, "the Click / Sub / Tail / Noise pitch envelopes default to flat 0 st");
+        }
+    }
+
+    //==============================================================================
+    // v0.3.6: randomise draws musical Click envelopes and mild Sub / Tail / Noise ones.
+    void testRandomiseLayerEnvelopes()
+    {
+        auto p = makeProcessor();
+        juce::Random random (4242);
+        int clickPitchMoves = 0;
+        bool clickOk = true, mildOk = true, ampsOk = true;
+        std::set<int> clickEnds;
+
+        for (int i = 0; i < 200; ++i)
+        {
+            const auto values = dooblrkick::presets::randomise (p->getParameterState(), random);
+            std::map<juce::String, float> v (values.begin(), values.end());
+            const auto at = [&] (params::Envelope e, int n, const char* what)
+            {
+                const auto id = juce::String (what) == "t" ? params::nodeTimeId (e, n) : params::nodeValueId (e, n);
+                check (v.count (id) > 0, "randomise sets " + id.toStdString());
+                return v[id];
+            };
+
+            // Click: 2 or 3 amp points ending at silence after 3 .. 80 ms; a 0 .. +12 st pitch drop.
+            const auto clickCount = (int) v[params::envelopeCountId (params::Envelope::clickAmp)];
+            const auto clickEnd = at (params::Envelope::clickAmp, clickCount - 1, "t");
+            clickOk = clickOk && (clickCount == 2 || clickCount == 3) && at (params::Envelope::clickAmp, clickCount - 1, "v") == 0.0f
+                      && clickEnd >= 2.9f && clickEnd <= 80.5f;
+            clickEnds.insert ((int) clickEnd);
+            const auto drop = at (params::Envelope::clickPitch, 0, "v");
+            clickOk = clickOk && drop >= 0.0f && drop <= 12.0f && at (params::Envelope::clickPitch, 1, "v") == 0.0f;
+            clickPitchMoves += drop > 0.0f ? 1 : 0;
+
+            // Sub / Tail: pitch within +-2 st; Noise filter within +-12 st; amp envelopes end silent.
+            for (const auto layer : { dsp::subLayer, dsp::tailLayer, dsp::noiseLayer })
+            {
+                const auto limit = layer == dsp::noiseLayer ? 12.0f : 2.0f;
+                const auto pe = params::layerEnvelope (layer, false), ae = params::layerEnvelope (layer, true);
+                for (int n = 0; n < (int) v[params::envelopeCountId (pe)]; ++n)
+                    mildOk = mildOk && std::abs (at (pe, n, "v")) <= limit;
+                const auto count = (int) v[params::envelopeCountId (ae)];
+                ampsOk = ampsOk && count >= 3 && at (ae, count - 1, "v") == 0.0f && at (ae, count - 1, "t") > 20.0f;
+            }
+        }
+
+        check (clickOk, "200 randomisations: Click amp envelopes end at 0 % within 3 .. 80 ms, pitch drops within 0 .. +12 st");
+        check (clickEnds.size() > 30 && clickPitchMoves > 60 && clickPitchMoves < 180,
+               "Click lengths vary (" + std::to_string (clickEnds.size()) + " distinct) and the pitch drop comes up sometimes ("
+                   + std::to_string (clickPitchMoves) + " / 200)");
+        check (mildOk, "Sub / Tail pitch envelopes stay within +-2 st and the Noise filter within +-12 st");
+        check (ampsOk, "Sub / Tail / Noise amp envelopes are attack / hold / decay shapes that end silent");
     }
 
     //==============================================================================
@@ -3981,12 +4366,51 @@ namespace
         for (const auto [w, hgt] : { std::pair { 940, 600 }, std::pair { 1080, 660 }, std::pair { 2400, 1400 } })
         {
             editor.setSize (w, hgt);
+            for (int page = 0; page < params::numLayers; ++page) // v0.3.6: on every layer page
+            {
+                editor.selectPage (page);
+                const auto tb = editor.getLocalArea (toggle.getParentComponent(), toggle.getBounds());
+                const auto eb = editor.getLocalArea (env.getParentComponent(), env.getBounds());
+                // The title ("NOISE PITCH ENVELOPE") has the bar's first 180 px.
+                check (toggle.isVisible() && tb.getWidth() >= 100 && tb.getHeight() >= 18 && editor.getLocalBounds().contains (tb) && ! tb.intersects (eb)
+                           && tb.getRight() <= eb.getRight() + 1 && tb.getBottom() <= eb.getY() && tb.getX() >= eb.getX() + 180,
+                       std::to_string (w) + "x" + std::to_string (hgt) + " " + params::layerNames[(size_t) page]
+                           + ": the switch fits above the graph, right of the title (" + tb.toString().toStdString() + " graph " + eb.toString().toStdString() + ")");
+            }
+        }
+
+        // v0.3.6: every layer page's switch flips that layer's own Pitch / Amp envelope.
+        editor.setSize (1080, 660);
+        {
+            bool allOk = true;
+            for (int page = 0; page < params::numLayers; ++page)
+            {
+                editor.selectPage (page);
+                toggle.setRight (false, true, false);
+                const auto c = toggle.getLocalBounds().getCentre().toFloat();
+                const auto pitchOk = env.getEnvelope() == params::layerEnvelope (page, false) && editor.getEnvelopeTitle().endsWith ("PITCH ENVELOPE");
+                toggle.mouseDown (makeMouseEvent (toggle, c, c, 1, false));
+                toggle.mouseUp (makeMouseEvent (toggle, c, c, 1, false));
+                for (double t = 0.0; t <= 300.0; t += 30.0) { toggle.advanceAnimation (20000.0 + page * 1000.0 + t); env.advanceCrossfade (20000.0 + page * 1000.0 + t); }
+                const auto ampOk = toggle.isRight() && env.getEnvelope() == params::layerEnvelope (page, true) && editor.getEnvelopeTitle().endsWith ("AMP ENVELOPE")
+                                   && env.getBoundParameterIds().contains (params::envelopeCountId (params::layerEnvelope (page, true)));
+                if (! (pitchOk && ampOk))
+                {
+                    allOk = false;
+                    note ("  page " + std::to_string (page) + ": pitch " + std::to_string (pitchOk) + ", amp " + std::to_string (ampOk));
+                }
+            }
+            // Leaving every layer on Amp, then putting the Body back on Pitch, leaves the others on Amp.
             editor.selectPage (dsp::bodyLayer);
-            const auto tb = editor.getLocalArea (toggle.getParentComponent(), toggle.getBounds());
-            const auto eb = editor.getLocalArea (env.getParentComponent(), env.getBounds());
-            check (toggle.isVisible() && tb.getWidth() >= 100 && tb.getHeight() >= 18 && editor.getLocalBounds().contains (tb) && ! tb.intersects (eb)
-                       && tb.getRight() <= eb.getRight() + 1 && tb.getBottom() <= eb.getY(),
-                   std::to_string (w) + "x" + std::to_string (hgt) + ": the switch fits above the graph (" + tb.toString().toStdString() + " graph " + eb.toString().toStdString() + ")");
+            toggle.setRight (false, true, false);
+            editor.selectPage (dsp::noiseLayer);
+            allOk = allOk && toggle.isRight() && env.getEnvelope() == params::Envelope::noiseAmp;
+            check (allOk, "on every layer page a click on the switch shows that layer's Amp envelope, and each page keeps its own choice");
+            for (int page = 0; page < params::numLayers; ++page)
+            {
+                editor.selectPage (page);
+                toggle.setRight (false, true, false);
+            }
         }
 
         editor.setSize (1080, 660);
@@ -4593,8 +5017,8 @@ namespace
         auto& editor = *h.editor;
 
         auto* version = dynamic_cast<juce::Label*> (editor.findChildWithID ("version"));
-        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.5",
-               "header subtitle is the build version (v0.3.5)");
+        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.6",
+               "header subtitle is the build version (v0.3.6)");
         juce::StringArray texts;
         collectLabels (editor, texts);
         bool tagLine = false;
@@ -5205,14 +5629,14 @@ namespace
 
         struct Expect { int layer; juce::StringArray synthOnly, sampleOnly, shared; };
         const std::vector<Expect> layers {
-            { dsp::clickLayer, { "click_type" }, { "click_sample", "click_loadSample", "click_sampleFile" },
-              { "click_pitch", "click_length", "click_tone", "click_keytrack" } },
+            { dsp::clickLayer, { "click_type" }, { "click_sample", "click_smp_penv", "click_loadSample", "click_sampleFile" },
+              { "click_pitch", "click_tone", "click_keytrack" } },
             { dsp::bodyLayer, { "body_wave", "body_harm", "body_phase" },
               { "body_sample", "body_smp_penv", "body_loadSample", "body_sampleFile" }, { "body_tune", "body_drive", "body_keytrack" } },
-            { dsp::tailLayer, { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_loadSample", "tail_sampleFile" },
-              { "tail_keytrack", "tail_tune", "tail_attack", "tail_hold", "tail_decay", "tail_curve", "tail_drive" } },
-            { dsp::noiseLayer, { "noise_color", "noise_width" }, { "noise_sample", "noise_tune", "noise_loadSample", "noise_sampleFile" },
-              { "noise_attack", "noise_hold", "noise_decay", "noise_curve", "noise_keytrack" } },
+            { dsp::tailLayer, { "tail_wave", "tail_spread", "tail_phase" }, { "tail_sample", "tail_smp_penv", "tail_loadSample", "tail_sampleFile" },
+              { "tail_keytrack", "tail_tune", "tail_drive" } },
+            { dsp::noiseLayer, { "noise_color", "noise_width" }, { "noise_sample", "noise_tune", "noise_smp_penv", "noise_loadSample", "noise_sampleFile" },
+              { "noise_keytrack" } },
         };
 
         // Hidden values are kept: give the other source's controls distinctive values first.
@@ -5663,7 +6087,7 @@ int main()
         { "meter tap (audio -> UI)",                testMeterTap },
         { "meter GR matches the DSP",               testMeterGainReductionMatchesDsp },
         { "EQ / Dynamics / Limiter views",          testOutputViews },
-        { "golden renders vs v0.2.0",               testGoldenRenders },
+        { "golden renders vs v0.2.0 (within -46 dBFS since 0.3.6)",               testGoldenRenders },
         { "master envelope defaults transparent",   testMasterEnvelopeDefaults },
         { "master envelope shapes the output",      testMasterEnvelopeShapes },
         { "dry / wet",                              testDryWet },
@@ -5684,8 +6108,10 @@ int main()
         { "envelope playhead (v0.3.4)", testPlayhead },
         { "playhead dims with the level (v0.3.5)", testPlayheadLevel },
         { "key track on every layer (v0.3.5)", testKeyTrackSwitches },
-        { "each layer page shows its own envelope (v0.3.5)", testLayerEnvelopes },
+        { "each layer page shows its own pitch / amp envelope (v0.3.6)", testLayerEnvelopes },
         { "pitch / amp sliding switch (v0.3.5)", testEnvelopeToggle },
+        { "layer pitch / amp envelopes (v0.3.6)", testLayerPitchAndAmpEnvelopes },
+        { "randomise layer envelopes (v0.3.6)", testRandomiseLayerEnvelopes },
         { "envelope / waveform divider (v0.3.5)", testSplitter },
         { "Export dialog and Play icon (v0.3.5)", testExportAndPlayButtons },
         { "console taper for the layer faders (v0.3.5)", testLevelTaper },

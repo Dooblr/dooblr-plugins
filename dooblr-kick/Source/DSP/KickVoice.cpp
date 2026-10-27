@@ -105,6 +105,10 @@ namespace dooblrkick::dsp
         clickBand.reset();
         clickTone = 0.0f;
 
+        for (auto& f : noiseLow) f.reset();
+        for (auto& f : noiseHigh) f.reset();
+        noiseToneCountdown = 0;
+
         for (auto& reader : readers)
             reader.reset();
     }
@@ -143,11 +147,18 @@ namespace dooblrkick::dsp
                 length = std::max (length, s.common (layer).startMs + layerLengthMs);
         };
 
-        consider (clickLayer, s.click.lengthMs);
+        // Every layer's amp envelope ends at its last point; one that ends above silence fades
+        // out over the next 10 ms (v0.3.6: the same rule on every layer).
+        const auto ampLength = [] (const MultiPointEnvelope& amp)
+        {
+            return amp.getEndTimeMs() + (amp.getEndValue() > 0.0f ? MultiPointEnvelope::endFadeMs : 0.0f);
+        };
+
+        consider (clickLayer, ampLength (s.click.amp));
         consider (bodyLayer, s.body.amp.getEndTimeMs() + 10.0f);
-        consider (subLayer, s.sub.amp.getLengthMs());
-        consider (tailLayer, s.tail.amp.getLengthMs());
-        consider (noiseLayer, s.noise.amp.getLengthMs());
+        consider (subLayer, ampLength (s.sub.amp));
+        consider (tailLayer, ampLength (s.tail.amp));
+        consider (noiseLayer, ampLength (s.noise.amp));
 
         // A master envelope that ends at silence ends the hit there.
         if (s.master.envelopeActive() && s.master.envelope.getEndValue() <= 1.0e-4f)
@@ -165,16 +176,21 @@ namespace dooblrkick::dsp
     }
 
     //==============================================================================
-    float KickVoice::renderClick (const ClickSettings& c, float tMs) noexcept
+    float KickVoice::renderClick (const ClickSettings& c, float tMs, bool pitchOn) noexcept
     {
-        const auto lengthMs = std::max (0.5f, c.lengthMs);
+        // v0.3.6: the amp envelope is the click's level and its last point the click's length
+        // (the timeline x of the type's own decay and of the chirp sweep). The default, 100 %
+        // to 0 over 12 ms, is the old linear taper over the old 12 ms Length.
+        const auto endMs = std::max (0.5f, c.amp.getEndTimeMs());
+        const auto stopMs = c.amp.getEndValue() > 0.0f ? endMs + MultiPointEnvelope::endFadeMs : endMs;
 
-        if (tMs < 0.0f || tMs >= lengthMs)
+        if (tMs < 0.0f || tMs >= stopMs)
             return 0.0f;
 
-        const auto x = tMs / lengthMs;
-        const auto taper = 1.0f - x;
-        auto ratio = std::exp2 (c.pitchSt / 12.0f); // synth click: follows the note only with Key Track (0.3.5)
+        const auto x = std::min (1.0f, tMs / endMs);
+        const auto taper = c.amp.evaluateLevel (tMs, false);
+        const auto envSt = pitchOn ? c.pitch.evaluate (tMs) : 0.0f;
+        auto ratio = std::exp2 ((c.pitchSt + envSt) / 12.0f); // synth click: follows the note only with Key Track (0.3.5)
         if (c.keyTrack)
             ratio *= (float) sampleKeyRatio;
         const auto nyquistGuard = 0.45 * sampleRate;
@@ -182,10 +198,12 @@ namespace dooblrkick::dsp
 
         if (c.sample.enabled)
         {
-            // Sample click: plays the sample (tuned by Pitch, optionally key-tracked) and
-            // fades it out over the last 40 % of the click Length.
-            const auto fade = x < 0.6f ? 1.0f : 0.5f + 0.5f * std::cos ((float) twoPi * 0.5f * (x - 0.6f) / 0.4f);
-            v = readers[(size_t) clickLayer].read (c.sample.data, sampleStep (c.sample, sampleRatio (c.keyTrack, c.pitchSt))) * fade;
+            // Sample click: plays the sample (tuned by Pitch, optionally key-tracked, bent by
+            // the pitch envelope times Smp Pitch Env) shaped by the amp envelope.
+            auto step = sampleRatio (c.keyTrack, c.pitchSt);
+            if (pitchOn && c.sampleEnvAmount > 1.0e-4f)
+                step *= std::exp2 ((double) c.sampleEnvAmount * (double) envSt / 12.0);
+            v = readers[(size_t) clickLayer].read (c.sample.data, sampleStep (c.sample, step)) * taper;
         }
         else
         {
@@ -239,15 +257,7 @@ namespace dooblrkick::dsp
         if (tMs < 0.0f)
             return 0.0f;
 
-        const auto endMs = b.amp.getEndTimeMs();
-        float amplitude;
-
-        if (tMs <= endMs)
-            amplitude = b.amp.evaluate (tMs);
-        else if (sustain)
-            amplitude = b.amp.getEndValue();
-        else
-            amplitude = b.amp.getEndValue() * std::max (0.0f, 1.0f - (tMs - endMs) / 10.0f);
+        const auto amplitude = b.amp.evaluateLevel (tMs, sustain);
 
         if (b.sample.enabled)
         {
@@ -282,15 +292,17 @@ namespace dooblrkick::dsp
         return v * amplitude;
     }
 
-    float KickVoice::renderSub (const KickSettings& s, float tMs) noexcept
+    float KickVoice::renderSub (const KickSettings& s, float tMs, bool pitchOn, bool sustain) noexcept
     {
         const auto& sub = s.sub;
 
         if (tMs < 0.0f)
             return 0.0f;
 
-        const auto amplitude = sub.amp.evaluate (tMs);
+        const auto amplitude = sub.amp.evaluateLevel (tMs, sustain);
         auto baseNote = (float) s.play.keyNote + sub.tuneSt + sub.fineCents / 100.0f; // the MIDI note only with Key Track (0.3.5)
+        if (pitchOn)
+            baseNote += sub.pitch.evaluate (tMs); // v0.3.6: the Sub's own pitch envelope (semitones)
         if (sub.keyTrack)
             baseNote += keyOffsetSt;
         auto frequency = (double) midiNoteToHz (baseNote);
@@ -304,23 +316,28 @@ namespace dooblrkick::dsp
         return v * amplitude;
     }
 
-    void KickVoice::renderTail (const TailSettings& t, float tMs, float keyNote, float& left, float& right) noexcept
+    void KickVoice::renderTail (const TailSettings& t, float tMs, float keyNote, bool pitchOn, bool sustain,
+                                float& left, float& right) noexcept
     {
         left = right = 0.0f;
 
         if (tMs < 0.0f)
             return;
 
-        const auto amplitude = t.amp.evaluate (tMs);
+        const auto amplitude = t.amp.evaluateLevel (tMs, sustain);
+        const auto envSt = pitchOn ? t.pitch.evaluate (tMs) : 0.0f;
 
         if (t.sample.enabled)
         {
-            const auto step = sampleStep (t.sample, sampleRatio (t.keyTrack, t.tuneSt));
+            auto ratio = sampleRatio (t.keyTrack, t.tuneSt);
+            if (pitchOn && t.sampleEnvAmount > 1.0e-4f)
+                ratio *= std::exp2 ((double) t.sampleEnvAmount * (double) envSt / 12.0);
+            const auto step = sampleStep (t.sample, ratio);
             left = right = applyDrive (readers[(size_t) tailLayer].read (t.sample.data, step), t.drive) * amplitude;
             return;
         }
 
-        const auto frequency = (double) midiNoteToHz (keyNote + t.tuneSt + (t.keyTrack ? keyOffsetSt : 0.0f)); // the note only with Key Track (0.3.5)
+        const auto frequency = (double) midiNoteToHz (keyNote + t.tuneSt + (t.keyTrack ? keyOffsetSt : 0.0f) + envSt); // the note only with Key Track (0.3.5)
         const auto spread = std::exp2 ((double) t.spreadCents / 2400.0);
         const auto wave = std::clamp (t.wave, 0, (int) saturatedWave);
 
@@ -330,19 +347,39 @@ namespace dooblrkick::dsp
         advance (tailPhase[1], std::min (frequency / spread, 0.45 * sampleRate) / sampleRate);
     }
 
-    void KickVoice::renderNoise (const NoiseSettings& n, float tMs, float& left, float& right) noexcept
+    void KickVoice::renderNoise (const NoiseSettings& n, float tMs, bool pitchOn, bool sustain, float& left, float& right) noexcept
     {
         left = right = 0.0f;
 
         if (tMs < 0.0f)
             return;
 
-        const auto amplitude = n.amp.evaluate (tMs);
+        const auto amplitude = n.amp.evaluateLevel (tMs, sustain);
 
         if (n.sample.enabled)
         {
-            left = right = readers[(size_t) noiseLayer].read (n.sample.data, sampleStep (n.sample, sampleRatio (n.keyTrack, n.tuneSt))) * amplitude;
+            auto ratio = sampleRatio (n.keyTrack, n.tuneSt);
+            if (pitchOn && n.sampleEnvAmount > 1.0e-4f)
+                ratio *= std::exp2 ((double) n.sampleEnvAmount * (double) n.pitch.evaluate (tMs) / 12.0);
+            left = right = readers[(size_t) noiseLayer].read (n.sample.data, sampleStep (n.sample, ratio)) * amplitude;
             return;
+        }
+
+        if (pitchOn && --noiseToneCountdown <= 0)
+        {
+            // The synth noise has no pitch: its pitch envelope moves a tone filter instead, one
+            // semitone of cutoff per semitone (below 0: low-pass down from 20 kHz; above 0:
+            // high-pass up from 20 Hz; at 0 both sit at the edges of the audio band).
+            noiseToneCountdown = noiseToneInterval;
+            const auto st = n.pitch.evaluate (tMs);
+            const auto lowHz = 20000.0f * std::exp2 (std::min (st, 0.0f) / 12.0f);
+            const auto highHz = 20.0f * std::exp2 (std::max (st, 0.0f) / 12.0f);
+
+            for (size_t ch = 0; ch < 2; ++ch)
+            {
+                noiseLow[ch].setParameters (SvfFilter::Mode::lowPass, lowHz, 0.3f, sampleRate);
+                noiseHigh[ch].setParameters (SvfFilter::Mode::highPass, highHz, 0.3f, sampleRate);
+            }
         }
 
         float raw[2] = { nextNoise (noiseStateL), nextNoise (noiseStateR) };
@@ -370,6 +407,10 @@ namespace dooblrkick::dsp
                 raw[ch] = brown[ch] * 3.5f;
             }
         }
+
+        if (pitchOn)
+            for (size_t ch = 0; ch < 2; ++ch)
+                raw[ch] = noiseHigh[ch].process (noiseLow[ch].process (raw[ch]));
 
         const auto mid = 0.5f * (raw[0] + raw[1]);
         const auto side = 0.5f * (raw[0] - raw[1]) * std::clamp (n.width, 0.0f, 1.0f);
@@ -404,8 +445,22 @@ namespace dooblrkick::dsp
 
         const auto lengthMs = getOneShotLengthMs (s);
         const auto masterActive = s.master.envelopeActive();
-        const auto bodySustains = s.play.gate && held && s.isLayerAudible (bodyLayer) && s.body.amp.getEndValue() > 1.0e-4f
-                               && ! (masterActive && s.master.envelope.getEndValue() <= 1.0e-4f);
+        // A gated, held note holds the end level of an amp envelope that does not end at silence
+        // (Body, Sub, Tail and Noise; the Click is a transient and always ends).
+        const auto gateHolds = s.play.gate && held && ! (masterActive && s.master.envelope.getEndValue() <= 1.0e-4f);
+        const auto sustains = [&] (int layer, const MultiPointEnvelope& amp)
+        {
+            return gateHolds && s.isLayerAudible (layer) && amp.getEndValue() > 1.0e-4f;
+        };
+        const auto bodySustains = sustains (bodyLayer, s.body.amp);
+        const auto subSustains = sustains (subLayer, s.sub.amp);
+        const auto tailSustains = sustains (tailLayer, s.tail.amp);
+        const auto noiseSustains = sustains (noiseLayer, s.noise.amp);
+        const auto anySustains = bodySustains || subSustains || tailSustains || noiseSustains;
+        const auto clickPitchOn = ! s.click.pitch.isFlatAt (0.0f);
+        const auto subPitchOn = ! s.sub.pitch.isFlatAt (0.0f);
+        const auto tailPitchOn = ! s.tail.pitch.isFlatAt (0.0f);
+        const auto noisePitchOn = ! s.noise.pitch.isFlatAt (0.0f);
         const auto msPerSample = 1000.0f / (float) sampleRate;
         const auto key = (float) s.play.keyNote;
 
@@ -436,11 +491,11 @@ namespace dooblrkick::dsp
 
                 switch (layer)
                 {
-                    case clickLayer: left = renderClick (s.click, t); break;
+                    case clickLayer: left = renderClick (s.click, t, clickPitchOn); break;
                     case bodyLayer:  left = renderBody (s.body, t, bodySustains); break;
-                    case subLayer:   left = renderSub (s, t); break;
-                    case tailLayer:  renderTail (s.tail, t, key, left, right); stereo = true; break;
-                    default:         renderNoise (s.noise, t, left, right); stereo = true; break;
+                    case subLayer:   left = renderSub (s, t, subPitchOn, subSustains); break;
+                    case tailLayer:  renderTail (s.tail, t, key, tailPitchOn, tailSustains, left, right); stereo = true; break;
+                    default:         renderNoise (s.noise, t, noisePitchOn, noiseSustains, left, right); stereo = true; break;
                 }
 
                 if (c.filterType > 0)
@@ -480,7 +535,7 @@ namespace dooblrkick::dsp
         }
 
         // Done once every layer has finished, plus time for the filters to ring out.
-        if (! bodySustains && (float) samplesElapsed * msPerSample > lengthMs + 30.0f)
+        if (! anySustains && (float) samplesElapsed * msPerSample > lengthMs + 30.0f)
             active = false;
     }
 }

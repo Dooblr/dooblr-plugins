@@ -5,24 +5,25 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.5 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.6 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
 - **Five layers.** Each layer has its own on/solo switch, level, pan, start offset, drive send,
   and filter (off, LP, HP or BP, with cutoff and resonance).
-  - **Click:** synthesised transient (chirp, noise burst, snap, tick or knock), with pitch, tone
-    and length. It can also play a sample.
+  - **Click:** synthesised transient (chirp, noise burst, snap, tick or knock), with pitch and
+    tone. Its amp envelope sets its length and shape. It can also play a sample.
   - **Body:** the main tone. It has a wave shape, harmonics, tune, start phase and drive. It is
     shaped by multi-point **pitch** and **amp** envelopes (up to 8 points each, with draggable
     curve tension). It can also play a sample, optionally re-pitched by the pitch envelope
     ("Smp pitch env").
-  - **Sub:** a sine at the **Key** note plus tune and fine. It has phase, AHD envelope and pitch
-    envelope amount.
-  - **Tail:** a rumble/boom layer with a wave, tune, drive, stereo spread and AHD. It can also
-    play a sample.
-  - **Noise:** coloured noise with stereo width and AHD. It can also play a sample (with its own
-    sample tune).
+  - **Sub:** a sine at the **Key** note plus tune and fine. It has phase and "Body pitch" (how
+    far it follows the Body pitch envelope).
+  - **Tail:** a rumble/boom layer with a wave, tune, drive and stereo spread. It can also play
+    a sample.
+  - **Noise:** coloured noise with stereo width. It can also play a sample (with its own sample
+    tune).
+  - **Every layer has its own pitch and amp envelopes (0.3.6)**, like the Body: see below.
 - **The MIDI note does not change the synth.** Every note plays the same kick; only velocity
   (and note length in gate mode) matters. The kick's pitch is set by **Key** (Play panel,
   default F0) and each layer's tune. Sample layers have an opt-in **Smp key track** switch
@@ -122,11 +123,32 @@ Version 0.3.5 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   maps to 10 % .. full brightness, with the end-of-hit fade on top. On the Body pitch graph it
   follows the Body amp envelope; on the master graph the master envelope (full brightness when
   the master envelope is off).
-- **Each layer page shows its own envelope (0.3.5).** Click shows its length shape, Sub,
-  Tail and Noise their attack / hold / decay (drag the points; the decay diamond sets the
+- **Pitch and amp envelopes on every layer (0.3.6).** Click, Sub, Tail and Noise now have
+  the same two multi-point envelopes as the Body (up to 8 points, curve tension, zoom, pan,
+  auto-fit, playhead, point readouts), picked with the Pitch / Amp switch above the graph on
+  every layer page. Each page remembers its own choice.
+  - **Amp** replaces the old Click Length and the Sub / Tail / Noise Attack / Hold / Decay /
+    Curve knobs (removed; the points do their job). The defaults are the old shapes (Click:
+    100 % to 0 over 12 ms; Sub 1 / 60 / 350 ms; Tail 30 / 0 / 900 ms; Noise 0.5 / 5 / 150 ms).
+    The last point is the layer's end: at 0 % the layer stops there, above 0 % it fades out
+    over 10 ms (or holds while a gated note is held; the Click never holds).
+  - **Pitch** is a semitone offset (-48 .. +48 st) on top of tune and key tracking, flat at
+    0 st by default. In Synth mode it moves the oscillator (Click, Sub, Tail). In Sample mode
+    it bends the playback rate, scaled by the layer's "Smp pitch env" knob (Click, Tail, Noise;
+    100 % by default, so +12 st is exactly an octave). Synth Noise has no pitch, so its pitch
+    envelope moves a tone filter instead: below 0 st a low-pass closes from 20 kHz by one
+    semitone per semitone, above 0 st a high-pass opens from 20 Hz.
+  - All points are automatable host parameters ("Sub Pitch Env 2 Time", "Click Amp Env 3
+    Level" ...). Envelope changes are smoothed per block, so moving one under a held note
+    does not zipper. The Sub's old "Env amt" knob is now "Body pitch" ("Sub Follow Body Pitch").
+  - Random rolls the Click's amp (3 .. 80 ms, sometimes with a held top) and a pitch drop
+    (up to +12 st on chirp, knock and samples, up to +4 st on the bright types), mild attack / hold / decay shapes for Sub, Tail and Noise, and flat or gentle
+    pitch envelopes for them (within 2 st; the Noise filter within 12 st).
+- **Each layer page shows its own envelope (0.3.5; superseded by the 0.3.6 envelopes above).** Click showed its length shape, Sub,
+  Tail and Noise their attack / hold / decay (drag the points; the decay diamond set the
   curve), Body its pitch or amp envelope. Previously one graph stayed bound to the Body on
   every page.
-- **Pitch / Amp switch (0.3.5).** On the Body page a sliding switch above the graph picks
+- **Pitch / Amp switch (0.3.5; every layer page since 0.3.6).** A sliding switch above the graph picks
   the envelope: the thumb eases over about 180 ms and the graph cross-fades over about 200 ms.
   Click, drag the thumb, or use Space / Left / Right; it changes only the view.
 - **Key Track switch per layer (0.3.5).** A vertical "KEY" switch under each layer's Level
