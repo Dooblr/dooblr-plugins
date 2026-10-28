@@ -1,1 +1,63 @@
 # dooblr-plugins
+
+Monorepo for the **dooblr** audio plug-in suite by Dan Feinstein: VST3 plug-ins for macOS
+(arm64, macOS 11+), built with C++20, CMake and JUCE 8.0.15. Each plug-in is self-contained
+in its own folder and has its own README.
+
+| Folder | Plug-in | Type |
+| --- | --- | --- |
+| [`dooblr-q/`](dooblr-q/) | dooblr-q 0.9.5 | Dynamic parametric EQ (VST3 effect) |
+| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick 0.3.6 | Layered kick drum designer (VST3 instrument) |
+| [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals 0.1.0 | Pitch correction and vocal chain (VST3 effect + Standalone) |
+| [`design/`](design/) | Design files | Shared visual design system for the suite |
+
+## Building
+
+Each plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
+host-style LoadCheck, and installs the VST3 bundle (never with sudo). Build directories live
+**outside** the repo (and outside Dropbox), in `~/dooblr-build/<plugin>`:
+
+```sh
+dooblr-q/scripts/build.sh        # builds in ~/dooblr-build/dooblr-q
+dooblr-kick/scripts/build.sh     # builds in ~/dooblr-build/dooblr-kick
+dooblr-vocals/scripts/build.sh   # builds in ~/dooblr-build/dooblr-vocals
+```
+
+Useful environment variables (see the top of each `build.sh`):
+
+- `BUILD_DIR`: build directory (default `~/dooblr-build/<plugin>`)
+- `CONFIG`: CMake configuration (default `Release`)
+- `RUN_TESTS=0`: skip the tests; `INSTALL_VST3=0`: don't install; `LOAD_CHECK=0`: skip LoadCheck
+- `JUCE_SOURCE_DIR` (dooblr-vocals only): JUCE 8.0.15 source; defaults to
+  `~/dooblr-build/_deps/juce-src` when it exists
+
+Without the script, the build is plain CMake. JUCE 8.0.15 is fetched into the build directory:
+
+```sh
+cmake -S dooblr-q -B ~/dooblr-build/dooblr-q -DCMAKE_BUILD_TYPE=Release
+cmake --build ~/dooblr-build/dooblr-q --config Release
+```
+
+Requirements: Xcode command-line tools, CMake 3.22+, and optionally Ninja.
+
+## Design files
+
+- [`design/dooblr-design-system.md`](design/dooblr-design-system.md): the suite's design
+  system (layout, controls, colour, typography and interaction rules).
+- [`design/dooblr-design-tokens.json`](design/dooblr-design-tokens.json): design tokens
+  (colours, sizes, spacing) used by the plug-in UIs.
+
+These are copies; the working originals are in `~/Dropbox/grok_plugin_design_files`.
+
+## History
+
+Each plug-in's git history was imported into its subfolder.
+
+- **dooblr-q**: full history.
+- **dooblr-vocals**: full history.
+- **dooblr-kick**: partial history. Commits before v0.3.0 were lost when an old iCloud copy
+  of the repo was damaged, so v0.3.0 is the root commit here. v0.3.2 could not be recovered
+  (its source tree was missing), so its changes are folded into the v0.3.3 commit.
+
+All original design, artwork and sounds. No third-party plug-in artwork, branding, samples or
+presets are included.

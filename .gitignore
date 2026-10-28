@@ -1,0 +1,45 @@
+# Build output (builds normally live outside this repo in ~/dooblr-build/<plugin>)
+build/
+build-*/
+cmake-build-*/
+out/
+CMakeFiles/
+CMakeCache.txt
+_deps/
+artefact-paths/
+*.o
+*.a
+*.dylib
+
+# Built plug-in bundles and packages
+*.vst3/
+*.vst3
+*.component/
+*.aaxplugin/
+*.app/
+*.dmg
+*.pkg
+
+# Local staging folders
+.sample-staging/
+uploads/
+
+# IDE / editor
+.vscode/
+.idea/
+*.xcworkspace/
+xcuserdata/
+.cache/
+compile_commands.json
+
+# OS
+.DS_Store
+._*
+Icon?
+
+# Secrets and local environment
+.env
+.env.*
+*.pem
+*.p12
+*.key
