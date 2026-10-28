@@ -164,6 +164,9 @@ namespace dooblrvocals::ui
         void mouseUp (const juce::MouseEvent& e) override;
         void mouseExit (const juce::MouseEvent& e) override;
 
+        /** Draws what the cached background image holds (labels, grids); for tests. */
+        void drawBackgroundLayer (juce::Graphics& g) const;
+
         // For tests.
         juce::Rectangle<float> getTransferArea() const noexcept { return transfer; }
         juce::Rectangle<int> getHistoryArea() const noexcept { return history.getBounds(); }
@@ -228,9 +231,18 @@ namespace dooblrvocals::ui
         float dbToY (float db) const;
 
         void paint (juce::Graphics& g) override;
+        void resized() override;
+
+        /** The static layer (panel, scales, empty bars, captions) cached on resize; for tests. */
+        void drawStaticLayer (juce::Graphics& g) const;
+        bool hasStaticLayer() const noexcept { return staticLayer.isValid(); }
 
     private:
         int pictureHash() const;
+        void rebuildStaticLayer();
+
+        juce::Image staticLayer;
+        float staticScale = 0.0f;
 
         float level = minDb, hold = minDb, gr = 0.0f, ceiling = 0.0f;
         double holdAge = 0.0;
@@ -260,6 +272,9 @@ namespace dooblrvocals::ui
         void mouseDrag (const juce::MouseEvent& e) override;
         void mouseUp (const juce::MouseEvent& e) override;
         void mouseExit (const juce::MouseEvent& e) override;
+
+        /** Draws what the cached background image holds (labels, grids); for tests. */
+        void drawBackgroundLayer (juce::Graphics& g) const;
 
         // For tests.
         juce::Rectangle<int> getHistoryArea() const noexcept { return history.getBounds(); }

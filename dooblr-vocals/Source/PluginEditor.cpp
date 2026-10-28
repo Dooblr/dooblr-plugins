@@ -681,6 +681,19 @@ void DooblrVocalsAudioProcessorEditor::toggleRangeLearn()
     updateLearnUi();
 }
 
+void DooblrVocalsAudioProcessorEditor::updateLearnPulse (double nowMs)
+{
+    // One sine period about every second, quantised to 1/64 of the swing so an unchanged
+    // colour never repaints the button.
+    const auto phase = 0.5f + 0.5f * std::sin ((float) std::fmod (nowMs * 0.006, juce::MathConstants<double>::twoPi));
+    const auto alpha = 0.35f + 0.45f * std::round (phase * 64.0f) / 64.0f;
+    const auto colour = Palette::frozen.withAlpha (alpha);
+
+    if (! learnButton.isColourSpecified (juce::TextButton::buttonColourId)
+        || learnButton.findColour (juce::TextButton::buttonColourId) != colour)
+        learnButton.setColour (juce::TextButton::buttonColourId, colour);
+}
+
 void DooblrVocalsAudioProcessorEditor::updateLearnUi()
 {
     const auto learning = audioProcessor.isLearningRange();
@@ -693,9 +706,9 @@ void DooblrVocalsAudioProcessorEditor::updateLearnUi()
         buttonText = "Stop" + (hz > 0.0f ? juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")) + params::noteName (juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0)))
                                          : juce::String());
         labelText = "Listening - sing low to high, then Stop (" + juce::String (learner.getVoicedSeconds(), 1) + " s voiced)";
-        // Pulse while armed.
-        const auto phase = 0.5f + 0.5f * std::sin ((float) juce::Time::getMillisecondCounterHiRes() * 0.006f);
-        learnButton.setColour (juce::TextButton::buttonColourId, Palette::frozen.withAlpha (0.35f + 0.45f * phase));
+        // Pulse while armed: the VBlank drives it (updateLearnPulse); this only sets the first frame.
+        if (! learnButton.isColourSpecified (juce::TextButton::buttonColourId))
+            updateLearnPulse (juce::Time::getMillisecondCounterHiRes());
         learnButton.setColour (juce::TextButton::textColourOffId, Palette::textPrimary);
     }
     else
@@ -932,6 +945,9 @@ void DooblrVocalsAudioProcessorEditor::pollMeters()
         audioProcessor.getPitchTap().discardAll();
         return;
     }
+
+    if (audioProcessor.isLearningRange())
+        updateLearnPulse (juce::Time::getMillisecondCounterHiRes());
 
     readMeters();
 }

@@ -2872,11 +2872,50 @@ namespace
             check (visibleChain (view) && view.getWidth() > 100, "routing switch is visible on the Delay page");
             auto& undo = p->getUndoHistory();
             undo.clear();
-            const auto seg = view.getSegmentArea (1).getCentre().toFloat();
-            view.mouseDown (makeMouseEvent (view, seg, seg, 1, false));
-            view.mouseUp (makeMouseEvent (view, seg, seg, 1, false));
+
+            // t13u: the switch is a SegmentedToggle - it picks on mouse-up, inside the pressed segment.
+            auto& segs = view.getSegments();
+            check (segs.getComponentID() == "fx_routing_segments" && segs.getNumSegments() == 3 && visibleChain (segs)
+                       && segs.getParentComponent() == &view, "routing switch is a three-segment toggle");
+            check (view.getSegmentArea (1) == segs.getSegmentBounds (1) + segs.getPosition(), "segment areas are in the view's coordinates");
+            const auto seg = segs.getSegmentBounds (1).getCentre().toFloat();
+            segs.mouseDown (makeMouseEvent (segs, seg, seg, 1, false));
+            check (getPlain (*p, "fx_routing") < 0.5f && view.getRouting() == 0 && undo.getNumUndoableSteps() == 0,
+                   "mouse-down alone does not change the routing");
+            segs.mouseUp (makeMouseEvent (segs, seg, seg, 1, false));
             check (std::abs (getPlain (*p, "fx_routing") - 1.0f) < 0.01f && view.getRouting() == 1, "clicking Delay > Reverb sets fx_routing");
             check (undo.getNumUndoableSteps() == 1, "routing click is one undo step");
+
+            // Released over another segment: nothing.
+            const auto other = segs.getSegmentBounds (2).getCentre().toFloat();
+            segs.mouseDown (makeMouseEvent (segs, seg, seg, 1, false));
+            segs.mouseUp (makeMouseEvent (segs, other, seg, 1, true));
+            check (view.getRouting() == 1 && undo.getNumUndoableSteps() == 1, "releasing over another segment does nothing");
+
+            // Keyboard and accessibility.
+            check (segs.getWantsKeyboardFocus(), "routing switch takes keyboard focus");
+            segs.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+            check (juce::roundToInt (getPlain (*p, "fx_routing")) == 2 && undo.getNumUndoableSteps() == 2, "Right picks Reverb > Delay (one undo step)");
+            segs.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+            check (juce::roundToInt (getPlain (*p, "fx_routing")) == 2, "Right stops at the last segment");
+            segs.keyPressed (juce::KeyPress (juce::KeyPress::spaceKey));
+            check (juce::roundToInt (getPlain (*p, "fx_routing")) == 0, "Space cycles to the next segment (wrapping)");
+            segs.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));
+            check (juce::roundToInt (getPlain (*p, "fx_routing")) == 0, "Left stops at the first segment");
+            segs.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+            check (juce::roundToInt (getPlain (*p, "fx_routing")) == 1, "Right picks Delay > Reverb");
+            const auto handler = segs.createAccessibilityHandler(); // (getAccessibilityHandler needs a peer)
+            check (handler != nullptr && handler->getActions().contains (juce::AccessibilityActionType::press)
+                       && handler->getHelp() == "Dly > Rev", "routing switch has an accessibility handler");
+            if (handler != nullptr)
+            {
+                handler->getActions().invoke (juce::AccessibilityActionType::press);
+                check (juce::roundToInt (getPlain (*p, "fx_routing")) == 2, "accessibility press picks the next routing");
+                segs.select (1);
+            }
+            check (view.getRouting() == 1, "the sketch follows the switch");
+            undo.clear();
+            setParam (*p, "fx_routing", 1.0f);
             editor->selectPage (Editor::reverbPage);
             auto& view2 = editor->getRoutingView (Editor::reverbPage);
             view2.repaint();
@@ -3746,6 +3785,197 @@ namespace
         base.reset();
     }
 
+    //==============================================================================
+    // Design-system deviations fixed (t13u)
+
+    /** A software renderer that remembers where text glyphs land (local coordinates). */
+    class GlyphRecorder final : public juce::LowLevelGraphicsSoftwareRenderer
+    {
+    public:
+        using juce::LowLevelGraphicsSoftwareRenderer::LowLevelGraphicsSoftwareRenderer;
+
+        void drawGlyphs (juce::Span<const uint16_t> glyphs, juce::Span<const juce::Point<float>> positions,
+                         const juce::AffineTransform& t) override
+        {
+            for (const auto& pos : positions)
+                points.push_back (pos.transformedBy (t));
+            juce::LowLevelGraphicsSoftwareRenderer::drawGlyphs (glyphs, positions, t);
+        }
+
+        int countIn (juce::Rectangle<float> area) const
+        {
+            return (int) std::count_if (points.begin(), points.end(), [&] (auto pt) { return area.contains (pt); });
+        }
+
+        std::vector<juce::Point<float>> points;
+    };
+
+    template <typename Draw>
+    std::unique_ptr<GlyphRecorder> recordGlyphs (juce::Component& c, Draw&& draw)
+    {
+        static juce::Image image;
+        image = juce::Image (juce::Image::ARGB, juce::jmax (1, c.getWidth()), juce::jmax (1, c.getHeight()), true, juce::SoftwareImageType());
+        auto recorder = std::make_unique<GlyphRecorder> (image);
+        {
+            juce::Graphics g (*recorder);
+            draw (g);
+        }
+        return recorder;
+    }
+
+    void testDesignFixes()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "editor for design fixes");
+        if (editor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+
+        // #8 No help captions under the limiter / compressor histories (the dB labels and "dBFS" stay).
+        {
+            editor->selectPage (Editor::limiterPage);
+            auto& lim = editor->getLimiterDisplay();
+            const auto h = lim.getHistoryArea().toFloat();
+            const auto rec = recordGlyphs (lim, [&] (juce::Graphics& g) { lim.drawBackgroundLayer (g); });
+            const auto under = juce::Rectangle<float>::leftTopRightBottom (h.getX(), h.getBottom(), h.getRight(), (float) lim.getHeight() + 1.0f);
+            check (rec->countIn (under) == 0 && rec->countIn ({ 0.0f, 0.0f, h.getX(), (float) lim.getHeight() }) > 0,
+                   "limiter history: no caption under it (" + std::to_string (rec->countIn (under)) + " glyphs), labels kept");
+
+            editor->selectPage (Editor::dynamicsPage);
+            auto& dyn = editor->getDynamicsDisplay();
+            const auto dh = dyn.getHistoryArea().toFloat();
+            const auto drec = recordGlyphs (dyn, [&] (juce::Graphics& g) { dyn.drawBackgroundLayer (g); });
+            const auto dunder = juce::Rectangle<float>::leftTopRightBottom (dh.getX(), dh.getBottom(), dh.getRight(), (float) dyn.getHeight() + 1.0f);
+            check (drec->countIn (dunder) == 0 && ! drec->points.empty(), "compressor history: no caption under it");
+        }
+
+        // #6 / #7 / #8 Delay and reverb: cached picture, repaint only on change, off = dimmed with no text.
+        {
+            editor->selectPage (Editor::delayPage);
+            auto& dly = editor->getDelayDisplay();
+            auto& rev = editor->getReverbDisplay();
+            setParam (*p, "dly_on", 1.0f);
+            dly.refresh (0.0f, 120.0);
+            const auto requests = dly.getRepaintRequests();
+            for (int i = 0; i < 5; ++i)
+                dly.refresh (0.0f, 120.0);
+            check (dly.getRepaintRequests() == requests, "delay display: identical refreshes do not repaint");
+            (void) dly.createComponentSnapshot (dly.getLocalBounds());
+            const auto builds = dly.getPictureBuilds();
+            (void) dly.createComponentSnapshot (dly.getLocalBounds());
+            check (builds >= 1 && dly.getPictureBuilds() == builds, "delay display: an unchanged picture repaints from its cached image");
+            setParam (*p, "dly_feedback", 0.123f);
+            dly.refresh (0.0f, 120.0);
+            (void) dly.createComponentSnapshot (dly.getLocalBounds());
+            check (dly.getRepaintRequests() == requests + 1 && dly.getPictureBuilds() == builds + 1, "delay display: a parameter change rebuilds once");
+
+            const auto onGlyphs = recordGlyphs (dly, [&] (juce::Graphics& g) { dly.drawPicture (g); })->points.size();
+            setParam (*p, "dly_on", 0.0f);
+            dly.refresh (0.0f, 120.0);
+            const auto offGlyphs = recordGlyphs (dly, [&] (juce::Graphics& g) { dly.drawPicture (g); })->points.size();
+            check (dly.isDimmed() && offGlyphs == onGlyphs, "delay off: dimmed, no caption (" + std::to_string (offGlyphs) + " vs " + std::to_string (onGlyphs) + " glyphs)");
+            const auto meanBrightness = [] (juce::Component& c)
+            {
+                const auto img = c.createComponentSnapshot (c.getLocalBounds());
+                double sum = 0.0;
+                for (int y = 0; y < img.getHeight(); y += 2)
+                    for (int x = 0; x < img.getWidth(); x += 2)
+                        sum += img.getPixelAt (x, y).getBrightness();
+                return sum / (double) juce::jmax (1, (img.getHeight() / 2) * (img.getWidth() / 2));
+            };
+            const auto offBrightness = meanBrightness (dly);
+            setParam (*p, "dly_on", 1.0f);
+            dly.refresh (0.0f, 120.0);
+            const auto onBrightness = meanBrightness (dly);
+            check (! dly.isDimmed() && onBrightness > offBrightness, "delay off is drawn dimmer than on");
+
+            editor->selectPage (Editor::reverbPage);
+            setParam (*p, "rev_on", 1.0f);
+            rev.refresh (0.0f, 120.0);
+            const auto rRequests = rev.getRepaintRequests();
+            rev.refresh (0.0f, 120.0);
+            rev.refresh (0.0f, 120.0);
+            check (rev.getRepaintRequests() == rRequests, "reverb display: identical refreshes do not repaint");
+            (void) rev.createComponentSnapshot (rev.getLocalBounds());
+            const auto rBuilds = rev.getPictureBuilds();
+            (void) rev.createComponentSnapshot (rev.getLocalBounds());
+            check (rBuilds >= 1 && rev.getPictureBuilds() == rBuilds, "reverb display: an unchanged picture repaints from its cached image");
+            const auto rOn = recordGlyphs (rev, [&] (juce::Graphics& g) { rev.drawPicture (g); })->points.size();
+            setParam (*p, "rev_on", 0.0f);
+            rev.refresh (0.0f, 120.0);
+            check (rev.getRepaintRequests() == rRequests + 1, "reverb display: turning it off repaints once");
+            const auto rOff = recordGlyphs (rev, [&] (juce::Graphics& g) { rev.drawPicture (g); })->points.size();
+            check (rev.isDimmed() && rOff == rOn, "reverb off: dimmed, no caption (" + std::to_string (rOff) + " vs " + std::to_string (rOn) + " glyphs)");
+        }
+
+        // #6 Pitch display: traces are built on new data, not in paint.
+        {
+            editor->selectPage (Editor::pitchPage);
+            auto& pitch = editor->getPitchDisplay();
+            std::vector<dsp::PitchFrame> frames (8);
+            for (size_t i = 0; i < frames.size(); ++i)
+            {
+                frames[i].voiced = true;
+                frames[i].detectedHz = 220.0f + (float) i;
+                frames[i].correctedHz = 220.0f;
+                frames[i].centreHz = 220.0f;
+                frames[i].vibrato = 0.8f;
+            }
+            pitch.update (frames.data(), (int) frames.size(), 0.1);
+            const auto traces = pitch.getTraceBuilds();
+            for (int i = 0; i < 3; ++i)
+                (void) pitch.createComponentSnapshot (pitch.getLocalBounds());
+            check (pitch.getTraceBuilds() == traces, "pitch display: paint does not rebuild the traces");
+            pitch.update (frames.data(), (int) frames.size(), 0.1);
+            check (pitch.getTraceBuilds() == traces + 1, "pitch display: new frames rebuild the traces once");
+        }
+
+        // #5 Limiter meter: static layer cached on resize; the level fill is solid zone colours.
+        {
+            editor->selectPage (Editor::limiterPage);
+            auto& meter = editor->getLimiterDisplay().getMeter();
+            check (meter.hasStaticLayer(), "limiter meter caches its static layer on resize");
+            for (int i = 0; i < 10; ++i)
+                meter.push (6.0f, -3.0f, 0.016);
+            const auto snap = meter.createComponentSnapshot (meter.getLocalBounds());
+            const auto bar = meter.getLevelBar();
+            const auto sample = [&] (float db) { return snap.getPixelAt (juce::roundToInt (bar.getCentreX()), juce::roundToInt (meter.dbToY (db))); };
+            const auto near = [] (juce::Colour a, juce::Colour b)
+            {
+                return std::abs (a.getRed() - b.getRed()) <= 3 && std::abs (a.getGreen() - b.getGreen()) <= 3 && std::abs (a.getBlue() - b.getBlue()) <= 3;
+            };
+            using dooblrvocals::ui::OutputMeter;
+            check (near (sample (-20.0f), OutputMeter::colourFor (-20.0f)) && near (sample (-3.0f), OutputMeter::colourFor (-3.0f))
+                       && near (sample (3.0f), OutputMeter::colourFor (3.0f)),
+                   "limiter meter: green / yellow / red zones at -20 / -3 / +3 dBFS");
+        }
+
+        // #10 Learn pulse: animated per VBlank frame, not stepped by the 15 Hz timer.
+        {
+            editor->selectPage (Editor::pitchPage);
+            auto& button = editor->getLearnButton();
+            button.onClick();
+            editor->refreshEnablementNow();
+            check (p->isLearningRange(), "learning armed for the pulse");
+            editor->pulseLearnNow (0.0);
+            const auto a = button.findColour (juce::TextButton::buttonColourId);
+            editor->pulseLearnNow (1000.0 * juce::MathConstants<double>::halfPi / 6.0);
+            const auto b = button.findColour (juce::TextButton::buttonColourId);
+            editor->pulseLearnNow (1000.0 * juce::MathConstants<double>::halfPi / 6.0 + 16.7);
+            const auto c = button.findColour (juce::TextButton::buttonColourId);
+            check (a != b && b.getAlpha() > a.getAlpha(), "learn pulse moves with time");
+            check (std::abs ((int) b.getAlpha() - (int) c.getAlpha()) <= 4, "one 60 Hz frame is a small step");
+            p->cancelRangeLearn();
+            editor->refreshEnablementNow();
+            check (! button.isColourSpecified (juce::TextButton::buttonColourId), "pulse colour cleared when learning stops");
+        }
+
+        p->editorBeingDeleted (editor);
+        base.reset();
+    }
+
 }
 
 int main()
@@ -3784,6 +4014,7 @@ int main()
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },
         { "mode toggle",                    testModeToggle },
+        { "design fixes (t13u)",            testDesignFixes },
     };
 
     int failedTests = 0;

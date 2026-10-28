@@ -17,8 +17,8 @@ namespace dooblrvocals::ui
         inline const juce::Colour dynamic     { 0xffd9a35b };
         inline const juce::Colour spectrum    { 0xff9fb4c8 };
         inline const juce::Colour frozen      { 0xffe58fc0 };
-        inline const juce::Colour master      { 0xff8fa8e8 }; // the Envelope page (master envelope, dry / wet)
-        inline const juce::Colour fx          { 0xffb59be6 }; // v0.3: the Delay / Reverb (time FX) pages
+        inline const juce::Colour master      { 0xff8fa8e8 }; // the Harmony page (voice colour, knobs and display)
+        inline const juce::Colour fx          { 0xffb59be6 }; // the Delay / Reverb (time FX) pages and the FX routing switch
     }
 
     /** Colour used to identify a band in the display and band selector. */

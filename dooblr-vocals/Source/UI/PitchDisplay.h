@@ -36,6 +36,9 @@ namespace dooblrvocals::ui
         int getFramesReceived() const noexcept { return framesReceived; }
         /** Vibrato Respect hint: the latest reading's vibrato weight (0 = none shown). */
         float getShownVibrato() const noexcept { return shownVibrato; }
+        /** How often the traces (and the dashed centre) were rebuilt: on new data or a resize,
+            never in paint; for tests. */
+        int getTraceBuilds() const noexcept { return traceBuilds; }
 
         static constexpr int minMidi = 36, maxMidi = 84; // C2 .. C6
 
@@ -43,6 +46,7 @@ namespace dooblrvocals::ui
         float midiToY (float midi) const noexcept;
         int hitPitchClass (juce::Point<float> p) const;
         void rebuildBackground();
+        void rebuildTraces();
         int currentMask() const;
         bool isCustom() const;
         bool isChromatic() const;
@@ -58,5 +62,9 @@ namespace dooblrvocals::ui
         float pixelScale = 1.0f;
         int lastMask = -1, lastKey = -1, lastScale = -1, lastMode = -1;
         juce::String readout;
+        juce::Path detected, corrected, centre, centreDashed, detectedOutline, correctedOutline;
+        const juce::PathStrokeType detectedStroke { 1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded },
+                                   correctedStroke { 2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded };
+        int traceBuilds = 0;
     };
 }

@@ -104,7 +104,8 @@ namespace dooblrvocals::ui
         KEYED | CHROMATIC). The active segment is filled in the colour; the other is dimmed,
         and brightens with a hand cursor on hover. A click picks a segment (on release, inside
         the pressed segment) as one complete gesture, so one undo step; clicking the active
-        segment does nothing. Left / Right pick a side, Space / Return toggle.
+        segment does nothing. Left / Right step through the segments, Space / Return pick the
+        next one (wrapping; with two segments that toggles).
     */
     class SegmentedToggle final : public juce::Component, public juce::SettableTooltipClient
     {
@@ -120,6 +121,8 @@ namespace dooblrvocals::ui
         juce::Rectangle<int> getSegmentBounds (int index) const;
         /** Picks a segment as one complete gesture (one undo step); no-op if already selected. */
         void select (int index);
+        /** Picks the next segment, wrapping (Space / Return and the accessibility press). */
+        void selectNext();
 
         void paint (juce::Graphics&) override;
         void mouseMove (const juce::MouseEvent&) override;

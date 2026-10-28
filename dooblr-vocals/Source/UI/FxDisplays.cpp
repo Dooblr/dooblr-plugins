@@ -45,13 +45,48 @@ namespace dooblrvocals::ui
             }
         }
 
-        void drawOffOverlay (juce::Graphics& g, juce::Rectangle<float> area, const juce::String& text)
+        /** Off state (design system \u00a77: no help captions on graphs): the plot is dimmed, the
+            tab's own power toggle says why. */
+        void dimPlot (juce::Graphics& g, juce::Rectangle<float> area)
         {
             g.setColour (Palette::background.withAlpha (0.55f));
             g.fillRoundedRectangle (area, 6.0f);
-            g.setColour (Palette::textMuted);
-            g.setFont (juce::FontOptions (13.0f, juce::Font::bold));
-            g.drawText (text, area, juce::Justification::centred);
+        }
+
+        /** Physical pixels per logical pixel of the context being painted into. */
+        float physicalScale (juce::Graphics& g)
+        {
+            return juce::jlimit (1.0f, 4.0f, g.getInternalContext().getPhysicalPixelScaleFactor());
+        }
+
+        juce::uint64 mix (juce::uint64 hash, double value)
+        {
+            return (hash * 1000003u) ^ (juce::uint64) (juce::int64) std::llround (value * 1000.0);
+        }
+
+        /** Draws a cached picture, re-rendering it only when its key, size or scale changed. */
+        template <typename Draw>
+        bool drawCached (juce::Graphics& g, juce::Component& c, juce::Image& picture, float& pictureScale,
+                         juce::uint64& builtKey, juce::uint64 key, Draw&& draw)
+        {
+            const auto scale = physicalScale (g);
+            const auto w = juce::jmax (1, juce::roundToInt ((float) c.getWidth() * scale));
+            const auto h = juce::jmax (1, juce::roundToInt ((float) c.getHeight() * scale));
+            const auto rebuild = ! picture.isValid() || picture.getWidth() != w || picture.getHeight() != h
+                              || ! juce::approximatelyEqual (pictureScale, scale) || builtKey != key;
+
+            if (rebuild)
+            {
+                picture = juce::Image (juce::Image::ARGB, w, h, true, juce::NativeImageType());
+                juce::Graphics pg (picture);
+                pg.addTransform (juce::AffineTransform::scale (scale));
+                draw (pg);
+                pictureScale = scale;
+                builtKey = key;
+            }
+
+            g.drawImage (picture, c.getLocalBounds().toFloat());
+            return rebuild;
         }
 
         void drawReadout (juce::Graphics& g, juce::Rectangle<float> area, const juce::String& text, juce::Colour colour)
@@ -74,20 +109,50 @@ namespace dooblrvocals::ui
         return juce::jlimit (0.3, 14.0, preDelayMs * 0.001 + rt60 * 1.15 + 0.05);
     }
 
+    juce::uint64 ReverbDisplay::pictureKey() const
+    {
+        const auto& s = shown;
+        auto h = (juce::uint64) 0x5eb;
+        for (const auto v : { (double) s.enabled, (double) s.preDelayMs, (double) s.preDelaySync, (double) s.decaySeconds,
+                              (double) s.size, (double) s.damping, (double) s.lowCutHz, (double) s.highCutHz,
+                              (double) s.earlyLate, (double) s.diffusion, (double) s.duckDb,
+                              s.duckDb > 0.05f ? std::round (std::min (0.0f, shownDuckDb) * 10.0f) / 10.0 : 0.0,
+                              s.preDelaySync > 0 ? shownBpm : 0.0 })
+            h = mix (h, v);
+        return h;
+    }
+
     void ReverbDisplay::refresh (float duckDb, double bpm)
     {
         shown = reader.read().reverb;
         shownDuckDb = duckDb;
         shownBpm = bpm;
         haveShown = true;
-        repaint();
+
+        const auto key = pictureKey();
+        if (key != shownKey)
+        {
+            shownKey = key;
+            ++repaintRequests;
+            repaint();
+        }
     }
 
     void ReverbDisplay::paint (juce::Graphics& g)
     {
         if (! haveShown)
+        {
             shown = reader.read().reverb;
+            haveShown = true;
+            shownKey = pictureKey();
+        }
 
+        if (drawCached (g, *this, picture, pictureScale, pictureBuiltKey, shownKey, [this] (juce::Graphics& pg) { drawPicture (pg); }))
+            ++pictureBuilds;
+    }
+
+    void ReverbDisplay::drawPicture (juce::Graphics& g) const
+    {
         g.fillAll (Palette::background);
         auto area = getLocalBounds().toFloat();
         g.setColour (Palette::panel);
@@ -208,7 +273,7 @@ namespace dooblrvocals::ui
         }
 
         if (! s.enabled)
-            drawOffOverlay (g, plot, "Reverb off - switch it on with the Reverb tab's toggle");
+            dimPlot (g, plot);
     }
 
     //==============================================================================
@@ -218,20 +283,49 @@ namespace dooblrvocals::ui
         setOpaque (true);
     }
 
+    juce::uint64 DelayDisplay::pictureKey() const
+    {
+        const auto& s = shown;
+        auto h = (juce::uint64) 0xde1a;
+        for (const auto v : { (double) s.enabled, (double) s.mode, (double) s.sync, (double) s.noteL, (double) s.noteR,
+                              (double) s.timeLMs, (double) s.timeRMs, (double) s.feedback, (double) s.mix, (double) s.duckDb,
+                              s.duckDb > 0.05f ? std::round (std::min (0.0f, shownDuckDb) * 10.0f) / 10.0 : 0.0,
+                              s.sync ? shownBpm : 0.0 })
+            h = mix (h, v);
+        return h;
+    }
+
     void DelayDisplay::refresh (float duckDb, double bpm)
     {
         shown = reader.read().delay;
         shownDuckDb = duckDb;
         shownBpm = bpm;
         haveShown = true;
-        repaint();
+
+        const auto key = pictureKey();
+        if (key != shownKey)
+        {
+            shownKey = key;
+            ++repaintRequests;
+            repaint();
+        }
     }
 
     void DelayDisplay::paint (juce::Graphics& g)
     {
         if (! haveShown)
+        {
             shown = reader.read().delay;
+            haveShown = true;
+            shownKey = pictureKey();
+        }
 
+        if (drawCached (g, *this, picture, pictureScale, pictureBuiltKey, shownKey, [this] (juce::Graphics& pg) { drawPicture (pg); }))
+            ++pictureBuilds;
+    }
+
+    void DelayDisplay::drawPicture (juce::Graphics& g) const
+    {
         g.fillAll (Palette::background);
         auto area = getLocalBounds().toFloat();
         g.setColour (Palette::panel);
@@ -316,7 +410,7 @@ namespace dooblrvocals::ui
         drawReadout (g, area.reduced (0.0f, 6.0f), readout, Palette::textPrimary);
 
         if (! s.enabled)
-            drawOffOverlay (g, plot, "Delay off - switch it on with the Delay tab's toggle");
+            dimPlot (g, plot);
     }
 
     //==============================================================================
@@ -329,58 +423,45 @@ namespace dooblrvocals::ui
         }
     }
 
-    FxRoutingView::FxRoutingView (juce::AudioProcessorValueTreeState& s) : state (s)
+    FxRoutingView::FxRoutingView (juce::AudioProcessorValueTreeState& s)
+        : segments (s, "fx_routing", { routingName (0), routingName (1), routingName (2) }, Palette::fx)
     {
         setComponentID ("fx_routing");
-        setTooltip ("Delay / reverb routing: Parallel (both from the vocal), Delay > Reverb (the reverb also "
-                    "blurs the echoes) or Reverb > Delay (the echoes repeat the reverb)");
-        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        const juce::String tip ("Delay / reverb routing: Parallel (both from the vocal), Delay > Reverb (the reverb also "
+                                "blurs the echoes) or Reverb > Delay (the echoes repeat the reverb)");
+        setTooltip (tip);
+        segments.setComponentID ("fx_routing_segments");
+        segments.setTooltip (tip);
+        segments.setTitle ("FX routing");
+        addAndMakeVisible (segments);
 
-        if (auto* p = state.getParameter ("fx_routing"))
+        // Only to redraw the sketch; the switch owns the edits.
+        if (auto* p = s.getParameter ("fx_routing"))
         {
-            attachment = std::make_unique<juce::ParameterAttachment> (*p, [this] (float v)
+            sketchAttachment = std::make_unique<juce::ParameterAttachment> (*p, [this] (float v)
             {
                 routing = juce::jlimit (0, 2, juce::roundToInt (v));
                 repaint();
             }, nullptr);
-            attachment->sendInitialUpdate();
+            sketchAttachment->sendInitialUpdate();
         }
     }
 
     FxRoutingView::~FxRoutingView() = default;
 
+    void FxRoutingView::resized()
+    {
+        segments.setBounds (getLocalBounds().withTrimmedTop (16).withHeight (24));
+    }
+
     juce::Rectangle<int> FxRoutingView::getSegmentArea (int index) const
     {
-        auto row = getLocalBounds().withTrimmedTop (16).withHeight (24);
-        const auto w = row.getWidth() / 3;
-        return row.withX (row.getX() + w * index).withWidth (index == 2 ? row.getWidth() - 2 * w : w);
+        return segments.getSegmentBounds (juce::jlimit (0, 2, index)) + segments.getPosition();
     }
 
     void FxRoutingView::choose (int index)
     {
-        if (attachment != nullptr && index != routing)
-            attachment->setValueAsCompleteGesture ((float) juce::jlimit (0, 2, index));
-    }
-
-    void FxRoutingView::mouseDown (const juce::MouseEvent& e)
-    {
-        for (int i = 0; i < 3; ++i)
-            if (getSegmentArea (i).contains (e.getPosition()))
-                choose (i);
-    }
-
-    void FxRoutingView::mouseMove (const juce::MouseEvent& e)
-    {
-        auto h = -1;
-        for (int i = 0; i < 3; ++i)
-            if (getSegmentArea (i).contains (e.getPosition()))
-                h = i;
-        if (h != hover) { hover = h; repaint(); }
-    }
-
-    void FxRoutingView::mouseExit (const juce::MouseEvent&)
-    {
-        if (hover != -1) { hover = -1; repaint(); }
+        segments.select (juce::jlimit (0, 2, index));
     }
 
     void FxRoutingView::paint (juce::Graphics& g)
@@ -388,17 +469,6 @@ namespace dooblrvocals::ui
         g.setFont (juce::FontOptions (12.0f));
         g.setColour (Palette::textMuted);
         g.drawText ("Routing", getLocalBounds().removeFromTop (16), juce::Justification::centred);
-
-        for (int i = 0; i < 3; ++i)
-        {
-            const auto seg = getSegmentArea (i).toFloat().reduced (1.0f, 0.0f);
-            const auto on = i == routing;
-            g.setColour (on ? Palette::fx.withAlpha (0.9f) : Palette::panelRaised.brighter (hover == i ? 0.15f : 0.0f));
-            g.fillRoundedRectangle (seg, 4.0f);
-            g.setColour (on ? Palette::background : Palette::textPrimary.withAlpha (0.85f));
-            g.setFont (juce::FontOptions (11.0f, on ? juce::Font::bold : juce::Font::plain));
-            g.drawFittedText (routingName (i), seg.toNearestInt(), juce::Justification::centred, 1, 0.8f);
-        }
 
         // Signal-flow sketch of the chosen routing.
         auto sketch = getLocalBounds().withTrimmedTop (44).toFloat().reduced (4.0f, 2.0f);

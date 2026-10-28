@@ -97,7 +97,12 @@ or Pitch off still delays by the reported latency (the host compensates).
 
 Requirements on the Mac this plug-in ships for: Xcode (with the macOS SDK) and
 CMake 3.22 or later. JUCE 8.0.15 is fetched by CMake. To reuse an existing JUCE
-checkout, pass `-DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE`.
+checkout, pass `-DFETCHCONTENT_SOURCE_DIR_JUCE=/path/to/JUCE`. `scripts/build.sh`
+uses `~/dooblr-build/_deps/juce-src` when it exists (override with `JUCE_SOURCE_DIR`).
+
+The repo lives in `~/Dropbox/dooblr_plugins/dooblr-vocals`. The script builds
+outside it, in `~/dooblr-build/dooblr-vocals` (override with `BUILD_DIR`),
+because Dropbox's extended attributes on build output break `codesign`.
 
 The script never uses sudo and never installs system packages.
 
@@ -115,7 +120,7 @@ This script does the following:
    writable, set `INSTALL_VST3_DIR`.
 3. Re-signs the bundle after JUCE writes `moduleinfo.json` (`cmake/sign-bundle.sh`
    strips Finder info / quarantine and retries, because a File Provider synced
-   `~/Documents` folder can re-add them).
+   folder such as Dropbox can re-add them).
 4. Checks the code signature (`codesign --verify --deep --strict`).
 5. Loads the installed bundle the way a host would (`Tools/LoadCheck`).
 
@@ -138,7 +143,7 @@ standalone build are meant to run here. The shipping bundle is macOS arm64.
 
 ## Tests
 
-`build/Tests/DooblrVocalsTests` checks:
+`~/dooblr-build/dooblr-vocals/Tests/DooblrVocalsTests` checks:
 
 - Instantiation, name, version `0.1.0`, stereo I/O, plugin code path.
 - YIN accuracy on synthetic tones and vibrato.

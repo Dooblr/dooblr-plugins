@@ -4,7 +4,10 @@
 # built bundle into the VST3 plug-in folder (after the tests pass).
 #
 # Environment variables:
-#   BUILD_DIR        build directory (default: <repo>/build)
+#   BUILD_DIR        build directory (default: ~/dooblr-build/dooblr-vocals, outside the repo:
+#                    the repo lives in Dropbox, whose extended attributes break codesign)
+#   JUCE_SOURCE_DIR  JUCE 8.0.15 source to build against (default: ~/dooblr-build/_deps/juce-src
+#                    when it exists; otherwise CMake fetches JUCE 8.0.15)
 #   CONFIG           CMake configuration (default: Release)
 #   RUN_TESTS        1 to build and run the tests, 0 to skip (default: 1)
 #   INSTALL_VST3     1 to install the bundle into the VST3 folder after a successful build
@@ -21,7 +24,8 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-"$ROOT_DIR/build"}"
+BUILD_DIR="${BUILD_DIR:-"$HOME/dooblr-build/dooblr-vocals"}"
+JUCE_SOURCE_DIR="${JUCE_SOURCE_DIR:-"$HOME/dooblr-build/_deps/juce-src"}"
 CONFIG="${CONFIG:-Release}"
 RUN_TESTS="${RUN_TESTS:-1}"
 COPY_TO_PROJECT="${COPY_TO_PROJECT:-0}"
@@ -41,6 +45,10 @@ if [[ -z "${JOBS:-}" ]]; then
 fi
 
 configure_args=(-S "$ROOT_DIR" -B "$BUILD_DIR" "-DCMAKE_BUILD_TYPE=$CONFIG")
+
+if [[ -f "$JUCE_SOURCE_DIR/CMakeLists.txt" ]]; then
+    configure_args+=("-DFETCHCONTENT_SOURCE_DIR_JUCE=$JUCE_SOURCE_DIR")
+fi
 
 if [[ "$RUN_TESTS" == "1" ]]; then
     configure_args+=(-DDOOBLRVOCALS_BUILD_TESTS=ON)
@@ -138,7 +146,7 @@ deliver_bundle() {
 
     if command -v ditto >/dev/null 2>&1; then
         # Preserves the bundle's code signature. --noqtn drops any quarantine flag and
-        # --noextattr drops Finder info that the File Provider synced ~/Documents adds (which
+        # --noextattr drops Finder info that a File Provider synced folder (Dropbox, iCloud) adds (which
         # `codesign --verify --strict` rejects as "detritus").
         ditto --noqtn --noextattr "$artefact" "$destination"
     else

@@ -74,8 +74,7 @@ target_sources(DooblrVocals
         Source/UI/PitchDisplay.cpp
         Source/UI/GateDisplay.cpp
         Source/UI/HarmonyDisplay.cpp
-        Source/UI/FxDisplays.cpp
-        Source/UI/Switches.cpp)
+        Source/UI/FxDisplays.cpp)
 
 target_include_directories(DooblrVocals PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 
@@ -103,7 +102,7 @@ if(TARGET DooblrVocals_VST3)
 
     # JUCE ad-hoc signs the bundle and only afterwards regenerates moduleinfo.json, which
     # leaves a stale signature. Re-sign last (cmake/sign-bundle.sh strips Finder info and
-    # quarantine, which the File Provider synced ~/Documents can add, and retries) so
+    # quarantine, which a File Provider synced folder (Dropbox, iCloud) can add, and retries) so
     # `codesign --verify --deep --strict` passes.
     if(APPLE AND dooblrvocals_vst3_artefact)
         add_custom_command(TARGET DooblrVocals_VST3 POST_BUILD

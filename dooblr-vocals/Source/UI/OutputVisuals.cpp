@@ -806,6 +806,11 @@ namespace dooblrvocals::ui
         background = makeImage (getLocalBounds(), scale);
         juce::Graphics g (background);
         g.addTransform (juce::AffineTransform::scale (scale));
+        drawBackgroundLayer (g);
+    }
+
+    void DynamicsDisplay::drawBackgroundLayer (juce::Graphics& g) const
+    {
         g.fillAll (Palette::background);
 
         const auto h = history.getBounds().toFloat();
@@ -815,8 +820,7 @@ namespace dooblrvocals::ui
                        juce::Justification::centredRight, Palette::textMuted);
 
         drawLabel (g, "dBFS", { 0.0f, h.getBottom() - 12.0f, h.getX() - 5.0f, 14.0f }, juce::Justification::centredRight, Palette::textMuted, 9.0f);
-        drawLabel (g, "time (newest right)", { h.getX(), h.getBottom() + 1.0f, h.getWidth(), 13.0f }, juce::Justification::centredRight,
-                   Palette::textMuted, 9.0f);
+        // No help caption under the history (design system section 7).
 
         g.setColour (Palette::panel);
         g.fillRect (transfer);
@@ -1172,7 +1176,26 @@ namespace dooblrvocals::ui
         return juce::jmap (juce::jlimit (minDb, maxDb, db), minDb, maxDb, bar.getBottom(), bar.getY());
     }
 
-    void LimiterMeter::paint (juce::Graphics& g)
+    void LimiterMeter::resized()
+    {
+        rebuildStaticLayer();
+    }
+
+    void LimiterMeter::rebuildStaticLayer()
+    {
+        staticLayer = {};
+        if (getWidth() <= 0 || getHeight() <= 0)
+            return;
+
+        const auto scale = pixelScaleFor (*this);
+        staticLayer = makeImage (getLocalBounds(), scale);
+        staticScale = scale;
+        juce::Graphics g (staticLayer);
+        g.addTransform (juce::AffineTransform::scale (scale));
+        drawStaticLayer (g);
+    }
+
+    void LimiterMeter::drawStaticLayer (juce::Graphics& g) const
     {
         g.setColour (Palette::panel);
         g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
@@ -1198,23 +1221,57 @@ namespace dooblrvocals::ui
                        juce::Justification::centredLeft, Palette::textMuted, 9.0f);
         }
 
-        // Level bar: zone-coloured segments up to the level, then the peak hold.
+        // The empty bars and their captions.
         g.setColour (Palette::background);
         g.fillRoundedRectangle (bar, 2.0f);
         g.fillRoundedRectangle (grBar, 2.0f);
+        drawLabel (g, "OUT", { bar.getX() - 8.0f, bar.getBottom() + 4.0f, bar.getWidth() + 16.0f, 12.0f },
+                   juce::Justification::centred, Palette::textMuted, 9.0f);
+        drawLabel (g, "GR", { grBar.getX() - 8.0f, bar.getBottom() + 4.0f, grBar.getWidth() + 16.0f, 12.0f },
+                   juce::Justification::centred, Palette::textMuted, 9.0f);
+    }
+
+    void LimiterMeter::paint (juce::Graphics& g)
+    {
+        // The scales, empty bars and captions come from the image cached on resize.
+        if (! staticLayer.isValid() || ! juce::approximatelyEqual (staticScale, pixelScaleFor (*this)))
+            rebuildStaticLayer();
+        if (staticLayer.isValid())
+            g.drawImage (staticLayer, getLocalBounds().toFloat());
+
+        const auto bar = getLevelBar();
+        const auto grBar = getGrBar();
 
         if (level > minDb + 0.01f)
         {
-            // One continuous fill: green, a short blend into yellow at -6 dBFS, into red at 0.
-            juce::ColourGradient fill (OutputMeter::colourFor (minDb), 0.0f, dbToY (minDb), OutputMeter::colourFor (maxDb), 0.0f, dbToY (maxDb), false);
-            const auto at = [] (float db) { return (double) ((db - minDb) / (maxDb - minDb)); };
-            using M = OutputMeter;
-            fill.addColour (at (M::yellowDb - M::blendDb), M::colourFor (M::yellowDb - M::blendDb - 0.01f));
-            fill.addColour (at (M::yellowDb), M::colourFor (M::yellowDb));
-            fill.addColour (at (M::redDb - M::blendDb), M::colourFor (M::redDb - M::blendDb - 0.01f));
-            fill.addColour (at (M::redDb), M::colourFor (M::redDb));
-            g.setGradientFill (fill);
-            g.fillRect (juce::Rectangle<float>::leftTopRightBottom (bar.getX() + 1.0f, dbToY (level), bar.getRight() - 1.0f, bar.getBottom()));
+            // The lit part as solid runs: each pixel row takes its zone colour (green, a short blend
+            // into yellow at -6 dBFS, into red at 0) and equal neighbours merge into one rect, so the
+            // usual picture is a handful of fills and nothing is allocated.
+            const auto top = dbToY (level);
+            const auto left = bar.getX() + 1.0f, right = bar.getRight() - 1.0f;
+            const auto colourAt = [&] (float rowTop, float rowBottom)
+            {
+                const auto midY = (rowTop + rowBottom) * 0.5f;
+                return OutputMeter::colourFor (juce::jmap (midY, bar.getBottom(), bar.getY(), minDb, maxDb));
+            };
+
+            auto runBottom = bar.getBottom();
+            auto runColour = colourAt (juce::jmax (top, runBottom - 1.0f), runBottom);
+
+            for (auto y = bar.getBottom(); y > top; y -= 1.0f)
+            {
+                const auto rowTop = juce::jmax (top, y - 1.0f);
+                const auto c = colourAt (rowTop, y);
+                if (c != runColour)
+                {
+                    g.setColour (runColour);
+                    g.fillRect (juce::Rectangle<float>::leftTopRightBottom (left, y, right, runBottom));
+                    runBottom = y;
+                    runColour = c;
+                }
+            }
+            g.setColour (runColour);
+            g.fillRect (juce::Rectangle<float>::leftTopRightBottom (left, top, right, runBottom));
         }
 
         g.setColour (Palette::textMuted.withAlpha (0.5f));
@@ -1249,15 +1306,11 @@ namespace dooblrvocals::ui
             g.fillRoundedRectangle (grBar.withHeight (std::max (1.5f, depth)).reduced (1.0f, 0.0f), 1.5f);
         }
 
-        // Peak-hold and GR values above the bars, captions below.
+        // Peak-hold and GR values above the bars (the captions below are in the static layer).
         drawLabel (g, hold > minDb + 0.5f ? formatDb (hold) : juce::String ("-inf"), { bar.getX() - 14.0f, 4.0f, bar.getWidth() + 28.0f, 14.0f },
                    juce::Justification::centred, Palette::accent, 10.0f);
         drawLabel (g, on ? juce::String (gr, 1) : juce::String ("-"), { grBar.getX() - 8.0f, 4.0f, grBar.getWidth() + 22.0f, 14.0f },
                    juce::Justification::centred, on ? Palette::dynamic : Palette::textMuted, 10.0f);
-        drawLabel (g, "OUT", { bar.getX() - 8.0f, bar.getBottom() + 4.0f, bar.getWidth() + 16.0f, 12.0f },
-                   juce::Justification::centred, Palette::textMuted, 9.0f);
-        drawLabel (g, "GR", { grBar.getX() - 8.0f, bar.getBottom() + 4.0f, grBar.getWidth() + 16.0f, 12.0f },
-                   juce::Justification::centred, Palette::textMuted, 9.0f);
     }
 
     //==============================================================================
@@ -1309,6 +1362,11 @@ namespace dooblrvocals::ui
         background = makeImage (getLocalBounds(), scale);
         juce::Graphics g (background);
         g.addTransform (juce::AffineTransform::scale (scale));
+        drawBackgroundLayer (g);
+    }
+
+    void LimiterDisplay::drawBackgroundLayer (juce::Graphics& g) const
+    {
         g.fillAll (Palette::background);
         const auto h = history.getBounds().toFloat();
 
@@ -1317,8 +1375,7 @@ namespace dooblrvocals::ui
                        juce::Justification::centredRight, Palette::textMuted);
 
         drawLabel (g, "dBFS", { 0.0f, h.getBottom() - 12.0f, h.getX() - 5.0f, 14.0f }, juce::Justification::centredRight, Palette::textMuted, 9.0f);
-        drawLabel (g, "time (newest right)   levels before the output gain", { h.getX(), h.getBottom() + 1.0f, h.getWidth(), 13.0f },
-                   juce::Justification::centredRight, Palette::textMuted, 9.0f);
+        // No help caption under the history (design system section 7): the legend names the traces.
     }
 
     void LimiterDisplay::updateReadouts()

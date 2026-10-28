@@ -16,7 +16,6 @@
 #include "UI/OutputMeter.h"
 #include "UI/OutputVisuals.h"
 #include "UI/PitchDisplay.h"
-#include "UI/Switches.h"
 #include "UI/Theme.h"
 
 class DooblrVocalsAudioProcessor;
@@ -100,6 +99,8 @@ public:
     /** The Learn Range button: start, or stop and apply. */
     void toggleRangeLearn();
     void refreshLearnUiNow() { updateLearnUi(); }
+    /** One VBlank frame of the Learn Range pulse at a given time (ms); for tests. */
+    void pulseLearnNow (double nowMs) { updateLearnPulse (nowMs); }
     void refreshEnablementNow() { updateEnablement(); updateLearnUi(); }
     juce::Label& getLatencyLabel() noexcept { return latencyLabel; }
     void refreshLatencyLabelNow() { updateLatencyLabel(); }
@@ -140,6 +141,7 @@ private:
     void setStatus (const juce::String& text);
     void updateLatencyLabel();
     void updateLearnUi();
+    void updateLearnPulse (double nowMs);
     void sectionPresetChosen (int page);
 
     DooblrVocalsAudioProcessor& audioProcessor;

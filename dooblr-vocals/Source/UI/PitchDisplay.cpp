@@ -43,6 +43,7 @@ namespace dooblrvocals::ui
         shownDetected = shownCorrected = shownVibrato = shownVibRate = shownVibCents = 0;
         readout.clear();
         rebuildBackground();
+        rebuildTraces();
         repaint();
     }
 
@@ -167,6 +168,7 @@ namespace dooblrvocals::ui
         bounds.removeFromLeft (4.0f);
         plot = bounds;
         rebuildBackground();
+        rebuildTraces();
     }
 
     void PitchDisplay::update (const dsp::PitchFrame* frames, int numFrames, double)
@@ -216,24 +218,28 @@ namespace dooblrvocals::ui
         else
             readout.clear();
 
+        if (numFrames > 0)
+            rebuildTraces();
+
         if (numFrames > 0 || hoverClass >= 0)
             repaint();
     }
 
-    void PitchDisplay::paint (juce::Graphics& g)
+    void PitchDisplay::rebuildTraces()
     {
-        g.setColour (Palette::background);
-        g.fillAll();
-
-        if (background.isValid())
-            g.drawImage (background, getLocalBounds().toFloat());
+        detected.clear();
+        corrected.clear();
+        centre.clear();
+        centreDashed.clear();
+        detectedOutline.clear();
+        correctedOutline.clear();
+        ++traceBuilds;
 
         const auto cols = juce::jmax (1, juce::roundToInt (plot.getWidth()));
         const auto used = juce::jmin (cols, maxColumns, filled);
         if (used <= 1)
             return;
 
-        juce::Path detected, corrected, centre;
         auto startedD = false, startedC = false, startedV = false;
 
         for (int x = 0; x < used; ++x)
@@ -267,23 +273,39 @@ namespace dooblrvocals::ui
             }
         }
 
-        if (startedD || ! detected.isEmpty())
-        {
-            g.setColour (Palette::spectrum.withAlpha (0.9f));
-            g.strokePath (detected, juce::PathStrokeType (1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        }
+        // Stroked once here, so paint only fills.
+        detectedStroke.createStrokedPath (detectedOutline, detected);
+        correctedStroke.createStrokedPath (correctedOutline, corrected);
         if (! centre.isEmpty())
         {
-            juce::Path dashed;
             const float dashes[] = { 4.0f, 3.0f };
-            juce::PathStrokeType (1.0f).createDashedStroke (dashed, centre, dashes, 2);
-            g.setColour (Palette::textPrimary.withAlpha (0.55f));
-            g.fillPath (dashed);
+            juce::PathStrokeType (1.0f).createDashedStroke (centreDashed, centre, dashes, 2);
         }
-        if (startedC || ! corrected.isEmpty())
+    }
+
+    void PitchDisplay::paint (juce::Graphics& g)
+    {
+        g.setColour (Palette::background);
+        g.fillAll();
+
+        if (background.isValid())
+            g.drawImage (background, getLocalBounds().toFloat());
+
+        // The traces were built when the data last changed (rebuildTraces), not here.
+        if (! detectedOutline.isEmpty())
+        {
+            g.setColour (Palette::spectrum.withAlpha (0.9f));
+            g.fillPath (detectedOutline);
+        }
+        if (! centreDashed.isEmpty())
+        {
+            g.setColour (Palette::textPrimary.withAlpha (0.55f));
+            g.fillPath (centreDashed);
+        }
+        if (! correctedOutline.isEmpty())
         {
             g.setColour (Palette::accent);
-            g.strokePath (corrected, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            g.fillPath (correctedOutline);
         }
 
         if (hoverClass >= 0 && isCustom())

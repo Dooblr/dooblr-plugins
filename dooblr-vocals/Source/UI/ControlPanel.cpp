@@ -389,8 +389,8 @@ namespace dooblrvocals::ui
             explicit SegmentedToggleAccessibility (SegmentedToggle& t)
                 : juce::AccessibilityHandler (t, juce::AccessibilityRole::toggleButton,
                                               juce::AccessibilityActions()
-                                                  .addAction (juce::AccessibilityActionType::toggle, [&t] { t.select (1 - t.getSelectedIndex()); })
-                                                  .addAction (juce::AccessibilityActionType::press, [&t] { t.select (1 - t.getSelectedIndex()); })),
+                                                  .addAction (juce::AccessibilityActionType::toggle, [&t] { t.selectNext(); })
+                                                  .addAction (juce::AccessibilityActionType::press, [&t] { t.selectNext(); })),
                   toggle (t)
             {
             }
@@ -398,6 +398,9 @@ namespace dooblrvocals::ui
             juce::AccessibleState getCurrentState() const override
             {
                 auto s = juce::AccessibilityHandler::getCurrentState().withCheckable();
+                // Two segments: checked = the second one. More: not a checkable on / off.
+                if (toggle.getNumSegments() != 2)
+                    return juce::AccessibilityHandler::getCurrentState();
                 return toggle.getSelectedIndex() == 1 ? s.withChecked() : s;
             }
 
@@ -467,6 +470,12 @@ namespace dooblrvocals::ui
         attachment->setValueAsCompleteGesture ((float) index);
     }
 
+    void SegmentedToggle::selectNext()
+    {
+        if (labels.size() > 1)
+            select ((selected + 1) % labels.size());
+    }
+
     void SegmentedToggle::setHovered (int index)
     {
         if (index != hovered)
@@ -511,7 +520,7 @@ namespace dooblrvocals::ui
         if (key == juce::KeyPress::rightKey) { select (selected + 1); return true; }
         if (key == juce::KeyPress::spaceKey || key == juce::KeyPress::returnKey)
         {
-            select (selected == 0 ? 1 : 0);
+            selectNext();
             return true;
         }
         return false;
@@ -560,7 +569,7 @@ namespace dooblrvocals::ui
                 g.setColour (hot ? Palette::textPrimary : Palette::textMuted.withAlpha (0.7f));
             }
 
-            g.drawText (labels[i], segment.toNearestInt(), juce::Justification::centred, false);
+            g.drawFittedText (labels[i], segment.toNearestInt(), juce::Justification::centred, 1, 0.75f);
         }
     }
 
