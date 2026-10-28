@@ -1,0 +1,203 @@
+#pragma once
+
+#include <array>
+#include <cmath>
+#include <complex>
+
+/**
+    Topology-preserving-transform state-variable filter (Andrew Simper / Cytomic,
+    "Linear Trapezoidal Integrated SVF"). It is the bilinear transform of the
+    analogue prototype H(s) = (m0 (s^2 + k s + 1) + m1 s + m2) / (s^2 + k s + 1),
+    stays stable for any positive g and k, and tolerates coefficient changes
+    while running, which is why it is used for the modulated dynamic bands.
+*/
+namespace dooblrq::dsp
+{
+    enum class FilterType
+    {
+        bell = 0,
+        lowShelf,
+        highShelf,
+        lowCut,
+        highCut,
+        notch,
+        tilt   // appended last: saved sessions store the type index, so the order is fixed
+    };
+
+    inline constexpr int numFilterTypes = 7;
+
+    /** Types with a gain control (bell, shelves, tilt): dynamics move their gain. */
+    constexpr bool hasGain (FilterType type) noexcept
+    {
+        return type == FilterType::bell || type == FilterType::lowShelf || type == FilterType::highShelf
+            || type == FilterType::tilt;
+    }
+
+    /** Low Cut (high-pass) and High Cut (low-pass). */
+    constexpr bool isCut (FilterType type) noexcept
+    {
+        return type == FilterType::lowCut || type == FilterType::highCut;
+    }
+
+    /** Dynamics: gain types move their gain; since 0.9.0 the cuts move their cutoff
+        (see DynamicEQBand::dynamicCutFrequency). Notch has no dynamics. */
+    constexpr bool supportsDynamics (FilterType type) noexcept
+    {
+        return hasGain (type) || isCut (type);
+    }
+
+
+    /** Per-band slope (choice index of bN_slope, appended in 0.7.0). The value is the
+        number of cascaded second-order sections minus one, except Brickwall. */
+    enum class Slope
+    {
+        db12 = 0,
+        db24,
+        db36,
+        db48,
+        db60,
+        brickwall
+    };
+
+    inline constexpr int numSlopes = 6;
+
+    /** Brickwall = a 32nd-order Butterworth (16 sections): about 192 dB/oct asymptotically,
+        -3 dB at the corner and about -26 dB only 10 % past it. */
+    inline constexpr int brickwallSections = 16;
+    inline constexpr int maxSections = brickwallSections;
+
+    constexpr int sectionsForSlope (Slope slope) noexcept
+    {
+        return slope == Slope::brickwall ? brickwallSections : (int) slope + 1;
+    }
+
+    /** Every type (0.7.1): the slope sets the number of second-order sections. */
+    constexpr int numSectionsFor (FilterType, Slope slope) noexcept
+    {
+        return sectionsForSlope (slope);
+    }
+
+    /** Asymptotic roll-off of a cut at this slope, dB per octave. */
+    constexpr int slopeDbPerOctave (Slope slope) noexcept
+    {
+        return 12 * sectionsForSlope (slope);
+    }
+
+    /** Q of section i (0-based, ascending Q) of an order-2n Butterworth filter. */
+    double butterworthSectionQ (int numSections, int index) noexcept;
+
+    struct SvfCoefficients
+    {
+        // Prototype parameters, kept for analysing the response.
+        double g = 0.0, k = 1.0;
+        // Per-sample processing coefficients.
+        float a1 = 1.0f, a2 = 0.0f, a3 = 0.0f;
+        // Output mix of (input, band-pass, low-pass).
+        float m0 = 1.0f, m1 = 0.0f, m2 = 0.0f;
+    };
+
+    struct SvfState
+    {
+        float ic1eq = 0.0f, ic2eq = 0.0f;
+
+        void reset() noexcept { ic1eq = ic2eq = 0.0f; }
+    };
+
+    /** Coefficients for an EQ band. Frequency is clamped below Nyquist. */
+    SvfCoefficients makeEqCoefficients (FilterType type, double frequency, double q,
+                                        double gainDb, double sampleRate) noexcept;
+
+    /** Unity-peak side-chain detector coefficients for a band: band-pass around bells
+        and notches, low-pass under a low shelf, high-pass above a high shelf, and
+        broadband (unfiltered) for a tilt, so a dynamic tilt follows the overall level. */
+    SvfCoefficients makeDetectorCoefficients (FilterType type, double frequency, double q,
+                                              double sampleRate) noexcept;
+
+    /** Analogue prototype of a band: H(s) = m0 + (m1 s + m2) / (s^2 + k s + 1) with
+        s = j f / (frequency * scale). */
+    struct AnalogPrototype
+    {
+        double scale = 1.0, k = 1.0, m0 = 1.0, m1 = 0.0, m2 = 0.0;
+    };
+
+    AnalogPrototype makeEqPrototype (FilterType type, double q, double gainDb) noexcept;
+
+    /**
+        A band as a cascade of second-order sections (1 for 12 dB/oct; n = 1-5 for 12-60
+        dB/oct, 16 for Brickwall).
+
+        Cuts: Butterworth sections (product of the section levels at the corner = 0.707, so
+        the corner is -3 dB at every order). The band's Q is applied as resonance to the
+        lowest-Q section (Q_section * Q / 0.707), so Q 0.707 is the plain Butterworth and
+        the level at the corner is always 20 log10 (Q) dB, as for the 12 dB/oct filter.
+        Shelves / tilt: Butterworth shelving of order 2n (zeros and poles on Butterworth
+        circles a gain-dependent ratio apart), so the transition gets steeper (up to 6 dB
+        per order per octave) while the midpoint stays at half the gain. Q again scales
+        the lowest-Q section.
+        Bell (0.7.1): Butterworth band-shelf of order 2n, i.e. the order-n Butterworth low
+        shelf (gain V at DC, half the dB gain at its corner) mapped through the low-pass to
+        band-pass transform s -> (s^2 + 1) / (s / Q). The centre is exactly at the gain and
+        the Width edges (centre / 2^(BW/2), centre * 2^(BW/2), BW from Q) are exactly at half
+        the dB gain for every order; a higher order makes the skirts steeper and the top
+        flatter. Notch (0.7.1): Butterworth band-stop of order 2n (order-n Butterworth
+        low-pass through s -> (s / Q) / (s^2 + 1)): -3 dB exactly at the Width edges and a
+        zero at the centre for every order; a higher order makes the edges steeper and the
+        rejection band wider and flatter.
+        With one section every type equals makeEqPrototype exactly.
+    */
+    struct BandPrototype
+    {
+        std::array<AnalogPrototype, maxSections> sections {};
+        int numSections = 1;
+    };
+
+    BandPrototype makeBandPrototype (FilterType type, Slope slope, double q, double gainDb) noexcept;
+
+    struct BandCoefficients
+    {
+        std::array<SvfCoefficients, maxSections> sections {};
+        int numSections = 1;
+    };
+
+    /** Digital sections of a band (same prewarp and clamping as makeEqCoefficients). */
+    BandCoefficients makeBandCoefficients (FilterType type, Slope slope, double frequency, double q,
+                                           double gainDb, double sampleRate) noexcept;
+    void makeBandCoefficients (const BandPrototype& prototype, double frequency, double sampleRate,
+                               BandCoefficients& destination) noexcept;
+
+    /** Response of the analogue prototype (no bilinear warping, so no cramping near
+        Nyquist). This is the target of the Natural and Linear phase modes. */
+    std::complex<double> analogResponseAt (const AnalogPrototype& p, double bandFrequency, double frequency) noexcept;
+
+    std::complex<double> analogResponseAt (const BandPrototype& p, double bandFrequency, double frequency) noexcept;
+
+    /** analogResponseAt for bins 0 .. numBins - 1 at bin * sampleRate / fftLength Hz, computed
+        faster for cascades (used to design the Natural / Linear Phase kernels). */
+    void analogResponse (const BandPrototype& prototype, double bandFrequency, double sampleRate, int fftLength,
+                         int numBins, std::complex<double>* destination) noexcept;
+
+    /** Exact complex response of the digital filter at a frequency. */
+    std::complex<double> responseAt (const SvfCoefficients& c, double frequency, double sampleRate) noexcept;
+
+    inline double magnitudeAt (const SvfCoefficients& c, double frequency, double sampleRate) noexcept
+    {
+        return std::abs (responseAt (c, frequency, sampleRate));
+    }
+
+    std::complex<double> responseAt (const BandCoefficients& c, double frequency, double sampleRate) noexcept;
+
+    inline double magnitudeAt (const BandCoefficients& c, double frequency, double sampleRate) noexcept
+    {
+        return std::abs (responseAt (c, frequency, sampleRate));
+    }
+
+    inline float processSvf (float input, SvfState& s, const SvfCoefficients& c) noexcept
+    {
+        const auto v3 = input - s.ic2eq;
+        const auto v1 = c.a1 * s.ic1eq + c.a2 * v3;
+        const auto v2 = s.ic2eq + c.a2 * s.ic1eq + c.a3 * v3;
+        s.ic1eq = 2.0f * v1 - s.ic1eq;
+        s.ic2eq = 2.0f * v2 - s.ic2eq;
+        return c.m0 * input + c.m1 * v1 + c.m2 * v2;
+    }
+}

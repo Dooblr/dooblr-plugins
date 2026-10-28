@@ -1,0 +1,219 @@
+#pragma once
+
+#include <array>
+
+#include <juce_audio_processors/juce_audio_processors.h>
+
+#include "Analysis/SpectrumAnalyzer.h"
+#include "DSP/DynamicEQBand.h"
+#include "DSP/FirEqEngine.h"
+#include "DSP/SoloStage.h"
+#include "Parameters.h"
+#include "UndoHistory.h"
+
+class DooblrQAudioProcessor final : public juce::AudioProcessor
+{
+public:
+    DooblrQAudioProcessor();
+    ~DooblrQAudioProcessor() override = default;
+
+    //==============================================================================
+    void prepareToPlay (double sampleRate, int maximumExpectedSamplesPerBlock) override;
+    void releaseResources() override;
+    void reset() override;
+
+    bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
+
+    void processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override;
+    void processBlockBypassed (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages) override;
+    using juce::AudioProcessor::processBlock;
+    using juce::AudioProcessor::processBlockBypassed;
+
+    //==============================================================================
+    juce::AudioProcessorEditor* createEditor() override;
+    bool hasEditor() const override;
+
+    //==============================================================================
+    const juce::String getName() const override;
+
+    bool acceptsMidi() const override;
+    bool producesMidi() const override;
+    bool isMidiEffect() const override;
+    double getTailLengthSeconds() const override;
+
+    //==============================================================================
+    int getNumPrograms() override;
+    int getCurrentProgram() override;
+    void setCurrentProgram (int index) override;
+    const juce::String getProgramName (int index) override;
+    void changeProgramName (int index, const juce::String& newName) override;
+
+    //==============================================================================
+    void getStateInformation (juce::MemoryBlock& destData) override;
+    void setStateInformation (const void* data, int sizeInBytes) override;
+
+    static inline const juce::Identifier stateType { "DooblrQState" };
+    static inline const juce::Identifier stateVersionProperty { "stateVersion" };
+
+    //==============================================================================
+    juce::AudioProcessorValueTreeState& getParameterState() noexcept { return parameters; }
+
+    /** Undo/redo of UI gestures (up to 50 steps); host automation is not recorded. */
+    dooblrq::ParameterUndoHistory& getUndoHistory() noexcept { return undoHistory; }
+
+    /** Live dynamic gain offset of a band in dB, for display. Lock-free. */
+    float getBandDynamicGainDb (int bandIndex) const noexcept;
+
+    /** Reads the current parameter values of a band (any thread). */
+    dooblrq::dsp::BandSettings getBandSettings (int bandIndex) const noexcept;
+
+    /** 0.9.1 Solo: a band is soloed when its Solo is on and the band itself is on (a
+        disabled band's Solo is ignored). Any thread. */
+    bool isBandSoloed (int bandIndex) const noexcept;
+    bool isAnyBandSoloed() const noexcept;
+
+    /** 0.9.4 S-drag audition: while a band's S is dragged on the graph, that band alone is
+        heard (exclusive, temporary, not a parameter: no undo step, nothing saved, Solo itself
+        is unchanged). -1 ends it. Any thread. */
+    void setSoloAudition (int bandIndex) noexcept;
+    int getSoloAudition() const noexcept { return soloAudition.load (std::memory_order_relaxed); }
+
+    /** What is heard: the auditioned band alone while an S-drag audition runs, otherwise the
+        soloed bands (isBandSoloed). Any thread. */
+    bool isBandHeardSolo (int bandIndex) const noexcept;
+    bool isAnyBandHeardSolo() const noexcept;
+
+    /** The region a band's Solo plays right now (follows a dynamic cut's live cutoff). */
+    dooblrq::dsp::SoloRegion getSoloRegion (int bandIndex) const noexcept;
+
+    /** For tests: the solo stage's current dry/solo mix (audio thread state). */
+    float getSoloMix() const noexcept { return soloStage.getMix(); }
+
+    /** (0.9.5) What Solo is playing, for the display: the solo stage's published state
+        (fade weights, mix and the glided region it filters with) while audio is running.
+        When no block has been processed for soloViewStaleMs (transport stopped, host not
+        processing, or no audio yet) the stage cannot move, so this is the target state
+        instead: heard bands at full weight with their current region. Any thread. */
+    dooblrq::dsp::SoloView getSoloView() const noexcept;
+    bool isSoloViewLive() const noexcept;
+    static constexpr std::uint32_t soloViewStaleMs = 250;
+
+    /** Sample rate for response analysis: the prepared rate, or 48 kHz before preparation. */
+    double getAnalysisSampleRate() const noexcept;
+
+    //==============================================================================
+    // Spectrum analyzer. The audio thread only pushes samples into the FIFO, and only
+    // while the analyzer is running (an editor is showing it). The analyzer itself and the
+    // UI settings below belong to the message thread. None of this is saved in the
+    // plug-in state.
+
+    enum class AnalyzerSource { postEq = 0, preEq };
+
+    void setAnalyzerRunning (bool shouldRun) noexcept;
+    bool isAnalyzerRunning() const noexcept { return analyzerRunning.load (std::memory_order_relaxed); }
+    void setAnalyzerSource (AnalyzerSource source) noexcept { analyzerSource.store ((int) source, std::memory_order_relaxed); }
+    AnalyzerSource getAnalyzerSource() const noexcept { return (AnalyzerSource) analyzerSource.load (std::memory_order_relaxed); }
+
+    dooblrq::analysis::AnalyzerFifo& getAnalyzerFifo() noexcept { return analyzerFifo; }
+    dooblrq::analysis::SpectrumAnalyzer& getSpectrumAnalyzer() noexcept { return spectrumAnalyzer; }
+
+    struct AnalyzerViewSettings
+    {
+        bool visible = true;
+        float tiltDbPerOctave = 4.5f;
+        bool showPeak = false;
+    };
+
+    AnalyzerViewSettings& getAnalyzerViewSettings() noexcept { return analyzerViewSettings; }
+
+    /** Coefficients are recomputed every this many samples. */
+    static constexpr int coefficientUpdateInterval = 16;
+
+    /** Phase mode currently running on the audio thread (may lag the parameter by a block). */
+    dooblrq::params::PhaseMode getActivePhaseMode() const noexcept
+    {
+        return (dooblrq::params::PhaseMode) activePhaseMode.load (std::memory_order_relaxed);
+    }
+
+    /** Latency of a phase mode at a sample rate (what setLatencySamples reports). */
+    static int latencyFor (dooblrq::params::PhaseMode mode, double sampleRate) noexcept;
+
+    /** In Natural/Linear phase, kernels follow parameter and dynamic-gain changes at most
+        this often (samples at 44.1/48 kHz; scaled with the rate). */
+    static constexpr int kernelUpdateInterval = 512;
+
+    /** For tests: the FIR engine (valid in Natural/Linear phase). */
+    const dooblrq::dsp::FirEqEngine& getFirEngine() const noexcept { return firEngine; }
+
+private:
+    static BusesProperties createBusesProperties();
+    void clearOutputOnlyChannels (juce::AudioBuffer<float>& buffer) const noexcept;
+    void updateBandSettings (bool snap) noexcept;
+    void applyPhaseMode (int mode, bool fadeIn) noexcept;
+    void updateKernel (bool immediate) noexcept;
+    void processFirBlock (float* const* channels, int numChannels, int numSamples, bool linked, bool outputDry,
+                          float* const* delayedInput = nullptr) noexcept;
+    void applySwitchFade (float* const* channels, int numChannels, int numSamples) noexcept;
+
+    struct BandParameterPointers
+    {
+        std::atomic<float>* enabled = nullptr;
+        std::atomic<float>* type = nullptr;
+        std::atomic<float>* frequency = nullptr;
+        std::atomic<float>* gain = nullptr;
+        std::atomic<float>* q = nullptr;
+        std::atomic<float>* dynamicsEnabled = nullptr;
+        std::atomic<float>* range = nullptr;
+        std::atomic<float>* threshold = nullptr;
+        std::atomic<float>* attack = nullptr;
+        std::atomic<float>* release = nullptr;
+        std::atomic<float>* slope = nullptr;
+        std::atomic<float>* model = nullptr;
+        std::atomic<float>* stepped = nullptr;
+        std::atomic<float>* drive = nullptr;
+        std::atomic<float>* atten = nullptr;
+        std::atomic<float>* solo = nullptr;
+    };
+
+    juce::AudioProcessorValueTreeState parameters;
+    dooblrq::ParameterUndoHistory undoHistory { *this }; // after parameters: listens to them
+
+    std::array<BandParameterPointers, dooblrq::params::numBands> bandParameters;
+    std::atomic<float>* outputGainDb = nullptr;
+    std::atomic<float>* stereoLink = nullptr;
+    std::atomic<float>* phaseMode = nullptr;
+
+    std::array<dooblrq::dsp::DynamicEQBand, dooblrq::params::numBands> bands;
+    juce::SmoothedValue<float> outputGain { 1.0f };
+    dooblrq::dsp::SoloStage soloStage;
+    std::atomic<int> soloAudition { -1 };
+
+    // 0.9.4: cut bands' solo plays what they remove, from the (latency-aligned) input. The
+    // block is processed in slices of up to soloSliceSize so this stays preallocated.
+    static constexpr int soloSliceSize = 1024;
+    juce::AudioBuffer<float> soloInput { 2, soloSliceSize };
+
+    std::atomic<double> preparedSampleRate { 0.0 };
+    std::atomic<std::uint32_t> lastProcessMs { 0 };
+    std::atomic<bool> processedSincePrepare { false };
+
+    // Natural / Linear phase (audio thread only, preallocated in prepareToPlay).
+    static constexpr int firChunkSize = dooblrq::dsp::FirEqEngine::partitionSize;
+    static_assert (soloSliceSize % coefficientUpdateInterval == 0 && soloSliceSize % firChunkSize == 0);
+    static constexpr int switchFadeLength = 256;
+    dooblrq::dsp::FirEqEngine firEngine;
+    std::atomic<int> activePhaseMode { 0 };
+    std::array<dooblrq::dsp::KernelBand, dooblrq::params::numBands> appliedKernel {};
+    int samplesSinceKernel = 0, switchFadeRemaining = 0;
+    juce::AudioBuffer<float> detectionScratch, dryScratch;
+    std::array<std::vector<float>, 2> dryRing;
+    int dryRingPosition = 0;
+
+    dooblrq::analysis::AnalyzerFifo analyzerFifo;
+    dooblrq::analysis::SpectrumAnalyzer spectrumAnalyzer;
+    std::atomic<bool> analyzerRunning { false };
+    std::atomic<int> analyzerSource { (int) AnalyzerSource::postEq };
+    AnalyzerViewSettings analyzerViewSettings;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrQAudioProcessor)
+};
