@@ -4,7 +4,8 @@
 # built bundle into the VST3 plug-in folder (after the tests pass).
 #
 # Environment variables:
-#   BUILD_DIR        build directory (default: <repo>/build)
+#   BUILD_DIR        build directory (default: ~/dooblr-build/dooblr-q, outside the synced
+#                    source folder so Dropbox never syncs build output or adds xattrs to it)
 #   CONFIG           CMake configuration (default: Release)
 #   RUN_TESTS        1 to build and run the smoke tests, 0 to skip (default: 1)
 #   INSTALL_VST3     1 to install the bundle into the VST3 folder after a successful build
@@ -22,7 +23,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-BUILD_DIR="${BUILD_DIR:-"$ROOT_DIR/build"}"
+BUILD_DIR="${BUILD_DIR:-"$HOME/dooblr-build/dooblr-q"}"
 CONFIG="${CONFIG:-Release}"
 RUN_TESTS="${RUN_TESTS:-1}"
 INSTALL_VST3="${INSTALL_VST3:-1}"

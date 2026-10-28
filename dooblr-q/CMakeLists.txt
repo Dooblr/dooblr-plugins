@@ -97,9 +97,9 @@ if(TARGET DooblrQ_VST3)
     # last so the bundle always passes `codesign --verify --deep --strict`.
     if(APPLE AND dooblrq_vst3_artefact)
         #
-        # The build output must also not carry com.apple.quarantine: this project lives in
-        # a File Provider (iCloud) synced ~/Documents, and the bundle folder in the build
-        # tree picked up a quarantine flag. Copies (ditto, Finder) carry it along, and
+        # The build output must also not carry com.apple.quarantine: this project used to live
+        # in a File Provider (iCloud) synced ~/Documents (now Dropbox; builds go to ~/dooblr-build),
+        # and the bundle folder in the build tree picked up a quarantine flag. Copies (ditto, Finder) carry it along, and
         # Gatekeeper then refuses to let a host dlopen the plug-in ("library load disallowed
         # by system policy"), so DAWs report it as not loadable. Strip it before signing.
         add_custom_command(TARGET DooblrQ_VST3 POST_BUILD
