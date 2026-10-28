@@ -13,6 +13,7 @@
 #include "UI/FxDisplays.h"
 #include "UI/GateDisplay.h"
 #include "UI/HarmonyDisplay.h"
+#include "UI/KeyFollowStrip.h"
 #include "UI/OutputMeter.h"
 #include "UI/OutputVisuals.h"
 #include "UI/PitchDisplay.h"
@@ -93,6 +94,7 @@ public:
     dooblrvocals::ui::FxRoutingView& getRoutingView (int page) noexcept { return page == delayPage ? delayRouting : reverbRouting; }
     juce::ComboBox& getSectionPresetBox (int page) noexcept { return page == delayPage ? delayPresetBox : reverbPresetBox; }
     dooblrvocals::ui::SegmentedToggle& getModeToggle() noexcept { return *modeToggle; }
+    dooblrvocals::ui::KeyFollowStrip& getKeyFollowStrip() noexcept { return *keyFollowStrip; }
     juce::TextButton& getLearnButton() noexcept { return learnButton; }
     juce::Label& getLearnLabel() noexcept { return learnLabel; }
     juce::TextButton& getLearnResetButton() noexcept { return learnResetButton; }
@@ -121,6 +123,8 @@ public:
     dooblrvocals::dsp::ChainOrder getShownChainOrder() const noexcept { return shownOrder; }
     void pollMetersNow() { readMeters(); }
     void syncChainOrderNow();
+    /** Key Follow readout, followed-key displays and Key / Scale dimming now (the timer does this at 15 Hz). */
+    void refreshKeyFollowNow() { updateKeyFollowUi(); updateEnablement(); }
 
 private:
     void timerCallback() override;
@@ -176,6 +180,8 @@ private:
     dooblrvocals::ui::FxRoutingView delayRouting, reverbRouting;
     juce::ComboBox delayPresetBox, reverbPresetBox;
     std::unique_ptr<dooblrvocals::ui::SegmentedToggle> modeToggle; // corr_mode: KEYED | CHROMATIC (pitch page bar)
+    std::unique_ptr<dooblrvocals::ui::KeyFollowStrip> keyFollowStrip; // key_follow / key_lock / key_sens / key_source (pitch page, under the bar)
+    void updateKeyFollowUi();
     juce::TextButton learnButton { "Learn Range" }, learnResetButton { "Reset" };
     juce::Label learnLabel;
     juce::String learnMessage;

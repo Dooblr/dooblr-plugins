@@ -217,7 +217,7 @@ namespace dooblrvocals::presets
 
     bool isSessionOnlyParameter (const juce::String& id)
     {
-        return id.startsWith ("range_");
+        return id.startsWith ("range_") || id.startsWith ("key_");
     }
 
     ValueList resolveSection (juce::AudioProcessorValueTreeState& state, const juce::String& prefix, const ValueList& overrides)

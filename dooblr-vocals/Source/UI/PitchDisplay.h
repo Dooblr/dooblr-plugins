@@ -23,6 +23,11 @@ namespace dooblrvocals::ui
         void update (const dsp::PitchFrame* frames, int numFrames, double elapsedSeconds);
         void reset();
 
+        /** Key Follow (v0.2.0): the key Keyed correction is following (0..23, C..B major then
+            minor), or -1 to use the Key / Scale parameters. The note grid shows this key. */
+        void setFollowedKey (int key);
+        int getFollowedKey() const noexcept { return followedKey; }
+
         void paint (juce::Graphics&) override;
         void resized() override;
         void mouseDown (const juce::MouseEvent&) override;
@@ -50,6 +55,8 @@ namespace dooblrvocals::ui
         int currentMask() const;
         bool isCustom() const;
         bool isChromatic() const;
+        int shownKey() const;
+        int shownScale() const;
 
         ParameterGesture gesture;
         juce::Rectangle<float> keyboard, plot;
@@ -60,7 +67,7 @@ namespace dooblrvocals::ui
         int write = 0, filled = 0, hoverClass = -1, framesReceived = 0;
         float shownDetected = 0, shownCorrected = 0, shownVibrato = 0, shownVibRate = 0, shownVibCents = 0;
         float pixelScale = 1.0f;
-        int lastMask = -1, lastKey = -1, lastScale = -1, lastMode = -1;
+        int lastMask = -1, lastKey = -1, lastScale = -1, lastMode = -1, followedKey = -1;
         juce::String readout;
         juce::Path detected, corrected, centre, centreDashed, detectedOutline, correctedOutline;
         const juce::PathStrokeType detectedStroke { 1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded },

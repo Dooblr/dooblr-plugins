@@ -161,6 +161,43 @@ int main (int argc, char* argv[])
     }
 
     const auto latency = instance->getLatencySamples();
+
+    // Key Follow's optional sidechain: the host can enable it (stereo) and audio still flows.
+    bool sidechainOk = true;
+    juce::String sidechainInfo = "no aux input bus";
+    if (instance->getBusCount (true) > 1)
+    {
+        instance->releaseResources();
+        auto layout = instance->getBusesLayout();
+        layout.inputBuses.getReference (1) = juce::AudioChannelSet::stereo();
+        const auto accepted = instance->setBusesLayout (layout);
+        instance->prepareToPlay (sampleRate, blockSize);
+        const auto channels = instance->getTotalNumInputChannels();
+        juce::AudioBuffer<float> sc (juce::jmax (channels, instance->getTotalNumOutputChannels()), blockSize);
+        float scPeak = 0.0f;
+        for (int block = 0; block < 50; ++block)
+        {
+            for (int ch = 0; ch < sc.getNumChannels(); ++ch)
+                for (int i = 0; i < blockSize; ++i)
+                    sc.setSample (ch, i, (float) (0.3 * std::sin (phase + increment * i)));
+            phase += increment * blockSize;
+            juce::MidiBuffer midi;
+            instance->processBlock (sc, midi);
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < blockSize; ++i)
+                {
+                    const auto v = sc.getSample (ch, i);
+                    sidechainOk = sidechainOk && std::isfinite (v);
+                    scPeak = std::max (scPeak, std::abs (v));
+                }
+        }
+        sidechainOk = sidechainOk && accepted && channels == 4 && scPeak > 0.05f;
+        sidechainInfo = juce::String ("\"") + instance->getBus (true, 1)->getName() + "\" bus, stereo "
+                        + (accepted ? "accepted" : "REJECTED") + ", " + juce::String (channels) + " input channels, peak "
+                        + juce::String (scPeak, 3);
+    }
+    std::printf ("  sidechain: %s\n", sidechainInfo.toRawUTF8());
+
     instance->releaseResources();
     std::printf ("  instantiated, %d parameters, latency %d samples, sine through %d blocks: peak %.3f, %s\n",
                  instance->getParameters().size(), latency, numBlocks, (double) peak,
@@ -172,6 +209,9 @@ int main (int argc, char* argv[])
 
     if (peak < 0.05f)
         return fail ("a 220 Hz sine produced (almost) silent output");
+
+    if (! sidechainOk)
+        return fail ("the sidechain layout did not process cleanly");
 
     if (latency < 256)
         return fail ("latency is not reported (got " + juce::String (latency) + " samples)");

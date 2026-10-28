@@ -462,6 +462,10 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
                             "(Key and Scale ignored). One undo step.");
     addChildComponent (*modeToggle);
 
+    // Key Follow (detected key, confidence, Follow / Lock / Sensitivity / Source) under the switch.
+    keyFollowStrip = std::make_unique<dooblrvocals::ui::KeyFollowStrip> (state);
+    addChildComponent (*keyFollowStrip);
+
     // Learn Range (Detector panel) and the learned range readout (pitch page bar).
     learnButton.setComponentID ("learnRange");
     learnButton.setClickingTogglesState (false);
@@ -518,6 +522,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     setResizeLimits (940, 600, 2400, 1400);
     setSize (1080, 660);
     startTimerHz (15);
+    updateKeyFollowUi();
     meterVBlank = std::make_unique<juce::VBlankAttachment> (this, [this] { pollMeters(); });
 }
 
@@ -554,6 +559,7 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     reverbDisplay.setVisible (selectedPage == reverbPage);
     learnLabel.setVisible (selectedPage == pitchPage);
     modeToggle->setVisible (selectedPage == pitchPage);
+    keyFollowStrip->setVisible (selectedPage == pitchPage);
     updateLearnUi();
 
     audioProcessor.getMeterTap().discardAll();
@@ -615,14 +621,20 @@ void DooblrVocalsAudioProcessorEditor::updateEnablement()
     setEnabled (pitchPage, "corr_scale", ! chromatic || harmony);
     // Chromatic: dimmed (but shown). With the harmonizer on they stay live for the voices, so
     // only half dimmed, and the tooltip says why.
+    // Key Follow driving the key: the parameters stay editable (they are the fallback, and
+    // automation is never overwritten) but half dimmed, and the tooltip names the followed key.
+    const auto followed = keyFollowStrip != nullptr ? keyFollowStrip->getView().appliedKey : -1;
+    const auto following = value ("key_follow") > 0.5f && followed >= 0;
     for (const auto* id : { "corr_key", "corr_scale" })
     {
         auto& panel = *pagePanels[pitchPage].front();
-        panel.setDimmed (id, chromatic, harmony ? 0.6f : 0.38f);
+        panel.setDimmed (id, chromatic || following, chromatic ? (harmony ? 0.6f : 0.38f) : 0.6f);
         if (auto* box = dynamic_cast<juce::ComboBox*> (panel.findControl (id)))
-            box->setTooltip (! chromatic ? (state.getParameter (id) != nullptr ? state.getParameter (id)->getName (64) : juce::String())
-                             : harmony ? juce::String ("Chromatic: pitch correction ignores this; it still sets the harmony voices' scale")
-                                       : juce::String ("Chromatic: ignored (switch to KEYED to use it)"));
+            box->setTooltip (chromatic ? (harmony ? juce::String ("Chromatic: pitch correction ignores this; it still sets the harmony voices' scale")
+                                                  : juce::String ("Chromatic: ignored (switch to KEYED to use it)"))
+                             : following ? "Key Follow is using " + dooblrvocals::dsp::KeyDetector::keyName (followed)
+                                               + "; this is the fallback when Key Follow is off"
+                             : (state.getParameter (id) != nullptr ? state.getParameter (id)->getName (64) : juce::String()));
     }
     setEnabled (pitchPage, "latency_mode", juce::roundToInt (value ("quality")) == 0);
 
@@ -994,8 +1006,25 @@ void DooblrVocalsAudioProcessorEditor::readMeters()
         limiterDisplay.update (meterFrameScratch.data(), frames, elapsed);
 }
 
+void DooblrVocalsAudioProcessorEditor::updateKeyFollowUi()
+{
+    const auto status = audioProcessor.getKeyFollowStatus();
+    dooblrvocals::ui::KeyFollowView view;
+    view.detectedKey = status.detectedKey;
+    view.candidateKey = status.candidateKey;
+    view.appliedKey = status.appliedKey;
+    view.confidence = status.confidence;
+    view.activeSource = status.activeSource;
+    view.sidechainConnected = status.sidechainConnected;
+    view.sidechainSignal = status.sidechainSignal;
+    keyFollowStrip->refresh (view);
+    pitchDisplay.setFollowedKey (status.appliedKey);
+    harmonyDisplay.setFollowedKey (status.appliedKey);
+}
+
 void DooblrVocalsAudioProcessorEditor::timerCallback()
 {
+    updateKeyFollowUi();
     updateEnablement();
     refreshPowerButtonsNow();
     syncChainOrderNow();
@@ -1217,6 +1246,11 @@ void DooblrVocalsAudioProcessorEditor::resized()
         }
         eqDisplay.getPeakHoldButton().setBounds (bar.withLeft (bar.getRight() - 96).reduced (0, 1));
         display.removeFromTop (4);
+        if (pitch)
+        {
+            keyFollowStrip->setBounds (display.removeFromTop (dooblrvocals::ui::KeyFollowStrip::preferredHeight));
+            display.removeFromTop (6);
+        }
         pitchDisplay.setBounds (display);
         harmonyDisplay.setBounds (display);
         gateDisplay.setBounds (display);

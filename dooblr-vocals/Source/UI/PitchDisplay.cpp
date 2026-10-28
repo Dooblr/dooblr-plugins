@@ -56,8 +56,8 @@ namespace dooblrvocals::ui
     int PitchDisplay::currentMask() const
     {
         const auto mode = juce::roundToInt (gesture.get ("corr_mode"));
-        const auto scale = juce::roundToInt (gesture.get ("corr_scale"));
-        const auto key = juce::roundToInt (gesture.get ("corr_key"));
+        const auto scale = shownScale();
+        const auto key = shownKey();
         const auto custom = juce::roundToInt (gesture.get ("corr_mask"));
         return dsp::effectiveMask ((dsp::CorrectionMode) mode, (dsp::ScaleType) scale, key, custom);
     }
@@ -65,7 +65,29 @@ namespace dooblrvocals::ui
     bool PitchDisplay::isCustom() const
     {
         return juce::roundToInt (gesture.get ("corr_mode")) == 0
-            && juce::roundToInt (gesture.get ("corr_scale")) == (int) dsp::ScaleType::custom;
+            && shownScale() == (int) dsp::ScaleType::custom;
+    }
+
+    int PitchDisplay::shownKey() const
+    {
+        return followedKey >= 0 ? followedKey % 12 : juce::roundToInt (gesture.get ("corr_key"));
+    }
+
+    int PitchDisplay::shownScale() const
+    {
+        if (followedKey >= 0)
+            return followedKey >= 12 ? (int) dsp::ScaleType::minor : (int) dsp::ScaleType::major;
+        return juce::roundToInt (gesture.get ("corr_scale"));
+    }
+
+    void PitchDisplay::setFollowedKey (int key)
+    {
+        key = (key >= 0 && key < 24) ? key : -1;
+        if (key == followedKey)
+            return;
+        followedKey = key;
+        rebuildBackground();
+        repaint();
     }
 
     bool PitchDisplay::isChromatic() const
@@ -107,8 +129,8 @@ namespace dooblrvocals::ui
 
         const auto mask = currentMask();
         lastMask = mask;
-        lastKey = juce::roundToInt (gesture.get ("corr_key"));
-        lastScale = juce::roundToInt (gesture.get ("corr_scale"));
+        lastKey = shownKey();
+        lastScale = shownScale();
         lastMode = juce::roundToInt (gesture.get ("corr_mode"));
 
         for (int midi = minMidi; midi <= maxMidi; ++midi)
@@ -201,8 +223,8 @@ namespace dooblrvocals::ui
         }
 
         const auto mask = currentMask();
-        if (mask != lastMask || juce::roundToInt (gesture.get ("corr_key")) != lastKey
-            || juce::roundToInt (gesture.get ("corr_scale")) != lastScale
+        if (mask != lastMask || shownKey() != lastKey
+            || shownScale() != lastScale
             || juce::roundToInt (gesture.get ("corr_mode")) != lastMode
             || ! background.isValid())
             rebuildBackground();

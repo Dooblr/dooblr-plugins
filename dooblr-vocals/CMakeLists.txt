@@ -55,6 +55,7 @@ juce_add_plugin(DooblrVocals
 target_sources(DooblrVocals
     PRIVATE
         Source/DSP/Effects.cpp
+        Source/DSP/KeyDetector.cpp
         Source/DSP/MeterTap.cpp
         Source/DSP/PitchEngine.cpp
         Source/DSP/ProcessingChain.cpp
@@ -74,7 +75,8 @@ target_sources(DooblrVocals
         Source/UI/PitchDisplay.cpp
         Source/UI/GateDisplay.cpp
         Source/UI/HarmonyDisplay.cpp
-        Source/UI/FxDisplays.cpp)
+        Source/UI/FxDisplays.cpp
+        Source/UI/KeyFollowStrip.cpp)
 
 target_include_directories(DooblrVocals PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/Source")
 

@@ -17,7 +17,9 @@ namespace
 DooblrVocalsAudioProcessor::DooblrVocalsAudioProcessor()
     : AudioProcessor (BusesProperties()
                           .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
-                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+                          .withOutput ("Output", juce::AudioChannelSet::stereo(), true)
+                          // Optional Key Follow sidechain (VST3 aux input); off until the host enables it.
+                          .withInput  ("Sidechain", juce::AudioChannelSet::stereo(), false)),
       parameters (*this, nullptr, stateType, params::createParameterLayout()),
       settingsReader (parameters),
       undoHistory (*this)
@@ -34,6 +36,15 @@ void DooblrVocalsAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     engine.setPitchTap (&pitchTap);
     engine.setLearnTap (&learnTap);
     engine.prepare (sampleRate, juce::jmax (1, samplesPerBlock));
+
+    // Keep the detected key across re-prepares at the same rate (hosts re-prepare often).
+    if (! juce::exactlyEqual (sampleRate, keyDetectorRate))
+    {
+        keyDetector.prepare (sampleRate);
+        keyDetectorRate = sampleRate;
+        lockedKey = -1;
+        appliedKey.store (-1);
+    }
     auto settings = getCurrentSettings();
     settings.nonRealtime = isNonRealtime();
     engine.setSettings (settings);
@@ -54,7 +65,96 @@ bool DooblrVocalsAudioProcessor::isBusesLayoutSupported (const BusesLayout& layo
 {
     const auto& out = layouts.getMainOutputChannelSet();
     const auto& in = layouts.getMainInputChannelSet();
-    return out == juce::AudioChannelSet::stereo() && (in == juce::AudioChannelSet::stereo() || in == juce::AudioChannelSet::mono());
+    const auto mainOk = out == juce::AudioChannelSet::stereo()
+                     && (in == juce::AudioChannelSet::stereo() || in == juce::AudioChannelSet::mono());
+
+    if (! mainOk || layouts.outputBuses.size() > 1 || layouts.inputBuses.size() > 2)
+        return false;
+
+    // The Key Follow sidechain may be disabled, mono or stereo.
+    if (layouts.inputBuses.size() == 2)
+    {
+        const auto& sc = layouts.inputBuses.getReference (1);
+        return sc.isDisabled() || sc == juce::AudioChannelSet::mono() || sc == juce::AudioChannelSet::stereo();
+    }
+
+    return true;
+}
+
+bool DooblrVocalsAudioProcessor::isSidechainConnected() const noexcept
+{
+    const auto* bus = getBus (true, 1);
+    return bus != nullptr && bus->isEnabled() && bus->getNumberOfChannels() > 0;
+}
+
+DooblrVocalsAudioProcessor::KeyFollowStatus DooblrVocalsAudioProcessor::getKeyFollowStatus() const noexcept
+{
+    KeyFollowStatus st;
+    st.detectedKey = keyDetector.getKey();
+    st.candidateKey = keyDetector.getCandidate();
+    st.confidence = keyDetector.getConfidence();
+    st.activeSource = keyDetector.getActiveSource();
+    st.sidechainConnected = isSidechainConnected();
+    st.sidechainSignal = keyDetector.hasSidechainSignal();
+    st.appliedKey = appliedKey.load (std::memory_order_relaxed);
+    return st;
+}
+
+void DooblrVocalsAudioProcessor::applyKeyFollow (juce::AudioBuffer<float>& buffer, dsp::VocalSettings& s) noexcept
+{
+    const auto n = buffer.getNumSamples();
+    const auto follow = settingsReader.readKeyFollow();
+
+    // The sidechain bus is read only through the current layout (a disabled bus has no channels).
+    const float* scPtrs[2] {};
+    int scChannels = 0;
+    if (isSidechainConnected())
+    {
+        const auto first = getChannelIndexInProcessBlockBuffer (true, 1, 0);
+        scChannels = juce::jmin (2, getBus (true, 1)->getNumberOfChannels());
+        if (first + scChannels > buffer.getNumChannels())
+            scChannels = 0;
+        for (int ch = 0; ch < scChannels; ++ch)
+            scPtrs[ch] = buffer.getReadPointer (first + ch);
+    }
+
+    const float* vocalPtrs[2] {};
+    const auto vocalChannels = juce::jmin (2, getMainBusNumInputChannels(), buffer.getNumChannels());
+    for (int ch = 0; ch < vocalChannels; ++ch)
+        vocalPtrs[ch] = buffer.getReadPointer (ch);
+
+    dsp::KeyDetector::Settings ks;
+    ks.sensitivity = follow.sensitivity;
+    ks.source = (dsp::KeySource) follow.source;
+    ks.a4Hz = s.pitch.a4Hz > 0.0f ? s.pitch.a4Hz : 440.0f;
+    keyDetector.process (scChannels > 0 ? scPtrs : nullptr, scChannels, vocalPtrs, vocalChannels, n, ks);
+
+    if (! follow.enabled)
+    {
+        lockedKey = -1;
+        appliedKey.store (-1, std::memory_order_relaxed);
+        return;
+    }
+
+    auto key = keyDetector.getKey();
+    if (follow.locked)
+    {
+        if (lockedKey < 0)
+            lockedKey = key; // locks to whatever was being applied (or the first detection)
+        key = lockedKey;
+    }
+    else
+    {
+        lockedKey = key;
+    }
+
+    appliedKey.store (key, std::memory_order_relaxed);
+    if (key < 0)
+        return; // nothing detected yet: the manual Key / Scale stay in charge
+
+    // Internal override only: corr_key / corr_scale are never written, so automation is untouched.
+    s.pitch.key = dsp::keyTonic (key);
+    s.pitch.scale = dsp::keyIsMinor (key) ? dsp::ScaleType::minor : dsp::ScaleType::major;
 }
 
 void DooblrVocalsAudioProcessor::updateLatency (const dsp::VocalSettings& s)
@@ -73,16 +173,22 @@ void DooblrVocalsAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     juce::ignoreUnused (midi);
     juce::ScopedNoDenormals noDenormals;
 
-    const auto totalNumInput = getTotalNumInputChannels();
-    const auto totalNumOutput = getTotalNumOutputChannels();
-
-    for (int ch = totalNumInput; ch < totalNumOutput; ++ch)
-        buffer.clear (ch, 0, buffer.getNumSamples());
-
-    if (totalNumInput == 1 && totalNumOutput >= 2)
-        buffer.copyFrom (1, 0, buffer, 0, 0, buffer.getNumSamples());
-
     auto settings = getCurrentSettings();
+
+    // Key Follow listens first: the sidechain channels may share buffer slots with the main
+    // output (e.g. a mono main input), and the vocal tap must be the dry input.
+    applyKeyFollow (buffer, settings);
+
+    const auto mainIn = getMainBusNumInputChannels();
+    const auto mainOut = getMainBusNumOutputChannels();
+    auto mainBus = getBusBuffer (buffer, false, 0);
+
+    if (mainIn == 1 && mainOut >= 2)
+        mainBus.copyFrom (1, 0, mainBus, 0, 0, mainBus.getNumSamples());
+    else
+        for (int ch = juce::jmax (0, mainIn); ch < mainOut; ++ch)
+            mainBus.clear (ch, 0, mainBus.getNumSamples());
+
     settings.nonRealtime = isNonRealtime();
     settings.pitch.learnRange = learnArmed.load (std::memory_order_relaxed);
 
@@ -95,15 +201,15 @@ void DooblrVocalsAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     updateLatency (settings);
     engine.setSettings (settings);
-    engine.process (buffer, buffer.getNumSamples());
+    engine.process (mainBus, mainBus.getNumSamples());
     gainReductionDb.store (engine.getGainReductionDb());
     reverbDuckDb.store (engine.getReverbDuckDb());
     delayDuckDb.store (engine.getDelayDuckDb());
 
-    const auto n = buffer.getNumSamples();
-    if (n > 0 && buffer.getNumChannels() > 0)
-        outputPeakTap.push (buffer.getMagnitude (0, 0, n),
-                            buffer.getNumChannels() > 1 ? buffer.getMagnitude (1, 0, n) : buffer.getMagnitude (0, 0, n));
+    const auto n = mainBus.getNumSamples();
+    if (n > 0 && mainBus.getNumChannels() > 0)
+        outputPeakTap.push (mainBus.getMagnitude (0, 0, n),
+                            mainBus.getNumChannels() > 1 ? mainBus.getMagnitude (1, 0, n) : mainBus.getMagnitude (0, 0, n));
 }
 
 double DooblrVocalsAudioProcessor::getTailLengthSeconds() const

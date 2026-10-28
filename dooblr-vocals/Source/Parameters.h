@@ -14,6 +14,16 @@ namespace dooblrvocals::params
     juce::StringArray chainOrderChoices();
     juce::StringArray keyChoices();
     juce::StringArray scaleChoices();
+    juce::StringArray keySourceChoices();   // Auto, Sidechain, Vocal
+
+    /** Key Follow controls (not part of dsp::VocalSettings: the processor applies the detected key). */
+    struct KeyFollowSettings
+    {
+        bool enabled = false;
+        float sensitivity = 0.5f;
+        bool locked = false;
+        int source = 0; // 0 Auto, 1 Sidechain, 2 Vocal
+    };
 
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
@@ -33,6 +43,7 @@ namespace dooblrvocals::params
     public:
         explicit SettingsReader (juce::AudioProcessorValueTreeState& state);
         dsp::VocalSettings read() const noexcept;
+        KeyFollowSettings readKeyFollow() const noexcept;
 
     private:
         using Value = std::atomic<float>*;
@@ -55,6 +66,7 @@ namespace dooblrvocals::params
         Value dlyDrive = nullptr, dlyDuck = nullptr, dlyDuckRelease = nullptr, dlyWidth = nullptr, dlyMix = nullptr;
         Value fxRouting = nullptr, rangeCustom = nullptr, rangeLow = nullptr, rangeHigh = nullptr;
         Value vibratoRespect = nullptr;
+        Value keyFollow = nullptr, keySens = nullptr, keyLock = nullptr, keySource = nullptr;
 
         struct VoiceValues { Value on = nullptr, mode = nullptr, degree = nullptr, semis = nullptr, level = nullptr,
                              pan = nullptr, detune = nullptr, delay = nullptr; };

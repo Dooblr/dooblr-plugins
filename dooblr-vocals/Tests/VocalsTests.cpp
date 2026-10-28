@@ -11,6 +11,7 @@
 #include "Parameters.h"
 #include "Presets.h"
 #include "DSP/Effects.h"
+#include "DSP/KeyDetector.h"
 #include "DSP/PitchEngine.h"
 #include "DSP/ProcessingChain.h"
 #include "DSP/VocalEngine.h"
@@ -2437,7 +2438,7 @@ namespace
         juce::MemoryBlock out;
         if (xml != nullptr)
         {
-            stripParameters (*xml, { "rev_", "dly_", "fx_routing", "range_" });
+            stripParameters (*xml, { "rev_", "dly_", "fx_routing", "range_", "key_" });
             juce::AudioProcessor::copyXmlToBinary (*xml, out);
         }
         return out;
@@ -3409,7 +3410,8 @@ namespace
         {
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
-            check (ids.size() > 0 && ids[ids.size() - 1] == "vibrato", "Vibrato Respect is the last parameter");
+            check (ids.size() > 4 && ids[ids.size() - 5] == "vibrato" && ids[ids.size() - 4] == "key_follow",
+                   "Vibrato Respect is the last parameter before the Key Follow group");
             check (std::abs (getPlain (*p, "vibrato")) < 1.0e-6f, "Vibrato Respect defaults to 0");
             if (auto* param = getParam (*p, "vibrato"))
                 check (param->getCurrentValueAsText().contains ("%") && param->getName (64) == "Vibrato Respect", "shown as a percentage");
@@ -3616,7 +3618,7 @@ namespace
             juce::MemoryBlock old;
             if (xml != nullptr)
             {
-                stripParameters (*xml, { "vibrato", "rev_", "dly_", "fx_routing", "range_" });
+                stripParameters (*xml, { "vibrato", "rev_", "dly_", "fx_routing", "range_", "key_" });
                 juce::AudioProcessor::copyXmlToBinary (*xml, old);
             }
             auto q = makeProcessor();
@@ -3624,6 +3626,417 @@ namespace
             q->setStateInformation (old.getData(), (int) old.getSize());
             check (old.getSize() > 32 && std::abs (getPlain (*q, "vibrato")) < 1.0e-6f && std::abs (getPlain (*q, "corr_key") - 5.0f) < 0.1f,
                    "an older session loads with Vibrato Respect at 0 and keeps its settings");
+        }
+    }
+
+    //==============================================================================
+    // Key Follow (v0.2.0): sidechain / vocal key detection driving the Keyed key and scale.
+    std::vector<float> chordProgression (const std::vector<std::string>& chords, double seconds = 2.0, float amp = 0.25f)
+    {
+        static const char* names[] { "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B" };
+        const auto n = (int) (seconds * sampleRate);
+        std::vector<float> out ((size_t) n * chords.size(), 0.0f);
+        for (size_t c = 0; c < chords.size(); ++c)
+        {
+            auto name = chords[c];
+            std::vector<int> intervals { 0, 4, 7 };
+            if (name.size() > 1 && name.back() == '7') { intervals = { 0, 4, 7, 10 }; name.pop_back(); }
+            else if (name.size() > 1 && name.back() == 'm') { intervals = { 0, 3, 7 }; name.pop_back(); }
+            int root = 0;
+            for (int k = 0; k < 12; ++k)
+                if (name == names[k])
+                    root = k;
+            std::vector<int> notes { 36 + root, 48 + root };
+            for (auto iv : intervals)
+                notes.push_back (60 + (root + iv) % 12);
+            for (auto m : notes)
+            {
+                const auto f = 440.0 * std::pow (2.0, (m - 69) / 12.0);
+                for (int h = 1; h <= 6; ++h)
+                {
+                    if (f * h >= 8000.0)
+                        continue;
+                    const auto w = 2.0 * juce::MathConstants<double>::pi * f * h / sampleRate;
+                    for (int i = 0; i < n; ++i)
+                    {
+                        const auto t = i / sampleRate;
+                        const auto env = std::min (1.0, t / 0.01) * std::exp (-0.6 * t);
+                        out[c * (size_t) n + (size_t) i] += (float) (std::sin (w * i) / h * env);
+                    }
+                }
+            }
+        }
+        float peak = 0.0f;
+        for (auto v : out)
+            peak = std::max (peak, std::abs (v));
+        for (auto& v : out)
+            v *= amp / std::max (peak, 1.0e-9f);
+        return out;
+    }
+
+    // C major (with passing A#, E7) for 32 s, E major for 24 s, A minor for 24 s (2 s chords).
+    std::vector<float> keyFollowProgression()
+    {
+        return chordProgression ({ "C", "G", "Am", "F", "C", "G", "F", "C", "Dm", "G", "C", "A#", "C", "E7", "Am", "G",
+                                   "E", "B", "C#m", "A", "E", "B", "A", "E", "C#m", "F#m", "B", "E",
+                                   "Am", "Dm", "E", "Am", "F", "Dm", "E7", "Am", "F", "G", "E", "Am" });
+    }
+
+    struct KeyEvent { double seconds; int key; };
+
+    // Feeds a signal to a bare KeyDetector (as sidechain or vocal) and records each decision.
+    std::vector<KeyEvent> runKeyDetector (const std::vector<float>& signal, float sensitivity, bool asVocal, int* allocations = nullptr)
+    {
+        dsp::KeyDetector detector;
+        detector.prepare (sampleRate);
+        dsp::KeyDetector::Settings settings;
+        settings.sensitivity = sensitivity;
+        settings.source = asVocal ? dsp::KeySource::vocal : dsp::KeySource::sidechain;
+        std::vector<KeyEvent> events;
+        int last = -1;
+        for (int pos = 0; pos < (int) signal.size(); pos += blockSize)
+        {
+            const auto n = std::min (blockSize, (int) signal.size() - pos);
+            const float* ptrs[2] { signal.data() + pos, signal.data() + pos };
+            if (allocations != nullptr) { allocationCount.store (0); countAllocations.store (true); }
+            if (asVocal)
+                detector.process (nullptr, 0, ptrs, 2, n, settings);
+            else
+                detector.process (ptrs, 2, nullptr, 0, n, settings);
+            if (allocations != nullptr) { countAllocations.store (false); *allocations += allocationCount.load(); }
+            if (detector.getKey() != last)
+            {
+                last = detector.getKey();
+                events.push_back ({ (pos + n) / sampleRate, last });
+            }
+        }
+        return events;
+    }
+
+    // A monophonic "vocal" melody in C major (0.4 s notes, slight vibrato, harmonics).
+    std::vector<float> cMajorMelody (double seconds)
+    {
+        const int melody[] { 60, 62, 64, 65, 67, 65, 64, 62, 60, 64, 67, 72, 71, 67, 65, 64, 62, 60, 59, 60,
+                             64, 62, 60, 57, 59, 60, 62, 64, 65, 64, 62, 60 };
+        const auto noteLen = (int) (0.4 * sampleRate);
+        const auto total = (int) (seconds * sampleRate);
+        std::vector<float> out ((size_t) total, 0.0f);
+        double phase = 0.0;
+        for (int i = 0; i < total; ++i)
+        {
+            const auto idx = (i / noteLen) % (int) std::size (melody);
+            const auto t = (i % noteLen) / sampleRate;
+            const auto f = 440.0 * std::pow (2.0, (melody[idx] - 69) / 12.0) * (1.0 + 0.004 * std::sin (2.0 * juce::MathConstants<double>::pi * 5.5 * t));
+            phase += 2.0 * juce::MathConstants<double>::pi * f / sampleRate;
+            double s = 0.0;
+            for (int h = 1; h <= 7; ++h)
+                s += std::sin (h * phase) / h;
+            const auto env = std::min (1.0, t / 0.03) * std::min (1.0, (0.4 - t) / 0.03);
+            out[(size_t) i] = (float) (0.15 * s * std::max (0.0, env));
+        }
+        return out;
+    }
+
+    // Processor with the optional stereo sidechain enabled (4-channel process buffer: main 0-1, sidechain 2-3).
+    std::unique_ptr<Processor> makeSidechainProcessor (bool enableSidechain)
+    {
+        auto p = std::make_unique<Processor>();
+        if (enableSidechain)
+        {
+            auto layout = p->getBusesLayout();
+            if (layout.inputBuses.size() > 1)
+                layout.inputBuses.getReference (1) = juce::AudioChannelSet::stereo();
+            check (p->setBusesLayout (layout), "the stereo sidechain layout is accepted");
+        }
+        p->setRateAndBufferSizeDetails (sampleRate, blockSize);
+        p->prepareToPlay (sampleRate, blockSize);
+        return p;
+    }
+
+    // Renders main (vocal) + optional sidechain; calls onBlock (seconds) after every block.
+    juce::AudioBuffer<float> renderWithSidechain (Processor& p, const std::function<float (int)>& vocal,
+                                                  const std::vector<float>* sidechain, int numSamples,
+                                                  const std::function<void (double)>& onBlock = {}, int* allocations = nullptr)
+    {
+        const auto channels = std::max (2, p.getTotalNumInputChannels());
+        juce::AudioBuffer<float> out (2, numSamples), scratch (channels, blockSize);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos < numSamples; pos += blockSize)
+        {
+            const auto n = std::min (blockSize, numSamples - pos);
+            scratch.setSize (channels, n, false, false, true);
+            scratch.clear();
+            for (int i = 0; i < n; ++i)
+            {
+                const auto v = vocal (pos + i);
+                scratch.setSample (0, i, v);
+                scratch.setSample (1, i, v);
+                if (channels >= 4 && sidechain != nullptr && pos + i < (int) sidechain->size())
+                {
+                    scratch.setSample (2, i, (*sidechain)[(size_t) (pos + i)]);
+                    scratch.setSample (3, i, (*sidechain)[(size_t) (pos + i)]);
+                }
+            }
+            if (allocations != nullptr) { allocationCount.store (0); countAllocations.store (true); }
+            p.processBlock (scratch, midi);
+            if (allocations != nullptr) { countAllocations.store (false); *allocations += allocationCount.load(); }
+            for (int ch = 0; ch < 2; ++ch)
+                out.copyFrom (ch, pos, scratch, ch, 0, n);
+            if (onBlock)
+                onBlock ((pos + n) / sampleRate);
+        }
+        return out;
+    }
+
+    bool bitIdentical (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+    {
+        if (a.getNumSamples() != b.getNumSamples() || a.getNumChannels() < 2 || b.getNumChannels() < 2)
+            return false;
+        for (int ch = 0; ch < 2; ++ch)
+            if (std::memcmp (a.getReadPointer (ch), b.getReadPointer (ch), sizeof (float) * (size_t) a.getNumSamples()) != 0)
+                return false;
+        return true;
+    }
+
+    void testKeyFollow()
+    {
+        // Parameters: appended after Vibrato Respect, defaults leave Key Follow off.
+        {
+            auto p = makeProcessor();
+            const auto ids = allParameterIds (*p);
+            check (ids.size() >= 4 && ids[ids.size() - 4] == "key_follow" && ids[ids.size() - 3] == "key_sens"
+                       && ids[ids.size() - 2] == "key_lock" && ids[ids.size() - 1] == "key_source",
+                   "key_follow, key_sens, key_lock, key_source are appended last");
+            check (getPlain (*p, "key_follow") < 0.5f && std::abs (getPlain (*p, "key_sens") - 0.5f) < 1.0e-4f
+                       && getPlain (*p, "key_lock") < 0.5f && juce::roundToInt (getPlain (*p, "key_source")) == 0,
+                   "defaults: Off, 50 %, unlocked, Auto");
+            check (dooblrvocals::presets::isSessionOnlyParameter ("key_follow")
+                       && dooblrvocals::presets::isSessionOnlyParameter ("key_source"),
+                   "Key Follow parameters are session-only (presets leave them alone)");
+            check (p->getBusCount (true) == 2 && p->getBus (true, 1) != nullptr && ! p->getBus (true, 1)->isEnabled()
+                       && p->getTotalNumInputChannels() == 2 && p->getTotalNumOutputChannels() == 2,
+                   "an optional Sidechain input bus exists and is disabled by default (main I/O stays 2 in / 2 out)");
+            check (p->getBus (true, 1) != nullptr && p->getBus (true, 1)->getName() == "Sidechain", "the aux bus is named Sidechain");
+            auto layout = p->getBusesLayout();
+            layout.inputBuses.getReference (1) = juce::AudioChannelSet::mono();
+            check (p->checkBusesLayoutSupported (layout), "a mono sidechain is accepted");
+            layout.inputBuses.getReference (1) = juce::AudioChannelSet::create5point1();
+            check (! p->checkBusesLayoutSupported (layout), "a 5.1 sidechain is rejected");
+        }
+
+        // Detection on the C -> E major -> A minor progression, at three sensitivities.
+        const auto progression = keyFollowProgression();
+        struct Section { double start, end; int key; const char* name; double maxDelay; };
+        const Section sections[] { { 0.0, 32.0, 0, "C major", 14.0 }, { 32.0, 56.0, 4, "E major", 16.0 }, { 56.0, 80.0, 21, "A minor", 22.0 } };
+        for (const auto sens : { 0.0f, 0.5f, 1.0f })
+        {
+            int allocations = 0;
+            const auto events = runKeyDetector (progression, sens, false, &allocations);
+            const auto tag = "sens " + format (sens, 1) + ": ";
+            check (allocations == 0, tag + "detector is allocation-free (" + std::to_string (allocations) + ")");
+            std::string log;
+            for (const auto& e : events)
+                log += format (e.seconds, 1) + "s " + dsp::KeyDetector::keyName (e.key).toStdString() + "; ";
+            note (tag + log);
+            int extra = 0;
+            for (const auto& sec : sections)
+            {
+                double hit = -1.0;
+                bool flipAfterHit = false;
+                for (const auto& e : events)
+                {
+                    if (e.seconds < sec.start || e.seconds >= sec.end)
+                        continue;
+                    if (e.key == sec.key && hit < 0.0)
+                        hit = e.seconds;
+                    else if (hit >= 0.0)
+                        flipAfterHit = true;
+                    else if (e.key != sec.key)
+                        ++extra;
+                }
+                check (hit >= 0.0 && hit - sec.start <= sec.maxDelay,
+                       tag + sec.name + " detected within " + format (sec.maxDelay, 0) + " s (after " + format (hit - sec.start, 1) + " s)");
+                check (! flipAfterHit, tag + sec.name + ": no change after it was detected (passing chords don't flip it)");
+            }
+            check (extra <= 1, tag + "at most one wrong key on the way (" + std::to_string (extra) + ")");
+            check ((int) events.size() <= 4, tag + "no flip-flopping (" + std::to_string (events.size()) + " decisions)");
+        }
+
+        // The vocal alone (fallback): a C major melody is found, more slowly.
+        {
+            const auto melody = cMajorMelody (30.0);
+            const auto events = runKeyDetector (melody, 0.5f, true);
+            check (! events.empty() && events.front().key == 0 && events.front().seconds < 20.0,
+                   "vocal fallback: C major from the melody within 20 s ("
+                       + (events.empty() ? std::string ("none") : format (events.front().seconds, 1) + " s "
+                                                                    + dsp::KeyDetector::keyName (events.front().key).toStdString()) + ")");
+            check (events.size() == 1, "vocal fallback: one decision, no flip-flop (" + std::to_string (events.size()) + ")");
+        }
+
+        // Silence holds the key (and never decides one from nothing).
+        {
+            std::vector<float> silence ((size_t) (20 * sampleRate), 0.0f);
+            check (runKeyDetector (silence, 1.0f, false).empty(), "silence never produces a key");
+            auto withGap = chordProgression ({ "E", "B", "C#m", "A", "E", "B", "A", "E" });
+            withGap.resize (withGap.size() + (size_t) (20 * sampleRate), 0.0f);
+            const auto events = runKeyDetector (withGap, 1.0f, false);
+            std::string log;
+            for (const auto& e : events)
+                log += format (e.seconds, 1) + "s " + dsp::KeyDetector::keyName (e.key).toStdString() + "; ";
+            note ("E then silence: " + log);
+            // A 16 s standalone progression can open on its relative minor (C# minor) before settling;
+            // what matters here is that nothing changes once the audio stops.
+            const auto chordsEnd = 16.0;
+            bool changedInSilence = false;
+            for (const auto& e : events)
+                changedInSilence = changedInSilence || e.seconds > chordsEnd + 0.5;
+            check (! events.empty() && events.back().key == 4 && events.size() <= 2 && ! changedInSilence,
+                   "a silent sidechain holds the last key (E major through 20 s of silence)");
+        }
+
+        // Off is bit-identical: no sidechain vs a live sidechain, Key Follow controls moved but off.
+        const auto vocal = [] (int i) { return sineAt (226.0, i, sampleRate, 0.3f); }; // between A3 and A#3
+        const auto n = (int) (20.0 * sampleRate);
+        {
+            auto a = makeSidechainProcessor (false);
+            auto b = makeSidechainProcessor (true);
+            check (b->getTotalNumInputChannels() == 4 && b->isSidechainConnected(), "sidechain enabled: 4 input channels");
+            check (! a->isSidechainConnected(), "default layout: no sidechain connected");
+            setParam (*b, "key_sens", 1.0f);
+            setParam (*b, "key_source", 1.0f);
+            int allocations = 0;
+            const auto outA = renderWithSidechain (*a, vocal, nullptr, n);
+            const auto outB = renderWithSidechain (*b, vocal, &progression, n, {}, &allocations);
+            check (bitIdentical (outA, outB), "Key Follow Off: output is bit-identical with and without a live sidechain");
+            check (allocations == 0, "no allocations in processBlock with the sidechain (" + std::to_string (allocations) + ")");
+            check (b->getKeyFollowStatus().detectedKey == 0 && b->getKeyFollowStatus().appliedKey < 0,
+                   "Off: the key is still detected for the readout (C major) but not applied");
+        }
+
+        // On, following the sidechain through the progression; Lock freezes the applied key.
+        {
+            auto p = makeSidechainProcessor (true);
+            setParam (*p, "corr_key", 2.0f);   // manual fallback: D Dorian
+            setParam (*p, "corr_scale", 2.0f);
+            setParam (*p, "key_follow", 1.0f);
+            int appliedAt20 = -2, appliedAt50 = -2, appliedAt70 = -2, detectedAt78 = -2, appliedAt78 = -2, appliedEnd = -2;
+            int sourceAt20 = -1;
+            const auto total = (int) progression.size();
+            renderWithSidechain (*p, vocal, &progression, total, [&] (double t)
+            {
+                const auto st = p->getKeyFollowStatus();
+                auto crossed = [&] (double mark) { return t >= mark && t - blockSize / sampleRate < mark; };
+                if (crossed (20.0)) { appliedAt20 = st.appliedKey; sourceAt20 = st.activeSource; }
+                if (crossed (50.0)) { appliedAt50 = st.appliedKey; setParam (*p, "key_lock", 1.0f); }
+                if (crossed (70.0)) appliedAt70 = st.appliedKey;
+                if (crossed (79.5)) { detectedAt78 = st.detectedKey; appliedAt78 = st.appliedKey; setParam (*p, "key_lock", 0.0f); }
+            });
+            renderWithSidechain (*p, vocal, nullptr, blockSize * 2);
+            appliedEnd = p->getKeyFollowStatus().appliedKey;
+            check (appliedAt20 == 0 && sourceAt20 == 1, "On: C major applied by 20 s, from the sidechain (" + std::to_string (appliedAt20) + ")");
+            check (appliedAt50 == 4, "On: E major applied by 50 s (" + std::to_string (appliedAt50) + ")");
+            check (appliedAt70 == 4 && appliedAt78 == 4 && detectedAt78 == 21,
+                   "Lock: E major stays applied while A minor is detected (" + std::to_string (appliedAt78) + " / " + std::to_string (detectedAt78) + ")");
+            check (appliedEnd == 21, "unlock: the detected A minor is applied (" + std::to_string (appliedEnd) + ")");
+            check (juce::roundToInt (getPlain (*p, "corr_key")) == 2 && juce::roundToInt (getPlain (*p, "corr_scale")) == 2,
+                   "Key Follow never writes the Key / Scale parameters (automation is not fought)");
+        }
+
+        // On vs Off differ once a key is applied (the correction really uses it): E major vs C major fallback.
+        {
+            const auto eMajor = chordProgression ({ "E", "B", "C#m", "A", "E", "B", "A", "E", "B", "E" });
+            const auto len = (int) eMajor.size();
+            const auto sharp = [] (int i) { return sineAt (207.65 * std::pow (2.0, 0.3 / 12.0), i, sampleRate, 0.3f); }; // G#3 +30 c
+            auto off = makeSidechainProcessor (true);
+            auto on = makeSidechainProcessor (true);
+            setParam (*on, "key_follow", 1.0f);
+            for (auto* q : { off.get(), on.get() })
+            {
+                setParam (*q, "corr_key", 0.0f);  // C major: G# is not in it
+                setParam (*q, "corr_scale", 0.0f);
+                setParam (*q, "retune_speed", 0.0f);
+            }
+            const auto outOff = renderWithSidechain (*off, sharp, &eMajor, len);
+            const auto outOn = renderWithSidechain (*on, sharp, &eMajor, len);
+            const auto start = len - (int) (2.0 * sampleRate);
+            const auto hzOff = detectHz (outOff, start, 8192), hzOn = detectHz (outOn, start, 8192);
+            check (on->getKeyFollowStatus().appliedKey == 4, "E major applied from the sidechain");
+            check (std::abs (hzOn - 207.65f) < 2.0f && std::abs (hzOff - 207.65f) > 4.0f,
+                   "Key Follow on: G# is kept (E major) instead of snapping to C major (on " + format (hzOn, 1) + " Hz, off " + format (hzOff, 1) + " Hz)");
+        }
+
+        // State round-trip, and an older session loads with Key Follow off.
+        {
+            auto src = makeProcessor();
+            setParam (*src, "key_follow", 1.0f);
+            setParam (*src, "key_sens", 0.8f);
+            setParam (*src, "key_lock", 1.0f);
+            setParam (*src, "key_source", 2.0f);
+            juce::MemoryBlock blob;
+            src->getStateInformation (blob);
+            auto q = makeProcessor();
+            q->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (getPlain (*q, "key_follow") > 0.5f && std::abs (getPlain (*q, "key_sens") - 0.8f) < 0.01f
+                       && getPlain (*q, "key_lock") > 0.5f && juce::roundToInt (getPlain (*q, "key_source")) == 2,
+                   "Key Follow state round-trips");
+
+            auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+            juce::MemoryBlock old;
+            if (xml != nullptr)
+            {
+                stripParameters (*xml, { "key_" });
+                juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            }
+            auto r = makeProcessor();
+            setParam (*r, "key_follow", 1.0f);
+            r->setStateInformation (old.getData(), (int) old.getSize());
+            check (old.getSize() > 32 && getPlain (*r, "key_follow") < 0.5f && getPlain (*r, "key_lock") < 0.5f,
+                   "an older session (no key_* parameters) loads with Key Follow off");
+        }
+
+        // Editor: the strip on the pitch page, bound controls, the readout and the followed key in the displays.
+        {
+            auto p = makeSidechainProcessor (true);
+            setParam (*p, "key_follow", 1.0f);
+            const auto eMajor = chordProgression ({ "E", "B", "C#m", "A", "E", "B", "A", "E", "B", "E" });
+            renderWithSidechain (*p, [] (int i) { return sineAt (207.65, i, sampleRate, 0.3f); }, &eMajor, (int) eMajor.size());
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            check (editor != nullptr, "editor for Key Follow");
+            if (editor == nullptr)
+                return;
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::pitchPage);
+            editor->refreshKeyFollowNow();
+            auto& strip = editor->getKeyFollowStrip();
+            check (visibleChain (strip) && strip.getHeight() >= 24, "the Key Follow strip is on the pitch page");
+            check (strip.getY() >= editor->getModeToggle().getBottom() && strip.getBottom() <= editor->getPitchDisplay().getY(),
+                   "it sits between the KEYED | CHROMATIC bar and the pitch display");
+            for (const auto* id : { "key_follow", "key_lock", "key_sens", "key_source" })
+            {
+                auto* c = findById (*editor, id);
+                check (c != nullptr && visibleChain (*c) && strip.getBounds().contains (c->getBounds() + strip.getPosition()),
+                       std::string ("strip control ") + id);
+            }
+            auto* follow = dynamic_cast<juce::ToggleButton*> (findById (*editor, "key_follow"));
+            check (follow != nullptr && follow->getToggleState(), "the Follow toggle shows On");
+            check (strip.getKeyText() == "E major", "the readout shows E major (" + strip.getKeyText().toStdString() + ")");
+            check (strip.getStatusText().contains ("sidechain"), "status names the sidechain (" + strip.getStatusText().toStdString() + ")");
+            check (editor->getPitchDisplay().getFollowedKey() == 4 && editor->getHarmonyDisplay().getFollowedKey() == 4,
+                   "the pitch and harmony displays follow E major");
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-key-follow");
+            editor->setSize (940, 600);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-key-follow-940x600");
+            check (strip.getWidth() > 600 && editor->getPitchDisplay().getHeight() > 120, "940 x 600: strip and pitch display still fit");
+
+            // Off: the displays go back to the Key / Scale parameters.
+            setParam (*p, "key_follow", 0.0f);
+            renderWithSidechain (*p, [] (int) { return 0.0f; }, nullptr, blockSize);
+            editor->refreshKeyFollowNow();
+            check (editor->getPitchDisplay().getFollowedKey() == -1 && strip.getKeyText() == "E major",
+                   "Off: displays use Key / Scale again; the readout still shows the detected key");
+            p->editorBeingDeleted (editor);
+            base.reset();
         }
     }
 
@@ -4015,6 +4428,7 @@ int main()
         { "vibrato respect",                testVibratoRespect },
         { "mode toggle",                    testModeToggle },
         { "design fixes (t13u)",            testDesignFixes },
+        { "key follow",                     testKeyFollow },
     };
 
     int failedTests = 0;

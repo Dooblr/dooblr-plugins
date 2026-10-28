@@ -25,6 +25,11 @@ namespace dooblrvocals::ui
         /** Re-reads the parameters: interval knob per mode, dimming of voices that are off, readouts. */
         void refresh();
 
+        /** Key Follow (v0.2.0): the key the correction is following (0..23, C..B major then minor),
+            or -1 to show the Key / Scale parameters. The readouts name it instead of the parameters. */
+        void setFollowedKey (int key);
+        int getFollowedKey() const noexcept { return followedKey; }
+
         void paint (juce::Graphics&) override;
         void resized() override;
 
@@ -36,5 +41,6 @@ namespace dooblrvocals::ui
         class Strip;
         juce::AudioProcessorValueTreeState& state;
         std::array<std::unique_ptr<Strip>, numVoices> strips;
+        int followedKey = -1;
     };
 }

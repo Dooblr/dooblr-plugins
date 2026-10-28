@@ -303,6 +303,12 @@ namespace dooblrvocals::params
 
             // Vibrato Respect (added last so existing sessions / automation indices are unchanged).
             addFloat (layout, "vibrato", "Vibrato Respect", range (0.0f, 1.0f), 0.0f, percentString());
+
+            // Key Follow (appended after Vibrato Respect: existing indices unchanged, defaults = off).
+            addBool (layout, "key_follow", "Key Follow", false);
+            addFloat (layout, "key_sens", "Key Follow Sensitivity", range (0.0f, 1.0f), 0.5f, percentString());
+            addBool (layout, "key_lock", "Key Follow Lock", false);
+            addChoice (layout, "key_source", "Key Follow Source", keySourceChoices(), 0);
         }
 
         return layout;
@@ -341,6 +347,8 @@ namespace dooblrvocals::params
         fxRouting = getId ("fx_routing");
         rangeCustom = getId ("range_custom"); rangeLow = getId ("range_low"); rangeHigh = getId ("range_high");
         vibratoRespect = getId ("vibrato");
+        keyFollow = getId ("key_follow"); keySens = getId ("key_sens"); keyLock = getId ("key_lock");
+        keySource = getId ("key_source");
 
         for (int v = 0; v < dsp::numHarmonyVoices; ++v)
         {
@@ -429,5 +437,18 @@ namespace dooblrvocals::params
         }
 
         return s;
+    }
+
+    juce::StringArray keySourceChoices() { return { "Auto", "Sidechain", "Vocal" }; }
+
+    KeyFollowSettings SettingsReader::readKeyFollow() const noexcept
+    {
+        auto f = [] (Value v) { return v != nullptr ? v->load() : 0.0f; };
+        KeyFollowSettings k;
+        k.enabled = f (keyFollow) > 0.5f;
+        k.sensitivity = juce::jlimit (0.0f, 1.0f, keySens != nullptr ? keySens->load() : 0.5f);
+        k.locked = f (keyLock) > 0.5f;
+        k.source = juce::jlimit (0, 2, juce::roundToInt (f (keySource)));
+        return k;
     }
 }

@@ -4,6 +4,7 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "DSP/KeyDetector.h"
 #include "DSP/MeterTap.h"
 #include "DSP/OutputPeakTap.h"
 #include "DSP/PitchTap.h"
@@ -80,9 +81,25 @@ public:
     void resetLearnedRange();
     dooblrvocals::dsp::PitchTap& getLearnTap() noexcept { return learnTap; }
 
+    //== Key Follow ============================================================================
+    /** What the editor shows (any thread). appliedKey is -1 unless Key Follow is overriding. */
+    struct KeyFollowStatus
+    {
+        int detectedKey = -1, candidateKey = -1, appliedKey = -1;
+        float confidence = 0.0f;
+        int activeSource = 0;           // 0 holding / silent, 1 sidechain, 2 vocal
+        bool sidechainConnected = false, sidechainSignal = false;
+    };
+    KeyFollowStatus getKeyFollowStatus() const noexcept;
+    const dooblrvocals::dsp::KeyDetector& getKeyDetector() const noexcept { return keyDetector; }
+    /** True while the host has the optional sidechain input bus enabled with at least one channel. */
+    bool isSidechainConnected() const noexcept;
+
 private:
     juce::ValueTree createStateTree();
     void updateLatency (const dooblrvocals::dsp::VocalSettings& s);
+    /** Runs the detector and, when Key Follow is on, overrides the Keyed key / scale in s. */
+    void applyKeyFollow (juce::AudioBuffer<float>& buffer, dooblrvocals::dsp::VocalSettings& s) noexcept;
 
     juce::AudioProcessorValueTreeState parameters;
     dooblrvocals::params::SettingsReader settingsReader;
@@ -97,6 +114,10 @@ private:
     std::atomic<float> reverbDuckDb { 0.0f }, delayDuckDb { 0.0f };
     std::atomic<double> hostBpm { 120.0 };
     dooblrvocals::dsp::VocalEngine engine;
+    dooblrvocals::dsp::KeyDetector keyDetector;
+    double keyDetectorRate = 0.0;
+    int lockedKey = -1;
+    std::atomic<int> appliedKey { -1 };
 
     std::atomic<float> gainReductionDb { 0.0f };
     int currentProgram = 0;

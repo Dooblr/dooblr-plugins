@@ -73,7 +73,7 @@ namespace dooblrvocals::ui
                 knob.attachment.reset();
         }
 
-        void refresh()
+        void refresh (int keyOverride = -1)
         {
             const auto id = [this] (const char* suffix) { return params::harmonyId (voice, suffix); };
             fixed = juce::roundToInt (plain (state, id ("mode"))) == 1;
@@ -113,11 +113,14 @@ namespace dooblrvocals::ui
             else
             {
                 const auto degrees = juce::roundToInt (plain (state, id ("degree")));
-                const auto custom = juce::roundToInt (plain (state, "corr_scale")) == (int) dsp::ScaleType::custom;
+                const auto custom = keyOverride < 0
+                                 && juce::roundToInt (plain (state, "corr_scale")) == (int) dsp::ScaleType::custom;
+                const auto keyIndex = keyOverride >= 0 ? keyOverride % 12 : juce::roundToInt (plain (state, "corr_key"));
+                const auto scaleIndex = keyOverride >= 0 ? (keyOverride >= 12 ? (int) dsp::ScaleType::minor : (int) dsp::ScaleType::major)
+                                                         : juce::roundToInt (plain (state, "corr_scale"));
                 text = params::degreeName (degrees) + " in "
                        + (custom ? juce::String ("custom scale")
-                                 : params::keyChoices()[juce::roundToInt (plain (state, "corr_key"))] + " "
-                                       + params::scaleChoices()[juce::roundToInt (plain (state, "corr_scale"))]);
+                                 : params::keyChoices()[keyIndex] + " " + params::scaleChoices()[scaleIndex]);
             }
 
             const auto newPan = plain (state, id ("pan"));
@@ -245,7 +248,17 @@ namespace dooblrvocals::ui
     void HarmonyDisplay::refresh()
     {
         for (auto& strip : strips)
-            strip->refresh();
+            strip->refresh (followedKey);
+    }
+
+    void HarmonyDisplay::setFollowedKey (int key)
+    {
+        key = (key >= 0 && key < 24) ? key : -1;
+        if (key != followedKey)
+        {
+            followedKey = key;
+            refresh();
+        }
     }
 
     juce::Component* HarmonyDisplay::findControl (const juce::String& parameterId) const
