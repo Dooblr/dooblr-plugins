@@ -93,6 +93,7 @@ public:
     dooblrvocals::ui::DelayDisplay& getDelayDisplay() noexcept { return delayDisplay; }
     dooblrvocals::ui::FxRoutingView& getRoutingView (int page) noexcept { return page == delayPage ? delayRouting : reverbRouting; }
     juce::ComboBox& getSectionPresetBox (int page) noexcept { return page == delayPage ? delayPresetBox : reverbPresetBox; }
+    dooblrvocals::ui::SegmentedToggle& getModeToggle() noexcept { return *modeToggle; }
     juce::TextButton& getLearnButton() noexcept { return learnButton; }
     juce::Label& getLearnLabel() noexcept { return learnLabel; }
     juce::TextButton& getLearnResetButton() noexcept { return learnResetButton; }
@@ -172,6 +173,7 @@ private:
     dooblrvocals::ui::ReverbDisplay reverbDisplay;
     dooblrvocals::ui::FxRoutingView delayRouting, reverbRouting;
     juce::ComboBox delayPresetBox, reverbPresetBox;
+    std::unique_ptr<dooblrvocals::ui::SegmentedToggle> modeToggle; // corr_mode: KEYED | CHROMATIC (pitch page bar)
     juce::TextButton learnButton { "Learn Range" }, learnResetButton { "Reset" };
     juce::Label learnLabel;
     juce::String learnMessage;

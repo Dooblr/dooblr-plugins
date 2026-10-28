@@ -62,6 +62,10 @@ namespace dooblrvocals::ui
         juce::Component* findControl (const juce::String& parameterId) const;
         juce::String getTitle() const { return title; }
 
+        /** Dims a control and its caption (still shown and laid out), e.g. Key / Scale while the
+            correction is Chromatic. */
+        void setDimmed (const juce::String& parameterId, bool shouldBeDimmed, float alpha = 0.38f);
+
         /** Height needed for the controls at the given width. */
         int getPreferredHeight (int width) const;
 
@@ -93,6 +97,53 @@ namespace dooblrvocals::ui
         juce::String title;
         juce::Colour colour;
         std::vector<Item> items;
+    };
+
+    /**
+        A large two-segment switch bound to a two-choice parameter (e.g. the pitch Mode:
+        KEYED | CHROMATIC). The active segment is filled in the colour; the other is dimmed,
+        and brightens with a hand cursor on hover. A click picks a segment (on release, inside
+        the pressed segment) as one complete gesture, so one undo step; clicking the active
+        segment does nothing. Left / Right pick a side, Space / Return toggle.
+    */
+    class SegmentedToggle final : public juce::Component, public juce::SettableTooltipClient
+    {
+    public:
+        SegmentedToggle (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                         const juce::StringArray& labels, juce::Colour colour);
+        ~SegmentedToggle() override;
+
+        int getSelectedIndex() const noexcept { return selected; }
+        int getHoveredIndex() const noexcept { return hovered; }
+        int getNumSegments() const noexcept { return labels.size(); }
+        juce::String getSegmentText (int index) const { return labels[index]; }
+        juce::Rectangle<int> getSegmentBounds (int index) const;
+        /** Picks a segment as one complete gesture (one undo step); no-op if already selected. */
+        void select (int index);
+
+        void paint (juce::Graphics&) override;
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseEnter (const juce::MouseEvent& e) override { mouseMove (e); }
+        void mouseExit (const juce::MouseEvent&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        bool keyPressed (const juce::KeyPress&) override;
+        void focusGained (FocusChangeType) override { repaint(); }
+        void focusLost (FocusChangeType) override { repaint(); }
+        void enablementChanged() override { repaint(); }
+        std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
+
+        static constexpr int minWidth = 236, minHeight = 32;
+
+    private:
+        int segmentAt (juce::Point<int> position) const;
+        void setHovered (int index);
+
+        juce::StringArray labels;
+        juce::Colour colour;
+        std::unique_ptr<juce::ParameterAttachment> attachment;
+        int selected = 0, hovered = -1, pressed = -1;
     };
 
     /**

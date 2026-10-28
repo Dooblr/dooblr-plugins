@@ -402,7 +402,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     pitchFrameScratch.resize (1 << 11);
 
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Correction", pageColour (pitchPage), Specs {
-        { "corr_mode", "Mode", K::combo }, { "corr_key", "Key", K::combo }, { "corr_scale", "Scale", K::combo },
+        { "corr_key", "Key", K::combo }, { "corr_scale", "Scale", K::combo },
         { "retune_speed", "Retune", K::knob }, { "humanize", "Humanize", K::knob }, { "vibrato", "Vibrato", K::knob },
         { "corr_amount", "Amount", K::knob } }));
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Detector", pageColour (pitchPage), Specs {
@@ -454,6 +454,13 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
         pagePanels[(size_t) page].back()->addExtra (page == delayPage ? (juce::Component&) delayRouting : (juce::Component&) reverbRouting,
                                                     dooblrvocals::ui::FxRoutingView::preferredWidth, -1, {}, true);
     }
+
+    // The correction Mode as a large KEYED | CHROMATIC switch at the top of the pitch page.
+    modeToggle = std::make_unique<dooblrvocals::ui::SegmentedToggle> (state, "corr_mode", juce::StringArray { "KEYED", "CHROMATIC" },
+                                                                      Palette::accent);
+    modeToggle->setTooltip ("Keyed: notes snap to the Key and Scale. Chromatic: notes snap to the nearest semitone "
+                            "(Key and Scale ignored). One undo step.");
+    addChildComponent (*modeToggle);
 
     // Learn Range (Detector panel) and the learned range readout (pitch page bar).
     learnButton.setComponentID ("learnRange");
@@ -546,6 +553,7 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     delayDisplay.setVisible (selectedPage == delayPage);
     reverbDisplay.setVisible (selectedPage == reverbPage);
     learnLabel.setVisible (selectedPage == pitchPage);
+    modeToggle->setVisible (selectedPage == pitchPage);
     updateLearnUi();
 
     audioProcessor.getMeterTap().discardAll();
@@ -605,6 +613,17 @@ void DooblrVocalsAudioProcessorEditor::updateEnablement()
     const auto harmony = value ("harm_on") > 0.5f;
     setEnabled (pitchPage, "corr_key", ! chromatic || harmony);
     setEnabled (pitchPage, "corr_scale", ! chromatic || harmony);
+    // Chromatic: dimmed (but shown). With the harmonizer on they stay live for the voices, so
+    // only half dimmed, and the tooltip says why.
+    for (const auto* id : { "corr_key", "corr_scale" })
+    {
+        auto& panel = *pagePanels[pitchPage].front();
+        panel.setDimmed (id, chromatic, harmony ? 0.6f : 0.38f);
+        if (auto* box = dynamic_cast<juce::ComboBox*> (panel.findControl (id)))
+            box->setTooltip (! chromatic ? (state.getParameter (id) != nullptr ? state.getParameter (id)->getName (64) : juce::String())
+                             : harmony ? juce::String ("Chromatic: pitch correction ignores this; it still sets the harmony voices' scale")
+                                       : juce::String ("Chromatic: ignored (switch to KEYED to use it)"));
+    }
     setEnabled (pitchPage, "latency_mode", juce::roundToInt (value ("quality")) == 0);
 
     const auto limiter = juce::roundToInt (value ("lim_mode"));
@@ -1158,15 +1177,25 @@ void DooblrVocalsAudioProcessorEditor::resized()
     displayArea = content.reduced (16, 10);
     {
         auto display = displayArea;
-        auto bar = display.removeFromTop (24);
-        graphTitleArea = bar.removeFromLeft (180);
-        statusLabel.setBounds (bar.removeFromRight (juce::jmin (280, bar.getWidth())).reduced (0, 2));
-        if (selectedPage == pitchPage)
+        const auto pitch = selectedPage == pitchPage;
+        // Pitch page: a taller bar holding the KEYED | CHROMATIC switch right after the title.
+        const auto toggleHeight = juce::jlimit (dooblrvocals::ui::SegmentedToggle::minHeight + 2, 40, getHeight() / 16);
+        auto bar = display.removeFromTop (pitch ? toggleHeight + 4 : 24);
+        graphTitleArea = bar.removeFromLeft (pitch ? 58 : 180);
+        if (pitch)
         {
-            // The learned range (or the learn message) and its reset, between the title and the status.
-            learnResetButton.setBounds (bar.removeFromRight (54).reduced (0, 1));
+            const auto toggleWidth = juce::jlimit (dooblrvocals::ui::SegmentedToggle::minWidth + 8, 300, bar.getWidth() / 3);
+            modeToggle->setBounds (bar.removeFromLeft (toggleWidth).withSizeKeepingCentre (toggleWidth, toggleHeight));
+            bar.removeFromLeft (14);
+        }
+        statusLabel.setBounds (bar.removeFromRight (juce::jmin (pitch ? 220 : 280, bar.getWidth())).withSizeKeepingCentre (
+            juce::jmin (pitch ? 220 : 280, bar.getWidth()), 20));
+        if (pitch)
+        {
+            // The learned range (or the learn message) and its reset, between the switch and the status.
+            learnResetButton.setBounds (bar.removeFromRight (54).withSizeKeepingCentre (54, 22));
             bar.removeFromRight (6);
-            learnLabel.setBounds (bar.reduced (0, 2));
+            learnLabel.setBounds (bar.withSizeKeepingCentre (bar.getWidth(), 20));
             if (audioProcessor.isLearningRange() || learnMessage.isNotEmpty())
                 statusLabel.setBounds (statusLabel.getBounds().withWidth (0));
         }

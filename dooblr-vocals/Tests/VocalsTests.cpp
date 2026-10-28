@@ -1561,7 +1561,7 @@ namespace
                         continue;
                     if (dynamic_cast<juce::Slider*> (child) != nullptr || dynamic_cast<juce::Button*> (child) != nullptr
                         || child == &editor->getPitchDisplay() || child == &editor->getGateDisplay()
-                        || child == &editor->getEqDisplay())
+                        || child == &editor->getEqDisplay() || child->getComponentID() == "corr_mode")
                         controls.push_back (child);
                     else
                         collect (*child);
@@ -3593,6 +3593,159 @@ namespace
         const char* name;
         std::function<void()> run;
     };
+
+    //==============================================================================
+    // The pitch Mode is a large KEYED | CHROMATIC switch at the top of the pitch page.
+    void testModeToggle()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "editor for the mode toggle");
+        if (editor == nullptr)
+            return;
+
+        editor->setVisible (true); // for getComponentAt (the window goes on the desktop further down)
+        auto& toggle = editor->getModeToggle();
+        auto& correction = *editor->getPanels (Editor::pitchPage).front();
+        check (correction.findControl ("corr_mode") == nullptr, "the old Mode combo is gone from the Correction panel");
+        check (findById (*editor, "corr_mode") == &toggle, "corr_mode is bound to the toggle (one control)");
+        check (toggle.getNumSegments() == 2 && toggle.getSegmentText (0) == "KEYED" && toggle.getSegmentText (1) == "CHROMATIC",
+               "segments read KEYED | CHROMATIC");
+
+        for (const auto& [w, h] : { std::pair<int, int> { 940, 600 }, { 1080, 660 }, { 2400, 1400 } })
+        {
+            const auto size = std::to_string (w) + "x" + std::to_string (h);
+            editor->setSize (w, h);
+            editor->selectPage (Editor::pitchPage);
+            const auto b = toggle.getBounds();
+            check (visibleChain (toggle), size + ": the toggle shows on the pitch page");
+            check (b.getWidth() >= 236 && b.getHeight() >= 32, size + ": the toggle is large (" + std::to_string (b.getWidth()) + "x"
+                                                                + std::to_string (b.getHeight()) + ", min 236x32)");
+            check (toggle.getSegmentBounds (0).getWidth() >= 110 && toggle.getSegmentBounds (1).getWidth() >= 110,
+                   size + ": each segment is at least 110 px wide");
+            check (editor->getLocalBounds().contains (b), size + ": the toggle lies inside the editor");
+            check (b.getBottom() <= editor->getPitchDisplay().getY(), size + ": the toggle sits above the pitch display");
+            check (b.getY() < editor->getHeight() / 5, size + ": the toggle is near the top (y " + std::to_string (b.getY()) + ")");
+
+            // Nothing overlaps it: no other showing editor child intersects it, and every point of
+            // it hits the toggle itself.
+            juce::StringArray overlaps;
+            for (auto* child : editor->getChildren())
+                if (child != &toggle && child->isVisible() && child->getBounds().intersects (b))
+                    overlaps.add (child->getComponentID().isNotEmpty() ? child->getComponentID() : child->getName());
+            check (overlaps.isEmpty(), size + ": nothing overlaps the toggle (" + overlaps.joinIntoString (", ").toStdString() + ")");
+            int misses = 0;
+            for (int iy = 1; iy < 4; ++iy)
+                for (int ix = 1; ix < 8; ++ix)
+                    misses += editor->getComponentAt (juce::Point<int> (b.getX() + b.getWidth() * ix / 8, b.getY() + b.getHeight() * iy / 4)) == &toggle ? 0 : 1;
+            check (misses == 0, size + ": the whole toggle takes the mouse (" + std::to_string (misses) + " points covered)");
+
+            // Key / Scale stay visible in both states.
+            for (const auto* id : { "corr_key", "corr_scale" })
+                check (correction.findControl (id) != nullptr && visibleChain (*correction.findControl (id)), size + ": " + id + " is shown");
+
+            for (int page = 1; page < Editor::numPages; ++page)
+            {
+                editor->selectPage (page);
+                check (! visibleChain (toggle), size + ": the toggle shows only on the pitch page (page " + std::to_string (page) + ")");
+            }
+        }
+
+        // Snapshots in both states.
+        editor->setSize (1080, 660);
+        editor->selectPage (Editor::pitchPage);
+        editor->refreshEnablementNow();
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-keyed");
+        setParam (*p, "corr_mode", 1.0f);
+        editor->refreshEnablementNow();
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-chromatic");
+        editor->setSize (940, 600);
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-chromatic-940x600");
+        setParam (*p, "corr_mode", 0.0f);
+        editor->refreshEnablementNow();
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-keyed-940x600");
+        check (toggle.getSelectedIndex() == 0, "the toggle follows the parameter (host automation)");
+
+        // Real mouse: hover, hand cursor, one click is one undo step.
+        editor->setSize (1080, 660);
+        editor->setTopLeftPosition (40, 40);
+        editor->setVisible (true);
+        editor->addToDesktop (juce::ComponentPeer::windowIsTemporary);
+        auto* peer = editor->getPeer();
+        juce::Process::makeForegroundProcess();
+        editor->setAlwaysOnTop (true);
+        editor->toFront (true);
+        const auto front = peer != nullptr && peer->contains ({ editor->getWidth() / 2, editor->getHeight() / 2 }, true);
+        RoutedMouse mouse (*editor, front ? peer : nullptr);
+        GestureCounter gestures (*p);
+        auto& undo = p->getUndoHistory();
+        undo.clear();
+
+        const auto segmentCentre = [&] (int i)
+        {
+            return editor->getLocalPoint (&toggle, toggle.getSegmentBounds (i).getCentre()).toFloat();
+        };
+        const auto keyBox = correction.findControl ("corr_key"), scaleBox = correction.findControl ("corr_scale");
+
+        mouse.moveTo ({ 400.0f, 400.0f }, 2);
+        gestures.clear();
+        mouse.moveTo (segmentCentre (1), 8);
+        check (toggle.getHoveredIndex() == 1, "hovering CHROMATIC highlights it");
+        check (toggle.getMouseCursor() == juce::MouseCursor::PointingHandCursor, "the toggle shows a hand cursor");
+        mouse.moveTo (segmentCentre (0), 8);
+        check (toggle.getHoveredIndex() == 0, "hover follows the pointer to KEYED");
+        check (gestures.changed.empty() && gestures.events == 0, "hovering changes nothing");
+
+        mouse.click (segmentCentre (1));
+        editor->refreshEnablementNow();
+        check (getPlain (*p, "corr_mode") > 0.5f && toggle.getSelectedIndex() == 1, "clicking CHROMATIC sets Chromatic");
+        check (gestures.balanced() && gestures.events == 2, "the click is one complete gesture (" + std::to_string (gestures.events) + " events)");
+        check (undo.getNumUndoableSteps() == 1, "the click is one undo step (" + std::to_string (undo.getNumUndoableSteps()) + ")");
+        check (keyBox != nullptr && ! keyBox->isEnabled() && keyBox->getAlpha() < 0.6f && keyBox->isShowing(),
+               "Chromatic: Key is disabled and dimmed but still visible");
+        check (scaleBox != nullptr && ! scaleBox->isEnabled() && scaleBox->getAlpha() < 0.6f && scaleBox->isShowing(),
+               "Chromatic: Scale is disabled and dimmed but still visible");
+
+        gestures.clear();
+        mouse.click (segmentCentre (1));
+        check (gestures.events == 0 && undo.getNumUndoableSteps() == 1, "clicking the active segment does nothing");
+
+        // Press on one segment, release on the other: no change.
+        mouse.moveTo (segmentCentre (0), 4);
+        mouse.press();
+        mouse.moveTo (segmentCentre (1), 6, true);
+        mouse.release();
+        check (getPlain (*p, "corr_mode") > 0.5f && gestures.events == 0, "press on KEYED, release on CHROMATIC changes nothing");
+
+        undo.undo();
+        editor->refreshEnablementNow();
+        check (getPlain (*p, "corr_mode") < 0.5f && toggle.getSelectedIndex() == 0, "one undo restores Keyed");
+        check (keyBox != nullptr && keyBox->isEnabled() && juce::approximatelyEqual (keyBox->getAlpha(), 1.0f), "Keyed: Key is live and undimmed");
+        undo.redo();
+        check (getPlain (*p, "corr_mode") > 0.5f && toggle.getSelectedIndex() == 1, "redo restores Chromatic");
+
+        // Harmony on: Key / Scale still set the voices' scale, so they stay live but dimmed.
+        setParam (*p, "harm_on", 1.0f);
+        editor->refreshEnablementNow();
+        check (keyBox != nullptr && keyBox->isEnabled() && keyBox->getAlpha() < 0.9f, "Chromatic + harmony: Key stays live, dimmed");
+
+        mouse.click (segmentCentre (0));
+        check (getPlain (*p, "corr_mode") < 0.5f, "clicking KEYED sets Keyed");
+        mouse.moveTo ({ 400.0f, 400.0f }, 6);
+        check (toggle.getHoveredIndex() < 0, "hover clears when the pointer leaves");
+
+        // Keyboard: Right / Left pick a side.
+        toggle.keyPressed (juce::KeyPress (juce::KeyPress::rightKey));
+        check (getPlain (*p, "corr_mode") > 0.5f, "Right picks CHROMATIC");
+        toggle.keyPressed (juce::KeyPress (juce::KeyPress::leftKey));
+        check (getPlain (*p, "corr_mode") < 0.5f, "Left picks KEYED");
+
+        editor->removeFromDesktop();
+        p->editorBeingDeleted (editor);
+        base.reset();
+    }
+
 }
 
 int main()
@@ -3630,6 +3783,7 @@ int main()
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },
+        { "mode toggle",                    testModeToggle },
     };
 
     int failedTests = 0;

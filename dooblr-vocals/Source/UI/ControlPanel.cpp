@@ -187,6 +187,15 @@ namespace dooblrvocals::ui
         return false;
     }
 
+    void ControlPanel::setDimmed (const juce::String& parameterId, bool shouldBeDimmed, float alpha)
+    {
+        for (auto& item : items)
+            if (item.control != nullptr && item.spec.parameterId == parameterId)
+                for (auto* component : { item.control.get(), (juce::Component*) item.caption.get() })
+                    if (component != nullptr)
+                        component->setAlpha (shouldBeDimmed ? alpha : 1.0f);
+    }
+
     juce::Component* ControlPanel::findControl (const juce::String& parameterId) const
     {
         for (const auto& item : items)
@@ -368,6 +377,191 @@ namespace dooblrvocals::ui
         g.setColour (colour);
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         g.drawText (title.toUpperCase(), getLocalBounds().removeFromTop (16), juce::Justification::centredLeft);
+    }
+
+
+    //==============================================================================
+    namespace
+    {
+        class SegmentedToggleAccessibility final : public juce::AccessibilityHandler
+        {
+        public:
+            explicit SegmentedToggleAccessibility (SegmentedToggle& t)
+                : juce::AccessibilityHandler (t, juce::AccessibilityRole::toggleButton,
+                                              juce::AccessibilityActions()
+                                                  .addAction (juce::AccessibilityActionType::toggle, [&t] { t.select (1 - t.getSelectedIndex()); })
+                                                  .addAction (juce::AccessibilityActionType::press, [&t] { t.select (1 - t.getSelectedIndex()); })),
+                  toggle (t)
+            {
+            }
+
+            juce::AccessibleState getCurrentState() const override
+            {
+                auto s = juce::AccessibilityHandler::getCurrentState().withCheckable();
+                return toggle.getSelectedIndex() == 1 ? s.withChecked() : s;
+            }
+
+            juce::String getHelp() const override { return toggle.getSegmentText (toggle.getSelectedIndex()); }
+
+        private:
+            SegmentedToggle& toggle;
+        };
+    }
+
+    SegmentedToggle::SegmentedToggle (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
+                                      const juce::StringArray& segmentLabels, juce::Colour segmentColour)
+        : labels (segmentLabels), colour (segmentColour)
+    {
+        setComponentID (parameterId);
+        setWantsKeyboardFocus (true);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        setTitle (labels.joinIntoString (" / "));
+
+        if (auto* parameter = dynamic_cast<juce::RangedAudioParameter*> (state.getParameter (parameterId)))
+        {
+            attachment = std::make_unique<juce::ParameterAttachment> (*parameter, [this] (float value)
+            {
+                const auto index = juce::jlimit (0, juce::jmax (0, labels.size() - 1), juce::roundToInt (value));
+                if (index != selected)
+                {
+                    selected = index;
+                    repaint();
+                    if (auto* h = getAccessibilityHandler())
+                        h->notifyAccessibilityEvent (juce::AccessibilityEvent::valueChanged);
+                }
+            }, state.undoManager);
+            attachment->sendInitialUpdate();
+        }
+    }
+
+    SegmentedToggle::~SegmentedToggle()
+    {
+        attachment.reset();
+    }
+
+    juce::Rectangle<int> SegmentedToggle::getSegmentBounds (int index) const
+    {
+        const auto area = getLocalBounds();
+        const auto n = juce::jmax (1, labels.size());
+        const auto x0 = area.getWidth() * index / n, x1 = area.getWidth() * (index + 1) / n;
+        return { x0, 0, x1 - x0, area.getHeight() };
+    }
+
+    int SegmentedToggle::segmentAt (juce::Point<int> position) const
+    {
+        if (! getLocalBounds().contains (position))
+            return -1;
+
+        for (int i = 0; i < labels.size(); ++i)
+            if (getSegmentBounds (i).contains (position))
+                return i;
+
+        return -1;
+    }
+
+    void SegmentedToggle::select (int index)
+    {
+        if (attachment == nullptr || index < 0 || index >= labels.size() || index == selected || ! isEnabled())
+            return;
+
+        attachment->setValueAsCompleteGesture ((float) index);
+    }
+
+    void SegmentedToggle::setHovered (int index)
+    {
+        if (index != hovered)
+        {
+            hovered = index;
+            repaint();
+        }
+    }
+
+    void SegmentedToggle::mouseMove (const juce::MouseEvent& e) { setHovered (segmentAt (e.getPosition())); }
+    void SegmentedToggle::mouseExit (const juce::MouseEvent&) { setHovered (-1); }
+
+    void SegmentedToggle::mouseDown (const juce::MouseEvent& e)
+    {
+        pressed = segmentAt (e.getPosition());
+        setHovered (pressed);
+        repaint();
+    }
+
+    void SegmentedToggle::mouseDrag (const juce::MouseEvent& e)
+    {
+        // While pressed, only the pressed segment shows as hot (and only while over it).
+        const auto at = segmentAt (e.getPosition());
+        setHovered (at == pressed ? at : -1);
+    }
+
+    void SegmentedToggle::mouseUp (const juce::MouseEvent& e)
+    {
+        const auto at = segmentAt (e.getPosition());
+        const auto target = pressed;
+        pressed = -1;
+        setHovered (at);
+        repaint();
+
+        if (target >= 0 && at == target)
+            select (target);
+    }
+
+    bool SegmentedToggle::keyPressed (const juce::KeyPress& key)
+    {
+        if (key == juce::KeyPress::leftKey)  { select (selected - 1); return true; }
+        if (key == juce::KeyPress::rightKey) { select (selected + 1); return true; }
+        if (key == juce::KeyPress::spaceKey || key == juce::KeyPress::returnKey)
+        {
+            select (selected == 0 ? 1 : 0);
+            return true;
+        }
+        return false;
+    }
+
+    std::unique_ptr<juce::AccessibilityHandler> SegmentedToggle::createAccessibilityHandler()
+    {
+        return std::make_unique<SegmentedToggleAccessibility> (*this);
+    }
+
+    void SegmentedToggle::paint (juce::Graphics& g)
+    {
+        const auto enabled = isEnabled();
+        const auto track = getLocalBounds().toFloat().reduced (0.5f);
+        const auto radius = juce::jmin (8.0f, track.getHeight() * 0.3f);
+
+        g.setColour (Palette::panel);
+        g.fillRoundedRectangle (track, radius);
+        g.setColour (hasKeyboardFocus (false) ? colour.withAlpha (0.9f) : Palette::grid.brighter (0.35f));
+        g.drawRoundedRectangle (track, radius, 1.0f);
+
+        const auto fontHeight = juce::jlimit (13.0f, 17.0f, (float) getHeight() * 0.40f);
+        g.setFont (juce::FontOptions (fontHeight, juce::Font::bold).withKerningFactor (0.06f));
+
+        for (int i = 0; i < labels.size(); ++i)
+        {
+            const auto segment = getSegmentBounds (i).toFloat().reduced (3.0f);
+            const auto active = i == selected;
+            const auto hot = enabled && i == hovered;
+            const auto down = hot && i == pressed;
+
+            if (active)
+            {
+                g.setColour (colour.withAlpha (enabled ? (hot ? 1.0f : 0.92f) : 0.4f));
+                g.fillRoundedRectangle (segment, radius - 2.0f);
+                g.setColour (Palette::background);
+            }
+            else
+            {
+                if (hot)
+                {
+                    g.setColour (colour.withAlpha (down ? 0.30f : 0.16f));
+                    g.fillRoundedRectangle (segment, radius - 2.0f);
+                }
+
+                g.setColour (hot ? Palette::textPrimary : Palette::textMuted.withAlpha (0.7f));
+            }
+
+            g.drawText (labels[i], segment.toNearestInt(), juce::Justification::centred, false);
+        }
     }
 
     //==============================================================================
