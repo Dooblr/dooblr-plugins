@@ -207,7 +207,7 @@ namespace dooblrvocals::ui
 
         if (shownDetected > 20.0f)
             readout = params::formatHz (shownDetected)
-                    + (shownCorrected > 20.0f ? "  →  " + params::formatHz (shownCorrected) : juce::String())
+                    + (shownCorrected > 20.0f ? juce::String (juce::CharPointer_UTF8 ("  \xe2\x86\x92  ")) + params::formatHz (shownCorrected) : juce::String())
                     + (shownVibrato > 0.25f ? juce::String (juce::CharPointer_UTF8 ("   VIB ")) + juce::String (shownVibRate, 1)
                                                   + juce::String (juce::CharPointer_UTF8 (" Hz \xc2\xb1"))
                                                   + juce::String (juce::roundToInt (shownVibCents))
