@@ -6,6 +6,10 @@
 #include "Analysis/SpectrumDisplay.h"
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <cstdlib>
+#include <new>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -17,6 +21,23 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+// 0.9.5: counts heap allocations (the solo highlight computation must make none).
+namespace allocationCounter
+{
+    std::atomic<long long> count { 0 };
+}
+
+void* operator new (std::size_t size)
+{
+    allocationCounter::count.fetch_add (1, std::memory_order_relaxed);
+    if (auto* p = std::malloc (size == 0 ? 1 : size))
+        return p;
+    throw std::bad_alloc();
+}
+
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
 
 namespace params = dooblrq::params;
 namespace dsp = dooblrq::dsp;
@@ -6159,6 +6180,460 @@ namespace
         }
     }
 
+    //==============================================================================
+    // 0.9.5: the Solo highlight tracks what Solo plays.
+    using SoloCurve = dooblrq::ui::ResponseCurveComponent;
+
+    int soloColumnAt (const SoloCurve& curve, double frequency)
+    {
+        const auto& h = curve.getSoloHighlight();
+        return juce::jlimit (0, std::max (0, h.columns - 1),
+                             (int) std::floor ((curve.frequencyToX (frequency) - h.left) / (float) SoloCurve::soloColumnWidth));
+    }
+
+    /** Max |drawn - stage| over every column of every band, against the stage's own view. */
+    double soloHighlightError (SoloCurve& curve, DooblrQAudioProcessor& processor, bool& regionsMatch)
+    {
+        const auto view = processor.getSoloView();
+        curve.computeSoloHighlight();
+        const auto& h = curve.getSoloHighlight();
+        double error = std::abs ((double) h.mix - (double) view.mix);
+        regionsMatch = std::abs (h.sampleRate - view.sampleRate) < 1.0e-9;
+
+        for (size_t b = 0; b < (size_t) params::numBands; ++b)
+        {
+            const auto& vb = view.bands[b];
+            error = std::max (error, std::abs ((double) h.weight[b] - (double) vb.weight));
+            if (vb.weight <= 0.0f)
+                continue;
+            regionsMatch = regionsMatch && h.region[b].shape == vb.region.shape && h.region[b].fromInput == vb.region.fromInput
+                           && std::abs (h.region[b].frequency - vb.region.frequency) < 1.0e-9 * vb.region.frequency
+                           && std::abs (h.region[b].q - vb.region.q) < 1.0e-9;
+            for (int c = 0; c < h.columns; ++c)
+            {
+                const auto f = curve.xToFrequency (h.columnCentre (c));
+                const auto expected = (double) vb.weight * dsp::soloMagnitudeAt (vb.region, f, view.sampleRate);
+                error = std::max (error, std::abs ((double) h.level[b][(size_t) c] - expected));
+            }
+        }
+        return error;
+    }
+
+    juce::AudioBuffer<float> processSilenceOrNoise (DooblrQAudioProcessor& processor, int samples, int block = 256, float noise = 0.0f)
+    {
+        juce::AudioBuffer<float> buffer (2, samples);
+        buffer.clear();
+        if (noise > 0.0f)
+            fillWithNoise (buffer, 5, noise);
+        processInBlocks (processor, buffer, { block });
+        return buffer;
+    }
+
+    float pixelLuma (const juce::Image& image, int x, int y)
+    {
+        const auto c = image.getPixelAt (x, y);
+        return 0.2126f * c.getRed() + 0.7152f * c.getGreen() + 0.0722f * c.getBlue();
+    }
+
+    /** Mean luma of a curve-image column over the plot's top quarter (clear of the 0 dB line). */
+    float columnLuma (const juce::Image& image, const SoloCurve& curve, double frequency)
+    {
+        const auto area = curve.plotArea();
+        const auto x = (int) std::floor (curve.frequencyToX (frequency));
+        float sum = 0.0f;
+        int n = 0;
+        for (int y = (int) area.getY() + 2; y < (int) (area.getY() + area.getHeight() * 0.25f); ++y, ++n)
+            sum += pixelLuma (image, x, y);
+        return n > 0 ? sum / (float) n : 0.0f;
+    }
+
+    void testSoloGradient()
+    {
+        using T = dsp::FilterType;
+        constexpr double sr = 48000.0;
+
+        // --- 1. Per type, the drawn highlight against what Solo actually plays (sines through
+        //        the processor): bell / notch / shelves / tilt = solo vs the EQ'd output, cuts
+        //        = solo vs the input (what the cut removes).
+        struct Case { const char* name; T type; float frequency, gain, q; };
+        const Case cases[] {
+            { "bell +6 dB Q 2", T::bell, 1000.0f, 6.0f, 2.0f },
+            { "bell -4 dB Q 0.7", T::bell, 1000.0f, -4.0f, 0.7f },
+            { "notch Q 4", T::notch, 1000.0f, 0.0f, 4.0f },
+            { "low shelf +5", T::lowShelf, 1000.0f, 5.0f, 0.707f },
+            { "high shelf -5", T::highShelf, 1000.0f, -5.0f, 0.707f },
+            { "tilt +4", T::tilt, 1000.0f, 4.0f, 0.707f },
+            { "tilt -4", T::tilt, 1000.0f, -4.0f, 0.707f },
+            { "low cut", T::lowCut, 1000.0f, 0.0f, 0.707f },
+            { "high cut", T::highCut, 1000.0f, 0.0f, 0.707f },
+        };
+        const double probes[] { 60.0, 250.0, 600.0, 850.0, 1000.0, 1200.0, 1700.0, 4000.0, 15000.0 };
+
+        for (const auto& k : cases)
+        {
+            const auto cut = k.type == T::lowCut || k.type == T::highCut;
+            DooblrQAudioProcessor processor;
+            configureBell (processor, 0, k.frequency, k.gain, k.q);
+            setBand (processor, 0, params::band::type, (float) k.type);
+            for (int b = 1; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 0.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1080, 660);
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            check (curve != nullptr, std::string (k.name) + ": curve found");
+            if (curve == nullptr)
+                return;
+
+            double worst = 0.0;
+            std::string row = std::string ("highlight vs audio, ") + k.name + " (drawn / heard dB):";
+            for (const auto f : probes)
+            {
+                if (k.type == T::notch && std::abs (f - 1000.0) < 1.0)
+                    continue; // the notch's own centre is silent in both: no ratio
+                setBand (processor, 0, params::band::solo, 0.0f);
+                processor.reset();
+                const auto reference = cut ? 0.0 : measureSineGainDb (processor, f, 0.25f, sr, 0.25);
+                setBand (processor, 0, params::band::solo, 1.0f);
+                processor.reset();
+                const auto soloed = measureSineGainDb (processor, f, 0.25f, sr, 0.25);
+                const auto heard = soloed - reference;
+
+                bool regionsOk = false;
+                const auto consistency = soloHighlightError (*curve, processor, regionsOk);
+                check (consistency < 1.0e-6 && regionsOk && processor.isSoloViewLive(),
+                       std::string (k.name) + ": every drawn column is the stage's weight * |H| (live)");
+                const auto& h = curve->getSoloHighlight();
+                // The drawn level at this frequency (column containing it, nearest centre).
+                const auto column = soloColumnAt (*curve, f);
+                const auto drawn = 20.0 * std::log10 (std::max (1.0e-7, (double) h.level[0][(size_t) column]));
+                row += " " + format (f, 0) + " Hz " + format (drawn, 1) + "/" + format (heard, 1);
+                // Tolerance: a column is 2 px wide, so allow its own slope across 1 px.
+                const auto slopeDb = std::abs (20.0 * std::log10 (std::max (1.0e-7, (double) h.level[0][(size_t) std::min (h.columns - 1, column + 1)]))
+                                               - 20.0 * std::log10 (std::max (1.0e-7, (double) h.level[0][(size_t) std::max (0, column - 1)]))) * 0.5;
+                if (heard > -30.0 || drawn > -30.0)
+                    worst = std::max (worst, std::abs (drawn - heard) - slopeDb);
+            }
+            note (row);
+            check (worst < 0.5, std::string (k.name) + ": the highlight equals the audition's response at every probe (within 0.5 dB + 1 px of slope; worst "
+                                    + format (worst, 2) + " dB)");
+
+            const auto& h = curve->getSoloHighlight();
+            if (k.type == T::lowCut || k.type == T::highCut)
+            {
+                const auto low = k.type == T::lowCut;
+                const auto edge = low ? h.level[0][0] : h.level[0][(size_t) (h.columns - 1)];
+                const auto far = low ? h.level[0][(size_t) (h.columns - 1)] : h.level[0][0];
+                const auto inner = h.level[0][(size_t) soloColumnAt (*curve, low ? 300.0 : 3300.0)];
+                check (edge > 0.995f && inner > 0.98f && far < 1.0e-3f,
+                       std::string (k.name) + ": lit to the graph edge on the removed side (" + (low ? "below" : "above")
+                           + " the cutoff), not a band around it");
+            }
+        }
+
+        // --- 2. Fades: the highlight fades in and out with the 20 ms audio fade.
+        {
+            DooblrQAudioProcessor processor;
+            configureBell (processor, 0, 1000.0f, 3.0f, 1.0f);
+            for (int b = 1; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 0.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1080, 660);
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            if (curve == nullptr)
+                return;
+            processSilenceOrNoise (*&processor, 4800);
+            curve->computeSoloHighlight();
+            check (curve->getSoloHighlight().mix == 0.0f && curve->getSoloHighlight().weight[0] == 0.0f, "fade: nothing lit before Solo");
+
+            setBand (processor, 0, params::band::solo, 1.0f);
+            const auto beforeAudio = processor.getSoloView();
+            check (beforeAudio.mix == 0.0f && beforeAudio.bands[0].weight == 0.0f,
+                   "fade: toggling Solo lights nothing until the audio starts fading (no jump ahead)");
+            processSilenceOrNoise (processor, 256, 256, 0.1f);
+            check (curve->soloHighlightStale(), "fade: mid fade-in the painted highlight is stale, so the timer / vblank repaint");
+            bool ok = false;
+            auto error = soloHighlightError (*curve, processor, ok);
+            const auto& h = curve->getSoloHighlight();
+            const auto expectedWeight = 256.0f / 960.0f;
+            const auto centre = h.level[0][(size_t) soloColumnAt (*curve, 1000.0)];
+            note ("fade-in after 256 samples (5.3 ms): drawn weight " + format (h.weight[0], 4) + ", mix " + format (h.mix, 4)
+                  + ", centre level " + format (centre, 4) + ", stage mix " + format (processor.getSoloMix(), 4)
+                  + ", dim alpha " + format (SoloCurve::soloDimAlpha (h.mix), 3));
+            check (error < 1.0e-6 && ok && std::abs (h.weight[0] - expectedWeight) < 1.0e-3f && std::abs (h.mix - processor.getSoloMix()) < 1.0e-6f
+                       && std::abs (centre - expectedWeight) < 0.01f,
+                   "fade-in: weight, dim and every column follow the stage's 20 ms ramp (27% after 5.3 ms)");
+            processSilenceOrNoise (processor, 256 * 3, 256, 0.1f);
+            curve->computeSoloHighlight();
+            check (curve->getSoloHighlight().weight[0] == 1.0f && curve->getSoloHighlight().mix == 1.0f && ! curve->soloHighlightStale(),
+                   "fade-in: full after 20 ms, then steady (no further repaints needed)");
+
+            setBand (processor, 0, params::band::solo, 0.0f);
+            processSilenceOrNoise (processor, 256, 256, 0.1f);
+            error = soloHighlightError (*curve, processor, ok);
+            note ("fade-out after 256 samples: drawn weight " + format (h.weight[0], 4) + ", mix " + format (h.mix, 4)
+                  + " (Solo already off: heard " + std::string (processor.isBandHeardSolo (0) ? "yes" : "no") + ")");
+            check (error < 1.0e-6 && ok && std::abs (h.weight[0] - (1.0f - expectedWeight)) < 1.0e-3f && ! processor.isBandHeardSolo (0),
+                   "fade-out: the highlight keeps fading with the audio after Solo is switched off (it used to vanish at once)");
+            processSilenceOrNoise (processor, 1024, 256, 0.1f);
+            curve->computeSoloHighlight();
+            check (curve->getSoloHighlight().weight[0] == 0.0f && curve->getSoloHighlight().mix == 0.0f && ! curve->soloHighlightStale(),
+                   "fade-out: nothing lit once the 20 ms fade ends");
+
+            // Pixels: the drawn fill scales with the fade.
+            setBand (processor, 0, params::band::type, (float) T::lowCut);
+            setBand (processor, 0, params::band::frequency, 500.0f);
+            const auto contrast = [&]
+            {
+                const auto image = curve->createComponentSnapshot (curve->getLocalBounds());
+                return columnLuma (image, *curve, 40.0) - columnLuma (image, *curve, 8000.0);
+            };
+            const auto off = contrast();
+            setBand (processor, 0, params::band::solo, 1.0f);
+            processSilenceOrNoise (processor, 256, 256, 0.1f);
+            const auto partial = contrast();
+            processSilenceOrNoise (processor, 1024, 256, 0.1f);
+            const auto full = contrast();
+            note ("rendered low cut 500 Hz highlight, luma 40 Hz minus 8 kHz (top quarter): off " + format (off, 2) + ", 27% into the fade "
+                  + format (partial, 2) + ", full " + format (full, 2));
+            check (full > off + 6.0f && partial > off + 0.5f && partial < off + 0.6f * (full - off),
+                   "pixels: the removed side is lit on screen, partially mid-fade, fully after it");
+        }
+
+        // --- 3. Glide: during the 10 ms glide the highlight is where the audio filter is.
+        {
+            DooblrQAudioProcessor processor;
+            configureBell (processor, 0, 1000.0f, 3.0f, 2.0f);
+            setBand (processor, 0, params::band::solo, 1.0f);
+            for (int b = 1; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 0.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1080, 660);
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            if (curve == nullptr)
+                return;
+            processSilenceOrNoise (processor, 4800, 256, 0.1f);
+            setBand (processor, 0, params::band::frequency, 4000.0f);
+            processSilenceOrNoise (processor, 256, 256, 0.1f);
+            bool ok = false;
+            const auto error = soloHighlightError (*curve, processor, ok);
+            const auto& h = curve->getSoloHighlight();
+            const auto glide = 1.0 - std::exp (-16.0 / (0.01 * sr));
+            const auto predicted = std::exp (std::log (4000.0) + (std::log (1000.0) - std::log (4000.0)) * std::pow (1.0 - glide, 16.0));
+            int peak = 0;
+            for (int c = 1; c < h.columns; ++c)
+                if (h.level[0][(size_t) c] > h.level[0][(size_t) peak])
+                    peak = c;
+            const auto peakHz = curve->xToFrequency (h.columnCentre (peak));
+            note ("glide 1 -> 4 kHz, 256 samples in: drawn region " + format (h.region[0].frequency, 1) + " Hz (one-pole prediction "
+                  + format (predicted, 1) + " Hz, target " + format (processor.getSoloRegion (0).frequency, 0) + " Hz), drawn peak at "
+                  + format (peakHz, 0) + " Hz");
+            check (error < 1.0e-6 && ok && std::abs (h.region[0].frequency / predicted - 1.0) < 0.01
+                       && std::abs (std::log2 (peakHz / h.region[0].frequency)) < 0.03,
+                   "glide: the highlight shows the smoothed region the audio is filtering with, not the target");
+            check (curve->soloHighlightStale() == false && processor.getSoloView().isMoving (true), "glide: still moving, so repaints continue");
+            processSilenceOrNoise (processor, 4800, 256, 0.1f);
+            curve->computeSoloHighlight();
+            check (std::abs (h.region[0].frequency / 4000.0 - 1.0) < 1.0e-3 && ! processor.getSoloView().isMoving (true) && ! curve->soloHighlightStale(),
+                   "glide: settles on the target, then stops repainting");
+        }
+
+        // --- 4. Live dynamics move a cut's cutoff: the highlight follows the stage.
+        for (const auto type : { T::lowCut, T::highCut })
+        {
+            const auto label = std::string (type == T::lowCut ? "dynamic low cut" : "dynamic high cut");
+            DooblrQAudioProcessor processor;
+            configureDynamicCut (processor, 0, type, 1000.0f, dsp::Slope::db24, 12.0f);
+            setBand (processor, 0, params::band::solo, 1.0f);
+            for (int b = 1; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 0.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1080, 660);
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            if (curve == nullptr)
+                return;
+            double worstError = 0.0;
+            auto allOk = true;
+            double minHz = 1.0e9, maxHz = 0.0, worstLag = 0.0;
+            juce::AudioBuffer<float> buffer (2, 256);
+            for (int block = 0; block < 120; ++block)
+            {
+                const auto loud = (block / 30) % 2 == 0;
+                for (int i = 0; i < 256; ++i)
+                {
+                    const auto v = (loud ? 0.5f : 0.001f) * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * (block * 256 + i) / sr);
+                    buffer.setSample (0, i, v);
+                    buffer.setSample (1, i, v);
+                }
+                juce::MidiBuffer midi;
+                processor.processBlock (buffer, midi);
+                bool ok = false;
+                worstError = std::max (worstError, soloHighlightError (*curve, processor, ok));
+                allOk = allOk && ok;
+                const auto drawnHz = curve->getSoloHighlight().region[0].frequency;
+                minHz = std::min (minHz, drawnHz);
+                maxHz = std::max (maxHz, drawnHz);
+                // How far the drawn cutoff is from the live (unsmoothed) cutoff: the glide lag only.
+                worstLag = std::max (worstLag, std::abs (std::log2 (drawnHz / processor.getSoloRegion (0).frequency)));
+            }
+            note (label + ": drawn cutoff ranged " + format (minHz, 0) + " - " + format (maxHz, 0) + " Hz over loud / quiet bursts, worst lag behind the live cutoff "
+                  + format (worstLag, 3) + " oct (the 10 ms glide), drawn vs stage error " + format (worstError, 8));
+            check (worstError < 1.0e-6 && allOk && maxHz / minHz > 1.5, label + ": the highlight follows the live cutoff exactly as the stage does, block by block");
+            check (curve->soloHighlightStale() == false, label + ": (computed this block)");
+        }
+
+        // --- 5. Multiple solos, three window sizes, the log mapping.
+        {
+            DooblrQAudioProcessor processor;
+            configureBell (processor, 0, 120.0f, 0.0f, 0.707f);
+            setBand (processor, 0, params::band::type, (float) T::lowCut);
+            configureBell (processor, 1, 1000.0f, 4.0f, 1.5f);
+            configureBell (processor, 2, 8000.0f, 0.0f, 0.707f);
+            setBand (processor, 2, params::band::type, (float) T::highCut);
+            for (int b = 0; b < 3; ++b)
+                setBand (processor, b, params::band::solo, 1.0f);
+            for (int b = 3; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 0.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            if (curve == nullptr)
+                return;
+            processSilenceOrNoise (processor, 4800, 256, 0.1f);
+
+            const std::pair<int, int> sizes[] { { DooblrQAudioProcessorEditor::minimumWidth, DooblrQAudioProcessorEditor::minimumHeight },
+                                                { DooblrQAudioProcessorEditor::defaultWidth, DooblrQAudioProcessorEditor::defaultHeight },
+                                                { DooblrQAudioProcessorEditor::maximumWidth, DooblrQAudioProcessorEditor::maximumHeight } };
+            for (const auto& [w, hgt] : sizes)
+            {
+                editor->setSize (w, hgt);
+                const auto label = std::to_string (w) + " x " + std::to_string (hgt);
+                bool ok = false;
+                const auto error = soloHighlightError (*curve, processor, ok);
+                const auto& h = curve->getSoloHighlight();
+                const auto area = curve->plotArea();
+                const auto pxPerOctave = area.getWidth() / (float) std::log2 (1000.0);
+                double worstMapping = 0.0;
+                for (const auto f : { 25.0, 100.0, 1000.0, 5000.0, 19000.0 })
+                {
+                    const auto c = soloColumnAt (*curve, f);
+                    worstMapping = std::max (worstMapping, std::abs (std::log2 (curve->xToFrequency (h.columnCentre (c)) / f)) * pxPerOctave);
+                }
+                const auto litAll = h.weight[0] == 1.0f && h.weight[1] == 1.0f && h.weight[2] == 1.0f;
+                note (label + ": " + std::to_string (h.columns) + " columns over " + format (area.getWidth(), 0) + " px, column-centre mapping off by at most "
+                      + format (worstMapping, 2) + " px, drawn vs stage " + format (error, 8));
+                check (h.columns == (int) std::ceil (area.getWidth() / 2.0f) && h.columns <= SoloCurve::maxSoloColumns && std::abs (h.left - area.getX()) < 1.0e-4f,
+                       label + ": columns span the plot exactly");
+                check (worstMapping <= 1.0001 && error < 1.0e-6 && ok && litAll,
+                       label + ": three solos drawn from the stage, each column at its log-frequency centre (within 1 px)");
+                check (h.level[0][0] > 0.99f && h.level[2][(size_t) (h.columns - 1)] > 0.99f
+                           && h.level[1][(size_t) soloColumnAt (*curve, 1000.0)] > 0.99f,
+                       label + ": low cut lit to the left edge, high cut to the right edge, bell at its centre");
+            }
+
+            // Timing and allocations, the largest window, three bands.
+            const auto before = allocationCounter::count.load();
+            const auto t0 = std::chrono::steady_clock::now();
+            for (int i = 0; i < 200; ++i)
+                curve->computeSoloHighlight();
+            const auto micros = std::chrono::duration<double, std::micro> (std::chrono::steady_clock::now() - t0).count() / 200.0;
+            const auto allocations = allocationCounter::count.load() - before;
+            const auto image = juce::Image (juce::Image::ARGB, curve->getWidth(), curve->getHeight(), true);
+            juce::Image target (image);
+            juce::Graphics g (target);
+            const auto t1 = std::chrono::steady_clock::now();
+            for (int i = 0; i < 20; ++i)
+                curve->paint (g);
+            const auto paintMs = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t1).count() / 20.0;
+            note ("2400 x 1400, three solos: highlight computation " + format (micros, 1) + " us per paint, "
+                  + std::to_string (allocations) + " allocations in 200 runs; whole graph paint (software renderer) " + format (paintMs, 2) + " ms");
+            check (allocations == 0, "the highlight computation allocates nothing");
+            check (micros < 2000.0, "the highlight computation is cheap (under 2 ms at the largest size)");
+        }
+
+        // --- 6. Mid S-drag: the auditioned band fades in, the soloed one fades out, as heard.
+        {
+            DooblrQAudioProcessor processor;
+            configureBell (processor, 0, 1000.0f, 4.0f, 1.0f);
+            configureBell (processor, 1, 2000.0f, -4.0f, 1.4f);
+            for (int b = 2; b < params::numBands; ++b)
+                setBand (processor, b, params::band::enabled, 0.0f);
+            setBand (processor, 0, params::band::solo, 1.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            auto* dooblrEditor = dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get());
+            editor->setSize (1080, 660);
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            if (curve == nullptr || dooblrEditor == nullptr)
+                return;
+            dooblrEditor->selectBand (1);
+            processSilenceOrNoise (processor, 4800, 256, 0.1f);
+            const auto hp = curve->handlePosition (1);
+            curve->updateHover (hp);
+            curve->advanceHoverAnimation (0.2);
+            const auto onS = curve->soloBadgeBounds (1).getCentre();
+            curve->updateHover (onS);
+            check (curve->hitAt (onS) == SoloCurve::Hit::soloBadge, "S-drag setup: the press lands on band 2's S");
+            curve->mouseDown (makeMouseEvent (*curve, onS, onS, 1, false));
+            for (int i = 1; i <= 6; ++i)
+                curve->mouseDrag (makeMouseEvent (*curve, onS.translated (-8.0f * (float) i, 2.0f * (float) i), onS, 1, true));
+            check (processor.getSoloAudition() == 1, "S-drag: auditioning band 2");
+            processSilenceOrNoise (processor, 256, 256, 0.1f);
+            bool ok = false;
+            auto error = soloHighlightError (*curve, processor, ok);
+            const auto& h = curve->getSoloHighlight();
+            note ("mid S-drag, 5.3 ms in: band 1 weight " + format (h.weight[0], 3) + " (fading out), band 2 " + format (h.weight[1], 3)
+                  + " (fading in), band 2 region " + format (h.region[1].frequency, 0) + " Hz (param " + format (getParameter (processor, params::bandId (1, params::band::frequency)), 0) + " Hz)");
+            check (error < 1.0e-6 && ok && h.weight[0] > 0.6f && h.weight[0] < 0.8f && h.weight[1] > 0.2f && h.weight[1] < 0.4f,
+                   "mid S-drag: both bands drawn at the weights the audio crossfades with");
+            for (int i = 7; i <= 12; ++i)
+            {
+                curve->mouseDrag (makeMouseEvent (*curve, onS.translated (-8.0f * (float) i, 2.0f * (float) i), onS, 1, true));
+                processSilenceOrNoise (processor, 256, 256, 0.1f);
+                error = std::max (error, soloHighlightError (*curve, processor, ok));
+            }
+            // Let the 10 ms glide settle (100 ms = ~10 time constants) before asking for the parameter.
+            processSilenceOrNoise (processor, 4800, 256, 0.1f);
+            error = std::max (error, soloHighlightError (*curve, processor, ok));
+            check (error < 1.0e-6 && ok && h.weight[0] == 0.0f && h.weight[1] == 1.0f
+                       && std::abs (std::log2 (h.region[1].frequency / getParameter (processor, params::bandId (1, params::band::frequency)))) < 0.01,
+                   "mid S-drag: the moving band's highlight follows the glided audition; the other band has faded out");
+            curve->mouseUp (makeMouseEvent (*curve, onS.translated (-96.0f, 24.0f), onS, 1, true));
+        }
+
+        // --- 7. No audio running (stopped host / headless): the target state, never stale.
+        {
+            DooblrQAudioProcessor processor;
+            configureDynamicCut (processor, 0, T::highCut, 3000.0f, dsp::Slope::db24, 0.0f, false);
+            setBand (processor, 0, params::band::solo, 1.0f);
+            prepare (processor, juce::AudioChannelSet::stereo(), sr, 512);
+            std::unique_ptr<juce::AudioProcessorEditor> editor (processor.createEditorAndMakeActive());
+            editor->setSize (1080, 660);
+            auto* curve = dynamic_cast<SoloCurve*> (findById (*editor, "responseCurve"));
+            if (curve == nullptr)
+                return;
+            curve->computeSoloHighlight();
+            const auto& h = curve->getSoloHighlight();
+            check (! processor.isSoloViewLive() && h.weight[0] == 1.0f && h.mix == 1.0f && h.region[0].shape == dsp::SoloShape::highPass
+                       && std::abs (h.region[0].frequency - 3000.0) < 0.01,
+                   "no audio: the highlight shows the region Solo will play (full weight)");
+            setBand (processor, 0, params::band::frequency, 6000.0f);
+            check (curve->soloHighlightStale(), "no audio: an edit marks the highlight stale (repaint)");
+            curve->computeSoloHighlight();
+            check (std::abs (h.region[0].frequency - 6000.0) < 1.0e-6, "no audio: edits show at once (nothing to glide)");
+
+            // Snapshot for the release: a high cut soloed live, the removed side lit to the edge.
+            setBand (processor, 0, params::band::frequency, 2500.0f);
+            configureBell (processor, 1, 400.0f, 3.0f, 1.0f);
+            processSilenceOrNoise (processor, 4800, 256, 0.1f);
+            dynamic_cast<DooblrQAudioProcessorEditor*> (editor.get())->selectBand (0);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-v0.9.5-solo-gradient");
+        }
+    }
+
 }
 
 int main()
@@ -6214,6 +6689,7 @@ int main()
         { "hover Range ring and blue S (0.9.2)",     testHoverRing },
         { "editing while soloed (0.9.3)",           testSoloEditing },
         { "S-drag audition (0.9.4)",                testSoloDrag },
+        { "solo gradient (0.9.5)",                  testSoloGradient },
         { "CPU per phase mode",                     testCpuUsage },
     };
 

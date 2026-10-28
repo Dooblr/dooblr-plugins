@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <atomic>
+#include <cstdint>
 
 #include "DynamicEQBand.h"
 #include "SvfFilter.h"
@@ -59,6 +61,29 @@ namespace dooblrq::dsp
     /** Linear magnitude of a region filter (for the display and the tests). */
     double soloMagnitudeAt (const SoloRegion& region, double frequency, double sampleRate) noexcept;
 
+    /** Same, from coefficients already made for the region (no per-call tan()). */
+    double soloMagnitudeAt (const SoloCoefficients& coefficients, double frequency, double sampleRate) noexcept;
+
+    /** (0.9.5) What the solo stage is playing right now, as published by the audio thread
+        after every process() call: the dry/solo mix, and per band the fade weight and the
+        region it is actually filtering with (the glided frequency / Q, not the target). */
+    struct SoloView
+    {
+        struct Band
+        {
+            float weight = 0.0f;   // 0..1, this band's 20 ms fade
+            SoloRegion region;     // the current (smoothed) region
+            bool settled = true;   // the glide has reached the target region
+        };
+
+        float mix = 0.0f;          // 0..1, the dry/solo crossfade
+        double sampleRate = 48000.0;
+        std::array<Band, 6> bands {};
+
+        /** True while a fade or a glide is still moving (the display keeps repainting). */
+        bool isMoving (bool anyTarget) const noexcept;
+    };
+
     class SoloStage
     {
     public:
@@ -81,8 +106,13 @@ namespace dooblrq::dsp
         /** True while any band is soloed or a fade is still running. */
         bool isActive() const noexcept;
 
-        /** Current dry/solo mix (0 = normal output, 1 = solo only). */
+        /** Current dry/solo mix (0 = normal output, 1 = solo only). Audio thread. */
         float getMix() const noexcept { return mix; }
+
+        /** (0.9.5) The state last published by process() / prepare() / reset(); safe from
+            any thread (lock-free sequence lock over relaxed atomics, never blocks the
+            audio thread). */
+        SoloView getView() const noexcept;
 
     private:
         struct Band
@@ -98,6 +128,20 @@ namespace dooblrq::dsp
         };
 
         void updateCoefficients (Band& band, bool snap) noexcept;
+        void publish() noexcept;
+
+        struct PublishedBand
+        {
+            std::atomic<float> weight { 0.0f };
+            std::atomic<double> frequency { 1000.0 }, q { 0.707 };
+            std::atomic<int> shape { 0 };
+            std::atomic<bool> fromInput { false }, settled { true };
+        };
+
+        std::array<PublishedBand, maxBands> published;
+        std::atomic<float> publishedMix { 0.0f };
+        std::atomic<double> publishedSampleRate { 48000.0 };
+        std::atomic<std::uint32_t> sequence { 0 };
 
         std::array<Band, maxBands> bands;
         float mix = 0.0f, step = 1.0f / 960.0f;

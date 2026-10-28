@@ -86,10 +86,93 @@ namespace dooblrq::dsp
         return c;
     }
 
+    double soloMagnitudeAt (const SoloCoefficients& c, double frequency, double sampleRate) noexcept
+    {
+        return magnitudeAt (c.sections[0], frequency, sampleRate) * magnitudeAt (c.sections[1], frequency, sampleRate);
+    }
+
     double soloMagnitudeAt (const SoloRegion& region, double frequency, double sampleRate) noexcept
     {
-        const auto c = makeSoloCoefficients (region, sampleRate);
-        return magnitudeAt (c.sections[0], frequency, sampleRate) * magnitudeAt (c.sections[1], frequency, sampleRate);
+        return soloMagnitudeAt (makeSoloCoefficients (region, sampleRate), frequency, sampleRate);
+    }
+
+    bool SoloView::isMoving (bool anyTarget) const noexcept
+    {
+        if (std::abs (mix - (anyTarget ? 1.0f : 0.0f)) > 0.0f)
+            return true;
+
+        for (const auto& band : bands)
+            if ((band.weight > 0.0f && band.weight < 1.0f) || (band.weight > 0.0f && ! band.settled))
+                return true;
+
+        return false;
+    }
+
+    //==============================================================================
+    void SoloStage::publish() noexcept
+    {
+        // Sequence lock: odd while writing. Single writer (the audio thread, or prepare /
+        // reset while audio is stopped); readers retry if the count changed under them.
+        const auto s = sequence.load (std::memory_order_relaxed);
+        sequence.store (s + 1, std::memory_order_relaxed);
+        std::atomic_thread_fence (std::memory_order_release);
+
+        publishedMix.store (mix, std::memory_order_relaxed);
+        publishedSampleRate.store (sampleRate, std::memory_order_relaxed);
+
+        for (size_t b = 0; b < bands.size(); ++b)
+        {
+            const auto& band = bands[b];
+            auto& out = published[b];
+            const auto running = band.running;
+            const auto targetLog = std::log (std::max (1.0, band.region.frequency));
+            out.weight.store (running ? band.weight : 0.0f, std::memory_order_relaxed);
+            out.frequency.store (std::exp (band.logFrequency), std::memory_order_relaxed);
+            out.q.store (band.q, std::memory_order_relaxed);
+            out.shape.store ((int) band.shape, std::memory_order_relaxed);
+            out.fromInput.store (band.fromInput, std::memory_order_relaxed);
+            out.settled.store (std::abs (targetLog - band.logFrequency) < 1.0e-4
+                                   && std::abs (band.region.q - band.q) < 1.0e-4 * std::max (1.0, band.q)
+                                   && band.shape == band.region.shape && band.fromInput == band.region.fromInput,
+                               std::memory_order_relaxed);
+        }
+
+        sequence.store (s + 2, std::memory_order_release);
+    }
+
+    SoloView SoloStage::getView() const noexcept
+    {
+        SoloView view;
+
+        for (int attempt = 0; attempt < 16; ++attempt)
+        {
+            const auto before = sequence.load (std::memory_order_acquire);
+
+            if ((before & 1u) != 0)
+                continue;
+
+            view.mix = publishedMix.load (std::memory_order_relaxed);
+            view.sampleRate = publishedSampleRate.load (std::memory_order_relaxed);
+
+            for (size_t b = 0; b < published.size(); ++b)
+            {
+                const auto& in = published[b];
+                auto& out = view.bands[b];
+                out.weight = in.weight.load (std::memory_order_relaxed);
+                out.region.frequency = in.frequency.load (std::memory_order_relaxed);
+                out.region.q = in.q.load (std::memory_order_relaxed);
+                out.region.shape = (SoloShape) in.shape.load (std::memory_order_relaxed);
+                out.region.fromInput = in.fromInput.load (std::memory_order_relaxed);
+                out.settled = in.settled.load (std::memory_order_relaxed);
+            }
+
+            std::atomic_thread_fence (std::memory_order_acquire);
+
+            if (sequence.load (std::memory_order_relaxed) == before)
+                break; // consistent
+        }
+
+        return view;
     }
 
     //==============================================================================
@@ -128,6 +211,7 @@ namespace dooblrq::dsp
         }
 
         mix = any ? 1.0f : 0.0f;
+        publish();
     }
 
     void SoloStage::setBand (int bandIndex, bool soloed, const SoloRegion& region) noexcept
@@ -176,7 +260,14 @@ namespace dooblrq::dsp
     void SoloStage::process (float* const* channels, const float* const* input, int numChannels, int numSamples) noexcept
     {
         if (! isActive())
-            return; // exact pass-through
+        {
+            // Exact pass-through. Publish once so the display sees the stage at rest.
+            if (publishedMix.load (std::memory_order_relaxed) != 0.0f
+                || std::any_of (published.begin(), published.end(),
+                                [] (const PublishedBand& p) { return p.weight.load (std::memory_order_relaxed) != 0.0f; }))
+                publish();
+            return;
+        }
 
         numChannels = std::min (numChannels, maxChannels);
         bool anyTarget = false;
@@ -268,5 +359,7 @@ namespace dooblrq::dsp
                 }
             }
         }
+
+        publish();
     }
 }

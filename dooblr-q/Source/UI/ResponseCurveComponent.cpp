@@ -104,7 +104,8 @@ namespace dooblrq::ui
                              || (processor.getSpectrumAnalyzer().isFrozen() && overlayDisplay.getLastMovement() > 0.02f);
         }
 
-        if (repaintPending.exchange (false) || newFrames > 0 || spectrumMoving || anyDynamicsActive())
+        if (repaintPending.exchange (false) || newFrames > 0 || spectrumMoving || anyDynamicsActive()
+            || soloHighlightStale()) // 0.9.5: every frame of a solo fade / glide
             repaint();
     }
 
@@ -539,6 +540,9 @@ namespace dooblrq::ui
         const auto dt = lastVBlankTime > 0.0 ? juce::jlimit (0.0, 0.05, now - lastVBlankTime) : 1.0 / 60.0;
         lastVBlankTime = now;
         advanceHoverAnimation (dt);
+
+        if (soloHighlightStale())
+            repaint(); // 0.9.5: display-synced solo fades / glides
     }
 
     ResponseCurveComponent::Hit ResponseCurveComponent::hitAt (juce::Point<float> position, int* bandOut) const
@@ -1019,6 +1023,137 @@ namespace dooblrq::ui
         g.drawText ("S", badge, juce::Justification::centred);
     }
 
+    void ResponseCurveComponent::computeSoloHighlight() noexcept
+    {
+        const auto view = processor.getSoloView();
+        const auto area = plotArea();
+        auto& h = soloHighlight;
+
+        h.left = area.getX();
+        h.columns = juce::jlimit (0, maxSoloColumns, (int) std::ceil (area.getWidth() / (float) soloColumnWidth));
+        h.mix = juce::jlimit (0.0f, 1.0f, view.mix);
+        h.sampleRate = view.sampleRate;
+
+        for (size_t b = 0; b < (size_t) params::numBands; ++b)
+        {
+            const auto& band = view.bands[b];
+            h.weight[b] = juce::jlimit (0.0f, 1.0f, band.weight);
+            h.region[b] = band.region;
+
+            if (h.weight[b] <= 0.0f)
+                continue;
+
+            // The stage's coefficients, made once per band per paint (no tan() per column).
+            const auto coefficients = dsp::makeSoloCoefficients (band.region, view.sampleRate);
+
+            for (int c = 0; c < h.columns; ++c)
+            {
+                const auto magnitude = dsp::soloMagnitudeAt (coefficients, xToFrequency (h.columnCentre (c)), view.sampleRate);
+                const auto db = 20.0 * std::log10 (std::max (magnitude, 1.0e-6));
+                h.level[b][(size_t) c] = h.weight[b] * (float) magnitude;
+                h.outlineY[b][(size_t) c] = juce::jlimit (area.getY() - 2.0f, area.getBottom() + 2.0f, decibelsToY (db));
+            }
+        }
+    }
+
+    bool ResponseCurveComponent::soloHighlightStale() const noexcept
+    {
+        const auto view = processor.getSoloView();
+        const auto& h = soloHighlight;
+
+        if (std::abs (view.mix - h.mix) > 1.0e-4f)
+            return true;
+
+        for (size_t b = 0; b < (size_t) params::numBands; ++b)
+        {
+            const auto& band = view.bands[b];
+
+            if (std::abs (band.weight - h.weight[b]) > 1.0e-4f)
+                return true;
+
+            if (band.weight <= 0.0f)
+                continue;
+
+            const auto& r = h.region[b];
+            if (band.region.shape != r.shape || band.region.fromInput != r.fromInput
+                || std::abs (std::log (band.region.frequency / r.frequency)) > 1.0e-4
+                || std::abs (band.region.q - r.q) > 1.0e-4 * std::max (1.0, r.q))
+                return true;
+        }
+
+        return std::abs (view.sampleRate - h.sampleRate) > 1.0e-6;
+    }
+
+    void ResponseCurveComponent::drawSoloHighlight (juce::Graphics& g, juce::Rectangle<float> area)
+    {
+        const auto& h = soloHighlight;
+        auto anyWeight = false;
+        for (auto w : h.weight)
+            anyWeight = anyWeight || w > 0.0f;
+
+        if (h.mix <= 0.0f && ! anyWeight)
+            return;
+
+        g.saveState();
+        g.reduceClipRegion (area.toNearestInt());
+        g.setColour (Palette::background.withAlpha (soloDimAlpha (h.mix)));
+        g.fillRect (area);
+
+        constexpr float dashOn = 3.0f, dashPeriod = 6.0f;
+
+        for (size_t b = 0; b < (size_t) params::numBands; ++b)
+        {
+            if (h.weight[b] <= 0.0f)
+                continue;
+
+            const auto colour = bandColour ((int) b);
+
+            for (int c = 0; c < h.columns; ++c)
+            {
+                const auto level = h.level[b][(size_t) c];
+                if (level > 0.004f)
+                {
+                    g.setColour (colour.withAlpha (soloColumnAlpha (level)));
+                    g.fillRect (h.left + (float) (c * soloColumnWidth), area.getY(), (float) soloColumnWidth, area.getHeight());
+                }
+            }
+
+            // The region filter's response, dashed (built into a reused member path).
+            auto& dashes = soloDashes[b];
+            dashes.clear();
+            auto travelled = 0.0f;
+
+            for (int c = 1; c < h.columns; ++c)
+            {
+                const juce::Point<float> p0 { h.columnCentre (c - 1), h.outlineY[b][(size_t) (c - 1)] };
+                const juce::Point<float> p1 { h.columnCentre (c), h.outlineY[b][(size_t) c] };
+                const auto length = p0.getDistanceFrom (p1);
+                auto along = 0.0f;
+
+                while (along < length)
+                {
+                    const auto phase = std::fmod (travelled + along, dashPeriod);
+                    const auto run = std::min (length - along, (phase < dashOn ? dashOn : dashPeriod) - phase);
+
+                    if (phase < dashOn && run > 0.0f)
+                    {
+                        dashes.startNewSubPath (p0 + (p1 - p0) * (along / length));
+                        dashes.lineTo (p0 + (p1 - p0) * ((along + run) / length));
+                    }
+
+                    along += std::max (run, 1.0e-3f);
+                }
+
+                travelled = std::fmod (travelled + length, dashPeriod);
+            }
+
+            g.setColour (colour.withAlpha (0.8f * h.weight[b]));
+            g.strokePath (dashes, juce::PathStrokeType (1.2f));
+        }
+
+        g.restoreState();
+    }
+
     void ResponseCurveComponent::paint (juce::Graphics& g)
     {
         repaintPending.store (false);
@@ -1037,61 +1172,17 @@ namespace dooblrq::ui
 
         drawGrid (g);
 
-        // 0.9.1 Solo: dim the plot and light up each soloed band's region (its region filter's
-        // magnitude per column), with the region filter's own response outlined.
-        // One read of the Solo state per paint (it can change from the host mid-paint), so each
-        // band's transparency layer is always begun and ended in pairs.
+        // Solo (0.9.1; 0.9.5 tracks the audio): dim the plot and light up each soloed band's
+        // region from the solo stage's own state, so the highlight fades, glides and follows
+        // dynamics exactly as the audition does. Handle dimming follows what is heard.
         std::array<bool, params::numBands> soloed {};
         for (int b = 0; b < params::numBands; ++b)
             soloed[(size_t) b] = processor.isBandHeardSolo (b); // an S-drag audition shows too
         const auto anySolo = std::find (soloed.begin(), soloed.end(), true) != soloed.end();
         const auto dimmed = [&] (int b) { return anySolo && ! soloed[(size_t) b]; };
 
-        if (anySolo)
-        {
-            g.saveState();
-            g.reduceClipRegion (area.toNearestInt());
-            g.setColour (Palette::background.withAlpha (0.38f));
-            g.fillRect (area);
-
-            const auto sampleRate = processor.getAnalysisSampleRate();
-
-            for (int b = 0; b < params::numBands; ++b)
-            {
-                if (! soloed[(size_t) b])
-                    continue;
-
-                const auto region = processor.getSoloRegion (b);
-                const auto colour = bandColour (b);
-                juce::Path outline;
-
-                for (auto x = area.getX(); x <= area.getRight(); x += 2.0f)
-                {
-                    const auto magnitude = dsp::soloMagnitudeAt (region, xToFrequency (x), sampleRate);
-                    const auto db = 20.0 * std::log10 (std::max (magnitude, 1.0e-6));
-                    const auto y = juce::jlimit (area.getY() - 2.0f, area.getBottom() + 2.0f, decibelsToY (db));
-
-                    if (magnitude > 0.02)
-                    {
-                        g.setColour (colour.withAlpha ((float) (0.26 * magnitude)));
-                        g.fillRect (x, area.getY(), 2.0f, area.getHeight());
-                    }
-
-                    if (x <= area.getX())
-                        outline.startNewSubPath (x, y);
-                    else
-                        outline.lineTo (x, y);
-                }
-
-                const float dashes[] { 3.0f, 3.0f };
-                juce::Path dashed;
-                juce::PathStrokeType (1.2f).createDashedStroke (dashed, outline, dashes, 2);
-                g.setColour (colour.withAlpha (0.8f));
-                g.fillPath (dashed);
-            }
-
-            g.restoreState();
-        }
+        computeSoloHighlight();
+        drawSoloHighlight (g, area);
 
         g.saveState();
         g.reduceClipRegion (area.toNearestInt().expanded (1));

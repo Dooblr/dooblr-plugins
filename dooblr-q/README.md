@@ -2,7 +2,7 @@
 
 A dynamic parametric EQ plug-in (VST3) built with [JUCE](https://juce.com) and CMake.
 
-**Version 0.9.4:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle (drag the S to audition and move a band), per-band **Solo**, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
+**Version 0.9.5:** six-band dynamic EQ with a **hover Range ring** and blue **S** (Solo) on every graph handle (drag the S to audition and move a band), per-band **Solo** whose graph highlight tracks exactly what Solo plays, dynamic Low / High Cut, an outer **Range ring** around each band's main knob, per-band analogue-style **Models** (Digital, Neve 1073/1081, SSL 4000 E and G, API 550A/B, Pultec EQP-1A, Harrison 32C, Trident A-Range, Helios, EMI TG) with Drive, Stepped switch positions and Pultec Atten, per-band slopes (12–60 dB/oct and Brickwall) for every band type, Tilt bands, Width (bandwidth in octaves), three
 phase modes (Zero Latency / Natural Phase / Linear Phase), a native JUCE editor with a
 live frequency-response display over a smoothed spectrum analyzer with a continuously
 updating Freeze overlay, 50-step undo/redo, on/off switches in the band tabs, and
@@ -17,7 +17,7 @@ moving band affects, instead of recolouring the whole curve. 0.7.0 adds a per-ba
 **Slope**: 12, 24, 36, 48, 60 dB/oct or Brickwall for cuts, shelves and tilt. 0.7.1 extends
 Slope to Bell and Notch, so it applies to every band type. 0.8.0 adds the per-band Model,
 Stepped, Drive and Atten controls; see [Models](#models-080). 0.9.0 adds dynamics to Low /
-High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091). 0.9.2 adds the hover ring and blue S on the graph; see [Hover ring and blue S](#hover-ring-and-blue-s-092). 0.9.4 makes the S draggable; see [S-drag audition](#s-drag-audition-094).)
+High Cut and the Range ring; see [Dynamic cuts and the Range ring](#dynamic-cuts-and-the-range-ring-090). 0.9.1 adds a Solo (S) button to every band; see [Band Solo](#band-solo-091). 0.9.2 adds the hover ring and blue S on the graph; see [Hover ring and blue S](#hover-ring-and-blue-s-092). 0.9.4 makes the S draggable; see [S-drag audition](#s-drag-audition-094). 0.9.5 makes the Solo highlight follow the audio; see [Solo highlight tracks the audio](#solo-highlight-tracks-the-audio-095).)
 
 The version shown in the editor comes from `project(dooblr-q VERSION ...)` in
 `CMakeLists.txt` (via `JucePlugin_VersionString`); a test checks they match.
@@ -117,6 +117,34 @@ band was a cut, shelf or tilt.
   impulse response of a 32nd-order filter rings (a steep corner always does; in Linear Phase
   the ringing is pre- and post-).
 
+## Solo highlight tracks the audio (0.9.5)
+
+The lit region on the graph is now drawn from the solo stage's own state, published by the
+audio thread after every processed block, so it is what Solo is playing at that moment:
+
+- **Same filter:** each soloed band lights every 2 px column by |H(f)| of its region filter
+  (the exact digital response the audio uses, at the stage's sample rate), with f the
+  log-frequency at the column's centre (0.9.1–0.9.4 sampled each column at its left edge).
+  Cut bands are lit from the cutoff to the graph edge on the side they remove.
+- **Fades with the audio:** the plot dim and each band's light are scaled by the stage's 20 ms
+  dry/solo mix and per-band fade weights, so the highlight fades in with Solo, keeps fading out
+  after Solo is switched off (it used to vanish at once while the audio still faded), and
+  crossfades between bands during an S-drag audition.
+- **Glides with the audio:** while a soloed band moves, the highlight sits at the smoothed
+  frequency / Q the stage is filtering with (the 10 ms glide), never at the target ahead of it;
+  a dynamic cut's highlight follows its live cutoff block by block.
+- **Repaints every frame** (timer and display vblank) while the drawn state differs from the
+  stage's, and stops once both agree.
+- With no audio running (transport stopped, nothing processed for 250 ms) the stage cannot
+  move, so the highlight shows the target region at full weight; edits show at once.
+- The highlight's columns are preallocated and its dashed outline reuses a member path, so the
+  highlight code allocates nothing per paint (JUCE's renderer may allocate internally when it
+  strokes the outline).
+
+In Natural / Linear phase the audio you hear lags the processed block by the plug-in latency
+(reported to the host), so the highlight leads what reaches your speakers by that latency;
+in Zero Latency it does not.
+
 ## Editing while soloed (0.9.3)
 
 Every band parameter stays editable while any band is soloed, for soloed and non-soloed bands
@@ -201,7 +229,8 @@ passband):
 Solo runs after the EQ (all phase modes, all Models) with no added latency, a 20 ms fade on
 every on / off / switch, and a 10 ms glide when a soloed band's frequency or Q moves. With no
 band soloed it is an exact pass-through. The display dims everything, lights the soloed
-regions in the band colour (with a dashed outline), fades the other bands' handles and shows
+regions in the band colour (with a dashed outline; since 0.9.5 drawn from the solo stage's
+live state, so it fades and glides with the audio), fades the other bands' handles and shows
 a filled blue S on soloed handles (since 0.9.2; it was a small amber badge in 0.9.1). Parameters "Band N Solo" (IDs `b1_solo` … `b6_solo`) are appended
 after all older parameters, so existing sessions load unchanged.
 
@@ -814,6 +843,16 @@ tests the same compiled code that goes into the VST3:
   menu items, Slope / Stepped / Drive / Atten enabled or disabled with tooltips, the drawn
   curve shows the model's response, and every knob readout fits its text box at the default
   and minimum editor sizes; CPU per model and mode.
+- solo gradient (0.9.5): for bell, notch, both shelves, tilt ± and both cuts, the drawn
+  highlight at nine frequencies equals the solo output measured with sines through the
+  processor (against the EQ'd output, or the input for cuts) within 0.5 dB plus one pixel of
+  slope, and every column equals the stage's weight × |H| at its centre; cuts lit to the
+  graph edge on the removed side; mid fade-in / fade-out weights (27 % after 5.3 ms), nothing
+  lit after the fade, and rendered pixels lit partially mid-fade; mid-glide region equal to the
+  one-pole prediction (not the target); dynamic cuts followed block by block; three solos at
+  the minimum, default and maximum editor sizes with column-centre log mapping within 1 px;
+  an S-drag crossfade between bands; the no-audio fallback; zero allocations and the time of
+  the highlight computation.
 
 Set `DOOBLRQ_EDITOR_SNAPSHOT=/path/editor.png` when running
 `build/Tests/DooblrQTests` to save images of the rendered editor. It writes `editor.png`,
@@ -827,7 +866,7 @@ plus `editor-drag-before.png`, `editor-drag-after.png`, `editor-drag-dynamic.png
 Brickwall high cut) and `editor-v0.7.1.png` (bells at 12, 24, 48 dB/oct, Brickwall and
 36 dB/oct, and a Brickwall notch) and `editor-v0.8.0.png` (Trident stepped low cut, Pultec
 low shelf with Boost + Atten, API stepped bell, SSL G bell cut, Helios high shelf, Digital
-high cut).
+high cut), and `editor-v0.9.5-solo-gradient.png` (a live high cut soloed, its removed side lit to the edge).
 
 ## Validation that still needs doing manually
 

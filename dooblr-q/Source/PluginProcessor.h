@@ -89,6 +89,15 @@ public:
     /** For tests: the solo stage's current dry/solo mix (audio thread state). */
     float getSoloMix() const noexcept { return soloStage.getMix(); }
 
+    /** (0.9.5) What Solo is playing, for the display: the solo stage's published state
+        (fade weights, mix and the glided region it filters with) while audio is running.
+        When no block has been processed for soloViewStaleMs (transport stopped, host not
+        processing, or no audio yet) the stage cannot move, so this is the target state
+        instead: heard bands at full weight with their current region. Any thread. */
+    dooblrq::dsp::SoloView getSoloView() const noexcept;
+    bool isSoloViewLive() const noexcept;
+    static constexpr std::uint32_t soloViewStaleMs = 250;
+
     /** Sample rate for response analysis: the prepared rate, or 48 kHz before preparation. */
     double getAnalysisSampleRate() const noexcept;
 
@@ -185,6 +194,8 @@ private:
     juce::AudioBuffer<float> soloInput { 2, soloSliceSize };
 
     std::atomic<double> preparedSampleRate { 0.0 };
+    std::atomic<std::uint32_t> lastProcessMs { 0 };
+    std::atomic<bool> processedSincePrepare { false };
 
     // Natural / Linear phase (audio thread only, preallocated in prepareToPlay).
     static constexpr int firChunkSize = dooblrq::dsp::FirEqEngine::partitionSize;

@@ -144,6 +144,35 @@ dsp::SoloRegion DooblrQAudioProcessor::getSoloRegion (int bandIndex) const noexc
     return dsp::soloRegionFor (getBandSettings (bandIndex), (double) getBandDynamicGainDb (bandIndex));
 }
 
+bool DooblrQAudioProcessor::isSoloViewLive() const noexcept
+{
+    if (! processedSincePrepare.load (std::memory_order_acquire))
+        return false;
+
+    const auto elapsed = juce::Time::getMillisecondCounter() - lastProcessMs.load (std::memory_order_relaxed);
+    return elapsed <= soloViewStaleMs;
+}
+
+dsp::SoloView DooblrQAudioProcessor::getSoloView() const noexcept
+{
+    if (isSoloViewLive())
+        return soloStage.getView();
+
+    dsp::SoloView view;
+    view.sampleRate = getAnalysisSampleRate();
+
+    for (int b = 0; b < params::numBands; ++b)
+    {
+        auto& band = view.bands[(size_t) b];
+        band.region = getSoloRegion (b);
+        band.weight = isBandHeardSolo (b) ? 1.0f : 0.0f;
+        band.settled = true;
+        view.mix = std::max (view.mix, band.weight);
+    }
+
+    return view;
+}
+
 void DooblrQAudioProcessor::setAnalyzerRunning (bool shouldRun) noexcept
 {
     if (shouldRun && ! analyzerRunning.load())
@@ -164,6 +193,7 @@ void DooblrQAudioProcessor::prepareToPlay (double sampleRate, int maximumExpecte
     juce::ignoreUnused (maximumExpectedSamplesPerBlock);
 
     preparedSampleRate.store (sampleRate);
+    processedSincePrepare.store (false, std::memory_order_release);
 
     for (auto& band : bands)
         band.prepare (sampleRate);
@@ -471,6 +501,9 @@ void DooblrQAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce
             soloStage.setBand (b, isBandHeardSolo (b), getSoloRegion (b));
         soloStage.process (slice, input, numChannels, sliceLength);
     }
+
+    lastProcessMs.store (juce::Time::getMillisecondCounter(), std::memory_order_relaxed);
+    processedSincePrepare.store (true, std::memory_order_release);
 
     if (outputGain.isSmoothing())
     {

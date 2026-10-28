@@ -11,6 +11,7 @@
 
 #include "../Analysis/SpectrumDisplay.h"
 #include "../DSP/DynamicEQBand.h"
+#include "../DSP/SoloStage.h"
 #include "../Parameters.h"
 
 class DooblrQAudioProcessor;
@@ -103,6 +104,41 @@ namespace dooblrq::ui
 
         /** 0.9.4: the band whose S is being dragged (auditioned and moved), -1 none. */
         int getSoloDragBand() const noexcept { return soloDragBand; }
+
+        /** (0.9.5) The Solo highlight as last computed for painting. The plot is cut into
+            soloColumnWidth px columns from the plot's left edge; each soloed band lights a
+            column by weight * |H(f)|, where H is the band's region filter exactly as the solo
+            stage runs it (current glided frequency / Q, the stage's sample rate) and f the
+            frequency at the column's centre. The plot dim is 0.38 * mix. Preallocated:
+            computing it never allocates. */
+        static constexpr int soloColumnWidth = 2;
+        static constexpr int maxSoloColumns = 1280;
+
+        struct SoloHighlight
+        {
+            int columns = 0;
+            float left = 0.0f;                              // plot left edge (x of column 0)
+            float mix = 0.0f;
+            double sampleRate = 48000.0;
+            std::array<float, params::numBands> weight {};
+            std::array<dsp::SoloRegion, params::numBands> region {};
+            std::array<std::array<float, maxSoloColumns>, params::numBands> level {}; // weight * |H|
+            std::array<std::array<float, maxSoloColumns>, params::numBands> outlineY {};
+
+            float columnCentre (int column) const noexcept { return left + (float) (column * soloColumnWidth) + 0.5f * (float) soloColumnWidth; }
+        };
+
+        /** Recomputes the highlight from processor.getSoloView(); paint() calls this. */
+        void computeSoloHighlight() noexcept;
+        const SoloHighlight& getSoloHighlight() const noexcept { return soloHighlight; }
+
+        /** True if the solo state now differs from what was last painted (fade, glide,
+            dynamics, edits): the timer / vblank repaint while this holds. */
+        bool soloHighlightStale() const noexcept;
+
+        /** The alpha a column is filled with for a given level (and the dim for a mix). */
+        static float soloColumnAlpha (float level) noexcept { return 0.26f * level; }
+        static float soloDimAlpha (float mix) noexcept { return 0.38f * mix; }
 
         /** Advances the fades (called from the display's vblank; public so tests can drive it). */
         void advanceHoverAnimation (double dtSeconds);
@@ -306,6 +342,11 @@ namespace dooblrq::ui
         bool soloPressAlt = false;
         juce::Point<float> soloPressPosition;
         double lastVBlankTime = 0.0;
+
+        // 0.9.5 Solo highlight (preallocated; see SoloHighlight).
+        SoloHighlight soloHighlight;
+        std::array<juce::Path, params::numBands> soloDashes;
+        void drawSoloHighlight (juce::Graphics& g, juce::Rectangle<float> area);
         std::unique_ptr<juce::VBlankAttachment> vblank;
 
         analysis::SpectrumDisplay liveDisplay, overlayDisplay;
