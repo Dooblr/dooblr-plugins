@@ -104,7 +104,7 @@ if(TARGET DooblrKick_VST3)
 
     # JUCE ad-hoc signs the bundle and only afterwards regenerates moduleinfo.json, which
     # leaves a stale signature. Re-sign last (cmake/sign-bundle.sh strips Finder info and
-    # quarantine, which the File Provider synced ~/Documents can add, and retries) so `codesign --verify --deep --strict` passes.
+    # quarantine, which a synced folder (iCloud ~/Documents before, Dropbox now) can add, and retries) so `codesign --verify --deep --strict` passes.
     if(APPLE AND dooblrkick_vst3_artefact)
         add_custom_command(TARGET DooblrKick_VST3 POST_BUILD
             COMMAND sh "${CMAKE_CURRENT_SOURCE_DIR}/cmake/sign-bundle.sh" "${dooblrkick_vst3_artefact}"

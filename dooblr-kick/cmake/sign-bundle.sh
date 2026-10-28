@@ -1,6 +1,6 @@
 #!/bin/sh
 # Ad-hoc signs a plug-in bundle so `codesign --verify --deep --strict` passes.
-# The project lives in a File Provider synced ~/Documents, which can re-add Finder info to the
+# Synced folders (iCloud ~/Documents before, Dropbox now) can re-add Finder info to the
 # bundle while it is being signed, so strip extended attributes and retry a few times.
 bundle="$1"
 

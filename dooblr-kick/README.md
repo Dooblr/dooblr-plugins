@@ -195,7 +195,9 @@ scripts/build.sh
 
 This script does the following:
 
-1. Builds the VST3, the tests and the LoadCheck tool, then runs the tests (`ctest`).
+1. Builds the VST3, the tests and the LoadCheck tool in `~/dooblr-build/dooblr-kick` (override with `BUILD_DIR=...`),
+   then runs the tests (`ctest`). The source lives in `~/Dropbox/dooblr_plugins/dooblr-kick`; builds
+   stay outside Dropbox so it never syncs build output or adds xattrs to the bundle.
 2. Installs `dooblr-kick.vst3` into `/Library/Audio/Plug-Ins/VST3`. It never uses sudo.
 3. Checks the code signature (`codesign --verify --deep --strict`).
 4. Loads the installed bundle the way a host would (Tools/LoadCheck).
@@ -214,7 +216,7 @@ installing.
 
 ## Tests
 
-`build/Tests/DooblrKickTests` checks the following:
+`~/dooblr-build/dooblr-kick/Tests/DooblrKickTests` checks the following:
 
 - Pitch accuracy.
 - Pitch envelope shape.
@@ -240,7 +242,7 @@ installing.
   Dynamics / Limiter views (handle, threshold, ratio and ceiling drags with undo, rendering,
   audition).
 
-`build/Tools/FrameBench/DooblrKickFrameBench` measures frame times per page while dragging.
+`~/dooblr-build/dooblr-kick/Tools/FrameBench/DooblrKickFrameBench` measures frame times per page while dragging.
 
 Set `DOOBLRKICK_EDITOR_SNAPSHOT=/path/prefix` to also write editor PNG snapshots.
 
