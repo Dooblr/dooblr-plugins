@@ -37,9 +37,10 @@ namespace dooblrvocals::ui
     {
         detectedMidi.fill (0);
         correctedMidi.fill (0);
+        centreMidi.fill (0);
         voiced.fill (0);
         write = filled = 0;
-        shownDetected = shownCorrected = 0;
+        shownDetected = shownCorrected = shownVibrato = shownVibRate = shownVibCents = 0;
         readout.clear();
         rebuildBackground();
         repaint();
@@ -181,6 +182,8 @@ namespace dooblrvocals::ui
             const auto cor = f.voiced && f.correctedHz > 20.0f ? dsp::PitchCorrector::hzToMidi (f.correctedHz, a4) : 0.0f;
             detectedMidi[(size_t) write] = det;
             correctedMidi[(size_t) write] = cor;
+            centreMidi[(size_t) write] = f.voiced && f.centreHz > 20.0f && f.vibrato > 0.25f
+                                             ? dsp::PitchCorrector::hzToMidi (f.centreHz, a4) : 0.0f;
             voiced[(size_t) write] = (char) (f.voiced ? 1 : 0);
             write = (write + 1) % used;
             filled = juce::jmin (used, filled + 1);
@@ -189,6 +192,9 @@ namespace dooblrvocals::ui
                 shownDetected = f.detectedHz;
                 shownCorrected = f.correctedHz;
             }
+            shownVibrato = f.voiced ? f.vibrato : 0.0f;
+            shownVibRate = f.vibratoRateHz;
+            shownVibCents = f.vibratoCents;
             ++framesReceived;
         }
 
@@ -201,7 +207,12 @@ namespace dooblrvocals::ui
 
         if (shownDetected > 20.0f)
             readout = params::formatHz (shownDetected)
-                    + (shownCorrected > 20.0f ? "  →  " + params::formatHz (shownCorrected) : juce::String());
+                    + (shownCorrected > 20.0f ? "  →  " + params::formatHz (shownCorrected) : juce::String())
+                    + (shownVibrato > 0.25f ? juce::String (juce::CharPointer_UTF8 ("   VIB ")) + juce::String (shownVibRate, 1)
+                                                  + juce::String (juce::CharPointer_UTF8 (" Hz \xc2\xb1"))
+                                                  + juce::String (juce::roundToInt (shownVibCents))
+                                                  + juce::String (juce::CharPointer_UTF8 ("\xc2\xa2"))
+                                            : juce::String());
         else
             readout.clear();
 
@@ -222,8 +233,8 @@ namespace dooblrvocals::ui
         if (used <= 1)
             return;
 
-        juce::Path detected, corrected;
-        auto startedD = false, startedC = false;
+        juce::Path detected, corrected, centre;
+        auto startedD = false, startedC = false, startedV = false;
 
         for (int x = 0; x < used; ++x)
         {
@@ -237,10 +248,22 @@ namespace dooblrvocals::ui
                 else detected.lineTo (px, yD);
                 if (! startedC) { corrected.startNewSubPath (px, yC); startedC = true; }
                 else corrected.lineTo (px, yC);
+
+                // Vibrato Respect: the centre the vibrato swings around (what gets corrected).
+                if (centreMidi[(size_t) idx] > 0.0f)
+                {
+                    const auto yV = midiToY (centreMidi[(size_t) idx]);
+                    if (! startedV) { centre.startNewSubPath (px, yV); startedV = true; }
+                    else centre.lineTo (px, yV);
+                }
+                else
+                {
+                    startedV = false;
+                }
             }
             else
             {
-                startedD = startedC = false;
+                startedD = startedC = startedV = false;
             }
         }
 
@@ -248,6 +271,14 @@ namespace dooblrvocals::ui
         {
             g.setColour (Palette::spectrum.withAlpha (0.9f));
             g.strokePath (detected, juce::PathStrokeType (1.25f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+        if (! centre.isEmpty())
+        {
+            juce::Path dashed;
+            const float dashes[] = { 4.0f, 3.0f };
+            juce::PathStrokeType (1.0f).createDashedStroke (dashed, centre, dashes, 2);
+            g.setColour (Palette::textPrimary.withAlpha (0.55f));
+            g.fillPath (dashed);
         }
         if (startedC || ! corrected.isEmpty())
         {

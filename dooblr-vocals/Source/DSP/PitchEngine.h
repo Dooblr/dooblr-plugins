@@ -135,7 +135,16 @@ namespace dooblrvocals::dsp
         void reset() noexcept;
 
         /** Once per detector hop: new detected / lead pitch (Hz, 0 = unvoiced). */
-        void setPitch (float detectedHz, float leadHz, bool voiced, const HarmonySettings& h, int mask, float a4) noexcept;
+        void setPitch (float detectedHz, float leadHz, bool isVoiced, const HarmonySettings& h, int mask, float a4) noexcept
+        {
+            setPitch (detectedHz, leadHz, isVoiced, h, mask, a4, leadHz);
+        }
+
+        /** leadNoteHz picks the lead note for Scale intervals; with Vibrato Respect it is the
+            vibrato's corrected centre, so a wide vibrato does not flip the harmony's interval
+            while leadHz (which carries the vibrato) still moves every voice with it. */
+        void setPitch (float detectedHz, float leadHz, bool isVoiced, const HarmonySettings& h, int mask, float a4,
+                       float leadNoteHz) noexcept;
 
         /** Adds the harmony voices for output time tOut to outL / outR. */
         void processSample (std::int64_t tOut, std::int64_t newest, float period, bool causal,
@@ -153,6 +162,63 @@ namespace dooblrvocals::dsp
         int lineSize = 0, linePos = 0;
         float env = 0.0f;
         bool voiced = false;
+    };
+
+    /**
+        Vibrato Respect (v0.2.0): finds vibrato in a pitch track (MIDI notes, one reading per
+        detector hop) and reports the slow centre it wobbles around.
+
+        The track is smoothed (one-pole, about 20 Hz) and its turning points are found with a
+        4 cent hysteresis. Every three alternating turning points give a midpoint
+        (v0 + 2 v1 + v2) / 4, which cancels a sinusoid's swing and leaves its centre. A midpoint
+        is good when both half-cycles are 59 .. 143 ms (3.5 .. 8.5 Hz), both swings are 6 .. 160
+        cents, and the two half-cycles agree (period within 0.6 .. 1.67x, swing within 0.5 .. 2x).
+        Vibrato is reported once a segment has two good midpoints (about 1.5 cycles), so a scoop,
+        a single bend or a held note never counts. A jump of more than the vibrato depth plus
+        0.6 semitones, a jump of 0.8 semitones within one reading, or more than 40 ms unvoiced
+        starts a new segment, so a note change is never read as vibrato.
+
+        push() and query() take absolute sample times: push readings in time order; query any time
+        (the engine queries behind the newest reading when it has look-ahead). Allocation free.
+    */
+    class VibratoTracker
+    {
+    public:
+        struct State
+        {
+            bool active = false;
+            float centreMidi = 0.0f;
+            float depthSemis = 0.0f;  // half the peak-to-peak swing
+            float rateHz = 0.0f;
+        };
+
+        void prepare (double sampleRate) noexcept { rate = sampleRate; reset(); }
+        void reset() noexcept;
+        void push (std::int64_t t, float midi, bool voiced) noexcept;
+        State query (std::int64_t t) const noexcept;
+
+    private:
+        struct Turn { std::int64_t t = 0; float v = 0.0f; bool peak = false; };
+        struct Mid { std::int64_t t = 0; float v = 0.0f, depth = 0.0f, halfPeriod = 0.0f; int segment = 0; bool good = false; };
+        struct Segment { std::int64_t start = 0; int id = 0; };
+        static constexpr int ringSize = 16;
+
+        void startSegment (std::int64_t t, float midi) noexcept;
+        void addTurn (std::int64_t t, float v, bool peak) noexcept;
+        const Mid* lastGoodMid() const noexcept;
+
+        double rate = 48000.0;
+        std::array<Turn, 2> turns {};
+        int numTurns = 0;
+        std::array<Mid, ringSize> mids {};
+        int midHead = 0, midCount = 0;
+        std::array<Segment, 8> segments {};
+        int segHead = 0, segCount = 0, segmentId = 0;
+        bool tracking = false;
+        std::int64_t lastT = 0, lastVoicedT = 0;
+        float y = 0.0f, lastMidi = 0.0f, cand = 0.0f, lo = 0.0f, hi = 0.0f;
+        std::int64_t candT = 0;
+        int dir = 0;
     };
 
     /**
@@ -184,11 +250,19 @@ namespace dooblrvocals::dsp
         PitchEstimate getLastEstimate() const noexcept { return lastEstimate; }
         float getLastCorrectedHz() const noexcept { return lastCorrectedHz; }
 
+        /** Vibrato Respect: how much of the latest reading was treated as vibrato (0 .. 1), and
+            the detected centre / depth / rate behind it. */
+        float getVibratoWeight() const noexcept { return vibWeight; }
+        VibratoTracker::State getVibratoState() const noexcept { return vibState; }
+
         /** Range learning: voiced / unvoiced readings while PitchSettings::learnRange is set. */
         void setLearnTap (PitchTap* t) noexcept { learnTap = t; }
 
     private:
         void analyseIfDue (const PitchSettings& s, const HarmonySettings& h) noexcept;
+        void trackVibrato (const PitchSettings& s, int window, std::int64_t estimateTime, float threshold,
+                           float minHz, float maxHz, float a4, float& correctorInputHz, float& vibratoSemis,
+                           float respect) noexcept;
         float readDelay (const std::vector<float>& buf, int delay) const noexcept;
 
         double sampleRate = 48000.0;
@@ -209,6 +283,10 @@ namespace dooblrvocals::dsp
 
         PitchEstimate lastEstimate;
         float lastCorrectedHz = 0.0f;
+        VibratoTracker vibrato;
+        VibratoTracker::State vibState;
+        float vibWeight = 0.0f, vibCentre = 0.0f, vibDepth = 0.0f, lastCentreHz = 0.0f;
+        bool vibratoUsed = false;
         float lastRatio = 1.0f;
         bool lastVoiced = false;
         float mixSmoothed = 1.0f;

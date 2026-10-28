@@ -300,6 +300,9 @@ namespace dooblrvocals::params
             addBool (layout, "range_custom", "Learned Range On", false);
             addFloat (layout, "range_low", "Learned Range Low", logRange (dsp::liveMinHz, 1400.0f), 130.0f, noteHz, "Hz");
             addFloat (layout, "range_high", "Learned Range High", logRange (dsp::liveMinHz, 1400.0f), 530.0f, noteHz, "Hz");
+
+            // Vibrato Respect (added last so existing sessions / automation indices are unchanged).
+            addFloat (layout, "vibrato", "Vibrato Respect", range (0.0f, 1.0f), 0.0f, percentString());
         }
 
         return layout;
@@ -337,6 +340,7 @@ namespace dooblrvocals::params
         dlyDuckRelease = getId ("dly_duck_release"); dlyWidth = getId ("dly_width"); dlyMix = getId ("dly_mix");
         fxRouting = getId ("fx_routing");
         rangeCustom = getId ("range_custom"); rangeLow = getId ("range_low"); rangeHigh = getId ("range_high");
+        vibratoRespect = getId ("vibrato");
 
         for (int v = 0; v < dsp::numHarmonyVoices; ++v)
         {
@@ -366,6 +370,7 @@ namespace dooblrvocals::params
         s.pitch.customMask = i (corrMask);
         s.pitch.retuneMs = f (retune);
         s.pitch.humanize = f (humanize);
+        s.pitch.vibratoRespect = f (vibratoRespect);
         s.pitch.amount = f (amount);
         s.pitch.a4Hz = f (a4);
         s.pitch.formant = b (formant);

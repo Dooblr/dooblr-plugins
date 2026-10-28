@@ -16,6 +16,9 @@ namespace dooblrvocals::dsp
         float confidence = 0.0f;
         bool voiced = false;
         float seconds = 0.0f;   // duration this reading covers (one hop)
+        float centreHz = 0.0f;  // Vibrato Respect: detected vibrato centre (0 = none)
+        float vibrato = 0.0f;   // 0 .. 1, how much of the reading was treated as vibrato
+        float vibratoRateHz = 0.0f, vibratoCents = 0.0f;
     };
 
     /**

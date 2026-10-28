@@ -54,6 +54,7 @@ namespace dooblrvocals::params
         Value dlyTimeR = nullptr, dlyFeedback = nullptr, dlyLowCut = nullptr, dlyHighCut = nullptr, dlyMod = nullptr;
         Value dlyDrive = nullptr, dlyDuck = nullptr, dlyDuckRelease = nullptr, dlyWidth = nullptr, dlyMix = nullptr;
         Value fxRouting = nullptr, rangeCustom = nullptr, rangeLow = nullptr, rangeHigh = nullptr;
+        Value vibratoRespect = nullptr;
 
         struct VoiceValues { Value on = nullptr, mode = nullptr, degree = nullptr, semis = nullptr, level = nullptr,
                              pan = nullptr, detune = nullptr, delay = nullptr; };

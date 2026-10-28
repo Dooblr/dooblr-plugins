@@ -196,6 +196,7 @@ namespace dooblrvocals::dsp
         float rangeLowHz = 0.0f;     // learned range (0 = use the Range / voice type)
         float rangeHighHz = 0.0f;
         bool learnRange = false;     // while learning, the detector searches its widest range
+        float vibratoRespect = 0.0f; // 0 = flatten vibrato (as before), 1 = keep all of it; only the centre is corrected
     };
 
     /** The detector's search range: the widest while learning, else the learned range, else the type. */

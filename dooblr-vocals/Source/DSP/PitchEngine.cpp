@@ -494,13 +494,14 @@ namespace dooblrvocals::dsp
         return std::clamp (scaleStepMidi (leadMidi, std::clamp (v.degrees, -14, 14), mask) - leadMidi, -24, 24);
     }
 
-    void Harmonizer::setPitch (float detectedHz, float leadHz, bool isVoiced, const HarmonySettings& h, int mask, float a4) noexcept
+    void Harmonizer::setPitch (float detectedHz, float leadHz, bool isVoiced, const HarmonySettings& h, int mask, float a4,
+                               float leadNoteHz) noexcept
     {
         voiced = isVoiced && detectedHz > 20.0f && leadHz > 20.0f;
         if (! voiced)
             return;
 
-        const auto leadMidi = (int) std::lround (PitchCorrector::hzToMidi (leadHz, a4));
+        const auto leadMidi = (int) std::lround (PitchCorrector::hzToMidi (leadNoteHz > 20.0f ? leadNoteHz : leadHz, a4));
         const auto leadRatio = leadHz / detectedHz;
 
         for (size_t v = 0; v < ratios.size(); ++v)
@@ -555,6 +556,188 @@ namespace dooblrvocals::dsp
     }
 
     //==============================================================================
+    void VibratoTracker::reset() noexcept
+    {
+        numTurns = midHead = midCount = segHead = segCount = 0;
+        tracking = false;
+        lastT = lastVoicedT = candT = 0;
+        y = lastMidi = cand = lo = hi = 0.0f;
+        dir = 0;
+    }
+
+    void VibratoTracker::startSegment (std::int64_t t, float midi) noexcept
+    {
+        segHead = (segHead + 1) % (int) segments.size();
+        segCount = std::min (segCount + 1, (int) segments.size());
+        segments[(size_t) segHead] = { t, ++segmentId };
+        numTurns = 0;
+        y = cand = lo = hi = midi;
+        candT = t;
+        dir = 0;
+        tracking = true;
+    }
+
+    const VibratoTracker::Mid* VibratoTracker::lastGoodMid() const noexcept
+    {
+        if (segCount == 0)
+            return nullptr;
+
+        const auto id = segments[(size_t) segHead].id;
+        for (int k = 0; k < midCount; ++k)
+        {
+            const auto& m = mids[(size_t) ((midHead - k + ringSize) % ringSize)];
+            if (m.segment != id)
+                return nullptr;
+            if (m.good)
+                return &m;
+        }
+        return nullptr;
+    }
+
+    void VibratoTracker::addTurn (std::int64_t t, float v, bool peak) noexcept
+    {
+        if (numTurns == 2)
+        {
+            const auto& a = turns[0];
+            const auto& b = turns[1];
+            if (a.peak != b.peak && b.peak != peak)
+            {
+                const auto hp1 = (float) ((double) (b.t - a.t) / rate);
+                const auto hp2 = (float) ((double) (t - b.t) / rate);
+                const auto sw1 = 0.5f * std::abs (b.v - a.v);
+                const auto sw2 = 0.5f * std::abs (v - b.v);
+                const auto inRange = [] (float x, float lo_, float hi_) { return x >= lo_ && x <= hi_; };
+                const auto good = inRange (hp1, 1.0f / 17.0f, 1.0f / 7.0f) && inRange (hp2, 1.0f / 17.0f, 1.0f / 7.0f)
+                               && inRange (sw1, 0.06f, 1.6f) && inRange (sw2, 0.06f, 1.6f)
+                               && inRange (hp1 / hp2, 0.6f, 1.67f) && inRange (sw1 / sw2, 0.5f, 2.0f);
+
+                midHead = (midHead + 1) % ringSize;
+                midCount = std::min (midCount + 1, ringSize);
+                mids[(size_t) midHead] = { b.t, 0.25f * (a.v + 2.0f * b.v + v), 0.5f * (sw1 + sw2), 0.5f * (hp1 + hp2),
+                                           segments[(size_t) segHead].id, good };
+            }
+            turns[0] = turns[1];
+            turns[1] = { t, v, peak };
+        }
+        else
+        {
+            turns[(size_t) numTurns++] = { t, v, peak };
+        }
+    }
+
+    void VibratoTracker::push (std::int64_t t, float midi, bool voiced) noexcept
+    {
+        const auto gap = (std::int64_t) (0.040 * rate);
+
+        if (! voiced || midi <= 0.0f)
+        {
+            if (tracking && t - lastVoicedT > gap)
+                tracking = false;
+            lastT = t;
+            return;
+        }
+
+        const auto dt = (double) (t - lastT) / rate;
+        lastT = t;
+
+        if (! tracking || t - lastVoicedT > gap || std::abs (midi - lastMidi) > 0.8f)
+        {
+            lastVoicedT = t;
+            lastMidi = midi;
+            startSegment (t, midi);
+            return;
+        }
+
+        lastVoicedT = t;
+        lastMidi = midi;
+
+        if (const auto* g = lastGoodMid())
+        {
+            if (std::abs (midi - g->v) > g->depth + 0.6f)
+            {
+                startSegment (t, midi);
+                return;
+            }
+        }
+
+        const auto a = (float) (1.0 - std::exp (-2.0 * juce::MathConstants<double>::pi * 20.0 * std::max (dt, 1.0e-6)));
+        y += (midi - y) * a;
+        constexpr float hysteresis = 0.04f;
+
+        if (dir == 0)
+        {
+            hi = std::max (hi, y);
+            lo = std::min (lo, y);
+            if (y - lo > hysteresis)       { dir = 1;  cand = y; candT = t; }
+            else if (hi - y > hysteresis)  { dir = -1; cand = y; candT = t; }
+        }
+        else if (dir > 0)
+        {
+            if (y >= cand) { cand = y; candT = t; }
+            else if (cand - y > hysteresis) { addTurn (candT, cand, true); dir = -1; cand = y; candT = t; }
+        }
+        else
+        {
+            if (y <= cand) { cand = y; candT = t; }
+            else if (y - cand > hysteresis) { addTurn (candT, cand, false); dir = 1; cand = y; candT = t; }
+        }
+    }
+
+    VibratoTracker::State VibratoTracker::query (std::int64_t t) const noexcept
+    {
+        State st;
+
+        // The segment t falls in (the newest one that started at or before t).
+        int id = -1;
+        for (int k = 0; k < segCount; ++k)
+        {
+            const auto& seg = segments[(size_t) ((segHead - k + (int) segments.size()) % (int) segments.size())];
+            if (seg.start <= t) { id = seg.id; break; }
+        }
+        if (id < 0)
+            return st;
+
+        // Good midpoints of that segment, oldest first.
+        const Mid* first = nullptr;
+        const Mid* last = nullptr;
+        const Mid* before = nullptr;
+        const Mid* after = nullptr;
+        int good = 0;
+        for (int k = midCount - 1; k >= 0; --k)
+        {
+            const auto& m = mids[(size_t) ((midHead - k + ringSize) % ringSize)];
+            if (m.segment != id || ! m.good)
+                continue;
+            ++good;
+            if (first == nullptr) first = &m;
+            last = &m;
+            if (m.t <= t) before = &m;
+            if (m.t >= t && after == nullptr) after = &m;
+        }
+        if (good < 2 || first == nullptr || last == nullptr)
+            return st;
+
+        const auto hp = (double) last->halfPeriod * rate;
+        if ((double) t < (double) first->t - hp || (double) t > (double) last->t + 3.0 * hp + 0.030 * rate)
+            return st;
+
+        const Mid* near = before != nullptr ? before : after;
+        if (before != nullptr && after != nullptr && after->t > before->t)
+        {
+            const auto u = (float) ((double) (t - before->t) / (double) (after->t - before->t));
+            st.centreMidi = before->v + u * (after->v - before->v);
+        }
+        else
+        {
+            st.centreMidi = near->v;
+        }
+        st.depthSemis = near->depth;
+        st.rateHz = near->halfPeriod > 0.0f ? 0.5f / near->halfPeriod : 0.0f;
+        st.active = true;
+        return st;
+    }
+
+    //==============================================================================
     void PitchEngine::prepare (double newSampleRate, int maxBlockSize)
     {
         sampleRate = newSampleRate;
@@ -566,6 +749,7 @@ namespace dooblrvocals::dsp
         monoScratch.assign ((size_t) delaySize, 0.0f);
         detector.prepare (sampleRate, 8192);
         corrector.prepare (sampleRate);
+        vibrato.prepare (sampleRate);
         shifter.prepare (sampleRate, hq + 64);
         shifter.setDelayBuffers (delayL.data(), delayR.data(), delaySize);
         harmonizer.prepare (sampleRate, hq + 64, delayL.data(), delayR.data(), delaySize);
@@ -588,6 +772,10 @@ namespace dooblrvocals::dsp
         latency = liveLatencySamples (sampleRate);
         detector.reset();
         corrector.reset();
+        vibrato.reset();
+        vibState = {};
+        vibWeight = vibCentre = vibDepth = lastCentreHz = 0.0f;
+        vibratoUsed = false;
         shifter.reset();
         harmonizer.reset();
         mode = ProcessMode::mix;
@@ -605,6 +793,73 @@ namespace dooblrvocals::dsp
         return buf[(size_t) wrap (writePos - 1 - delay, delaySize)];
     }
 
+    void PitchEngine::trackVibrato (const PitchSettings& s, int window, std::int64_t estimateTime, float threshold,
+                                    float minHz, float maxHz, float a4, float& correctorInputHz, float& vibratoSemis,
+                                    float respect) noexcept
+    {
+        juce::ignoreUnused (s);
+        vibratoUsed = true;
+        const auto hq = mode == ProcessMode::hq;
+        const auto toMidi = [a4] (const PitchEstimate& e) { return e.voiced && e.hz > 20.0f ? PitchCorrector::hzToMidi (e.hz, a4) : 0.0f; };
+
+        if (mode == ProcessMode::tracking)
+        {
+            // Causal: the tracker only knows the past, so the centre is the latest midpoint.
+            vibrato.push (estimateTime, toMidi (lastEstimate), lastEstimate.voiced);
+        }
+        else
+        {
+            // Look-ahead: a second YIN on the newest input (the future of the playback point), so
+            // the centre at the playback point is interpolated between midpoints on both sides.
+            const auto w = std::min (window, delaySize - 4);
+            for (int i = 0; i < w; ++i)
+            {
+                const auto d = w - 1 - i;
+                monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
+            }
+            const auto future = detector.analyse (monoScratch.data(), w, minHz, maxHz, threshold, hq);
+            vibrato.push (inputCount - 1 - (w - 1 - w / 2), toMidi (future), future.voiced);
+        }
+
+        vibState = vibrato.query (estimateTime);
+        const auto m = toMidi (lastEstimate);
+        const auto voiced = lastEstimate.voiced && m > 0.0f;
+
+        if (vibState.active)
+        {
+            vibCentre = vibState.centreMidi;
+            vibDepth = vibState.depthSemis;
+        }
+
+        // A reading far outside the vibrato's swing is a new note (or a scoop): drop the vibrato
+        // at once so it snaps like it always has.
+        const auto outside = vibWeight > 0.0f && std::abs (m - vibCentre) > vibDepth * 1.3f + 0.5f;
+
+        if (! voiced || outside || (vibState.active && std::abs (m - vibState.centreMidi) > vibState.depthSemis * 1.3f + 0.5f))
+        {
+            vibWeight = 0.0f;
+        }
+        else
+        {
+            const auto coeff = 1.0f - std::exp (-(float) hop / (0.040f * (float) sampleRate));
+            vibWeight += ((vibState.active ? 1.0f : 0.0f) - vibWeight) * coeff;
+            if (vibWeight < 1.0e-3f)
+                vibWeight = 0.0f;
+        }
+
+        if (vibWeight <= 0.0f)
+        {
+            lastCentreHz = 0.0f;
+            return; // exactly the plain path: the corrector sees the detected pitch
+        }
+
+        const auto swing = m - vibCentre;
+        const auto centreMidi = m - vibWeight * swing;
+        correctorInputHz = PitchCorrector::midiToHz (centreMidi, a4);
+        vibratoSemis = respect * vibWeight * swing;
+        lastCentreHz = PitchCorrector::midiToHz (vibCentre, a4);
+    }
+
     void PitchEngine::analyseIfDue (const PitchSettings& s, const HarmonySettings& h) noexcept
     {
         const auto hq = mode == ProcessMode::hq;
@@ -612,6 +867,8 @@ namespace dooblrvocals::dsp
         const auto minHz = range.minHz;
         const auto maxHz = range.maxHz;
         int window = 0;
+        std::int64_t estimateTime = 0; // input sample number at the centre of the analysed window
+        const auto newest = inputCount - 1;
 
         if (mode == ProcessMode::tracking)
         {
@@ -622,6 +879,7 @@ namespace dooblrvocals::dsp
                 const auto d = window - 1 - i;
                 monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
             }
+            estimateTime = newest - (window - 1 - window / 2);
         }
         else
         {
@@ -643,6 +901,7 @@ namespace dooblrvocals::dsp
                 const auto d = std::max (0, latency - ahead + centre - 1 - i);
                 monoScratch[(size_t) i] = 0.5f * (readDelay (delayL, d) + readDelay (delayR, d));
             }
+            estimateTime = newest - std::max (0, latency - ahead - 1);
         }
 
         const auto threshold = hq ? 0.10f : 0.15f;
@@ -650,7 +909,25 @@ namespace dooblrvocals::dsp
 
         // Hop-scaled corrector: treat one hop as the time step.
         // Temporarily scale by calling process once per hop (the 64x factor inside matches live hop).
-        lastCorrectedHz = corrector.process (lastEstimate.hz, lastEstimate.voiced, s, hop);
+        const auto a4 = std::clamp (s.a4Hz, 415.0f, 466.0f);
+        const auto respect = std::clamp (s.vibratoRespect, 0.0f, 1.0f);
+        auto correctorInputHz = lastEstimate.hz;
+        auto vibratoSemis = 0.0f;
+
+        if (respect > 0.0f)
+            trackVibrato (s, window, estimateTime, threshold, minHz, maxHz, a4, correctorInputHz, vibratoSemis, respect);
+        else if (vibratoUsed)
+        {
+            vibrato.reset();
+            vibState = {};
+            vibWeight = vibCentre = vibDepth = lastCentreHz = 0.0f;
+            vibratoUsed = false;
+        }
+
+        lastCorrectedHz = corrector.process (correctorInputHz, lastEstimate.voiced, s, hop);
+        const auto correctedCentreHz = lastCorrectedHz;
+        if (! juce::exactlyEqual (vibratoSemis, 0.0f) && lastCorrectedHz > 20.0f)
+            lastCorrectedHz *= std::exp2 (vibratoSemis / 12.0f);
         lastVoiced = lastEstimate.voiced && lastCorrectedHz > 20.0f && lastEstimate.hz > 20.0f;
 
         if (lastVoiced)
@@ -659,8 +936,11 @@ namespace dooblrvocals::dsp
             lastRatio = 1.0f;
 
         // Harmonies follow what the lead plays: the corrected note when correction is on.
+        // With Vibrato Respect the lead note (for Scale intervals) is the vibrato's centre; leadHz
+        // still carries the vibrato, so every voice keeps it.
         const auto leadHz = s.enabled ? lastCorrectedHz : lastEstimate.hz;
-        harmonizer.setPitch (lastEstimate.hz, leadHz, lastVoiced, h, harmonyMask (s), std::clamp (s.a4Hz, 415.0f, 466.0f));
+        const auto leadNoteHz = s.enabled ? correctedCentreHz : correctorInputHz;
+        harmonizer.setPitch (lastEstimate.hz, leadHz, lastVoiced, h, harmonyMask (s), a4, leadNoteHz);
     }
 
     void PitchEngine::process (juce::AudioBuffer<float>& buffer, int numSamples, const PitchSettings& s,
@@ -699,7 +979,8 @@ namespace dooblrvocals::dsp
                 analyseIfDue (s, harmony);
 
                 if (tap != nullptr)
-                    tap->push ({ lastEstimate.hz, lastVoiced ? lastCorrectedHz : 0.0f, lastEstimate.confidence, lastVoiced });
+                    tap->push ({ lastEstimate.hz, lastVoiced ? lastCorrectedHz : 0.0f, lastEstimate.confidence, lastVoiced,
+                                 0.0f, lastVoiced ? lastCentreHz : 0.0f, vibWeight, vibState.rateHz, vibDepth * 100.0f });
                 if (learnTap != nullptr && s.learnRange)
                     learnTap->push ({ lastEstimate.hz, 0.0f, lastEstimate.confidence, lastEstimate.voiced, (float) ((double) hop / sampleRate) });
             }

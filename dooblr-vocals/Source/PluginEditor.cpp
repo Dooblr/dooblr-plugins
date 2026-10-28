@@ -403,7 +403,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
 
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Correction", pageColour (pitchPage), Specs {
         { "corr_mode", "Mode", K::combo }, { "corr_key", "Key", K::combo }, { "corr_scale", "Scale", K::combo },
-        { "retune_speed", "Retune", K::knob }, { "humanize", "Humanize", K::knob }, { "corr_amount", "Amount", K::knob } }));
+        { "retune_speed", "Retune", K::knob }, { "humanize", "Humanize", K::knob }, { "vibrato", "Vibrato", K::knob },
+        { "corr_amount", "Amount", K::knob } }));
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Detector", pageColour (pitchPage), Specs {
         { "input_type", "Range", K::combo, 110 }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle, 88 },
         { "quality", "Quality", K::combo, 104 }, { "latency_mode", "Latency", K::combo, 112 } }));

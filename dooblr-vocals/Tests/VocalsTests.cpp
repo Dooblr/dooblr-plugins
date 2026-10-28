@@ -24,7 +24,9 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <functional>
 #include <iomanip>
 #include <iostream>
@@ -225,6 +227,9 @@ namespace
 
         return detector.analyse (mono.data(), window, minHz, maxHz, 0.15f, true).hz;
     }
+
+    std::vector<float> vibratoVoice (int numSamples, const std::function<double (double)>& centsAt, float amp = 0.3f);
+    double vibratoCents (double t, double baseCents = 30.0, double depth = 60.0, double rate = 5.5);
 
     int liveLatency() { return dsp::liveLatencySamples (sampleRate); }
     int hqLatency() { return dsp::hqLatencySamples (sampleRate); }
@@ -885,6 +890,23 @@ namespace
         setParam (*p, "corr_scale", 0.0f);
         pulse ("retune_speed", sawBb, 0.0f, 400.0f, 0.5);
         pulse ("humanize", sineA, 0.0f, 1.0f, 0.2);
+        {
+            // Vibrato Respect needs a sung vibrato to act on (it locks after about 1.5 cycles).
+            const auto m = (int) (1.2 * sampleRate);
+            const auto voice = vibratoVoice (m, [] (double t) { return vibratoCents (t); });
+            const auto fillV = [&voice] (int i) { return voice[(size_t) i]; };
+            setParam (*p, "vibrato", 0.0f);
+            p->reset();
+            p->prepareToPlay (sampleRate, blockSize);
+            const auto a = render (*p, fillV, m);
+            setParam (*p, "vibrato", 1.0f);
+            p->reset();
+            p->prepareToPlay (sampleRate, blockSize);
+            const auto b = render (*p, fillV, m);
+            if (bufferDiff (a, b, lat + 256) < 1.0)
+                dead.add ("vibrato");
+            setParam (*p, "vibrato", 0.0f);
+        }
         pulse ("corr_amount", sawBb, 0.0f, 1.0f, 1.0);
         pulse ("a4_hz", sawBb, 415.0f, 466.0f, 0.2);
         pulse ("formant", sawBb, 0.0f, 1.0f, 0.05);
@@ -3205,6 +3227,367 @@ namespace
         base.reset();
     }
 
+    //==============================================================================
+    // Vibrato respect (v0.2.0, t10u)
+
+    /** A sung voice: eight harmonics on a phase-accumulated pitch track (cents relative to A3). */
+    std::vector<float> vibratoVoice (int numSamples, const std::function<double (double)>& centsAt, float amp)
+    {
+        std::vector<float> out ((size_t) numSamples);
+        double phase = 0.0;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto t = (double) i / sampleRate;
+            const auto hz = 220.0 * std::pow (2.0, centsAt (t) / 1200.0);
+            phase = std::fmod (phase + hz / sampleRate, 1.0);
+            double v = 0.0;
+            for (int h = 1; h <= 8; ++h)
+                v += std::sin (2.0 * juce::MathConstants<double>::pi * phase * h) / (double) h;
+            const auto fade = std::min (1.0, std::min (t / 0.01, ((double) numSamples / sampleRate - t) / 0.01));
+            out[(size_t) i] = amp * 0.55f * (float) (v * fade);
+        }
+        return out;
+    }
+
+    /** Cents relative to A3 = 220 Hz of the vibrato test voice: A3 +30 c, 5.5 Hz, +/-60 c. */
+    double vibratoCents (double t, double baseCents, double depth, double rate)
+    {
+        return baseCents + depth * std::sin (2.0 * juce::MathConstants<double>::pi * rate * t);
+    }
+
+    std::uint64_t hashBuffer (const juce::AudioBuffer<float>& b)
+    {
+        std::uint64_t hash = 1469598103934665603ull;
+        for (int ch = 0; ch < b.getNumChannels(); ++ch)
+            for (int i = 0; i < b.getNumSamples(); ++i)
+            {
+                std::uint32_t bits = 0;
+                const auto v = b.getSample (ch, i);
+                std::memcpy (&bits, &v, sizeof (bits));
+                for (int k = 0; k < 4; ++k)
+                {
+                    hash ^= (bits >> (8 * k)) & 0xffu;
+                    hash *= 1099511628211ull;
+                }
+            }
+        return hash;
+    }
+
+    /** Fixed renders used to prove the Vibrato knob at 0 is bit-identical to v0.2.0 before it existed
+        (the expected hashes were produced by the 7186b7d build). */
+    juce::AudioBuffer<float> goldenVibratoRender (int setup, bool setVibratoZero)
+    {
+        auto p = makeProcessor();
+        setParam (*p, "humanize", 0.0f);
+        setParam (*p, "retune_speed", 10.0f);
+        if (setup == 0) setParam (*p, "latency_mode", 0.0f);
+        if (setup == 1) setParam (*p, "latency_mode", 1.0f);
+        if (setup == 2) setParam (*p, "quality", 1.0f);
+        if (setup == 3)
+        {
+            setParam (*p, "latency_mode", 1.0f);
+            setParam (*p, "harm_on", 1.0f);
+            setParam (*p, params::harmonyId (0, "on"), 1.0f);
+            setParam (*p, params::harmonyId (1, "on"), 1.0f);
+        }
+        if (setVibratoZero && p->getParameterState().getParameter ("vibrato") != nullptr)
+            setParam (*p, "vibrato", 0.0f);
+
+        const auto n = (int) (2.5 * sampleRate);
+        const auto voice = vibratoVoice (n, [] (double t) { return t < 1.5 ? vibratoCents (t) : 330.0 + 60.0 * std::sin (2.0 * juce::MathConstants<double>::pi * 5.5 * t); });
+        juce::Random rng (77);
+        std::vector<float> noisy (voice);
+        for (auto& v : noisy)
+            v += 0.002f * (rng.nextFloat() - 0.5f);
+        return render (*p, [&] (int i) { return noisy[(size_t) i]; }, n);
+    }
+
+    void testVibratoGolden()
+    {
+        constexpr std::array<std::uint64_t, 4> expected { 0xbf522864896a8477ull, 0x1fbffa5e63b6e183ull, 0x2a95d427aebc085bull, 0x0b6f1146be163920ull };
+        const char* names[] = { "Tracking", "Mix", "HQ", "Mix + 2 harmonies" };
+        for (int setup = 0; setup < 4; ++setup)
+        {
+            const auto hash = hashBuffer (goldenVibratoRender (setup, true));
+            note (std::string (names[setup]) + " render hash 0x" + juce::String::toHexString ((juce::int64) hash).toStdString());
+            check (hash == expected[(size_t) setup], std::string ("Vibrato 0 is bit-identical to v0.2.0 (7186b7d): ") + names[setup]);
+        }
+    }
+
+    /** Pitch track (cents relative to A3 = 220 Hz) of a rendered buffer, one reading every 5 ms. */
+    std::vector<std::pair<double, double>> centsTrack (const juce::AudioBuffer<float>& b, int start, int end)
+    {
+        std::vector<std::pair<double, double>> track;
+        constexpr int window = 1024, step = 240;
+        for (int pos = start; pos + window <= end; pos += step)
+        {
+            const auto hz = detectHz (b, pos, window, 150.0f, 700.0f);
+            if (hz > 20.0f)
+                track.emplace_back ((double) (pos + window / 2) / sampleRate, 1200.0 * std::log2 (hz / 220.0));
+        }
+        return track;
+    }
+
+    /** Centre (mean) and vibrato depth (amplitude of the rate-Hz component) of a cents track.
+        Readings more than 400 cents from the median (octave errors) are ignored. */
+    std::pair<double, double> centreAndDepth (const std::vector<std::pair<double, double>>& track, double rate = 5.5)
+    {
+        if (track.size() < 8)
+            return { 1.0e9, 0.0 };
+        std::vector<double> values;
+        for (const auto& [t, c] : track)
+            values.push_back (c);
+        std::nth_element (values.begin(), values.begin() + (long) values.size() / 2, values.end());
+        const auto median = values[values.size() / 2];
+        double sum = 0.0, s = 0.0, co = 0.0;
+        int n = 0;
+        for (const auto& [t, c] : track)
+            if (std::abs (c - median) < 400.0) { sum += c; ++n; }
+        const auto mean = sum / std::max (1, n);
+        for (const auto& [t, c] : track)
+            if (std::abs (c - median) < 400.0)
+            {
+                const auto w = 2.0 * juce::MathConstants<double>::pi * rate * t;
+                s += (c - mean) * std::sin (w);
+                co += (c - mean) * std::cos (w);
+            }
+        return { mean, 2.0 * std::sqrt (s * s + co * co) / std::max (1, n) };
+    }
+
+    void setVibratoMode (Processor& p, int mode)
+    {
+        setParam (p, "humanize", 0.0f);
+        setParam (p, "retune_speed", 10.0f);
+        setParam (p, "latency_mode", mode == 0 ? 0.0f : 1.0f);
+        setParam (p, "quality", mode == 2 ? 1.0f : 0.0f);
+    }
+
+    void testVibratoRespect()
+    {
+        const char* modeNames[] = { "Tracking", "Mix", "HQ" };
+
+        // Parameter: last in the layout, 0 .. 100 %, default 0.
+        {
+            auto p = makeProcessor();
+            const auto ids = allParameterIds (*p);
+            check (ids.size() > 0 && ids[ids.size() - 1] == "vibrato", "Vibrato Respect is the last parameter");
+            check (std::abs (getPlain (*p, "vibrato")) < 1.0e-6f, "Vibrato Respect defaults to 0");
+            if (auto* param = getParam (*p, "vibrato"))
+                check (param->getCurrentValueAsText().contains ("%") && param->getName (64) == "Vibrato Respect", "shown as a percentage");
+        }
+
+        // Synthetic singer: A3 +30 cents, 5.5 Hz, +/-60 cents vibrato.
+        const auto n = (int) (4.5 * sampleRate);
+        const auto voice = vibratoVoice (n, [] (double t) { return vibratoCents (t); });
+        {
+            juce::AudioBuffer<float> in (2, n);
+            for (int i = 0; i < n; ++i)
+                in.setSample (0, i, voice[(size_t) i]), in.setSample (1, i, voice[(size_t) i]);
+            const auto [c, d] = centreAndDepth (centsTrack (in, (int) (1.5 * sampleRate), (int) (3.5 * sampleRate)));
+            note ("input (measured the same way): centre " + format (c, 1) + " c, vibrato +/-" + format (d, 1) + " c");
+        }
+
+        for (int mode = 0; mode < 3; ++mode)
+        {
+            for (const auto k : { 1.0f, 0.5f, 0.0f })
+            {
+                auto p = makeProcessor();
+                setVibratoMode (*p, mode);
+                setParam (*p, "vibrato", k);
+                const auto out = render (*p, [&] (int i) { return voice[(size_t) i]; }, n);
+                const auto lat = p->getLatencySamples();
+                const auto [c, d] = centreAndDepth (centsTrack (out, (int) (1.5 * sampleRate) + lat, (int) (3.5 * sampleRate) + lat));
+                note (std::string (modeNames[mode]) + " (latency " + std::to_string (lat) + " = " + format (1000.0 * lat / sampleRate, 1)
+                      + " ms), Vibrato " + std::to_string (juce::roundToInt (k * 100.0f)) + "%: output centre " + format (c, 1)
+                      + " c from A3, vibrato +/-" + format (d, 1) + " c");
+                check (std::abs (c) <= 5.0, std::string (modeNames[mode]) + " Vibrato " + std::to_string (juce::roundToInt (k * 100.0f))
+                                                + "%: centre within 5 cents of A3 (" + format (c, 1) + ")");
+                if (k > 0.99f)
+                    check (d >= 50.0 && d <= 70.0, std::string (modeNames[mode]) + " 100%: vibrato depth kept (+/-" + format (d, 1) + " c)");
+                else if (k > 0.4f)
+                    check (d >= 20.0 && d <= 42.0, std::string (modeNames[mode]) + " 50%: about half the vibrato (+/-" + format (d, 1) + " c)");
+                else
+                    check (d <= (mode == 0 ? 35.0 : 15.0), std::string (modeNames[mode]) + " 0%: vibrato flattened (+/-" + format (d, 1) + " c)");
+                check (allFinite (out), "finite output");
+            }
+        }
+
+        // Engine view: how long until the vibrato is recognised, and how good the centre estimate is.
+        for (int mode = 0; mode < 3; ++mode)
+        {
+            dsp::PitchEngine engine;
+            engine.prepare (sampleRate, 256);
+            dsp::PitchSettings s;
+            s.humanize = 0.0f;
+            s.retuneMs = 10.0f;
+            s.vibratoRespect = 1.0f;
+            s.latency = mode == 0 ? dsp::LatencyMode::tracking : dsp::LatencyMode::mix;
+            s.quality = mode == 2 ? dsp::QualityMode::hq : dsp::QualityMode::live;
+            juce::AudioBuffer<float> block (2, 256);
+            double lockAt = -1.0, errSum = 0.0, errMax = 0.0;
+            int errCount = 0;
+            for (int pos = 0; pos + 256 <= n; pos += 256)
+            {
+                for (int i = 0; i < 256; ++i)
+                    block.setSample (0, i, voice[(size_t) (pos + i)]), block.setSample (1, i, voice[(size_t) (pos + i)]);
+                engine.process (block, 256, s, false, nullptr);
+                const auto outTime = (double) (pos + 256 - engine.currentLatency()) / sampleRate;
+                if (lockAt < 0.0 && engine.getVibratoWeight() > 0.5f)
+                    lockAt = outTime;
+                if (outTime > 1.5 && outTime < 3.5 && engine.getVibratoState().active)
+                {
+                    const auto e = std::abs ((engine.getVibratoState().centreMidi - 57.3f) * 100.0f);
+                    errSum += e;
+                    errMax = std::max (errMax, (double) e);
+                    ++errCount;
+                }
+            }
+            note (std::string (modeNames[mode]) + ": vibrato recognised " + format (lockAt * 1000.0, 0) + " ms into the note (output time); "
+                  + "centre estimate error mean " + format (errSum / std::max (1, errCount), 1) + " c, max " + format (errMax, 1) + " c");
+            check (lockAt > 0.0 && lockAt < 0.45, std::string (modeNames[mode]) + ": vibrato recognised within 450 ms");
+            check (errCount > 0 && errSum / errCount < 5.0, std::string (modeNames[mode]) + ": centre estimate within 5 cents on average");
+        }
+
+        // A note change still snaps: A3 +30 c with vibrato, then C4 +30 c with vibrato at 2.0 s.
+        {
+            const auto m = (int) (4.0 * sampleRate);
+            const auto stepVoice = vibratoVoice (m, [] (double t) { return vibratoCents (t, t < 2.0 ? 30.0 : 330.0); });
+            for (int mode = 0; mode < 3; ++mode)
+            {
+                auto p = makeProcessor();
+                setVibratoMode (*p, mode);
+                setParam (*p, "vibrato", 1.0f);
+                const auto out = render (*p, [&] (int i) { return stepVoice[(size_t) i]; }, m);
+                const auto lat = p->getLatencySamples();
+                const auto stepAt = (int) (2.0 * sampleRate) + lat;
+                const auto early = centsTrack (out, stepAt + (int) (0.04 * sampleRate), stepAt + (int) (0.20 * sampleRate));
+                double worst = 0.0;
+                for (const auto& [t, c] : early)
+                    worst = std::max (worst, std::abs (c - 300.0));
+                const auto [c, d] = centreAndDepth (centsTrack (out, stepAt + (int) (0.8 * sampleRate), stepAt + (int) (1.8 * sampleRate)));
+                note (std::string (modeNames[mode]) + " A3 -> C4 at 100%: 40-200 ms after the step the output is within "
+                      + format (worst, 1) + " c of C4 (vibrato included); later centre " + format (c - 300.0, 1) + " c, vibrato +/-" + format (d, 1) + " c");
+                check (! early.empty() && worst <= 100.0, std::string (modeNames[mode]) + ": the new note is reached at once (no stuck correction)");
+                check (std::abs (c - 300.0) <= 5.0 && d >= 50.0, std::string (modeNames[mode]) + ": the new note's centre is corrected and its vibrato kept");
+            }
+        }
+
+        // No vibrato (held note, a scoop, a plain note change): the knob changes nothing at all.
+        {
+            const auto m = (int) (3.0 * sampleRate);
+            const auto plain = vibratoVoice (m, [] (double t)
+            {
+                if (t < 0.15) return -120.0 + 150.0 * (t / 0.15);               // scoop up into A3 +30
+                if (t < 1.5) return 30.0;
+                if (t < 1.62) return 330.0 - 150.0 * (1.0 - (t - 1.5) / 0.12); // scoop into C4 +30
+                return 330.0;
+            });
+            for (int mode = 0; mode < 3; ++mode)
+            {
+                std::uint64_t hashes[2] {};
+                for (int on = 0; on < 2; ++on)
+                {
+                    auto p = makeProcessor();
+                    setVibratoMode (*p, mode);
+                    setParam (*p, "vibrato", on == 1 ? 1.0f : 0.0f);
+                    hashes[on] = hashBuffer (render (*p, [&] (int i) { return plain[(size_t) i]; }, m));
+                }
+                check (hashes[0] == hashes[1], std::string (modeNames[mode]) + ": scoops and note changes without vibrato are untouched by the knob (bit-identical)");
+            }
+        }
+
+        // Harmonies follow the corrected pitch, vibrato included, and keep their interval.
+        {
+            dsp::PitchEngine engine;
+            engine.prepare (sampleRate, 256);
+            dsp::PitchSettings s;
+            s.humanize = 0.0f;
+            s.retuneMs = 10.0f;
+            s.vibratoRespect = 1.0f;
+            dsp::HarmonySettings h;
+            h.enabled = true;
+            h.voices[0].enabled = true;
+            h.voices[0].fixed = false;
+            h.voices[0].degrees = 2; // a third above in the key (A -> C in C major: 3 semitones)
+            juce::AudioBuffer<float> block (2, 256);
+            float leadLo = 1000.0f, leadHi = -1000.0f, intervalLo = 1000.0f, intervalHi = -1000.0f;
+            for (int pos = 0; pos + 256 <= n; pos += 256)
+            {
+                for (int i = 0; i < 256; ++i)
+                    block.setSample (0, i, voice[(size_t) (pos + i)]), block.setSample (1, i, voice[(size_t) (pos + i)]);
+                engine.process (block, 256, s, h, false, nullptr);
+                const auto t = (double) pos / sampleRate;
+                const auto est = engine.getLastEstimate();
+                if (t > 1.5 && t < 3.5 && est.voiced && engine.getLastCorrectedHz() > 20.0f)
+                {
+                    const auto lead = dsp::PitchCorrector::hzToMidi (engine.getLastCorrectedHz(), 440.0f);
+                    const auto harm = dsp::PitchCorrector::hzToMidi (est.hz * engine.getHarmonizer().getVoiceRatio (0), 440.0f);
+                    leadLo = std::min (leadLo, lead); leadHi = std::max (leadHi, lead);
+                    intervalLo = std::min (intervalLo, harm - lead); intervalHi = std::max (intervalHi, harm - lead);
+                }
+            }
+            note ("harmony (a third above, Mix, 100%): lead swings " + format ((leadHi - leadLo) * 100.0f, 0) + " c peak to peak, harmony - lead "
+                  + format (intervalLo, 3) + " .. " + format (intervalHi, 3) + " semitones");
+            check (leadHi - leadLo > 0.8f, "the lead keeps its vibrato");
+            check (intervalLo > 2.98f && intervalHi < 3.02f, "the harmony keeps a steady minor third, so it carries the same vibrato");
+        }
+
+        // Pitch page: the Vibrato knob and the display hint (dashed centre line + VIB readout).
+        {
+            auto p = makeProcessor();
+            setVibratoMode (*p, 1);
+            setParam (*p, "vibrato", 1.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            check (editor != nullptr, "editor for the vibrato hint");
+            if (editor != nullptr)
+            {
+                editor->selectPage (Editor::pitchPage);
+                editor->refreshEnablementNow();
+                auto* knob = findById (*editor, "vibrato");
+                check (knob != nullptr && visibleChain (*knob), "the Vibrato knob is on the pitch page");
+                const auto total = (int) (3.0 * sampleRate);
+                const auto take = vibratoVoice (total, [] (double t) { return vibratoCents (t, t < 1.9 ? 30.0 : 330.0); });
+                std::vector<dsp::PitchFrame> frames (2048);
+                float maxShown = 0.0f;
+                for (int pos = 0; pos < total; pos += 4096)
+                {
+                    const auto len = std::min (4096, total - pos);
+                    render (*p, [&] (int i) { return take[(size_t) (pos + i)]; }, len);
+                    const auto got = p->getPitchTap().pop (frames.data(), (int) frames.size());
+                    editor->getPitchDisplay().update (frames.data(), got, 0.1);
+                    maxShown = std::max (maxShown, editor->getPitchDisplay().getShownVibrato());
+                }
+                check (maxShown > 0.5f, "the pitch display shows the vibrato hint (" + format (maxShown, 2) + ")");
+                saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-vibrato");
+                editor->setSize (940, 600);
+                saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-vibrato-940x600");
+                p->editorBeingDeleted (editor);
+            }
+            base.reset();
+        }
+
+        // Old sessions (no Vibrato parameter) load at 0.
+        {
+            auto src = makeProcessor();
+            setParam (*src, "corr_key", 5.0f);
+            juce::MemoryBlock blob;
+            src->getStateInformation (blob);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+            juce::MemoryBlock old;
+            if (xml != nullptr)
+            {
+                stripParameters (*xml, { "vibrato", "rev_", "dly_", "fx_routing", "range_" });
+                juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            }
+            auto q = makeProcessor();
+            setParam (*q, "vibrato", 0.8f);
+            q->setStateInformation (old.getData(), (int) old.getSize());
+            check (old.getSize() > 32 && std::abs (getPlain (*q, "vibrato")) < 1.0e-6f && std::abs (getPlain (*q, "corr_key") - 5.0f) < 0.1f,
+                   "an older session loads with Vibrato Respect at 0 and keeps its settings");
+        }
+    }
+
     struct TestCase
     {
         const char* name;
@@ -3245,6 +3628,8 @@ int main()
         { "fx routing",                     testFxRouting },
         { "learn range",                    testRangeLearn },
         { "fx pages",                       testFxPages },
+        { "vibrato golden",                 testVibratoGolden },
+        { "vibrato respect",                testVibratoRespect },
     };
 
     int failedTests = 0;

@@ -34,6 +34,8 @@ namespace dooblrvocals::ui
         float getShownDetectedHz() const noexcept { return shownDetected; }
         float getShownCorrectedHz() const noexcept { return shownCorrected; }
         int getFramesReceived() const noexcept { return framesReceived; }
+        /** Vibrato Respect hint: the latest reading's vibrato weight (0 = none shown). */
+        float getShownVibrato() const noexcept { return shownVibrato; }
 
         static constexpr int minMidi = 36, maxMidi = 84; // C2 .. C6
 
@@ -49,10 +51,10 @@ namespace dooblrvocals::ui
         juce::Rectangle<float> keyboard, plot;
         juce::Image background;
         static constexpr int maxColumns = 2048;
-        std::array<float, maxColumns> detectedMidi {}, correctedMidi {};
+        std::array<float, maxColumns> detectedMidi {}, correctedMidi {}, centreMidi {};
         std::array<char, maxColumns> voiced {};
         int write = 0, filled = 0, hoverClass = -1, framesReceived = 0;
-        float shownDetected = 0, shownCorrected = 0;
+        float shownDetected = 0, shownCorrected = 0, shownVibrato = 0, shownVibRate = 0, shownVibCents = 0;
         float pixelScale = 1.0f;
         int lastMask = -1, lastKey = -1, lastScale = -1, lastMode = -1;
         juce::String readout;
