@@ -866,6 +866,200 @@ namespace
         base.reset();
     }
 
+    //==============================================================================
+    juce::MouseEvent mouseAt (juce::Component& c, juce::Point<float> position, juce::Point<float> down, int clicks, bool dragged,
+                              juce::ModifierKeys mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier))
+    {
+        using Source = juce::MouseInputSource;
+        const auto now = juce::Time::getCurrentTime();
+        return { juce::Desktop::getInstance().getMainMouseSource(), position, mods, Source::defaultPressure, Source::defaultOrientation,
+                 Source::defaultRotation, Source::defaultTiltX, Source::defaultTiltY, &c, &c, now, down, now, clicks, dragged };
+    }
+
+    void dragGraph (juce::Component& c, juce::Point<float> from, juce::Point<float> to, bool fine = false)
+    {
+        auto mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier | (fine ? juce::ModifierKeys::shiftModifier : 0));
+        c.mouseDown (mouseAt (c, from, from, 1, false, mods));
+        constexpr int steps = 12;
+        for (int i = 1; i <= steps; ++i)
+            c.mouseDrag (mouseAt (c, from + (to - from) * ((float) i / (float) steps), from, 1, true, mods));
+        c.mouseUp (mouseAt (c, to, from, 1, true, mods));
+    }
+
+    float paramValue (DooblrProphetProcessor& p, const char* pid)
+    {
+        auto* r = p.getState().getParameter (pid);
+        return r->convertFrom0to1 (r->getValue());
+    }
+
+    void testFilterHandles()
+    {
+        using FD = dooblrprophet::ui::FilterDisplay;
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrProphetEditor");
+        if (editor == nullptr) return;
+        editor->selectPage (Editor::filtersPage);
+        auto* graph = dynamic_cast<FD*> (&editor->getGraph (Editor::filtersPage));
+        check (graph != nullptr, "the Filters graph is a FilterDisplay");
+        if (graph == nullptr) return;
+
+        juce::Slider* lpKnob = nullptr;
+        juce::Slider* lpResoKnob = nullptr;
+        for (auto& panel : editor->getPanels (Editor::filtersPage))
+        {
+            if (auto* c = dynamic_cast<juce::Slider*> (panel->findControl (id::lpfCutoff))) lpKnob = c;
+            if (auto* c = dynamic_cast<juce::Slider*> (panel->findControl (id::lpfReso))) lpResoKnob = c;
+        }
+        check (lpKnob != nullptr && lpResoKnob != nullptr, "low-pass Cutoff and Resonance knobs found");
+
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor->setSize (size.x, size.y);
+            const auto label = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
+            const auto plot = graph->getPlotArea();
+
+            // Mapping round trip: value -> position -> value.
+            double worstOct = 0.0, worstRes = 0.0;
+            for (float hz : { 20.0f, 31.0f, 100.0f, 440.0f, 1000.0f, 4000.0f, 12345.0f, 20000.0f })
+                for (float res : { 0.0f, 0.1f, 0.37f, 0.5f, 0.9f, 1.0f })
+                {
+                    const auto at = FD::positionFor (hz, res, plot);
+                    worstOct = std::max (worstOct, std::abs (std::log2 ((double) FD::cutoffAt (at.x, plot) / hz)));
+                    worstRes = std::max (worstRes, (double) std::abs (FD::resonanceAt (at.y, plot) - res));
+                }
+            check (worstOct < 0.001 && worstRes < 0.001, label + "position <-> cutoff / resonance round trip (worst " + fmt (worstOct * 1200.0, 3)
+                                                             + " cents, " + fmt (worstRes * 100.0, 3) + "% res)");
+            // Position -> value -> position, within a pixel.
+            float worstPx = 0.0f;
+            for (float tx : { 0.0f, 0.13f, 0.5f, 0.77f, 1.0f })
+                for (float ty : { 0.0f, 0.25f, 0.5f, 0.9f, 1.0f })
+                {
+                    const auto at0 = FD::positionFor (FD::cutoffAt (plot.getX() + plot.getWidth() * tx, plot), FD::resonanceAt (plot.getY() + plot.getHeight() * ty, plot), plot);
+                    const auto back = FD::positionFor (FD::cutoffAt (at0.x, plot), FD::resonanceAt (at0.y, plot), plot);
+                    worstPx = std::max (worstPx, at0.getDistanceFrom (back));
+                }
+            check (worstPx < 0.5f, label + "graph position round trip within half a pixel (" + fmt (worstPx, 4) + " px)");
+
+            // Handles inside the graph at the extremes.
+            const auto bounds = graph->getLocalBounds().toFloat();
+            bool inside = true;
+            for (float hz : { FD::minHz, FD::maxHz })
+                for (float res : { 0.0f, 1.0f })
+                {
+                    const auto at = FD::positionFor (hz, res, plot);
+                    const auto circle = juce::Rectangle<float> (2.0f * FD::handleRadius, 2.0f * FD::handleRadius).withCentre (at);
+                    inside = inside && bounds.contains (circle) && at.x >= plot.getX() && at.x <= plot.getRight()
+                             && circle.getY() >= plot.getY() && circle.getBottom() <= plot.getBottom();
+                }
+            check (inside, label + "handles inside the graph at 20 Hz / 20 kHz, 0 / 100% resonance");
+        }
+
+        editor->setSize (1080, 660);
+        auto& undo = p->getUndoHistory();
+        undo.clear();
+        graph->refresh();
+        const auto plot = graph->getPlotArea();
+
+        // Hover highlight picks the nearest handle; no hover, no readout.
+        check (graph->getReadout().isEmpty(), "no readout without hover");
+        const auto lpAt = graph->getHandlePosition (FD::lowPassHandle);
+        check (lpAt.getDistanceFrom (FD::positionFor (4000.0f, 0.15f, plot)) < 0.01f, "low-pass handle at 4 kHz / 15%");
+        graph->mouseMove (mouseAt (*graph, lpAt + juce::Point<float> (5.0f, 3.0f), {}, 0, false, {}));
+        check (graph->getHoverHandle() == FD::lowPassHandle, "hovering near the low-pass handle highlights it");
+        check (graph->getReadout().startsWith ("Low-pass"), "hover readout names the filter (" + graph->getReadout().toStdString() + ")");
+        graph->mouseExit (mouseAt (*graph, { -5.0f, -5.0f }, {}, 0, false, {}));
+        check (graph->getHoverHandle() == FD::noHandle, "hover cleared on exit");
+
+        // Drag: right one octave and up: higher cutoff and resonance; one undo step; knobs follow.
+        const auto octave = plot.getWidth() / std::log2 (FD::maxHz / FD::minHz);
+        dragGraph (*graph, lpAt, lpAt + juce::Point<float> (octave, -60.0f));
+        const auto hz = paramValue (*p, id::lpfCutoff), res = paramValue (*p, id::lpfReso);
+        check (std::abs (std::log2 (hz / 8000.0f)) < 0.01f, "drag one octave right: 4 kHz -> 8 kHz (" + fmt (hz, 1) + " Hz)");
+        check (res > 0.3f, "drag up raises resonance (" + fmt (res * 100.0f, 1) + "%)");
+        check (std::abs (lpKnob->getValue() - hz) < 0.5 && std::abs (lpResoKnob->getValue() - res) < 1.0e-4, "knobs follow the handle");
+        check (undo.getNumUndoableSteps() == 1, "one drag is one undo step (" + std::to_string (undo.getNumUndoableSteps()) + ")");
+        check (graph->getHandlePosition (FD::lowPassHandle).getDistanceFrom (lpAt + juce::Point<float> (octave, -60.0f)) < 0.5f, "handle followed the pointer");
+        undo.undo();
+        check (std::abs (paramValue (*p, id::lpfCutoff) - 4000.0f) < 0.5f && std::abs (paramValue (*p, id::lpfReso) - 0.15f) < 1.0e-4f
+                   && ! undo.canUndo(), "one undo restores cutoff and resonance");
+
+        // Shift: a tenth of the movement.
+        dragGraph (*graph, lpAt, lpAt + juce::Point<float> (octave, 0.0f), true);
+        check (std::abs (std::log2 (paramValue (*p, id::lpfCutoff) / 4000.0f) - 0.1f) < 0.01f,
+               "Shift-drag one octave moves a tenth of an octave (" + fmt (paramValue (*p, id::lpfCutoff), 1) + " Hz)");
+
+        // Knob -> handle.
+        lpKnob->setValue (500.0, juce::sendNotificationSync);
+        graph->refresh();
+        check (std::abs (graph->getHandlePosition (FD::lowPassHandle).x - FD::positionFor (500.0f, paramValue (*p, id::lpfReso), plot).x) < 0.5f,
+               "handle follows the Cutoff knob");
+
+        // High-pass handle (at 20 Hz, 0%): its own drag.
+        undo.clear();
+        const auto hpAt = graph->getHandlePosition (FD::highPassHandle);
+        check (graph->handleAt (hpAt) == FD::highPassHandle, "high-pass handle hit at its position");
+        dragGraph (*graph, hpAt, hpAt + juce::Point<float> (3.0f * octave, -40.0f));
+        check (std::abs (std::log2 (paramValue (*p, id::hpfCutoff) / 160.0f)) < 0.01f && paramValue (*p, id::hpfReso) > 0.1f,
+               "high-pass drag: 20 Hz -> 160 Hz, resonance up (" + fmt (paramValue (*p, id::hpfCutoff), 1) + " Hz, " + fmt (paramValue (*p, id::hpfReso) * 100.0f, 1) + "%)");
+        check (undo.getNumUndoableSteps() == 1, "high-pass drag is one undo step");
+
+        // Overlapping handles: the nearer one wins.
+        p->getState().getParameter (id::hpfCutoff)->setValueNotifyingHost (p->getState().getParameter (id::hpfCutoff)->convertTo0to1 (500.0f));
+        p->getState().getParameter (id::hpfReso)->setValueNotifyingHost (p->getState().getParameter (id::hpfReso)->convertTo0to1 (paramValue (*p, id::lpfReso)));
+        graph->refresh();
+        const auto lpNow = graph->getHandlePosition (FD::lowPassHandle), hpNow = graph->getHandlePosition (FD::highPassHandle);
+        check (lpNow.getDistanceFrom (hpNow) < 1.0f, "handles can coincide");
+        p->getState().getParameter (id::hpfCutoff)->setValueNotifyingHost (p->getState().getParameter (id::hpfCutoff)->convertTo0to1 (560.0f));
+        graph->refresh();
+        const auto hpNear = graph->getHandlePosition (FD::highPassHandle);
+        const auto mid = (graph->getHandlePosition (FD::lowPassHandle) + hpNear) * 0.5f;
+        check (graph->handleAt (hpNear + juce::Point<float> (1.0f, 0.0f)) == FD::highPassHandle
+                   && graph->handleAt (graph->getHandlePosition (FD::lowPassHandle) - juce::Point<float> (1.0f, 0.0f)) == FD::lowPassHandle,
+               "close handles: the nearest takes the click");
+        check (graph->handleAt (mid + juce::Point<float> (0.0f, 100.0f)) == FD::noHandle, "a click away from both hits nothing");
+
+        // Wheel over the low-pass handle: resonance only, one step.
+        undo.clear();
+        const auto cutoffBefore = paramValue (*p, id::lpfCutoff), resBefore = paramValue (*p, id::lpfReso);
+        juce::MouseWheelDetails wheel {};
+        wheel.deltaY = 0.2f;
+        graph->mouseWheelMove (mouseAt (*graph, graph->getHandlePosition (FD::lowPassHandle) - juce::Point<float> (2.0f, 0.0f), {}, 0, false, {}), wheel);
+        check (std::abs (paramValue (*p, id::lpfReso) - (resBefore + 0.1f)) < 1.0e-4f && std::abs (paramValue (*p, id::lpfCutoff) - cutoffBefore) < 0.01f,
+               "wheel up over the handle: +10% resonance, cutoff unchanged");
+        check (undo.getNumUndoableSteps() == 1, "wheel tick is one undo step");
+
+        // Double-click resets that filter's cutoff and resonance, as one undo step.
+        undo.clear();
+        const auto hpCutoffBefore = paramValue (*p, id::hpfCutoff);
+        const auto lpHere = graph->getHandlePosition (FD::lowPassHandle) - juce::Point<float> (2.0f, 0.0f);
+        graph->mouseDown (mouseAt (*graph, lpHere, lpHere, 2, false));
+        graph->mouseUp (mouseAt (*graph, lpHere, lpHere, 2, false));
+        graph->mouseDoubleClick (mouseAt (*graph, lpHere, lpHere, 2, false));
+        check (std::abs (paramValue (*p, id::lpfCutoff) - 4000.0f) < 0.5f && std::abs (paramValue (*p, id::lpfReso) - 0.15f) < 1.0e-4f,
+               "double-click resets low-pass cutoff and resonance to 4 kHz / 15%");
+        check (std::abs (paramValue (*p, id::hpfCutoff) - hpCutoffBefore) < 0.01f, "double-click leaves the high-pass alone");
+        check (undo.getNumUndoableSteps() == 1, "double-click reset is one undo step");
+        const auto hpHere = graph->getHandlePosition (FD::highPassHandle);
+        graph->mouseDoubleClick (mouseAt (*graph, hpHere, hpHere, 2, false));
+        check (std::abs (paramValue (*p, id::hpfCutoff) - 20.0f) < 0.01f && paramValue (*p, id::hpfReso) < 1.0e-4f, "double-click resets the high-pass to 20 Hz / 0%");
+
+        // A click on empty graph changes nothing.
+        undo.clear();
+        dragGraph (*graph, { plot.getCentreX(), plot.getBottom() - 2.0f }, { plot.getCentreX() + 50.0f, plot.getY() + 5.0f });
+        check (! undo.canUndo() && std::abs (paramValue (*p, id::lpfCutoff) - 4000.0f) < 0.5f, "dragging empty graph space changes nothing");
+
+        // Snapshot with a resonant low-pass and an audible high-pass, low-pass handle hovered.
+        p->getState().getParameter (id::lpfReso)->setValueNotifyingHost (0.55f);
+        p->getState().getParameter (id::hpfCutoff)->setValueNotifyingHost (p->getState().getParameter (id::hpfCutoff)->convertTo0to1 (120.0f));
+        p->getState().getParameter (id::hpfReso)->setValueNotifyingHost (0.3f);
+        graph->refresh();
+        graph->mouseMove (mouseAt (*graph, graph->getHandlePosition (FD::lowPassHandle), {}, 0, false, {}));
+        saveSnapshot (*editor, "-Filters-handles");
+        base.reset();
+    }
+
     void testRandomPatch()
     {
         // The excluded parameters survive Random, even at non-default values.
@@ -953,6 +1147,7 @@ int main()
         { "real-time safety and 10-voice CPU",         testRealtimeAndCpu },
         { "random patch",                              testRandomPatch },
         { "editor",                                    testEditor },
+        { "filter graph handles",                      testFilterHandles },
     };
 
     int failedTests = 0;

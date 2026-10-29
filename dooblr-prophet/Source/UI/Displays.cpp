@@ -57,7 +57,8 @@ namespace dooblrprophet::ui
         setDescription (accessibleTitle);
         if (source)
             settings = source();
-        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { refresh(); });
+        // Hidden graphs (other pages) skip the poll; an explicit refresh() always polls.
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { if (isShowing()) refresh(); });
     }
 
     GraphView::~GraphView() = default;
@@ -66,10 +67,6 @@ namespace dooblrprophet::ui
 
     bool GraphView::refresh()
     {
-        if (! isShowing() && everPolled)
-            return false;
-
-        everPolled = true;
         bool dirty = false;
 
         if (source)
@@ -231,7 +228,7 @@ namespace dooblrprophet::ui
     }
 
     //==============================================================================
-    FilterDisplay::FilterDisplay (SettingsSource s) : GraphView (std::move (s), "Filter response")
+    FilterDisplay::FilterDisplay (SettingsSource s, Parameters p) : GraphView (std::move (s), "Filter response"), parameters (p)
     {
         lowPath.preallocateSpace (3 * 1200);
         highPath.preallocateSpace (3 * 1200);
@@ -267,6 +264,228 @@ namespace dooblrprophet::ui
     {
         const auto t = juce::jlimit (0.0f, 1.0f, (x - plot.getX()) / plot.getWidth());
         return minHz * std::pow (maxHz / minHz, t);
+    }
+
+    namespace
+    {
+        // The handles' vertical travel keeps the whole handle inside the plot.
+        juce::Range<float> resonanceTravel (juce::Rectangle<float> plot) noexcept
+        {
+            const auto inset = FilterDisplay::handleRadius + 1.0f;
+            return { plot.getY() + inset, juce::jmax (plot.getY() + inset + 1.0f, plot.getBottom() - inset) };
+        }
+
+        float logSpan() noexcept { return std::log (FilterDisplay::maxHz / FilterDisplay::minHz); }
+    }
+
+    juce::Point<float> FilterDisplay::positionFor (float hz, float resonance, juce::Rectangle<float> plot) noexcept
+    {
+        const auto t = std::log (juce::jlimit (minHz, maxHz, hz) / minHz) / logSpan();
+        const auto travel = resonanceTravel (plot);
+        return { plot.getX() + plot.getWidth() * t, travel.getEnd() - travel.getLength() * juce::jlimit (0.0f, 1.0f, resonance) };
+    }
+
+    float FilterDisplay::cutoffAt (float x, juce::Rectangle<float> plot) noexcept
+    {
+        const auto t = juce::jlimit (0.0f, 1.0f, (x - plot.getX()) / plot.getWidth());
+        return minHz * std::exp (logSpan() * t);
+    }
+
+    float FilterDisplay::resonanceAt (float y, juce::Rectangle<float> plot) noexcept
+    {
+        const auto travel = resonanceTravel (plot);
+        return juce::jlimit (0.0f, 1.0f, (travel.getEnd() - y) / travel.getLength());
+    }
+
+    juce::RangedAudioParameter* FilterDisplay::cutoffParameter (int handle) const noexcept
+    {
+        return handle == lowPassHandle ? parameters.lowCutoff : handle == highPassHandle ? parameters.highCutoff : nullptr;
+    }
+
+    juce::RangedAudioParameter* FilterDisplay::resonanceParameter (int handle) const noexcept
+    {
+        return handle == lowPassHandle ? parameters.lowResonance : handle == highPassHandle ? parameters.highResonance : nullptr;
+    }
+
+    float FilterDisplay::cutoffOf (int handle) const noexcept
+    {
+        if (auto* p = cutoffParameter (handle))
+            return p->convertFrom0to1 (p->getValue());
+        return handle == lowPassHandle ? settings.lpfCutoff : settings.hpfCutoff;
+    }
+
+    float FilterDisplay::resonanceOf (int handle) const noexcept
+    {
+        if (auto* p = resonanceParameter (handle))
+            return p->convertFrom0to1 (p->getValue());
+        return handle == lowPassHandle ? settings.lpfReso : settings.hpfReso;
+    }
+
+    juce::Point<float> FilterDisplay::getHandlePosition (int handle) const
+    {
+        // From the parameters themselves, so the handle never lags its knob.
+        return positionFor (cutoffOf (handle), resonanceOf (handle), getPlotArea());
+    }
+
+    int FilterDisplay::handleAt (juce::Point<float> p) const
+    {
+        if (cutoffParameter (lowPassHandle) == nullptr)
+            return noHandle;
+
+        int best = noHandle;
+        auto bestDistance = handleHitRadius;
+        for (int h : { lowPassHandle, highPassHandle })
+        {
+            const auto d = getHandlePosition (h).getDistanceFrom (p);
+            if (d <= bestDistance) { best = h; bestDistance = d; }
+        }
+        return best;
+    }
+
+    void FilterDisplay::setValues (int handle, float hz, float resonance)
+    {
+        auto* cutoff = cutoffParameter (handle);
+        auto* reso = resonanceParameter (handle);
+        if (cutoff == nullptr || reso == nullptr)
+            return;
+        cutoff->setValueNotifyingHost (cutoff->convertTo0to1 (hz));
+        reso->setValueNotifyingHost (reso->convertTo0to1 (resonance));
+        refresh();
+    }
+
+    void FilterDisplay::mouseMove (const juce::MouseEvent& e)
+    {
+        GraphView::mouseMove (e);
+        int nearest = noHandle;
+        if (cutoffParameter (lowPassHandle) != nullptr)
+        {
+            auto bestDistance = hoverProximity;
+            for (int h : { lowPassHandle, highPassHandle })
+            {
+                const auto d = getHandlePosition (h).getDistanceFrom (e.position);
+                if (d <= bestDistance) { nearest = h; bestDistance = d; }
+            }
+        }
+        if (nearest != hoverHandle)
+        {
+            hoverHandle = nearest;
+            setMouseCursor (nearest == noHandle ? juce::MouseCursor::NormalCursor : juce::MouseCursor::PointingHandCursor);
+            repaint();
+        }
+    }
+
+    void FilterDisplay::mouseExit (const juce::MouseEvent& e)
+    {
+        GraphView::mouseExit (e);
+        if (dragHandle == noHandle)
+            hoverHandle = noHandle;
+        repaint();
+    }
+
+    void FilterDisplay::mouseDown (const juce::MouseEvent& e)
+    {
+        dragHandle = handleAt (e.position);
+        if (dragHandle == noHandle)
+            return;
+
+        hoverHandle = dragHandle;
+        const auto plot = getPlotArea();
+        const auto at = getHandlePosition (dragHandle);
+        const auto travel = resonanceTravel (plot);
+        dragX = juce::jlimit (0.0f, 1.0f, (at.x - plot.getX()) / plot.getWidth());
+        dragY = juce::jlimit (0.0f, 1.0f, (travel.getEnd() - at.y) / travel.getLength());
+        lastDragPosition = e.position;
+        // Both parameters in one gesture: the undo history commits them as one step.
+        cutoffParameter (dragHandle)->beginChangeGesture();
+        resonanceParameter (dragHandle)->beginChangeGesture();
+    }
+
+    void FilterDisplay::mouseDrag (const juce::MouseEvent& e)
+    {
+        if (dragHandle == noHandle)
+            return;
+
+        // Relative movement, so Shift (fine) can be pressed or released mid-drag without a jump.
+        const auto plot = getPlotArea();
+        const auto travel = resonanceTravel (plot);
+        const auto scale = e.mods.isShiftDown() ? fineFactor : 1.0f;
+        const auto delta = e.position - lastDragPosition;
+        lastDragPosition = e.position;
+        dragX = juce::jlimit (0.0f, 1.0f, dragX + delta.x / plot.getWidth() * scale);
+        dragY = juce::jlimit (0.0f, 1.0f, dragY - delta.y / travel.getLength() * scale);
+
+        setValues (dragHandle, minHz * std::exp (logSpan() * dragX), dragY);
+        setHoverPoint (getHandlePosition (dragHandle));
+    }
+
+    void FilterDisplay::mouseUp (const juce::MouseEvent& e)
+    {
+        if (dragHandle == noHandle)
+            return;
+
+        resonanceParameter (dragHandle)->endChangeGesture();
+        cutoffParameter (dragHandle)->endChangeGesture();
+        dragHandle = noHandle;
+        if (! getLocalBounds().toFloat().contains (e.position))
+            hoverHandle = noHandle;
+        repaint();
+    }
+
+    void FilterDisplay::mouseDoubleClick (const juce::MouseEvent& e)
+    {
+        const auto handle = handleAt (e.position);
+        if (handle == noHandle)
+            return;
+
+        auto* cutoff = cutoffParameter (handle);
+        auto* reso = resonanceParameter (handle);
+        cutoff->beginChangeGesture();
+        reso->beginChangeGesture();
+        cutoff->setValueNotifyingHost (cutoff->getDefaultValue());
+        reso->setValueNotifyingHost (reso->getDefaultValue());
+        reso->endChangeGesture();
+        cutoff->endChangeGesture();
+        refresh();
+    }
+
+    void FilterDisplay::mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel)
+    {
+        auto handle = handleAt (e.position);
+        if (handle == noHandle)
+            handle = hoverHandle;
+        if (handle == noHandle)
+        {
+            GraphView::mouseWheelMove (e, wheel);
+            return;
+        }
+
+        auto* reso = resonanceParameter (handle);
+        const auto delta = (wheel.isReversed ? -wheel.deltaY : wheel.deltaY) * wheelResonancePerUnit
+                           * (e.mods.isShiftDown() ? fineFactor : 1.0f);
+        const auto current = resonanceOf (handle);
+        reso->beginChangeGesture();
+        reso->setValueNotifyingHost (reso->convertTo0to1 (juce::jlimit (0.0f, 1.0f, current + delta)));
+        reso->endChangeGesture();
+        refresh();
+    }
+
+    void FilterDisplay::drawHandle (juce::Graphics& g, int handle, juce::Colour colour)
+    {
+        const auto centre = getHandlePosition (handle);
+        const auto active = handle == hoverHandle || handle == dragHandle;
+        if (active)
+        {
+            g.setColour (colour.withAlpha (0.22f));
+            g.fillEllipse (juce::Rectangle<float> (2.0f * handleHitRadius, 2.0f * handleHitRadius).withCentre (centre));
+        }
+        const auto r = active ? handleRadius : handleRadius - 1.5f;
+        const auto dot = juce::Rectangle<float> (2.0f * r, 2.0f * r).withCentre (centre);
+        g.setColour (Palette::background);
+        g.fillEllipse (dot);
+        g.setColour (colour);
+        g.drawEllipse (dot.reduced (1.0f), 2.0f);
+        if (active)
+            g.fillEllipse (dot.reduced (3.5f));
     }
 
     void FilterDisplay::drawBackground (juce::Graphics& g, juce::Rectangle<float> plot)
@@ -309,10 +528,27 @@ namespace dooblrprophet::ui
         g.strokePath (highPath, juce::PathStrokeType (1.5f));
         g.setColour (Palette::dynamic);
         g.strokePath (lowPath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+        if (cutoffParameter (lowPassHandle) != nullptr)
+        {
+            // The active one on top, so it stays grabbable when the two overlap.
+            const auto top = dragHandle != noHandle ? dragHandle : hoverHandle != noHandle ? hoverHandle : lowPassHandle;
+            const auto under = top == lowPassHandle ? highPassHandle : lowPassHandle;
+            drawHandle (g, under, under == lowPassHandle ? Palette::dynamic : Palette::spectrum);
+            drawHandle (g, top, top == lowPassHandle ? Palette::dynamic : Palette::spectrum);
+        }
     }
 
     juce::String FilterDisplay::readoutAt (juce::Point<float> p) const
     {
+        const auto handle = dragHandle != noHandle ? dragHandle : hoverHandle;
+        if (handle != noHandle)
+        {
+            const auto hz = cutoffOf (handle);
+            const auto reso = resonanceOf (handle);
+            return juce::String (handle == lowPassHandle ? "Low-pass " : "High-pass ") + formatHz (hz) + "   Res "
+                 + juce::String (juce::roundToInt (reso * 100.0f)) + "%";
+        }
         const auto plot = getPlotArea();
         if (! plot.contains (p))
             return {};

@@ -7,7 +7,7 @@ high-pass into a switchable 4-pole ladder low-pass, and 1–10 voices with uniso
 Original design, code and sounds. "Prophet" describes the instrument family it emulates;
 see the disclaimer below.
 
-Version 0.1.2 (milestone 1 plus Random). See [ROADMAP.md](ROADMAP.md) for what is next and
+Version 0.1.3 (milestone 1 plus Random and draggable filter handles). See [ROADMAP.md](ROADMAP.md) for what is next and
 [docs/analog-reference.md](docs/analog-reference.md) for the circuit reference the DSP follows.
 
 ## Pages and controls
@@ -15,7 +15,7 @@ Version 0.1.2 (milestone 1 plus Random). See [ROADMAP.md](ROADMAP.md) for what i
 | Page | Controls |
 | --- | --- |
 | **Oscillators** | Per oscillator: Variable (continuous Shape, P6) or Switched (Saw / Triangle / Pulse, P5) mode, Coarse, Fine, Shape, Pulse Width. Osc 1 Sync (slaved to osc 2). Osc 2 Low Freq and Key Track. Mixer: Osc 1, Osc 2, Sub (one octave below osc 1), Noise. The graph shows both live waveforms. |
-| **Filters** | High-pass (2-pole, resonant): Cutoff, Resonance, Env Amount. Low-pass (4-pole ladder): Cutoff, Resonance, Drive, Env Amount, Key Track. Low-pass model: 3320 (P5 Rev3) or 2040 (P5 Rev1/2, P6). The graph shows the combined response. |
+| **Filters** | High-pass (2-pole, resonant): Cutoff, Resonance, Env Amount. Low-pass (4-pole ladder): Cutoff, Resonance, Drive, Env Amount, Key Track. Low-pass model: 3320 (P5 Rev3) or 2040 (P5 Rev1/2, P6). The graph shows the combined response, with a draggable handle per filter: drag left/right for Cutoff, up/down for Resonance (Shift for fine, mouse wheel for Resonance, double-click to reset that filter; one drag is one undo step). |
 | **Envelopes** | Filter and amp ADSR, each with a velocity amount. |
 | **Modulation** | Poly-Mod: Filter Env and Osc 2 amounts to Osc 1 Freq, Osc 1 Shape, Filter (both cutoffs). LFO: Wave (triangle, saw, reverse saw, square, sample & hold), Free Rate or Tempo Sync Division, Initial amount, Wheel amount, Noise Mix, and seven destinations. |
 | **Voices** | Poly / Unison / Mono. Voices (1–10, quick 5 / 6 / 10), Unison voices and Detune, Glide (mono), Vintage (per-voice variance). Bend Range, aftertouch to filter and to LFO amount. |

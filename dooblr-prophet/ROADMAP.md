@@ -39,6 +39,14 @@ feature sets in one original-design instrument. The circuit behaviour follows
   its waveform and filter-response graphs is back; the 0.1.1 single panel is removed.
 - Random stays in the header; one undo now also restores the previous preset name.
 
+## 0.1.3: draggable filter handles (done)
+
+- The Filters graph has a handle at each filter's cutoff: one for the 4-pole low-pass, one for the 2-pole high-pass.
+- Horizontal drag sets Cutoff on the log frequency axis; vertical drag sets Resonance (up = more). Nearest handle wins when they overlap.
+- Hover highlight with a readout, Shift for fine adjustment, mouse wheel for Resonance, double-click resets that filter's Cutoff and Resonance.
+- Each drag, wheel step or reset is one host gesture and one undo step; the knobs and handles stay in sync both ways.
+- Tested: mapping round trips at 940x600, 1080x660 and 2400x1400, handles inside the graph at the extremes, drag/undo/reset/wheel behaviour.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice

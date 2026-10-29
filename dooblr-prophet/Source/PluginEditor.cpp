@@ -165,7 +165,10 @@ namespace dooblrprophet
         auto& tap = synth.getEngine().getVoiceTap();
 
         pages[oscillatorsPage].graph = std::make_unique<ui::OscillatorDisplay> (source);
-        pages[filtersPage].graph = std::make_unique<ui::FilterDisplay> (source);
+        auto& apvts = synth.getState();
+        pages[filtersPage].graph = std::make_unique<ui::FilterDisplay> (
+            source, ui::FilterDisplay::Parameters { apvts.getParameter (id::lpfCutoff), apvts.getParameter (id::lpfReso),
+                                                    apvts.getParameter (id::hpfCutoff), apvts.getParameter (id::hpfReso) });
         pages[envelopesPage].graph = std::make_unique<ui::EnvelopeDisplay> (source);
         pages[modulationPage].graph = std::make_unique<ui::LfoDisplay> (source, tap);
         pages[voicesPage].graph = std::make_unique<ui::VoiceDisplay> (source, tap);

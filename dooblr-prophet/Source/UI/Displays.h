@@ -60,7 +60,6 @@ namespace dooblrprophet::ui
         juce::Image background;
         float backgroundScale = 0.0f;
         int lastLiveSignature = 0;
-        bool everPolled = false;
         bool hover = false;
         juce::Point<float> hoverPoint;
         std::unique_ptr<juce::VBlankAttachment> vblank;
@@ -79,11 +78,53 @@ namespace dooblrprophet::ui
         juce::Path paths[2];
     };
 
-    /** Filters page: the ladder low-pass and the high-pass responses (analytic), log frequency. */
+    /**
+        Filters page: the ladder low-pass and the high-pass responses (analytic), log frequency.
+
+        Each filter has a handle: x is its cutoff on the graph's log frequency axis, y its
+        resonance (bottom 0 %, top 100 %). Drag a handle to set both (Shift = fine), scroll over
+        it for resonance, double-click it to reset that filter's cutoff and resonance. The
+        nearest handle within handleHitRadius takes the click. Each drag / double-click / wheel
+        tick is wrapped in begin/endChangeGesture, so it is one undo step and hosts record it as
+        a touch. The knobs follow through their parameter attachments; the handles follow the
+        knobs through the graph's settings poll.
+    */
     class FilterDisplay final : public GraphView
     {
     public:
-        explicit FilterDisplay (SettingsSource source);
+        struct Parameters
+        {
+            juce::RangedAudioParameter* lowCutoff = nullptr;
+            juce::RangedAudioParameter* lowResonance = nullptr;
+            juce::RangedAudioParameter* highCutoff = nullptr;
+            juce::RangedAudioParameter* highResonance = nullptr;
+        };
+        enum Handle { noHandle = -1, lowPassHandle = 0, highPassHandle = 1 };
+
+        FilterDisplay (SettingsSource source, Parameters parameters);
+
+        static constexpr float handleRadius = 7.0f, handleHitRadius = 14.0f, hoverProximity = 24.0f;
+        static constexpr float fineFactor = 0.1f;
+        static constexpr float wheelResonancePerUnit = 0.5f; // resonance change per unit of wheel delta
+
+        /** Graph position of a cutoff / resonance pair, and back (clamped to the ranges). */
+        static juce::Point<float> positionFor (float hz, float resonance, juce::Rectangle<float> plot) noexcept;
+        static float cutoffAt (float x, juce::Rectangle<float> plot) noexcept;
+        static float resonanceAt (float y, juce::Rectangle<float> plot) noexcept;
+
+        juce::Point<float> getHandlePosition (int handle) const;
+        /** The nearest handle within handleHitRadius of a point, or noHandle. */
+        int handleAt (juce::Point<float> p) const;
+        int getHoverHandle() const noexcept { return hoverHandle; }
+        int getDragHandle() const noexcept { return dragHandle; }
+
+        void mouseMove (const juce::MouseEvent& e) override;
+        void mouseExit (const juce::MouseEvent& e) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseUp (const juce::MouseEvent& e) override;
+        void mouseDoubleClick (const juce::MouseEvent& e) override;
+        void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
         /** Response in dB of the low-pass ladder and the high-pass, as set, at a frequency. */
         static float lowPassDb (const dsp::Settings& s, float hz) noexcept;
@@ -96,7 +137,17 @@ namespace dooblrprophet::ui
         juce::String readoutAt (juce::Point<float>) const override;
         bool changed (const dsp::Settings& a, const dsp::Settings& b) const override;
         float xToHz (float x, juce::Rectangle<float> plot) const noexcept;
+        juce::RangedAudioParameter* cutoffParameter (int handle) const noexcept;
+        juce::RangedAudioParameter* resonanceParameter (int handle) const noexcept;
+        void setValues (int handle, float hz, float resonance);
+        float cutoffOf (int handle) const noexcept;
+        float resonanceOf (int handle) const noexcept;
+        void drawHandle (juce::Graphics& g, int handle, juce::Colour colour);
         juce::Path lowPath, highPath, combinedPath;
+        Parameters parameters;
+        int hoverHandle = noHandle, dragHandle = noHandle;
+        float dragX = 0.0f, dragY = 0.0f; // the dragged handle's position in 0..1 of its travel
+        juce::Point<float> lastDragPosition;
     };
 
     /** Envelopes page: the filter and amp envelopes, computed with the engine's own envelope. */
