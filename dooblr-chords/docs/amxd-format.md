@@ -1,0 +1,44 @@
+# The .amxd container used by dooblr-chords
+
+`scripts/build.js` wraps `src/patcher/dooblr-chords.maxpat` in an **unfrozen**
+Max for Live device file. The JavaScript files are not embedded. They sit next
+to the `.amxd` and Max finds them through the patcher's own folder.
+
+## Layout
+
+All lengths are little-endian uint32 and count the payload only.
+
+| Offset | Bytes | Content |
+|---|---|---|
+| 0  | 4 | `ampf` |
+| 4  | 4 | `4` |
+| 8  | 4 | device type: `mmmm` MIDI effect (`aaaa` audio effect, `iiii` instrument) |
+| 12 | 4 | `meta` |
+| 16 | 4 | `4` |
+| 20 | 4 | meta value, written as `0` |
+| 24 | 4 | `ptch` |
+| 28 | 4 | N = JSON byte length + 1 |
+| 32 | N | patcher JSON (UTF-8), then one `0x00` byte |
+
+`scripts/amxd.js` writes and reads this layout. The build reads its own output
+back and compares it with the source before writing anything. The built file
+also parses with Ableton's `maxdevtools` reference tool
+(`maxdiff/amxd_textconv.py`), which reports "MIDI Effect Device".
+
+## Uncertainties
+
+* **The meta value.** Saved devices in the wild carry 0 (older files and
+  third-party writers such as py2max), 1 (a Max 9 test device) or 7 (frozen
+  devices). Nothing public documents what it means. 0 is the conservative
+  choice. If Live refuses to load the device, the first thing to try is
+  `amxd.write(patcher, { meta: 1 })` in `scripts/build.js`.
+* **Trailing NUL.** Max writes one, and the reader tolerates it either way.
+* **Frozen devices** use a different `ptch` payload (`mx@c` header, a file
+  directory in a `dlst` footer, big-endian sizes). We do not write it. To make
+  a self-contained device, open the built device in the Max editor, press
+  Freeze and save. Note that a frozen copy stops picking up a rebuilt
+  `dooblr_chords.js`.
+* **Patcher attributes.** The JSON was written by hand, not saved by Max.
+  Max fills in missing defaults on load. The first save from the Max editor
+  will rewrite the file with many extra keys. Save it back to
+  `src/patcher/dooblr-chords.maxpat` and rebuild.

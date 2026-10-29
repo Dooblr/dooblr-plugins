@@ -1,0 +1,3208 @@
+{
+	"patcher": {
+		"fileversion": 1,
+		"appversion": {
+			"major": 8,
+			"minor": 5,
+			"revision": 8,
+			"architecture": "x64",
+			"modernui": 1
+		},
+		"classnamespace": "box",
+		"rect": [
+			100,
+			100,
+			1280,
+			640
+		],
+		"openrect": [
+			0,
+			0,
+			0,
+			169
+		],
+		"bglocked": 0,
+		"openinpresentation": 1,
+		"default_fontsize": 10,
+		"default_fontface": 0,
+		"default_fontname": "Arial",
+		"gridonopen": 1,
+		"gridsize": [
+			8,
+			8
+		],
+		"gridsnaponopen": 1,
+		"objectsnaponopen": 1,
+		"statusbarvisible": 2,
+		"toolbarvisible": 1,
+		"lefttoolbarpinned": 0,
+		"toptoolbarpinned": 0,
+		"righttoolbarpinned": 0,
+		"bottomtoolbarpinned": 0,
+		"toolbars_unpinned_last_save": 0,
+		"tallnewobj": 0,
+		"boxanimatetime": 200,
+		"enablehscroll": 1,
+		"enablevscroll": 1,
+		"devicewidth": 760,
+		"description": "Chord progression generator that writes clips into Session View.",
+		"digest": "",
+		"tags": "",
+		"style": "",
+		"subpatcher_template": "",
+		"assistshowspatchername": 0,
+		"boxes": [
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"id": "obj-1",
+					"patching_rect": [
+						0,
+						0,
+						760,
+						169
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						0,
+						0,
+						760,
+						169
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.114,
+						0.125,
+						0.149,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.114,
+						0.125,
+						0.149,
+						1
+					],
+					"id": "obj-2",
+					"patching_rect": [
+						0,
+						0,
+						146,
+						169
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						0,
+						0,
+						146,
+						169
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"id": "obj-3",
+					"patching_rect": [
+						10,
+						12,
+						3,
+						32
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						12,
+						3,
+						32
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "dooblr-chords",
+					"fontname": "Arial Bold",
+					"fontsize": 16,
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-4",
+					"patching_rect": [
+						18,
+						10,
+						124,
+						22
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						18,
+						10,
+						124,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "v0.1.0",
+					"fontname": "Arial",
+					"fontsize": 10,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-5",
+					"patching_rect": [
+						18,
+						32,
+						124,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						18,
+						32,
+						124,
+						16
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "generate",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "Generate",
+					"texton": "Generate",
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Generate",
+							"parameter_shortname": "Generate",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Generate",
+					"annotation": "Generate makes a new progression with a new seed and writes it as a clip in the next empty slot on this track.",
+					"id": "obj-6",
+					"patching_rect": [
+						10,
+						56,
+						126,
+						24
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						56,
+						126,
+						24
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "reroll",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "Reroll",
+					"texton": "Reroll",
+					"fontname": "Arial Bold",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Reroll",
+							"parameter_shortname": "Reroll",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Reroll",
+					"annotation": "Reroll keeps the locked chords, regenerates the others with a new seed and writes a clip.",
+					"id": "obj-7",
+					"patching_rect": [
+						10,
+						84,
+						61,
+						20
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						84,
+						61,
+						20
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "write",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "Write",
+					"texton": "Write",
+					"fontname": "Arial Bold",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Write",
+							"parameter_shortname": "Write",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Write",
+					"annotation": "Write puts the progression shown below into the next empty clip slot without changing it.",
+					"id": "obj-8",
+					"patching_rect": [
+						75,
+						84,
+						61,
+						20
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						75,
+						84,
+						61,
+						20
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Seed",
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-9",
+					"patching_rect": [
+						10,
+						113,
+						34,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						113,
+						34,
+						16
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.numbox",
+					"varname": "seed",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"tricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetricolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activeslidercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Seed",
+							"parameter_shortname": "Seed",
+							"parameter_type": 1,
+							"parameter_mmin": 1,
+							"parameter_mmax": 99999,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 0,
+							"parameter_invisible": 1
+						}
+					},
+					"annotation_name": "Seed",
+					"annotation": "The seed makes a progression repeatable. The same seed and settings always give the same chords.",
+					"id": "obj-10",
+					"patching_rect": [
+						46,
+						112,
+						90,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						46,
+						112,
+						90,
+						18
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Clips go into the next empty slot on this track.",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-11",
+					"patching_rect": [
+						10,
+						136,
+						128,
+						28
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						136,
+						128,
+						28
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"id": "obj-12",
+					"patching_rect": [
+						146,
+						0,
+						1,
+						169
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						146,
+						0,
+						1,
+						169
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "KEY",
+					"fontname": "Arial Bold",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-13",
+					"patching_rect": [
+						156,
+						3,
+						60,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						156,
+						3,
+						60,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Root",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-14",
+					"patching_rect": [
+						156,
+						17,
+						40,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						156,
+						17,
+						40,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Mode",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-15",
+					"patching_rect": [
+						200,
+						17,
+						80,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						200,
+						17,
+						80,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.menu",
+					"varname": "root",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"tricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Root",
+							"parameter_shortname": "Root",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"C",
+								"C#",
+								"D",
+								"Eb",
+								"E",
+								"F",
+								"F#",
+								"G",
+								"Ab",
+								"A",
+								"Bb",
+								"B"
+							],
+							"parameter_mmax": 11,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Root",
+					"annotation": "Root sets the key centre of the progression.",
+					"id": "obj-16",
+					"patching_rect": [
+						158,
+						31,
+						38,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						158,
+						31,
+						38,
+						16
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.menu",
+					"varname": "mode",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"tricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Mode",
+							"parameter_shortname": "Mode",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"Major",
+								"Natural Minor",
+								"Dorian",
+								"Phrygian",
+								"Lydian",
+								"Mixolydian",
+								"Harmonic Minor"
+							],
+							"parameter_mmax": 6,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Mode",
+					"annotation": "Mode sets the scale the chords are built from.",
+					"id": "obj-17",
+					"patching_rect": [
+						202,
+						31,
+						86,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						202,
+						31,
+						86,
+						16
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Length",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-18",
+					"patching_rect": [
+						156,
+						49,
+						44,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						156,
+						49,
+						44,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Bars per Chord",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-19",
+					"patching_rect": [
+						200,
+						49,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						200,
+						49,
+						90,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.numbox",
+					"varname": "length",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"tricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetricolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activeslidercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Length",
+							"parameter_shortname": "Length",
+							"parameter_type": 1,
+							"parameter_mmin": 2,
+							"parameter_mmax": 16,
+							"parameter_initial": [
+								4
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 0,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Length",
+					"annotation": "Length is the number of chords in the progression.",
+					"id": "obj-20",
+					"patching_rect": [
+						158,
+						63,
+						38,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						158,
+						63,
+						38,
+						16
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "duration",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Duration",
+							"parameter_shortname": "Duration",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"1/2",
+								"1",
+								"2"
+							],
+							"parameter_mmax": 2,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Bars per Chord",
+					"annotation": "Bars per Chord sets how long each chord lasts: half a bar, one bar or two bars.",
+					"id": "obj-21",
+					"patching_rect": [
+						202,
+						63,
+						86,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						202,
+						63,
+						86,
+						16
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"id": "obj-22",
+					"patching_rect": [
+						292,
+						6,
+						1,
+						72
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						292,
+						6,
+						1,
+						72
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "TENSION",
+					"fontname": "Arial Bold",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-23",
+					"patching_rect": [
+						294,
+						3,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						294,
+						3,
+						90,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "color",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"needlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activeneedlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Color",
+							"parameter_shortname": "Color",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								35
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Color",
+					"annotation": "Color adds sevenths, ninths and other extensions. At 0 every chord is a plain triad.",
+					"id": "obj-24",
+					"patching_rect": [
+						296,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						296,
+						20,
+						46,
+						58
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "chromatic",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.851,
+						0.639,
+						0.357,
+						1
+					],
+					"needlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activeneedlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Chromatic",
+							"parameter_shortname": "Chromatic",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								10
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Chromatic",
+					"annotation": "Chromatic adds borrowed chords, secondary dominants, tritone substitutions and the Neapolitan. At 0 every chord stays in the scale.",
+					"id": "obj-25",
+					"patching_rect": [
+						346,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						346,
+						20,
+						46,
+						58
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"id": "obj-26",
+					"patching_rect": [
+						396,
+						6,
+						1,
+						72
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						396,
+						6,
+						1,
+						72
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "VOICING",
+					"fontname": "Arial Bold",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-27",
+					"patching_rect": [
+						398,
+						3,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						398,
+						3,
+						90,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "register",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"needlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activeneedlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Register",
+							"parameter_shortname": "Register",
+							"parameter_type": 1,
+							"parameter_mmin": 36,
+							"parameter_mmax": 72,
+							"parameter_initial": [
+								60
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 8,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Register",
+					"annotation": "Register sets the lowest note of the upper voices.",
+					"id": "obj-28",
+					"patching_rect": [
+						400,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						400,
+						20,
+						46,
+						58
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "spread",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"needlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activeneedlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Spread",
+							"parameter_shortname": "Spread",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								25
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Spread",
+					"annotation": "Spread opens the voicing from close position to drop-2 to wide open.",
+					"id": "obj-29",
+					"patching_rect": [
+						450,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						450,
+						20,
+						46,
+						58
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Bass",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-30",
+					"patching_rect": [
+						500,
+						20,
+						44,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						500,
+						20,
+						44,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "bass",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 1,
+					"text": "Off",
+					"texton": "On",
+					"fontname": "Arial Bold",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Bass",
+							"parameter_shortname": "Bass",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Bass",
+					"annotation": "Bass adds a separate bass note an octave or more below the chord.",
+					"id": "obj-31",
+					"patching_rect": [
+						500,
+						36,
+						40,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						500,
+						36,
+						40,
+						18
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"id": "obj-32",
+					"patching_rect": [
+						548,
+						6,
+						1,
+						72
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						548,
+						6,
+						1,
+						72
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "OUTPUT",
+					"fontname": "Arial Bold",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-33",
+					"patching_rect": [
+						550,
+						3,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						550,
+						3,
+						90,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "velocity",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"needlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activeneedlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Velocity",
+							"parameter_shortname": "Velocity",
+							"parameter_type": 1,
+							"parameter_mmin": 1,
+							"parameter_mmax": 127,
+							"parameter_initial": [
+								100
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 0,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Velocity",
+					"annotation": "Velocity sets how hard every note is played.",
+					"id": "obj-34",
+					"patching_rect": [
+						552,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						552,
+						20,
+						46,
+						58
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "humanize",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"needlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activeneedlecolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Humanize",
+							"parameter_shortname": "Humanize",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Humanize",
+					"annotation": "Humanize nudges note timing and velocity a little. At 0 the notes are exactly on the grid.",
+					"id": "obj-35",
+					"patching_rect": [
+						604,
+						20,
+						50,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						604,
+						20,
+						50,
+						58
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"id": "obj-36",
+					"patching_rect": [
+						660,
+						6,
+						1,
+						72
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						660,
+						6,
+						1,
+						72
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Click a chord below to lock it. Reroll keeps locked chords and changes the rest.",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-37",
+					"patching_rect": [
+						664,
+						6,
+						90,
+						72
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						664,
+						6,
+						90,
+						72
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "jsui",
+					"filename": "dooblr_blocks.js",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"parameter_enable": 0,
+					"border": 0,
+					"annotation_name": "Progression",
+					"annotation": "Click a chord to lock it. Locked chords stay the same when you press Reroll.",
+					"id": "obj-38",
+					"patching_rect": [
+						158,
+						84,
+						594,
+						79
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						158,
+						84,
+						594,
+						79
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "live.thisdevice",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"bang",
+						"int",
+						"int"
+					],
+					"id": "obj-39",
+					"patching_rect": [
+						800,
+						20,
+						90,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "init",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-40",
+					"patching_rect": [
+						800,
+						52,
+						34,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "js dooblr_chords.js",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"saved_object_attributes": {
+						"filename": "dooblr_chords.js",
+						"parameter_enable": 0
+					},
+					"id": "obj-41",
+					"patching_rect": [
+						800,
+						420,
+						200,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param root",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-42",
+					"patching_rect": [
+						800,
+						90,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param mode",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-43",
+					"patching_rect": [
+						950,
+						90,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param length",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-44",
+					"patching_rect": [
+						1100,
+						90,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param duration",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-45",
+					"patching_rect": [
+						1250,
+						90,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param color",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-46",
+					"patching_rect": [
+						800,
+						120,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param chromatic",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-47",
+					"patching_rect": [
+						950,
+						120,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param register",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-48",
+					"patching_rect": [
+						1100,
+						120,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param spread",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-49",
+					"patching_rect": [
+						1250,
+						120,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param bass",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-50",
+					"patching_rect": [
+						800,
+						150,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param velocity",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-51",
+					"patching_rect": [
+						950,
+						150,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param humanize",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-52",
+					"patching_rect": [
+						1100,
+						150,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param seed",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-53",
+					"patching_rect": [
+						1250,
+						150,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "route bang 1",
+					"numinlets": 2,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						""
+					],
+					"id": "obj-54",
+					"patching_rect": [
+						800,
+						200,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "generate",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-55",
+					"patching_rect": [
+						800,
+						232,
+						70,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "route bang 1",
+					"numinlets": 2,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						""
+					],
+					"id": "obj-56",
+					"patching_rect": [
+						950,
+						200,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "reroll",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-57",
+					"patching_rect": [
+						950,
+						232,
+						70,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "route bang 1",
+					"numinlets": 2,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						""
+					],
+					"id": "obj-58",
+					"patching_rect": [
+						1100,
+						200,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "write",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-59",
+					"patching_rect": [
+						1100,
+						232,
+						70,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "midiin",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						"int"
+					],
+					"id": "obj-60",
+					"patching_rect": [
+						1100,
+						20,
+						50,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "midiout",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"id": "obj-61",
+					"patching_rect": [
+						1100,
+						60,
+						55,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"text": "Controls send \"param <name> <value>\" to the js. The js sends \"setstate\" to the display and \"set <seed>\" back to the Seed box.",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"fontsize": 10,
+					"id": "obj-62",
+					"patching_rect": [
+						800,
+						460,
+						420,
+						32
+					]
+				}
+			}
+		],
+		"lines": [
+			{
+				"patchline": {
+					"source": [
+						"obj-39",
+						0
+					],
+					"destination": [
+						"obj-40",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-40",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-16",
+						0
+					],
+					"destination": [
+						"obj-42",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-42",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-17",
+						0
+					],
+					"destination": [
+						"obj-43",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-43",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-20",
+						0
+					],
+					"destination": [
+						"obj-44",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-44",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-21",
+						0
+					],
+					"destination": [
+						"obj-45",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-45",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-24",
+						0
+					],
+					"destination": [
+						"obj-46",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-46",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-25",
+						0
+					],
+					"destination": [
+						"obj-47",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-47",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-28",
+						0
+					],
+					"destination": [
+						"obj-48",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-48",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-29",
+						0
+					],
+					"destination": [
+						"obj-49",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-49",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-31",
+						0
+					],
+					"destination": [
+						"obj-50",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-50",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-34",
+						0
+					],
+					"destination": [
+						"obj-51",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-51",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-35",
+						0
+					],
+					"destination": [
+						"obj-52",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-52",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-10",
+						0
+					],
+					"destination": [
+						"obj-53",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-53",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-6",
+						0
+					],
+					"destination": [
+						"obj-54",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-54",
+						0
+					],
+					"destination": [
+						"obj-55",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-54",
+						1
+					],
+					"destination": [
+						"obj-55",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-55",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-7",
+						0
+					],
+					"destination": [
+						"obj-56",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-56",
+						0
+					],
+					"destination": [
+						"obj-57",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-56",
+						1
+					],
+					"destination": [
+						"obj-57",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-57",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-8",
+						0
+					],
+					"destination": [
+						"obj-58",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-58",
+						0
+					],
+					"destination": [
+						"obj-59",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-58",
+						1
+					],
+					"destination": [
+						"obj-59",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-59",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-38",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-41",
+						0
+					],
+					"destination": [
+						"obj-38",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-41",
+						1
+					],
+					"destination": [
+						"obj-10",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-60",
+						0
+					],
+					"destination": [
+						"obj-61",
+						0
+					]
+				}
+			}
+		],
+		"dependency_cache": [],
+		"latency": 0,
+		"is_mpe": 0,
+		"minimum_live_version": "",
+		"minimum_max_version": "",
+		"platform_compatibility": 0,
+		"autosave": 0
+	}
+}
