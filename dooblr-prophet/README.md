@@ -7,7 +7,7 @@ high-pass into a switchable 4-pole ladder low-pass, and 1–10 voices with uniso
 Original design, code and sounds. "Prophet" describes the instrument family it emulates;
 see the disclaimer below.
 
-Version 0.1.4 (milestone 1 plus Random, draggable filter handles and filter env Sync to Amp). See [ROADMAP.md](ROADMAP.md) for what is next and
+Version 0.2.0 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, and Echo and Reverb). See [ROADMAP.md](ROADMAP.md) for what is next and
 [docs/analog-reference.md](docs/analog-reference.md) for the circuit reference the DSP follows.
 
 ## Pages and controls
@@ -19,6 +19,7 @@ Version 0.1.4 (milestone 1 plus Random, draggable filter handles and filter env 
 | **Envelopes** | Filter and amp ADSR, each with a velocity amount. Sync to Amp (filter envelope panel, automatable, off by default): the filter envelope follows the amp ADSR while keeping its own velocity, env amounts and Poly-Mod; its own ADSR knobs are dimmed but keep their values, and the graph shows the envelope in effect. |
 | **Modulation** | Poly-Mod: Filter Env and Osc 2 amounts to Osc 1 Freq, Osc 1 Shape, Filter (both cutoffs). LFO: Wave (triangle, saw, reverse saw, square, sample & hold), Free Rate or Tempo Sync Division, Initial amount, Wheel amount, Noise Mix, and seven destinations. |
 | **Voices** | Poly / Unison / Mono. Voices (1–10, quick 5 / 6 / 10), Unison voices and Detune, Glide (mono), Vintage (per-voice variance). Bend Range, aftertouch to filter and to LFO amount. |
+| **FX** | A global stereo stage after the voice mix: Echo, then Reverb. Each has an automatable On switch (off by default), a Preset menu (10 each) and Mix. Echo: Time (20–2000 ms) or tempo Sync with Division (1/32 to 1/1, dotted and triplet), Feedback (up to 95%), and Ping-Pong (automatable; the mono-summed input starts on the left and each repeat crosses sides). Reverb: Size / Decay and Tone. Choosing a preset sets its character and the macros it starts from (one undo step); the macros and Ping-Pong then move freely. The graph shows the echo taps (left above, right below) and the reverb decay. |
 
 Controls that the current mode ignores are dimmed (for example Saw / Triangle / Pulse in
 Variable mode, Rate when the LFO is synced). Dimmed controls stay clickable and editable, so
@@ -94,6 +95,18 @@ writes one PNG per page.
 - Automation, preset recall and undo in the host; reopen a saved set.
 - Resize the window across its range (940 × 600 to 2400 × 1400).
 
+## FX presets
+
+Original voicings, aimed at poly pads and unison / mono leads and basses.
+
+- Echo: Tape Slap, Dotted 8th Lead, Ping-Pong Pad, Analog BBD Echo, Dub Feedback, Mono Bass
+  Tight, Wide Stereo 1/4, Ducked Lead, Lo-Fi Wobble, Long Ambient.
+- Reverb: Small Plate, Bright Plate, Vintage Spring-ish, Room, Hall, Big Hall, Dark Pad Wash,
+  Lead Ambience, Unison Wide, Short Tight.
+
+With both modules off the output is the synth's, bit for bit. Random turns Echo on about 15%
+and Reverb about 20% of the time (with a random preset). Factory patches leave both off.
+
 ## Tests
 
 `Tests/ProphetTests.cpp` runs on the real processor and editor: silence, bounded output and
@@ -106,7 +119,10 @@ processing and 10-voice CPU, the editor layout at three sizes, filter env Sync t
 real-mouse test: at 940 × 600, 1080 × 660 and 2400 × 1400, in Variable and Switched mode,
 every showing button, switch, knob and menu is hit-tested at its centre, and every parameter
 toggle, mode segment, page button, voice-count button, Random / Undo / Redo and knob is
-clicked or dragged through JUCE's mouse dispatch, dimmed or not.
+clicked or dragged through JUCE's mouse dispatch, dimmed or not. FX: bit-identical bypass
+(also after use), all 20 presets bounded and decaying at maximum feedback / size, ping-pong
+timing (L at T, R at 2T, L at 3T), tempo-synced times at 44.1–192 kHz, preset undo and state,
+and CPU with 10 voices plus both modules on.
 
 ## Licences
 

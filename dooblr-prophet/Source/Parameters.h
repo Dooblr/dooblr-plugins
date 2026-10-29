@@ -69,6 +69,21 @@ namespace dooblrprophet::params
         inline constexpr const char* fenvRelease = "fenvRelease";
         inline constexpr const char* fenvVelAmt  = "fenvVelAmt";
         inline constexpr const char* fenvSync    = "fenvSync";   // filter envelope uses the amp envelope's ADSR
+
+        // FX (0.2.0): Echo then Reverb, after the voice mix. Appended so older indices never move.
+        inline constexpr const char* echoOn        = "echoOn";
+        inline constexpr const char* echoPreset    = "echoPreset";
+        inline constexpr const char* echoMix       = "echoMix";
+        inline constexpr const char* echoTime      = "echoTime";      // ms, when not synced
+        inline constexpr const char* echoSync      = "echoSync";
+        inline constexpr const char* echoDivision  = "echoDivision";
+        inline constexpr const char* echoFeedback  = "echoFeedback";
+        inline constexpr const char* echoPingPong  = "echoPingPong";
+        inline constexpr const char* reverbOn      = "reverbOn";
+        inline constexpr const char* reverbPreset  = "reverbPreset";
+        inline constexpr const char* reverbMix     = "reverbMix";
+        inline constexpr const char* reverbSize    = "reverbSize";    // size / decay macro
+        inline constexpr const char* reverbTone    = "reverbTone";
         inline constexpr const char* aenvAttack  = "aenvAttack";
         inline constexpr const char* aenvDecay   = "aenvDecay";
         inline constexpr const char* aenvSustain = "aenvSustain";

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "Parameters.h"
+#include "DSP/Effects.h"
 
 namespace dooblrprophet::randomiser
 {
@@ -130,6 +131,36 @@ namespace dooblrprophet::randomiser
         // Voice character
         p.set (id::glide, p.chance (0.15f) ? p.logUniform (0.02f, 0.3f) : 0.0f);
         p.set (id::vintage, p.uniform (0.0f, 0.5f));
+
+        // FX: now and then an echo or a reverb, each a random preset with that preset's macros.
+        {
+            const auto echoOn = p.chance (0.15f);
+            const auto echoIndex = random.nextInt (dsp::numEchoPresets);
+            const auto& e = dsp::echoPresets()[(size_t) echoIndex];
+            p.setBool (id::echoOn, echoOn);
+            if (echoOn)
+            {
+                p.set (id::echoPreset, (float) echoIndex);
+                p.set (id::echoMix, e.mix);
+                p.set (id::echoTime, e.timeMs);
+                p.setBool (id::echoSync, e.sync);
+                p.set (id::echoDivision, (float) e.division);
+                p.set (id::echoFeedback, e.feedback);
+                p.setBool (id::echoPingPong, e.pingPong);
+            }
+
+            const auto reverbOn = p.chance (0.2f);
+            const auto reverbIndex = random.nextInt (dsp::numReverbPresets);
+            const auto& v = dsp::reverbPresets()[(size_t) reverbIndex];
+            p.setBool (id::reverbOn, reverbOn);
+            if (reverbOn)
+            {
+                p.set (id::reverbPreset, (float) reverbIndex);
+                p.set (id::reverbMix, v.mix);
+                p.set (id::reverbSize, v.size);
+                p.set (id::reverbTone, v.tone);
+            }
+        }
 
         // One gesture around every change: the undo history records a single step.
         std::vector<std::pair<juce::RangedAudioParameter*, float>> changes;

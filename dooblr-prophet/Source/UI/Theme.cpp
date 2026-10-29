@@ -208,6 +208,10 @@ namespace dooblrprophet::ui
         if (dynamic_cast<juce::TextButton*> (&c) != nullptr)
             c.setAlpha (dimmed ? 0.45f : 1.0f);
 
+        // Combo boxes (e.g. a division while free-running) fade a little less.
+        if (dynamic_cast<juce::ComboBox*> (&c) != nullptr)
+            c.setAlpha (dimmed ? 0.55f : 1.0f);
+
         c.repaint();
     }
 }

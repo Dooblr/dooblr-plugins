@@ -6,6 +6,7 @@
 
 #include <juce_audio_basics/juce_audio_basics.h>
 
+#include "Effects.h"
 #include "Primitives.h"
 
 namespace dooblrprophet::dsp
@@ -76,6 +77,8 @@ namespace dooblrprophet::dsp
         double lfoSyncQuarters = 1.0;
         float lfoInitial = 0.0f, lfoWheel = 0.25f, lfoNoiseMix = 0.0f;
         bool lfoFreq1 = true, lfoFreq2 = true, lfoShape1 = false, lfoShape2 = false, lfoLpf = false, lfoHpf = false, lfoAmp = false;
+
+        FxSettings fx;                   // the global FX stage (processed after the engine)
     };
 
     struct HostTime

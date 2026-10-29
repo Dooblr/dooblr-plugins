@@ -1,5 +1,7 @@
 #include "Parameters.h"
 
+#include "DSP/Effects.h"
+
 namespace dooblrprophet::params
 {
     namespace
@@ -181,6 +183,28 @@ namespace dooblrprophet::params
         layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::lpfModel), "Low-Pass Model", lpfModelNames(), 0));
         // Added in 0.1.4, kept last so existing parameter indices do not move.
         addBool (layout, id::fenvSync, "Filter Env Sync to Amp", false);
+
+        // Added in 0.2.0: the FX stage. Defaults are each module's first preset, switched off.
+        {
+            const auto& echo = dsp::echoPresets()[0];
+            const auto& verb = dsp::reverbPresets()[0];
+            addBool (layout, id::echoOn, "Echo On", false);
+            layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::echoPreset), "Echo Preset", dsp::echoPresetNames(), 0));
+            addPercent (layout, id::echoMix, "Echo Mix", echo.mix);
+            layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::echoTime), "Echo Time", skewed (20.0f, 2000.0f, 300.0f), echo.timeMs,
+                                                                     Attributes().withLabel ("ms").withStringFromValueFunction ([] (float v, int)
+                                                                     { return v < 1000.0f ? juce::String (juce::roundToInt (v)) + " ms" : juce::String (v / 1000.0f, 2) + " s"; })));
+            addBool (layout, id::echoSync, "Echo Sync", echo.sync);
+            layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::echoDivision), "Echo Division", dsp::echoDivisionNames(), echo.division));
+            layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::echoFeedback), "Echo Feedback", juce::NormalisableRange<float> (0.0f, dsp::maxEchoFeedback), echo.feedback,
+                                                                     Attributes().withStringFromValueFunction (formatPercent)));
+            addBool (layout, id::echoPingPong, "Echo Ping-Pong", echo.pingPong);
+            addBool (layout, id::reverbOn, "Reverb On", false);
+            layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::reverbPreset), "Reverb Preset", dsp::reverbPresetNames(), 0));
+            addPercent (layout, id::reverbMix, "Reverb Mix", verb.mix);
+            addPercent (layout, id::reverbSize, "Reverb Size", verb.size);
+            addPercent (layout, id::reverbTone, "Reverb Tone", verb.tone);
+        }
 
         return layout;
     }

@@ -27,7 +27,7 @@ namespace dooblrprophet
         bool acceptsMidi() const override { return true; }
         bool producesMidi() const override { return false; }
         bool isMidiEffect() const override { return false; }
-        double getTailLengthSeconds() const override { return 10.0; }
+        double getTailLengthSeconds() const override { return 15.0; }
 
         int getNumPrograms() override;
         int getCurrentProgram() override { return currentProgram; }
@@ -42,6 +42,8 @@ namespace dooblrprophet
         ParameterUndoHistory& getUndoHistory() noexcept { return undoHistory; }
         dsp::SynthEngine& getEngine() noexcept { return engine; }
         dsp::OutputPeakTap& getPeakTap() noexcept { return peakTap; }
+        /** The host tempo at the last block (120 until a host reports one); for the FX graph. */
+        double getHostBpm() const noexcept { return hostBpm.load (std::memory_order_relaxed); }
 
         /** The engine settings for the current parameter values (also used by the displays). */
         dsp::Settings readSettings() const;
@@ -54,6 +56,9 @@ namespace dooblrprophet
         /** The Random button: a new random patch (see Randomiser.h) as one undo step, shown as
             "Random" in the preset box. Returns the number of parameters changed. */
         int randomisePatch (juce::Random& random);
+        /** Picks an FX preset (0 Echo, 1 Reverb): sets the preset and the macros it starts from
+            (Mix, Time / Sync / Division, Feedback and Ping-Pong; or Mix, Size and Tone) as one undo step. */
+        void applyFxPreset (int module, int index);
 
         /** Messages from the processor to the editor (preset changes): a change broadcaster. */
         juce::ChangeBroadcaster presetChanged;
@@ -64,6 +69,8 @@ namespace dooblrprophet
         juce::AudioProcessorValueTreeState state;
         ParameterUndoHistory undoHistory;
         dsp::SynthEngine engine;
+        dsp::FxChain fx;
+        std::atomic<double> hostBpm { 120.0 };
         dsp::OutputPeakTap peakTap;
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;

@@ -2,6 +2,7 @@
 
 #include "Parameters.h"
 #include "Presets.h"
+#include "DSP/Effects.h"
 #include "UI/Theme.h"
 
 namespace dooblrprophet
@@ -42,7 +43,7 @@ namespace dooblrprophet
 
     const char* DooblrProphetEditor::pageName (int page)
     {
-        static const char* names[] { "Oscillators", "Filters", "Envelopes", "Modulation", "Voices" };
+        static const char* names[] { "Oscillators", "Filters", "Envelopes", "Modulation", "Voices", "FX" };
         return names[juce::jlimit (0, (int) numPages - 1, page)];
     }
 
@@ -173,6 +174,7 @@ namespace dooblrprophet
         pages[envelopesPage].graph = std::make_unique<ui::EnvelopeDisplay> (source);
         pages[modulationPage].graph = std::make_unique<ui::LfoDisplay> (source, tap);
         pages[voicesPage].graph = std::make_unique<ui::VoiceDisplay> (source, tap);
+        pages[fxPage].graph = std::make_unique<ui::FxDisplay> (source, [&p = synth] { return p.getHostBpm(); });
 
         for (auto& content : pages)
             addChildComponent (*content.graph);
@@ -246,6 +248,48 @@ namespace dooblrprophet
         addPanel (voicesPage, "PERFORMANCE", { knob (id::bendRange, "Bend Range"), knob (id::atFilter, "AT > Filter"),
                                                knob (id::atLfo, "AT > LFO") });
         pages[voicesPage].rows = { { 0 }, { 1 } };
+
+        // FX: Echo, then Reverb, after the voice mix.
+        auto& echoPanel = addPanel (fxPage, "ECHO", { toggle (id::echoOn, "On"), knob (id::echoMix, "Mix"), knob (id::echoTime, "Time"),
+                                                      toggle (id::echoSync, "Sync"), combo (id::echoDivision, "Division"),
+                                                      knob (id::echoFeedback, "Feedback"), toggle (id::echoPingPong, "Ping-Pong") });
+        auto& reverbPanel = addPanel (fxPage, "REVERB", { toggle (id::reverbOn, "On"), knob (id::reverbMix, "Mix"),
+                                                          knob (id::reverbSize, "Size"), knob (id::reverbTone, "Tone") });
+
+        for (int module = 0; module < 2; ++module)
+        {
+            auto& picker = fxPresetPickers[(size_t) module];
+            const auto& names = module == 0 ? dsp::echoPresetNames() : dsp::reverbPresetNames();
+            picker.box.addItemList (names, 1);
+            picker.box.setComponentID (module == 0 ? "echoPresetBox" : "reverbPresetBox");
+            picker.box.setSelectedItemIndex (juce::roundToInt (valueOf (state, module == 0 ? id::echoPreset : id::reverbPreset)), juce::dontSendNotification);
+            picker.box.onChange = [this, module]
+            {
+                synth.applyFxPreset (module, fxPresetPickers[(size_t) module].box.getSelectedItemIndex());
+                updateEnablement();
+                updateUndoButtons();
+            };
+            (module == 0 ? echoPanel : reverbPanel).addExtra (picker, 150, -1, module == 0 ? id::echoMix : id::reverbMix, true);
+        }
+        pages[fxPage].rows = { { 0 }, { 1 } };
+    }
+
+    DooblrProphetEditor::FxPresetPicker::FxPresetPicker()
+    {
+        caption.setText ("Preset", juce::dontSendNotification);
+        caption.setFont (juce::FontOptions (12.0f));
+        caption.setColour (juce::Label::textColourId, Palette::textMuted);
+        caption.setJustificationType (juce::Justification::centredLeft);
+        caption.setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (caption);
+        addAndMakeVisible (box);
+    }
+
+    void DooblrProphetEditor::FxPresetPicker::resized()
+    {
+        auto area = getLocalBounds();
+        caption.setBounds (area.removeFromTop (16));
+        box.setBounds (area.removeFromTop (28).reduced (0, 1));
     }
 
     void DooblrProphetEditor::setVoices (int count)
@@ -328,6 +372,27 @@ namespace dooblrprophet
         setLive (voicesPage, id::voices, mode == 0);
         setLive (voicesPage, id::unisonVoices, mode == 1);
         setLive (voicesPage, id::unisonDetune, mode == 1);
+
+        // FX: a module's controls are dimmed while it is off; Time or Division by the Sync switch.
+        const bool echoOn = valueOf (state, id::echoOn) > 0.5f, reverbOn = valueOf (state, id::reverbOn) > 0.5f;
+        const bool echoSync = valueOf (state, id::echoSync) > 0.5f;
+        setLive (fxPage, id::echoMix, echoOn);
+        setLive (fxPage, id::echoFeedback, echoOn);
+        setLive (fxPage, id::echoSync, echoOn);
+        setLive (fxPage, id::echoPingPong, echoOn);
+        setLive (fxPage, id::echoTime, echoOn && ! echoSync);
+        setLive (fxPage, id::echoDivision, echoOn && echoSync);
+        for (auto* pid : { id::reverbMix, id::reverbSize, id::reverbTone })
+            setLive (fxPage, pid, reverbOn);
+
+        for (int module = 0; module < 2; ++module)
+        {
+            auto& picker = fxPresetPickers[(size_t) module];
+            ui::setDimmed (picker.box, ! (module == 0 ? echoOn : reverbOn));
+            const auto index = juce::roundToInt (valueOf (state, module == 0 ? id::echoPreset : id::reverbPreset));
+            if (picker.box.getSelectedItemIndex() != index && ! picker.box.isPopupActive())
+                picker.box.setSelectedItemIndex (index, juce::dontSendNotification);
+        }
 
         const auto voices = juce::roundToInt (valueOf (state, id::voices));
 

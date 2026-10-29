@@ -182,6 +182,27 @@ namespace dooblrprophet::ui
         juce::Path path;
     };
 
+    /** FX page: the echo's repeats (left above the centre line, right below; ping-pong
+        alternates) and the reverb's decay envelope after its pre-delay, on one time axis. */
+    class FxDisplay final : public GraphView
+    {
+    public:
+        using TempoSource = std::function<double()>;
+        FxDisplay (SettingsSource source, TempoSource tempo);
+        /** The time span shown for these settings at this tempo. */
+        static float spanSeconds (const dsp::FxSettings& fx, double bpm) noexcept;
+        static constexpr int maxTaps = 24;
+
+    private:
+        void drawBackground (juce::Graphics& g, juce::Rectangle<float> plot) override;
+        void drawCurves (juce::Graphics& g, juce::Rectangle<float> plot) override;
+        juce::String readoutAt (juce::Point<float>) const override;
+        bool changed (const dsp::Settings& a, const dsp::Settings& b) const override;
+        int liveSignature() const override;
+        TempoSource tempo;
+        juce::Path reverbPath, tapPath;
+    };
+
     /** Voices page: one lane per voice, the note it plays and its level, live. */
     class VoiceDisplay final : public GraphView
     {

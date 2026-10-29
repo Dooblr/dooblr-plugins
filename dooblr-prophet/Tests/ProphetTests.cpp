@@ -13,7 +13,9 @@
 #include "Randomiser.h"
 #include "UI/ControlPanel.h"
 #include "UI/Theme.h"
+#include "UI/Displays.h"
 #include "DSP/AnalogModel.h"
+#include "DSP/Effects.h"
 #include "DSP/Primitives.h"
 #include "DSP/SynthEngine.h"
 
@@ -31,6 +33,7 @@
 #include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 #include <vector>
 
 //==============================================================================
@@ -428,6 +431,18 @@ namespace
             { id::unisonVoices, { { id::voiceMode, 1.0f } } },
             { id::unisonDetune, { { id::voiceMode, 1.0f } } },
             { id::glide, { { id::voiceMode, 2.0f } } },
+            // FX controls act while their module is on (the Division while synced, the Time while free).
+            { id::echoPreset, { { id::echoOn, 1.0f } } },
+            { id::echoMix, { { id::echoOn, 1.0f } } },
+            { id::echoTime, { { id::echoOn, 1.0f } } },
+            { id::echoSync, { { id::echoOn, 1.0f } } },
+            { id::echoDivision, { { id::echoOn, 1.0f }, { id::echoSync, 1.0f } } },
+            { id::echoFeedback, { { id::echoOn, 1.0f } } },
+            { id::echoPingPong, { { id::echoOn, 1.0f } } },
+            { id::reverbPreset, { { id::reverbOn, 1.0f } } },
+            { id::reverbMix, { { id::reverbOn, 1.0f } } },
+            { id::reverbSize, { { id::reverbOn, 1.0f } } },
+            { id::reverbTone, { { id::reverbOn, 1.0f } } },
         };
 
         // Mod wheel up, a chord with mixed velocities, then bend, pressure and a legato note.
@@ -639,6 +654,11 @@ namespace
         set (*p, id::mixSub, 0.5f);
         set (*p, id::mixNoise, 0.2f);
         set (*p, id::lfoInitial, 0.3f);
+        // FX on too: the heaviest echo (Dub Feedback) into the longest reverb (Dark Pad Wash).
+        p->applyFxPreset (0, 4);
+        p->applyFxPreset (1, 6);
+        set (*p, id::echoOn, 1.0f);
+        set (*p, id::reverbOn, 1.0f);
         std::vector<Event> events;
         for (int i = 0; i < 10; ++i)
             events.push_back ({ 0, on (36 + 4 * i) });
@@ -662,8 +682,8 @@ namespace
         const auto load = elapsed / audioSeconds;
         check (allocationCount.load() == 0, "no allocation in processBlock (" + std::to_string (allocationCount.load()) + ")");
         check (p->getEngine().getNumActiveVoices() == 10, "10 voices sounding");
-        check (load < 0.25, "10 voices (4x Poly-Mod path) under 25% of one core (" + fmt (100.0 * load, 2) + "%)");
-        note ("10 voices, 4x path: " + fmt (elapsed * 1000.0, 1) + " ms for " + fmt (audioSeconds, 1) + " s of audio = "
+        check (load < 0.25, "10 voices (4x Poly-Mod path) + Echo + Reverb under 25% of one core (" + fmt (100.0 * load, 2) + "%)");
+        note ("10 voices, 4x path, Echo + Reverb: " + fmt (elapsed * 1000.0, 1) + " ms for " + fmt (audioSeconds, 1) + " s of audio = "
               + fmt (100.0 * load, 2) + "% of one core at 48 kHz");
     }
 
@@ -714,6 +734,18 @@ namespace
                 ++controls[t->getComponentID()];
         }
         ++controls[id::output]; // the header Output slider
+        // The FX preset pickers (not attachments: picking one also sets that preset's macros).
+        for (int module = 0; module < 2; ++module)
+        {
+            auto& picker = editor->getFxPresetPicker (module);
+            const auto& names = module == 0 ? dsp::echoPresetNames() : dsp::reverbPresetNames();
+            bool listed = picker.box.getNumItems() == names.size();
+            for (int i = 0; listed && i < names.size(); ++i)
+                listed = picker.box.getItemText (i) == names[i];
+            check (listed, std::string (module == 0 ? "echo" : "reverb") + " preset box lists the 10 presets");
+            if (listed && picker.getParentComponent() != nullptr)
+                ++controls[module == 0 ? id::echoPreset : id::reverbPreset];
+        }
         check (editor->findChildWithID (id::output) != nullptr, "header Output slider exists");
         int missing = 0;
         for (auto* r : p->getParameters())
@@ -845,6 +877,12 @@ namespace
         for (int page = 0; page < Editor::numPages; ++page)
             check (editor->getGraph (page).getReadout().isEmpty(), std::string ("no readout without hover: ") + Editor::pageName (page));
 
+        // The FX snapshot shows both modules on (a ping-pong echo into a hall).
+        p->applyFxPreset (0, 2);
+        p->applyFxPreset (1, 4);
+        set (*p, id::echoOn, 1.0f);
+        set (*p, id::reverbOn, 1.0f);
+        editor->updateEnablement();
         // Snapshots: a chord sounding so the live graphs show something.
         render (*p, 24000, { { 0, on (48) }, { 0, on (55) }, { 0, on (60) }, { 0, on (64) } });
         for (int page = 0; page < Editor::numPages; ++page)
@@ -1555,6 +1593,272 @@ namespace
         }
     }
 
+
+    //==============================================================================
+    // FX (0.2.0): Echo then Reverb.
+    std::vector<float> noiseBurst (int length, int burst, unsigned seed = 7)
+    {
+        std::vector<float> x ((size_t) length, 0.0f);
+        juce::Random r ((juce::int64) seed);
+        for (int i = 0; i < burst && i < length; ++i)
+            x[(size_t) i] = 0.5f * (r.nextFloat() * 2.0f - 1.0f);
+        return x;
+    }
+
+    /** Runs the FX chain over a stereo signal in blocks; returns the output. */
+    Render runFx (dsp::FxChain& fx, const std::vector<float>& inL, const std::vector<float>& inR, const dsp::FxSettings& s,
+                  double bpm = 120.0, int block = blockSize)
+    {
+        Render out { inL, inR };
+        for (size_t start = 0; start < inL.size(); start += (size_t) block)
+        {
+            const auto n = (int) std::min ((size_t) block, inL.size() - start);
+            fx.process (out.left.data() + start, out.right.data() + start, n, s, bpm);
+        }
+        return out;
+    }
+
+    /** Index of the largest |x| in [from, to). */
+    size_t peakIndex (const std::vector<float>& x, size_t from, size_t to)
+    {
+        size_t best = from;
+        for (size_t i = from; i < std::min (to, x.size()); ++i)
+            if (std::abs (x[i]) > std::abs (x[best])) best = i;
+        return best;
+    }
+
+    double windowRms (const std::vector<float>& x, size_t from, size_t to)
+    {
+        double sum = 0.0;
+        to = std::min (to, x.size());
+        for (size_t i = from; i < to; ++i) sum += (double) x[i] * x[i];
+        return to > from ? std::sqrt (sum / (double) (to - from)) : 0.0;
+    }
+
+    void testFxBypass()
+    {
+        // Off (the default) is bit-identical to no FX stage at all, including after use.
+        const auto n = 48000;
+        auto inL = noiseBurst (n, n, 1), inR = noiseBurst (n, n, 2);
+        dsp::FxChain fx;
+        fx.prepare (defaultRate);
+        dsp::FxSettings idle;
+        auto out = runFx (fx, inL, inR, idle);
+        check (out.left == inL && out.right == inR, "both modules off: output bit-identical to the input");
+
+        auto both = idle;
+        both.echoOn = both.reverbOn = true;
+        runFx (fx, inL, inR, both);                       // used
+        runFx (fx, std::vector<float> (2048, 0.0f), std::vector<float> (2048, 0.0f), idle); // the 20 ms fade-out
+        out = runFx (fx, inL, inR, idle);
+        check (out.left == inL && out.right == inR, "switched off after use: bit-identical again once faded (20 ms)");
+
+        // Through the processor: FX off renders exactly what the engine renders.
+        auto a = makeProcessor(), b = makeProcessor();
+        set (*b, id::echoMix, 0.9f);
+        set (*b, id::reverbSize, 0.9f);
+        set (*b, id::echoPingPong, 1.0f);
+        const std::vector<Event> chord { { 0, on (48) }, { 0, on (60) }, { 12000, off (48) }, { 12000, off (60) } };
+        const auto ra = render (*a, 24000, chord), rb = render (*b, 24000, chord);
+        check (ra.left == rb.left && ra.right == rb.right, "processor with FX off: bit-identical whatever the FX settings");
+
+        // A mono bus: the stereo FX result is summed back into the one channel, still bounded.
+        dsp::FxChain mono;
+        mono.prepare (defaultRate);
+        auto x = noiseBurst (24000, 2400, 3);
+        for (size_t i = 0; i < x.size(); i += blockSize)
+            mono.process (x.data() + i, x.data() + i, (int) std::min<size_t> (blockSize, x.size() - i), both, 120.0);
+        bool finite = true; float peak = 0.0f;
+        for (auto v : x) { finite = finite && std::isfinite (v); peak = std::max (peak, std::abs (v)); }
+        check (finite && peak < 2.0f && windowRms (x, 12000, 24000) > 1.0e-4, "mono bus (L == R): finite, bounded, with a tail");
+    }
+
+    void testFxPresets()
+    {
+        // Every preset with its Feedback (echo) or Size (reverb) at the maximum, fully wet:
+        // finite, bounded, and the tail decays.
+        const auto rate = defaultRate;
+        const auto length = (int) (30.0 * rate);
+        const auto in = noiseBurst (length, (int) (0.3 * rate), 11);
+
+        for (int i = 0; i < dsp::numEchoPresets; ++i)
+        {
+            const auto& e = dsp::echoPresets()[(size_t) i];
+            dsp::FxSettings s;
+            s.echoOn = true; s.echoPreset = i; s.echoMix = 1.0f; s.echoTimeMs = e.timeMs; s.echoSync = e.sync;
+            s.echoDivision = e.division; s.echoPingPong = e.pingPong; s.echoFeedback = dsp::maxEchoFeedback;
+            dsp::FxChain fx;
+            fx.prepare (rate);
+            const auto out = runFx (fx, in, in, s);
+            const auto early = out.rms ((size_t) (2.0 * rate), (size_t) (8.0 * rate));
+            const auto late = out.rms ((size_t) (24.0 * rate), (size_t) (30.0 * rate));
+            const auto label = std::string ("echo ") + e.name + ": ";
+            check (out.finite() && out.denormals() == 0, label + "finite, no denormals");
+            check (out.peak() < 1.5f, label + "bounded at 95% feedback (peak " + fmt (out.peak(), 3) + ")");
+            check (early > 1.0e-4 && late < 0.8 * early, label + "the tail decays (" + fmt (20.0 * std::log10 (late / early), 1) + " dB from 2-8 s to 24-30 s)");
+            note (label + "peak " + fmt (out.peak(), 3) + ", tail " + fmt (20.0 * std::log10 (std::max (late, 1.0e-12) / early), 1) + " dB");
+        }
+
+        for (int i = 0; i < dsp::numReverbPresets; ++i)
+        {
+            const auto& v = dsp::reverbPresets()[(size_t) i];
+            dsp::FxSettings s;
+            s.reverbOn = true; s.reverbPreset = i; s.reverbMix = 1.0f; s.reverbSize = 1.0f; s.reverbTone = v.tone;
+            dsp::FxChain fx;
+            fx.prepare (rate);
+            const auto out = runFx (fx, in, in, s);
+            const auto rt60 = dsp::reverbDecaySeconds (s);
+            const auto from = (size_t) ((0.4 + 0.1 * rt60) * rate), to = (size_t) ((0.4 + 0.5 * rt60) * rate);
+            const auto a = out.rms (from, from + (size_t) (0.1 * rate)), b = out.rms (to, to + (size_t) (0.1 * rate));
+            const auto dbPerRt60 = 20.0 * std::log10 (std::max (b, 1.0e-12) / a) / 0.4; // measured over 0.4 x RT60
+            const auto label = std::string ("reverb ") + v.name + ": ";
+            check (out.finite() && out.denormals() == 0, label + "finite, no denormals");
+            check (out.peak() < 1.5f, label + "bounded at maximum size (peak " + fmt (out.peak(), 3) + ")");
+            check (a > 1.0e-4 && b < a, label + "the tail decays");
+            check (dbPerRt60 < -30.0 && dbPerRt60 > -120.0, label + "decay near its RT60 (" + fmt (dbPerRt60, 1) + " dB per RT60 " + fmt (rt60, 2) + " s)");
+            check (out.rms ((size_t) (29.0 * rate)) < 1.0e-3 * a || rt60 > 14.5, label + "silent by 30 s");
+            check (out.rms (0, (size_t) (0.5 * rate)) > 0.0 && std::abs (out.left[(size_t) (0.6 * rate)] - out.right[(size_t) (0.6 * rate)]) > 0.0f,
+                   label + "stereo from a mono input");
+            note (label + "RT60 " + fmt (rt60, 2) + " s, measured " + fmt (dbPerRt60, 1) + " dB per RT60, peak " + fmt (out.peak(), 3));
+        }
+
+        // A preset choice sets the macros it starts from (and Ping-Pong) as one undo step.
+        auto p = makeProcessor();
+        p->getUndoHistory().clear();
+        p->applyFxPreset (0, 2); // Ping-Pong Pad
+        const auto& e = dsp::echoPresets()[2];
+        check (std::abs (get (*p, id::echoPreset) - 2.0f) < 1.0e-4f && std::abs (get (*p, id::echoMix) - e.mix) < 1.0e-3f
+                   && std::abs (get (*p, id::echoFeedback) - e.feedback) < 1.0e-3f && get (*p, id::echoPingPong) > 0.5f
+                   && get (*p, id::echoSync) > 0.5f && juce::roundToInt (get (*p, id::echoDivision)) == e.division,
+               "Ping-Pong Pad sets Mix, Feedback, Sync, Division and Ping-Pong");
+        set (*p, id::echoPingPong, 0.0f);
+        check (get (*p, id::echoPingPong) < 0.5f && juce::roundToInt (get (*p, id::echoPreset)) == 2, "Ping-Pong switches independently of the preset");
+        p->getUndoHistory().clear();
+        p->applyFxPreset (1, 5); // Big Hall
+        check (std::abs (get (*p, id::reverbSize) - dsp::reverbPresets()[5].size) < 1.0e-3f, "Big Hall sets the reverb Size");
+        p->getUndoHistory().undo();
+        check (juce::roundToInt (get (*p, id::reverbPreset)) == 0 && std::abs (get (*p, id::reverbSize) - dsp::reverbPresets()[0].size) < 1.0e-3f
+                   && ! p->getUndoHistory().canUndo(), "one undo restores the reverb preset and its macros");
+
+        // Saved in the patch state.
+        p->applyFxPreset (0, 9);
+        set (*p, id::echoOn, 1.0f);
+        juce::MemoryBlock block;
+        p->getStateInformation (block);
+        auto q = makeProcessor();
+        q->setStateInformation (block.getData(), (int) block.getSize());
+        check (juce::roundToInt (get (*q, id::echoPreset)) == 9 && get (*q, id::echoOn) > 0.5f
+                   && std::abs (get (*q, id::echoFeedback) - dsp::echoPresets()[9].feedback) < 1.0e-3f, "FX preset, macros and on state restored from the patch state");
+
+        // Factory patches leave FX off.
+        int fxOn = 0;
+        for (int i = 0; i < p->getNumPrograms(); ++i)
+        {
+            p->setCurrentProgram (i);
+            if (get (*p, id::echoOn) > 0.5f || get (*p, id::reverbOn) > 0.5f) ++fxOn;
+        }
+        check (fxOn == 0, "factory presets load with the FX off (" + std::to_string (fxOn) + " on)");
+    }
+
+    void testFxPingPong()
+    {
+        const auto rate = defaultRate;
+        const auto timeMs = 250.0f;
+        const auto T = (size_t) std::lround (timeMs * 0.001 * rate);
+        const auto tolerance = (size_t) (0.002 * rate);
+
+        const auto run = [&] (bool pingPong, bool impulseLeft)
+        {
+            dsp::FxSettings s;
+            s.echoOn = true; s.echoPreset = 2; s.echoMix = 1.0f; s.echoSync = false; s.echoTimeMs = timeMs;
+            s.echoFeedback = 0.6f; s.echoPingPong = pingPong;
+            dsp::FxChain fx;
+            fx.prepare (rate);
+            std::vector<float> l ((size_t) (1.2 * rate), 0.0f), r = l;
+            (impulseLeft ? l : r)[0] = 1.0f;
+            return runFx (fx, l, r, s);
+        };
+
+        const auto energyAround = [&] (const std::vector<float>& x, size_t centre) { return windowRms (x, centre - tolerance, centre + tolerance); };
+
+        {
+            const auto out = run (true, true);
+            const auto l1 = peakIndex (out.left, T - tolerance, T + tolerance);
+            const auto r2 = peakIndex (out.right, 2 * T - tolerance, 2 * T + tolerance);
+            const auto l3 = peakIndex (out.left, 3 * T - tolerance, 3 * T + tolerance);
+            const auto ms = [&] (size_t i) { return fmt (1000.0 * (double) i / rate, 2) + " ms"; };
+            check (std::abs ((double) l1 - (double) T) < (double) tolerance && energyAround (out.left, T) > 10.0 * energyAround (out.right, T),
+                   "ping-pong: 1st repeat on the left at T (" + ms (l1) + ")");
+            check (std::abs ((double) r2 - 2.0 * (double) T) < (double) tolerance && energyAround (out.right, 2 * T) > 10.0 * energyAround (out.left, 2 * T),
+                   "ping-pong: 2nd repeat on the right at 2T (" + ms (r2) + ")");
+            check (std::abs ((double) l3 - 3.0 * (double) T) < (double) tolerance && energyAround (out.left, 3 * T) > 10.0 * energyAround (out.right, 3 * T),
+                   "ping-pong: 3rd repeat back on the left at 3T (" + ms (l3) + ")");
+            check (energyAround (out.right, 2 * T) < energyAround (out.left, T) && energyAround (out.left, 3 * T) < energyAround (out.right, 2 * T),
+                   "ping-pong: each repeat quieter than the last");
+            note ("ping-pong at 250 ms: L " + ms (l1) + ", R " + ms (r2) + ", L " + ms (l3));
+        }
+        {
+            const auto out = run (true, false); // a right-only input is mono-summed into the first (left) side
+            check (energyAround (out.left, T) > 10.0 * energyAround (out.right, T) && energyAround (out.right, 2 * T) > 10.0 * energyAround (out.left, 2 * T),
+                   "ping-pong: a right-only input still starts on the left (mono-summed input)");
+        }
+        {
+            const auto out = run (false, true); // stereo echo: each side repeats on its own side
+            check (energyAround (out.left, T) > 0.0 && energyAround (out.left, 2 * T) > 0.0 && windowRms (out.right, 0, out.right.size()) < 1.0e-9,
+                   "Ping-Pong off: a left input repeats only on the left");
+        }
+    }
+
+    void testFxTempoAndRates()
+    {
+        // Tempo sync: the division's length at the host tempo.
+        dsp::FxSettings s;
+        s.echoSync = true;
+        s.echoDivision = dsp::echoDivisionNames().indexOf ("1/4");
+        check (std::abs (dsp::echoSeconds (s, 120.0) - 0.5) < 1.0e-9, "1/4 at 120 bpm = 500 ms");
+        s.echoDivision = dsp::echoDivisionNames().indexOf ("1/8.");
+        check (std::abs (dsp::echoSeconds (s, 90.0) - 0.5) < 1.0e-9, "1/8. at 90 bpm = 500 ms");
+        s.echoDivision = dsp::echoDivisionNames().indexOf ("1/16T");
+        check (std::abs (dsp::echoSeconds (s, 100.0) - 0.1) < 1.0e-9, "1/16T at 100 bpm = 100 ms");
+        s.echoDivision = dsp::echoDivisionNames().indexOf ("1/1");
+        check (std::abs (dsp::echoSeconds (s, 40.0) - dsp::maxEchoSeconds) < 1.0e-9, "1/1 at 40 bpm clamps to 4 s");
+
+        for (auto rate : { 44100.0, 48000.0, 88200.0, 96000.0, 176400.0, 192000.0 })
+        {
+            const auto label = fmt (rate / 1000.0, 1) + " kHz: ";
+            for (const auto& [bpm, division, expected] : { std::tuple<double, const char*, double> { 120.0, "1/4", 0.5 }, { 150.0, "1/8", 0.2 } })
+            {
+                dsp::FxSettings e;
+                e.echoOn = true; e.echoPreset = 6; e.echoMix = 1.0f; e.echoFeedback = 0.0f;
+                e.echoSync = true; e.echoDivision = dsp::echoDivisionNames().indexOf (division);
+                dsp::FxChain fx;
+                fx.prepare (rate);
+                std::vector<float> l ((size_t) (0.8 * rate), 0.0f);
+                l[0] = 1.0f;
+                const auto out = runFx (fx, l, l, e, bpm);
+                const auto at = (double) peakIndex (out.left, (size_t) (0.05 * rate), out.left.size()) / rate;
+                check (std::abs (at - expected) < 0.002, label + division + " at " + fmt (bpm, 0) + " bpm repeats at " + fmt (1000.0 * at, 2)
+                                                             + " ms (expected " + fmt (1000.0 * expected, 0) + ")");
+            }
+
+            dsp::FxSettings both;
+            both.echoOn = both.reverbOn = true;
+            both.echoPreset = 4; both.echoFeedback = dsp::maxEchoFeedback; both.echoSync = true; both.echoDivision = 9; both.echoMix = 0.5f;
+            both.reverbPreset = 5; both.reverbSize = 1.0f; both.reverbMix = 0.5f;
+            dsp::FxChain fx;
+            fx.prepare (rate);
+            const auto in = noiseBurst ((int) (4.0 * rate), (int) (0.2 * rate), 5);
+            const auto out = runFx (fx, in, in, both, 120.0, rate > 100000.0 ? 1024 : 333);
+            check (out.finite() && out.peak() < 1.5f && out.rms ((size_t) (3.0 * rate)) > 1.0e-4, label + "Echo + Reverb finite, bounded, with a tail (peak "
+                                                                                                    + fmt (out.peak(), 3) + ")");
+        }
+
+        // The processor's tail covers the longest reverb.
+        auto p = makeProcessor();
+        check (p->getTailLengthSeconds() >= 14.0, "tail length covers the longest reverb (" + fmt (p->getTailLengthSeconds(), 0) + " s)");
+        check (p->getLatencySamples() == 0, "FX add no latency");
+    }
+
     void testRandomPatch()
     {
         // The excluded parameters survive Random, even at non-default values.
@@ -1645,6 +1949,10 @@ int main()
         { "filter graph handles",                      testFilterHandles },
         { "filter env Sync to Amp",                    testFilterEnvSync },
         { "real mouse: every control clicks",          testRealMouse },
+        { "FX: off is bit-identical (bypass)",         testFxBypass },
+        { "FX: 20 presets bounded, tails decay",       testFxPresets },
+        { "FX: echo ping-pong timing",                 testFxPingPong },
+        { "FX: tempo sync and 44.1k..192k",            testFxTempoAndRates },
     };
 
     int failedTests = 0;

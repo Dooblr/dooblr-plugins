@@ -16,6 +16,7 @@ namespace dooblrprophet::ui
             case 1: return Palette::dynamic;
             case 2: return Palette::master;
             case 3: return Palette::frozen;
+            case 5: return juce::Colour (0xffb59be6); // FX
             default: return Palette::spectrum;
         }
     }
@@ -647,6 +648,115 @@ namespace dooblrprophet::ui
             return {};
         const auto t = (p.x - plot.getX()) / plot.getWidth() * spanSeconds (settings);
         return formatSeconds (t);
+    }
+
+    //==============================================================================
+    FxDisplay::FxDisplay (SettingsSource s, TempoSource t) : GraphView (std::move (s), "Echo repeats and reverb decay"), tempo (std::move (t))
+    {
+        reverbPath.preallocateSpace (3 * 2600);
+        tapPath.preallocateSpace (3 * 8 * maxTaps * 2);
+    }
+
+    bool FxDisplay::changed (const dsp::Settings& a, const dsp::Settings& b) const { return ! (a.fx == b.fx); }
+
+    int FxDisplay::liveSignature() const { return juce::roundToInt (tempo() * 100.0); }
+
+    float FxDisplay::spanSeconds (const dsp::FxSettings& fx, double bpm) noexcept
+    {
+        const auto echo = (float) dsp::echoSeconds (fx, bpm) * 8.0f;
+        const auto& verb = dsp::reverbPresets()[(size_t) juce::jlimit (0, dsp::numReverbPresets - 1, fx.reverbPreset)];
+        const auto reverb = verb.preDelayMs * 0.001f + (float) dsp::reverbDecaySeconds (fx);
+        return juce::jlimit (0.25f, 16.0f, juce::jmax (fx.echoOn || ! fx.reverbOn ? echo : 0.0f, fx.reverbOn || ! fx.echoOn ? reverb : 0.0f));
+    }
+
+    void FxDisplay::drawBackground (juce::Graphics& g, juce::Rectangle<float> plot)
+    {
+        drawHorizontalGrid (g, plot, 4);
+        const auto titleArea = juce::Rectangle<float> (plot.getX(), 2.0f, plot.getWidth(), (float) titleStripHeight - 2.0f);
+        drawTitle (g, titleArea, "Echo", Palette::dynamic);
+        drawTitle (g, titleArea.withTrimmedLeft (90.0f), "Reverb", Palette::master);
+    }
+
+    void FxDisplay::drawCurves (juce::Graphics& g, juce::Rectangle<float> plot)
+    {
+        const auto& fx = settings.fx;
+        const auto bpm = tempo();
+        const auto span = spanSeconds (fx, bpm);
+        const auto mid = plot.getCentreY(), half = plot.getHeight() * 0.5f;
+        const auto xAt = [&] (float t) { return plot.getX() + plot.getWidth() * t / span; };
+
+        g.setColour (Palette::textMuted.withAlpha (0.35f));
+        g.drawHorizontalLine (juce::roundToInt (mid), plot.getX(), plot.getRight());
+
+        // Reverb: the decay envelope (amplitude, -60 dB at the decay time) after the pre-delay.
+        {
+            const auto& verb = dsp::reverbPresets()[(size_t) juce::jlimit (0, dsp::numReverbPresets - 1, fx.reverbPreset)];
+            const auto pre = verb.preDelayMs * 0.001f;
+            const auto rt60 = (float) dsp::reverbDecaySeconds (fx);
+            const auto level = 0.25f + 0.75f * fx.reverbMix;
+            const auto points = juce::jlimit (16, 1200, (int) plot.getWidth());
+            reverbPath.clear();
+            reverbPath.startNewSubPath (xAt (pre), mid);
+            for (int n = 0; n <= points; ++n)
+            {
+                const auto t = pre + (span - pre) * (float) n / (float) points;
+                const auto a = level * std::pow (10.0f, -3.0f * (t - pre) / rt60);
+                reverbPath.lineTo (xAt (t), mid - a * half * 0.95f);
+            }
+            for (int n = points; n >= 0; --n)
+            {
+                const auto t = pre + (span - pre) * (float) n / (float) points;
+                const auto a = level * std::pow (10.0f, -3.0f * (t - pre) / rt60);
+                reverbPath.lineTo (xAt (t), mid + a * half * 0.95f);
+            }
+            reverbPath.closeSubPath();
+            const auto alpha = fx.reverbOn ? 1.0f : 0.3f;
+            g.setColour (Palette::master.withAlpha (0.25f * alpha));
+            g.fillPath (reverbPath);
+            g.setColour (Palette::master.withAlpha (alpha));
+            g.strokePath (reverbPath, juce::PathStrokeType (1.5f));
+        }
+
+        // Echo: each repeat a bar, left up and right down; ping-pong alternates sides.
+        {
+            const auto& echo = dsp::echoPresets()[(size_t) juce::jlimit (0, dsp::numEchoPresets - 1, fx.echoPreset)];
+            const auto time = (float) dsp::echoSeconds (fx, bpm);
+            const auto level = 0.25f + 0.75f * fx.echoMix;
+            tapPath.clear();
+            for (int n = 1; n <= maxTaps; ++n)
+            {
+                const auto a = level * std::pow (fx.echoFeedback, (float) (n - 1));
+                if (a < 0.01f)
+                    break;
+                const auto h = a * half * 0.95f;
+                if (fx.echoPingPong)
+                {
+                    const auto t = time * (float) n;
+                    if (t > span) break;
+                    const auto left = (n % 2) == 1;
+                    tapPath.addRectangle (xAt (t) - 1.5f, left ? mid - h : mid, 3.0f, h);
+                }
+                else
+                {
+                    const auto tl = time * (float) n, tr = time * (1.0f + echo.spread) * (float) n;
+                    if (tl > span) break;
+                    tapPath.addRectangle (xAt (tl) - 1.5f, mid - h, 3.0f, h);
+                    if (tr <= span)
+                        tapPath.addRectangle (xAt (tr) - 1.5f, mid, 3.0f, h);
+                }
+            }
+            g.setColour (Palette::dynamic.withAlpha (fx.echoOn ? 1.0f : 0.3f));
+            g.fillPath (tapPath);
+        }
+    }
+
+    juce::String FxDisplay::readoutAt (juce::Point<float> p) const
+    {
+        const auto plot = getPlotArea();
+        if (! plot.contains (p))
+            return {};
+        const auto t = (p.x - plot.getX()) / plot.getWidth() * spanSeconds (settings.fx, tempo());
+        return formatSeconds (t) + (p.y < plot.getCentreY() ? "   L" : "   R");
     }
 
     //==============================================================================

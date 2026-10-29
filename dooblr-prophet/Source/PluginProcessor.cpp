@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include <vector>
+
 #include "Parameters.h"
 #include "PluginEditor.h"
 #include "Randomiser.h"
@@ -19,7 +21,9 @@ namespace dooblrprophet
     X(pmodFiltEnv) X(pmodOsc2) X(pmodDestFreq1) X(pmodDestShape1) X(pmodDestFilter) \
     X(lfoWave) X(lfoRate) X(lfoSync) X(lfoDivision) X(lfoInitial) X(lfoWheel) X(lfoNoiseMix) \
     X(lfoDestFreq1) X(lfoDestFreq2) X(lfoDestShape1) X(lfoDestShape2) X(lfoDestLpf) X(lfoDestHpf) X(lfoDestAmp) \
-    X(lpfModel) X(fenvSync)
+    X(lpfModel) X(fenvSync) \
+    X(echoOn) X(echoPreset) X(echoMix) X(echoTime) X(echoSync) X(echoDivision) X(echoFeedback) X(echoPingPong) \
+    X(reverbOn) X(reverbPreset) X(reverbMix) X(reverbSize) X(reverbTone)
 
     struct DooblrProphetProcessor::RawParameters
     {
@@ -57,11 +61,13 @@ namespace dooblrprophet
     {
         engine.setSettings (readSettings());
         engine.prepare (sampleRate, samplesPerBlock);
+        fx.prepare (sampleRate);
     }
 
     void DooblrProphetProcessor::releaseResources()
     {
         engine.reset();
+        fx.reset();
     }
 
     dsp::Settings DooblrProphetProcessor::readSettings() const
@@ -127,6 +133,20 @@ namespace dooblrprophet
         s.lfoLpf = b (r.lfoDestLpf);
         s.lfoHpf = b (r.lfoDestHpf);
         s.lfoAmp = b (r.lfoDestAmp);
+
+        s.fx.echoOn = b (r.echoOn);
+        s.fx.echoPreset = juce::jlimit (0, dsp::numEchoPresets - 1, i (r.echoPreset));
+        s.fx.echoMix = f (r.echoMix);
+        s.fx.echoTimeMs = f (r.echoTime);
+        s.fx.echoSync = b (r.echoSync);
+        s.fx.echoDivision = i (r.echoDivision);
+        s.fx.echoFeedback = f (r.echoFeedback);
+        s.fx.echoPingPong = b (r.echoPingPong);
+        s.fx.reverbOn = b (r.reverbOn);
+        s.fx.reverbPreset = juce::jlimit (0, dsp::numReverbPresets - 1, i (r.reverbPreset));
+        s.fx.reverbMix = f (r.reverbMix);
+        s.fx.reverbSize = f (r.reverbSize);
+        s.fx.reverbTone = f (r.reverbTone);
         return s;
     }
 
@@ -134,7 +154,8 @@ namespace dooblrprophet
     {
         juce::ScopedNoDenormals noDenormals;
 
-        engine.setSettings (readSettings());
+        const auto settings = readSettings();
+        engine.setSettings (settings);
 
         dsp::HostTime time;
         if (auto* head = getPlayHead())
@@ -170,6 +191,10 @@ namespace dooblrprophet
             // Mono bus: render into the one channel (the engine's output is mono-compatible).
             engine.process (left, left, numSamples, midi, time);
         }
+
+        // The global FX stage: Echo, then Reverb (a bypass when both are off).
+        hostBpm.store (time.bpm, std::memory_order_relaxed);
+        fx.process (left, right, numSamples, settings.fx, time.bpm);
 
         for (int ch = 2; ch < channels; ++ch)
             buffer.clear (ch, 0, numSamples);
@@ -247,6 +272,36 @@ namespace dooblrprophet
             setPresetName ("Random");
 
         return changed;
+    }
+
+    void DooblrProphetProcessor::applyFxPreset (int module, int index)
+    {
+        namespace id = params::id;
+        std::vector<std::pair<const char*, float>> values;
+
+        if (module == 0)
+        {
+            index = juce::jlimit (0, dsp::numEchoPresets - 1, index);
+            const auto& e = dsp::echoPresets()[(size_t) index];
+            values = { { id::echoPreset, (float) index }, { id::echoMix, e.mix }, { id::echoTime, e.timeMs }, { id::echoSync, e.sync ? 1.0f : 0.0f },
+                       { id::echoDivision, (float) e.division }, { id::echoFeedback, e.feedback }, { id::echoPingPong, e.pingPong ? 1.0f : 0.0f } };
+        }
+        else
+        {
+            index = juce::jlimit (0, dsp::numReverbPresets - 1, index);
+            const auto& v = dsp::reverbPresets()[(size_t) index];
+            values = { { id::reverbPreset, (float) index }, { id::reverbMix, v.mix }, { id::reverbSize, v.size }, { id::reverbTone, v.tone } };
+        }
+
+        // Nested gestures: the undo history records one step for the whole preset.
+        std::vector<std::pair<juce::RangedAudioParameter*, float>> changes;
+        for (const auto& [pid, value] : values)
+            if (auto* param = state.getParameter (pid))
+                changes.emplace_back (param, param->convertTo0to1 (value));
+
+        for (auto& c : changes) c.first->beginChangeGesture();
+        for (auto& c : changes) c.first->setValueNotifyingHost (c.second);
+        for (auto& c : changes) c.first->endChangeGesture();
     }
 
     juce::String DooblrProphetProcessor::loadUserPreset (const juce::File& file)

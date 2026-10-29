@@ -25,7 +25,17 @@ namespace dooblrprophet
                                       private juce::ChangeListener
     {
     public:
-        enum Page { oscillatorsPage = 0, filtersPage, envelopesPage, modulationPage, voicesPage, numPages };
+        enum Page { oscillatorsPage = 0, filtersPage, envelopesPage, modulationPage, voicesPage, fxPage, numPages };
+
+        /** An FX module's preset box with its caption. Picking one sets the preset and the macros it
+            starts from, as one undo step (DooblrProphetProcessor::applyFxPreset). */
+        struct FxPresetPicker final : juce::Component
+        {
+            FxPresetPicker();
+            void resized() override;
+            juce::Label caption;
+            juce::ComboBox box;
+        };
 
         explicit DooblrProphetEditor (DooblrProphetProcessor&);
         ~DooblrProphetEditor() override;
@@ -43,6 +53,8 @@ namespace dooblrprophet
         const std::vector<std::unique_ptr<ui::SegmentedToggle>>& getModeToggles (int page) const { return pages[(size_t) page].toggles; }
         ui::GraphView& getGraph (int page) const { return *pages[(size_t) page].graph; }
         juce::TextButton& getRandomButton() noexcept { return randomButton; }
+        /** 0 Echo, 1 Reverb. */
+        FxPresetPicker& getFxPresetPicker (int module) { return fxPresetPickers[(size_t) juce::jlimit (0, 1, module)]; }
         juce::TextButton& getVoicePresetButton (int index) { return voicePresetButtons[(size_t) index]; }
         juce::String getStatusText() const { return statusLabel.getText(); }
         juce::Rectangle<int> getContentArea() const noexcept { return contentArea; }
@@ -90,6 +102,7 @@ namespace dooblrprophet
         std::array<juce::TextButton, numPages> pageButtons;
         std::array<PageContent, numPages> pages;
         std::array<juce::TextButton, 3> voicePresetButtons;
+        std::array<FxPresetPicker, 2> fxPresetPickers;
         int selectedPage = oscillatorsPage;
 
         juce::Rectangle<int> headerArea, navArea, titleBarArea, contentArea;

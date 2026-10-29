@@ -57,6 +57,15 @@ feature sets in one original-design instrument. The circuit behaviour follows
   about 20% of the time, saved in presets).
 - Tested: a real-mouse pass over every control at three sizes in both oscillator modes.
 
+## 0.2.0: Echo and Reverb (done)
+
+- A global stereo FX page after the voice mix: Echo (free or synced time, feedback, ping-pong,
+  filtered / saturated / wobbling repeats, ducking) then Reverb (pre-delay, diffusion, an
+  8-line feedback delay network, spring-style dispersion, low cut, width). Zero latency,
+  allocation-free, original design and presets (10 each).
+- Tested: bypass bit-identical, 20 presets bounded with decaying tails, ping-pong timing,
+  tempo sync and 44.1–192 kHz, state, undo, editor and real mouse at three sizes, CPU.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice
@@ -68,7 +77,7 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Arp: up / down / up-down / random / assign, 1–3 octaves, host sync, latch.
 - Poly step sequencer: 64 steps, record from MIDI, rests and ties, host sync.
 
-## Milestone 4: effects (P6 dual digital effects)
+## Milestone 4: more effects (P6 dual digital effects; Echo and Reverb shipped in 0.2.0)
 
 - Two effect slots: BBD-style delay, digital delay, chorus, phaser, flanger, room / hall /
   plate / spring reverb, ring mod, distortion; mix and two parameters each.
