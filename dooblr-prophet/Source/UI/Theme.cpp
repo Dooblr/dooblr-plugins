@@ -170,24 +170,21 @@ namespace dooblrprophet::ui
     {
         juce::ignoreUnused (down);
 
-        // toggleScale: the front panel's section scale (1 at 940 / 1080 px, larger on big windows).
-        const auto scale = (float) (double) button.getProperties().getWithDefault ("toggleScale", 1.0);
         auto bounds = button.getLocalBounds().toFloat().reduced (1.0f);
         const auto on = button.getToggleState();
-        const auto fill = button.findColour (juce::ToggleButton::tickColourId);
 
-        auto pill = bounds.removeFromLeft (28.0f * scale).withSizeKeepingCentre (26.0f * scale, 13.0f * scale);
-        g.setColour (on ? fill.withAlpha (button.isEnabled() ? 0.9f : 0.4f) : Palette::divider);
-        g.fillRoundedRectangle (pill, 6.5f * scale);
+        auto pill = bounds.removeFromLeft (30.0f).withSizeKeepingCentre (28.0f, 14.0f);
+        g.setColour (on ? Palette::accent.withAlpha (button.isEnabled() ? 0.9f : 0.4f) : Palette::divider);
+        g.fillRoundedRectangle (pill, 7.0f);
 
-        const auto knob = juce::Rectangle<float> (9.0f * scale, 9.0f * scale)
-                              .withCentre ({ on ? pill.getRight() - 6.5f * scale : pill.getX() + 6.5f * scale, pill.getCentreY() });
+        const auto knob = juce::Rectangle<float> (10.0f, 10.0f)
+                              .withCentre ({ on ? pill.getRight() - 7.0f : pill.getX() + 7.0f, pill.getCentreY() });
         g.setColour (highlighted ? Palette::textPrimary : Palette::textPrimary.withAlpha (0.85f));
         g.fillEllipse (knob);
 
         g.setColour (button.isEnabled() ? Palette::textPrimary : Palette::textMuted);
-        g.setFont (juce::FontOptions (12.5f * scale));
-        g.drawFittedText (button.getButtonText(), bounds.withTrimmedLeft (5.0f * scale).toNearestInt(),
+        g.setFont (juce::FontOptions (13.0f));
+        g.drawFittedText (button.getButtonText(), bounds.reduced (6.0f, 0.0f).toNearestInt(),
                           juce::Justification::centredLeft, 1);
     }
 }

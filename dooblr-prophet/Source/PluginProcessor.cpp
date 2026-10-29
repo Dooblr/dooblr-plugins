@@ -226,8 +226,25 @@ namespace dooblrprophet
 
     int DooblrProphetProcessor::randomisePatch (juce::Random& random)
     {
+        // The name change joins the parameters' undo step, so one undo brings back both.
+        struct NameAction final : juce::UndoableAction
+        {
+            NameAction (DooblrProphetProcessor& o, juce::String b, juce::String a) : owner (o), before (std::move (b)), after (std::move (a)) {}
+            bool perform() override { owner.setPresetName (after); return true; }
+            bool undo() override { owner.setPresetName (before); return true; }
+            int getSizeInUnits() override { return 1; }
+            DooblrProphetProcessor& owner;
+            juce::String before, after;
+        };
+
+        const auto previousName = getPresetName();
         const auto changed = randomiser::apply (state, random);
-        setPresetName ("Random");
+
+        if (changed > 0)
+            undoHistory.appendToLastTransaction (std::make_unique<NameAction> (*this, previousName, "Random"));
+        else
+            setPresetName ("Random");
+
         return changed;
     }
 

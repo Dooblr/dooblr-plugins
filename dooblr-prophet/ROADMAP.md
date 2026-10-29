@@ -33,6 +33,12 @@ feature sets in one original-design instrument. The circuit behaviour follows
   filter-response graphs of 0.1.0 were dropped to make room.
 - Random button: a musically usable random patch as one undo step.
 
+## 0.1.2: tabbed pages back, Random kept (done)
+
+- The five-page editor of 0.1.0 (Oscillators, Filters, Envelopes, Modulation, Voices) with
+  its waveform and filter-response graphs is back; the 0.1.1 single panel is removed.
+- Random stays in the header; one undo now also restores the previous preset name.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice

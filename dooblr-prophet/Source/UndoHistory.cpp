@@ -166,6 +166,18 @@ namespace dooblrprophet
         }
     }
 
+    void ParameterUndoHistory::appendToLastTransaction (std::unique_ptr<juce::UndoableAction> action)
+    {
+        if (action == nullptr)
+            return;
+
+        if (! canUndo() || canRedo())
+            undoManager.beginNewTransaction();
+
+        undoManager.perform (action.release());
+        lastCommitMergeable = false; // the next gesture is a step of its own
+    }
+
     bool ParameterUndoHistory::undo()
     {
         lastCommitMergeable = false;

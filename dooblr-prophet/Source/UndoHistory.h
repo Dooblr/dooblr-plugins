@@ -42,6 +42,11 @@ namespace dooblrprophet
         int getNumUndoableSteps() const;
         int getMaxTransactions() const noexcept { return maxTransactions; }
 
+        /** Adds an action (performed now) to the transaction just committed, so one undo
+            reverts both: e.g. the preset name a Random patch set. Starts its own step when
+            there is nothing to join. */
+        void appendToLastTransaction (std::unique_ptr<juce::UndoableAction> action);
+
         /** Drops all history (e.g. after a preset or session load). */
         void clear();
 
