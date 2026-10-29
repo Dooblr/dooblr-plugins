@@ -7,7 +7,7 @@ high-pass into a switchable 4-pole ladder low-pass, and 1–10 voices with uniso
 Original design, code and sounds. "Prophet" describes the instrument family it emulates;
 see the disclaimer below.
 
-Version 0.1.3 (milestone 1 plus Random and draggable filter handles). See [ROADMAP.md](ROADMAP.md) for what is next and
+Version 0.1.4 (milestone 1 plus Random, draggable filter handles and filter env Sync to Amp). See [ROADMAP.md](ROADMAP.md) for what is next and
 [docs/analog-reference.md](docs/analog-reference.md) for the circuit reference the DSP follows.
 
 ## Pages and controls
@@ -16,12 +16,13 @@ Version 0.1.3 (milestone 1 plus Random and draggable filter handles). See [ROADM
 | --- | --- |
 | **Oscillators** | Per oscillator: Variable (continuous Shape, P6) or Switched (Saw / Triangle / Pulse, P5) mode, Coarse, Fine, Shape, Pulse Width. Osc 1 Sync (slaved to osc 2). Osc 2 Low Freq and Key Track. Mixer: Osc 1, Osc 2, Sub (one octave below osc 1), Noise. The graph shows both live waveforms. |
 | **Filters** | High-pass (2-pole, resonant): Cutoff, Resonance, Env Amount. Low-pass (4-pole ladder): Cutoff, Resonance, Drive, Env Amount, Key Track. Low-pass model: 3320 (P5 Rev3) or 2040 (P5 Rev1/2, P6). The graph shows the combined response, with a draggable handle per filter: drag left/right for Cutoff, up/down for Resonance (Shift for fine, mouse wheel for Resonance, double-click to reset that filter; one drag is one undo step). |
-| **Envelopes** | Filter and amp ADSR, each with a velocity amount. |
+| **Envelopes** | Filter and amp ADSR, each with a velocity amount. Sync to Amp (filter envelope panel, automatable, off by default): the filter envelope follows the amp ADSR while keeping its own velocity, env amounts and Poly-Mod; its own ADSR knobs are dimmed but keep their values, and the graph shows the envelope in effect. |
 | **Modulation** | Poly-Mod: Filter Env and Osc 2 amounts to Osc 1 Freq, Osc 1 Shape, Filter (both cutoffs). LFO: Wave (triangle, saw, reverse saw, square, sample & hold), Free Rate or Tempo Sync Division, Initial amount, Wheel amount, Noise Mix, and seven destinations. |
 | **Voices** | Poly / Unison / Mono. Voices (1–10, quick 5 / 6 / 10), Unison voices and Detune, Glide (mono), Vintage (per-voice variance). Bend Range, aftertouch to filter and to LFO amount. |
 
 Controls that the current mode ignores are dimmed (for example Saw / Triangle / Pulse in
-Variable mode, Rate when the LFO is synced).
+Variable mode, Rate when the LFO is synced). Dimmed controls stay clickable and editable, so
+you can set them up before switching mode (0.1.4 fixes 0.1.0–0.1.3, where they ignored clicks).
 
 Header: Undo / Redo, preset menu (factory and user), Random, Save / Load (.dprophet files in
 `~/Music/dooblr-prophet/Presets`), Output level and meter.
@@ -100,7 +101,12 @@ release, stealing at 1–10 voices, unison / mono, maximum resonance at four cut
 models (no NaN, no denormals), 44.1–192 kHz tuning, state round trip, factory and user
 presets, every parameter audible, undo, the analog checks (k = 4 self-oscillation at fc,
 DC gain 1/(1+k), 5 kHz flattening, Poly-Mod raising the mean pitch), allocation-free
-processing and 10-voice CPU, and the editor layout at three sizes.
+processing and 10-voice CPU, the editor layout at three sizes, filter env Sync to Amp
+(sample-exact against the amp envelope, independence when off, state round trip), and a
+real-mouse test: at 940 × 600, 1080 × 660 and 2400 × 1400, in Variable and Switched mode,
+every showing button, switch, knob and menu is hit-tested at its centre, and every parameter
+toggle, mode segment, page button, voice-count button, Random / Undo / Redo and knob is
+clicked or dragged through JUCE's mouse dispatch, dimmed or not.
 
 ## Licences
 

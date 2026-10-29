@@ -19,7 +19,7 @@ namespace dooblrprophet
     X(pmodFiltEnv) X(pmodOsc2) X(pmodDestFreq1) X(pmodDestShape1) X(pmodDestFilter) \
     X(lfoWave) X(lfoRate) X(lfoSync) X(lfoDivision) X(lfoInitial) X(lfoWheel) X(lfoNoiseMix) \
     X(lfoDestFreq1) X(lfoDestFreq2) X(lfoDestShape1) X(lfoDestShape2) X(lfoDestLpf) X(lfoDestHpf) X(lfoDestAmp) \
-    X(lpfModel)
+    X(lpfModel) X(fenvSync)
 
     struct DooblrProphetProcessor::RawParameters
     {
@@ -105,6 +105,7 @@ namespace dooblrprophet
 
         s.filterEnv = { f (r.fenvAttack), f (r.fenvDecay), f (r.fenvSustain), f (r.fenvRelease), f (r.fenvVelAmt) };
         s.ampEnv = { f (r.aenvAttack), f (r.aenvDecay), f (r.aenvSustain), f (r.aenvRelease), f (r.aenvVelAmt) };
+        s.filterEnvSync = b (r.fenvSync);
 
         s.pmodFiltEnv = f (r.pmodFiltEnv);
         s.pmodOsc2 = f (r.pmodOsc2);
@@ -273,6 +274,17 @@ namespace dooblrprophet
             return;
 
         auto tree = juce::ValueTree::fromXml (*xml);
+        // Parameters added after the state was saved (e.g. Filter Env Sync in 0.1.4) take their
+        // defaults instead of keeping whatever the current patch had.
+        for (auto* p : getParameters())
+            if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (p))
+                if (! tree.getChildWithProperty ("id", ranged->paramID).isValid())
+                {
+                    juce::ValueTree child ("PARAM");
+                    child.setProperty ("id", ranged->paramID, nullptr);
+                    child.setProperty ("value", ranged->convertFrom0to1 (ranged->getDefaultValue()), nullptr);
+                    tree.appendChild (child, nullptr);
+                }
         // stateVersion 1 is the first format; future versions migrate here before replacing.
         tree.setProperty ("stateVersion", params::stateVersion, nullptr);
         state.replaceState (tree);

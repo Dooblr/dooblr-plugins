@@ -2,6 +2,7 @@
 
 #include "Parameters.h"
 #include "Presets.h"
+#include "UI/Theme.h"
 
 namespace dooblrprophet
 {
@@ -204,7 +205,7 @@ namespace dooblrprophet
         // Envelopes
         addPanel (envelopesPage, "FILTER ENVELOPE", { knob (id::fenvAttack, "Attack"), knob (id::fenvDecay, "Decay"),
                                                       knob (id::fenvSustain, "Sustain"), knob (id::fenvRelease, "Release"),
-                                                      knob (id::fenvVelAmt, "Velocity") });
+                                                      knob (id::fenvVelAmt, "Velocity"), toggle (id::fenvSync, "Sync to Amp") });
         addPanel (envelopesPage, "AMP ENVELOPE", { knob (id::aenvAttack, "Attack"), knob (id::aenvDecay, "Decay"),
                                                    knob (id::aenvSustain, "Sustain"), knob (id::aenvRelease, "Release"),
                                                    knob (id::aenvVelAmt, "Velocity") });
@@ -286,46 +287,53 @@ namespace dooblrprophet
 
     void DooblrProphetEditor::updateEnablement()
     {
-        const auto setEnabled = [this] (int page, const char* pid, bool enabled)
+        // Ignored controls are dimmed, never disabled: a disabled JUCE component swallows clicks, so
+        // the Saw / Triangle / Pulse switches could not be switched on in Variable mode (0.1.4 fix).
+        const auto setLive = [this] (int page, const char* pid, bool live)
         {
             for (auto& panel : pages[(size_t) page].panels)
                 if (auto* control = panel->findControl (pid))
-                    control->setEnabled (enabled);
+                    ui::setDimmed (*control, ! live);
         };
 
         // Variable mode uses the Shape knob; Switched mode uses the wave switches. Pulse Width acts in both.
         const bool osc1Switched = valueOf (state, id::osc1Mode) > 0.5f;
         const bool osc2Switched = valueOf (state, id::osc2Mode) > 0.5f;
-        setEnabled (oscillatorsPage, id::osc1Shape, ! osc1Switched);
-        setEnabled (oscillatorsPage, id::osc2Shape, ! osc2Switched);
+        setLive (oscillatorsPage, id::osc1Shape, ! osc1Switched);
+        setLive (oscillatorsPage, id::osc2Shape, ! osc2Switched);
 
         for (auto* pid : { id::osc1Saw, id::osc1Tri, id::osc1Pulse })
-            setEnabled (oscillatorsPage, pid, osc1Switched);
+            setLive (oscillatorsPage, pid, osc1Switched);
 
         for (auto* pid : { id::osc2Saw, id::osc2Tri, id::osc2Pulse })
-            setEnabled (oscillatorsPage, pid, osc2Switched);
+            setLive (oscillatorsPage, pid, osc2Switched);
 
         // Poly-Mod destinations only matter when a Poly-Mod source is turned up.
         const bool polyModOn = std::abs (valueOf (state, id::pmodFiltEnv)) > 1.0e-4f || valueOf (state, id::pmodOsc2) > 1.0e-4f;
 
         for (auto* pid : { id::pmodDestFreq1, id::pmodDestShape1, id::pmodDestFilter })
-            setEnabled (modulationPage, pid, polyModOn);
+            setLive (modulationPage, pid, polyModOn);
+
+        // Filter env synced to the amp envelope: its own ADSR is kept but not used.
+        const bool envSynced = valueOf (state, id::fenvSync) > 0.5f;
+        for (auto* pid : { id::fenvAttack, id::fenvDecay, id::fenvSustain, id::fenvRelease })
+            setLive (envelopesPage, pid, ! envSynced);
 
         const bool synced = valueOf (state, id::lfoSync) > 0.5f;
-        setEnabled (modulationPage, id::lfoRate, ! synced);
-        setEnabled (modulationPage, id::lfoDivision, synced);
+        setLive (modulationPage, id::lfoRate, ! synced);
+        setLive (modulationPage, id::lfoDivision, synced);
 
         // Voices sets the poly voice count; Unison and Detune only act in Unison mode; Mono uses one voice.
         const auto mode = juce::roundToInt (valueOf (state, id::voiceMode));
-        setEnabled (voicesPage, id::voices, mode == 0);
-        setEnabled (voicesPage, id::unisonVoices, mode == 1);
-        setEnabled (voicesPage, id::unisonDetune, mode == 1);
+        setLive (voicesPage, id::voices, mode == 0);
+        setLive (voicesPage, id::unisonVoices, mode == 1);
+        setLive (voicesPage, id::unisonDetune, mode == 1);
 
         const auto voices = juce::roundToInt (valueOf (state, id::voices));
 
         for (size_t i = 0; i < voicePresetButtons.size(); ++i)
         {
-            voicePresetButtons[i].setEnabled (mode == 0);
+            ui::setDimmed (voicePresetButtons[i], mode != 0);
             voicePresetButtons[i].setToggleState (voices == voicePresets[i], juce::dontSendNotification);
         }
     }

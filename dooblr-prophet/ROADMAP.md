@@ -47,6 +47,16 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Each drag, wheel step or reset is one host gesture and one undo step; the knobs and handles stay in sync both ways.
 - Tested: mapping round trips at 940x600, 1080x660 and 2400x1400, handles inside the graph at the extremes, drag/undo/reset/wheel behaviour.
 
+## 0.1.4: clickable dimmed controls, filter env Sync to Amp (done)
+
+- Fix: Saw / Triangle / Pulse could not be switched on in Variable mode (and the other dimmed
+  controls: Poly-Mod destinations, LFO Rate / Division, Voices / Unison / Detune, Shape in
+  Switched mode, the 5 / 6 / 10 buttons). The editor disabled ignored controls, and a disabled
+  JUCE component drops mouse input; they are now only drawn dimmed.
+- Sync to Amp in the filter envelope panel (automatable, off by default, Random turns it on
+  about 20% of the time, saved in presets).
+- Tested: a real-mouse pass over every control at three sizes in both oscillator modes.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice

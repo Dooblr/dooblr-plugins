@@ -20,6 +20,16 @@ namespace dooblrprophet::ui
         inline const juce::Colour master      { 0xff8fa8e8 }; // the Envelope page (master envelope, dry / wet)
     }
 
+    /** Dimmed: shown greyed out because the current mode ignores it, but still live, so it can be
+        clicked, dragged and automated (0.1.4: dimming no longer disables the control). */
+    inline bool isDimmed (const juce::Component& c)
+    {
+        return ! c.isEnabled() || (bool) c.getProperties().getWithDefault ("dimmed", false);
+    }
+
+    /** Sets the dimmed look (see isDimmed); the control stays enabled and clickable. */
+    void setDimmed (juce::Component& c, bool dimmed);
+
     /** Colour used to identify a band in the display and band selector. */
     juce::Colour bandColour (int bandIndex);
 

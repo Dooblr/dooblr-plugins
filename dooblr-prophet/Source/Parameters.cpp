@@ -179,6 +179,8 @@ namespace dooblrprophet::params
         addBool (layout, id::lfoDestAmp, "LFO to Amp", false);
 
         layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::lpfModel), "Low-Pass Model", lpfModelNames(), 0));
+        // Added in 0.1.4, kept last so existing parameter indices do not move.
+        addBool (layout, id::fenvSync, "Filter Env Sync to Amp", false);
 
         return layout;
     }

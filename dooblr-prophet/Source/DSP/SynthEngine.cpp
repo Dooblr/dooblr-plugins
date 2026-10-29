@@ -177,14 +177,15 @@ namespace dooblrprophet::dsp
             return juce::exactlyEqual (a.attack, b.attack) && juce::exactlyEqual (a.decay, b.decay) && juce::exactlyEqual (a.sustain, b.sustain) && juce::exactlyEqual (a.release, b.release);
         };
 
-        if (juce::exactlyEqual (lastEnvVintage, s.vintage) && same (lastFilterEnv, s.filterEnv) && same (lastAmpEnv, s.ampEnv))
+        const auto fenv = s.effectiveFilterEnv(); // Sync to Amp: the amp ADSR, so both run identically
+        if (juce::exactlyEqual (lastEnvVintage, s.vintage) && same (lastFilterEnv, fenv) && same (lastAmpEnv, s.ampEnv))
             return;
 
         lastEnvVintage = s.vintage;
-        lastFilterEnv = s.filterEnv;
+        lastFilterEnv = fenv;
         lastAmpEnv = s.ampEnv;
         const auto scale = 1.0f + 0.12f * s.vintage * slopEnv; // vintage: +-12 % per-voice envelope times
-        filterEnv.setTimes (sampleRate, s.filterEnv.attack * scale, s.filterEnv.decay * scale, s.filterEnv.sustain, s.filterEnv.release * scale);
+        filterEnv.setTimes (sampleRate, fenv.attack * scale, fenv.decay * scale, fenv.sustain, fenv.release * scale);
         ampEnv.setTimes (sampleRate, s.ampEnv.attack * scale, s.ampEnv.decay * scale, s.ampEnv.sustain, s.ampEnv.release * scale);
     }
 

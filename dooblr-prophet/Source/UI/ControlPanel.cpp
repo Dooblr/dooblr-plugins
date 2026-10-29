@@ -524,7 +524,7 @@ namespace dooblrprophet::ui
 
     void SegmentedToggle::paint (juce::Graphics& g)
     {
-        const auto enabled = isEnabled();
+        const auto enabled = ! isDimmed (*this);
         const auto track = getLocalBounds().toFloat().reduced (0.5f);
         const auto radius = juce::jmin (8.0f, track.getHeight() * 0.3f);
 

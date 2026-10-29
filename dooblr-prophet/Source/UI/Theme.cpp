@@ -67,7 +67,7 @@ namespace dooblrprophet::ui
         const auto originAngle = bipolar ? startAngle + (float) slider.valueToProportionOfLength (0.0) * (endAngle - startAngle)
                                          : startAngle;
 
-        if (slider.isEnabled())
+        if (! isDimmed (slider))
         {
             juce::Path value;
             value.addCentredArc (centre.x, centre.y, arcRadius, arcRadius, 0.0f,
@@ -82,7 +82,7 @@ namespace dooblrprophet::ui
         const auto pointerLength = radius * 0.55f;
         const juce::Point<float> tip (centre.x + pointerLength * std::sin (angle),
                                       centre.y - pointerLength * std::cos (angle));
-        g.setColour (slider.isEnabled() ? Palette::textPrimary : Palette::textMuted);
+        g.setColour (! isDimmed (slider) ? Palette::textPrimary : Palette::textMuted);
         g.drawLine ({ centre.getPointOnCircumference (radius * 0.15f, angle), tip }, 2.0f);
     }
 
@@ -143,7 +143,7 @@ namespace dooblrprophet::ui
         g.setColour (slider.findColour (juce::Slider::rotarySliderOutlineColourId));
         g.fillRoundedRectangle (groove, 2.5f);
 
-        if (slider.isEnabled())
+        if (! isDimmed (slider))
         {
             g.setColour (fill);
             g.fillRoundedRectangle (groove.withTop (sliderPos), 2.5f);
@@ -154,7 +154,7 @@ namespace dooblrprophet::ui
         g.fillRoundedRectangle (cap, 3.0f);
         g.setColour (slider.isMouseOverOrDragging() ? fill : Palette::divider.brighter (0.4f));
         g.drawRoundedRectangle (cap.reduced (0.5f), 3.0f, 1.0f);
-        g.setColour (slider.isEnabled() ? Palette::textPrimary : Palette::textMuted);
+        g.setColour (! isDimmed (slider) ? Palette::textPrimary : Palette::textMuted);
         g.fillRect (juce::Rectangle<float> (cap.getWidth() - 10.0f, 1.5f).withCentre (cap.getCentre()));
     }
 
@@ -174,7 +174,7 @@ namespace dooblrprophet::ui
         const auto on = button.getToggleState();
 
         auto pill = bounds.removeFromLeft (30.0f).withSizeKeepingCentre (28.0f, 14.0f);
-        g.setColour (on ? Palette::accent.withAlpha (button.isEnabled() ? 0.9f : 0.4f) : Palette::divider);
+        g.setColour (on ? Palette::accent.withAlpha (! isDimmed (button) ? 0.9f : 0.4f) : Palette::divider);
         g.fillRoundedRectangle (pill, 7.0f);
 
         const auto knob = juce::Rectangle<float> (10.0f, 10.0f)
@@ -182,9 +182,32 @@ namespace dooblrprophet::ui
         g.setColour (highlighted ? Palette::textPrimary : Palette::textPrimary.withAlpha (0.85f));
         g.fillEllipse (knob);
 
-        g.setColour (button.isEnabled() ? Palette::textPrimary : Palette::textMuted);
+        g.setColour (! isDimmed (button) ? Palette::textPrimary : Palette::textMuted);
         g.setFont (juce::FontOptions (13.0f));
         g.drawFittedText (button.getButtonText(), bounds.reduced (6.0f, 0.0f).toNearestInt(),
                           juce::Justification::centredLeft, 1);
+    }
+
+    void setDimmed (juce::Component& c, bool dimmed)
+    {
+        if ((bool) c.getProperties().getWithDefault ("dimmed", false) == dimmed)
+            return;
+
+        c.getProperties().set ("dimmed", dimmed);
+
+        // A knob's value box greys out with it.
+        if (auto* slider = dynamic_cast<juce::Slider*> (&c))
+        {
+            if (dimmed)
+                slider->setColour (juce::Slider::textBoxTextColourId, Palette::textMuted);
+            else
+                slider->removeColour (juce::Slider::textBoxTextColourId);
+        }
+
+        // Plain buttons (e.g. the voice-count presets) fade.
+        if (dynamic_cast<juce::TextButton*> (&c) != nullptr)
+            c.setAlpha (dimmed ? 0.45f : 1.0f);
+
+        c.repaint();
     }
 }

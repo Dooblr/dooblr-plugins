@@ -566,13 +566,14 @@ namespace dooblrprophet::ui
 
     bool EnvelopeDisplay::changed (const dsp::Settings& a, const dsp::Settings& b) const
     {
-        return ! sameEnv (a.filterEnv, b.filterEnv) || ! sameEnv (a.ampEnv, b.ampEnv);
+        return ! sameEnv (a.effectiveFilterEnv(), b.effectiveFilterEnv()) || ! sameEnv (a.ampEnv, b.ampEnv)
+               || a.filterEnvSync != b.filterEnvSync;
     }
 
     float EnvelopeDisplay::spanSeconds (const dsp::Settings& s) noexcept
     {
         const auto length = [] (const dsp::EnvSettings& e) { return e.attack + e.decay + e.release; };
-        const auto longest = juce::jmax (length (s.filterEnv), length (s.ampEnv));
+        const auto longest = juce::jmax (length (s.effectiveFilterEnv()), length (s.ampEnv));
         return juce::jmax (0.05f, longest * 1.25f);
     }
 
@@ -608,15 +609,31 @@ namespace dooblrprophet::ui
     void EnvelopeDisplay::drawCurves (juce::Graphics& g, juce::Rectangle<float> plot)
     {
         const auto span = spanSeconds (settings);
+        const auto fenv = settings.effectiveFilterEnv(); // what the voices run: the amp ADSR when synced
         // Both hold their sustain until the same moment (the longer attack + decay), like one held key.
-        const auto keyUp = juce::jmax (settings.filterEnv.attack + settings.filterEnv.decay, settings.ampEnv.attack + settings.ampEnv.decay) + 0.15f * span;
-        trace (filterPath, settings.filterEnv, plot, span, keyUp - settings.filterEnv.attack - settings.filterEnv.decay);
+        const auto keyUp = juce::jmax (fenv.attack + fenv.decay, settings.ampEnv.attack + settings.ampEnv.decay) + 0.15f * span;
+        trace (filterPath, fenv, plot, span, keyUp - fenv.attack - fenv.decay);
         trace (ampPath, settings.ampEnv, plot, span, keyUp - settings.ampEnv.attack - settings.ampEnv.decay);
 
-        g.setColour (Palette::dynamic);
-        g.strokePath (filterPath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-        g.setColour (Palette::master);
-        g.strokePath (ampPath, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        const juce::PathStrokeType stroke (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
+        if (settings.filterEnvSync)
+        {
+            // Identical curves: the amp one wide underneath, the filter one dashed on top, so both read.
+            g.setColour (Palette::master);
+            g.strokePath (ampPath, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            juce::Path dashed;
+            const float dashes[] { 7.0f, 5.0f };
+            stroke.createDashedStroke (dashed, filterPath, dashes, 2);
+            g.setColour (Palette::dynamic);
+            g.fillPath (dashed);
+        }
+        else
+        {
+            g.setColour (Palette::dynamic);
+            g.strokePath (filterPath, stroke);
+            g.setColour (Palette::master);
+            g.strokePath (ampPath, stroke);
+        }
 
         const auto x = plot.getX() + plot.getWidth() * keyUp / span;
         g.setColour (Palette::textMuted.withAlpha (0.35f));

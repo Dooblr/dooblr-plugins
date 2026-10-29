@@ -11,6 +11,8 @@
 #include "Parameters.h"
 #include "Presets.h"
 #include "Randomiser.h"
+#include "UI/ControlPanel.h"
+#include "UI/Theme.h"
 #include "DSP/AnalogModel.h"
 #include "DSP/Primitives.h"
 #include "DSP/SynthEngine.h"
@@ -779,7 +781,7 @@ namespace
         const auto enabled = [&] (int page, const char* pid)
         {
             for (auto& panel : editor->getPanels (page))
-                if (auto* c = panel->findControl (pid)) return c->isEnabled();
+                if (auto* c = panel->findControl (pid)) return ! ui::isDimmed (*c);
             return false;
         };
         set (*p, id::osc1Mode, 1.0f);
@@ -791,7 +793,7 @@ namespace
         set (*p, id::voiceMode, 1.0f);
         editor->updateEnablement();
         check (enabled (Editor::voicesPage, id::unisonVoices) && ! enabled (Editor::voicesPage, id::voices)
-                   && ! editor->getVoicePresetButton (0).isEnabled(), "Unison: Unison / Detune live, poly Voices dimmed");
+                   && ui::isDimmed (editor->getVoicePresetButton (0)) && editor->getVoicePresetButton (0).isEnabled(), "Unison: Unison / Detune live, poly Voices dimmed");
         set (*p, id::voiceMode, 0.0f);
         set (*p, id::lfoSync, 1.0f);
         editor->updateEnablement();
@@ -1060,6 +1062,499 @@ namespace
         base.reset();
     }
 
+    //==============================================================================
+    /** Raw per-sample envelope levels of every voice, rendering one sample per block. */
+    struct EnvTrace { std::vector<std::array<float, dsp::maxVoices>> filter, amp; };
+
+    EnvTrace traceEnvelopes (Processor& p, int numSamples, const std::vector<Event>& events)
+    {
+        EnvTrace t;
+        juce::AudioBuffer<float> buffer (2, 1);
+        juce::MidiBuffer midi;
+        for (int n = 0; n < numSamples; ++n)
+        {
+            buffer.clear();
+            midi.clear();
+            for (const auto& e : events)
+                if (e.sample == n)
+                    midi.addEvent (e.message, 0);
+            p.processBlock (buffer, midi);
+            std::array<float, dsp::maxVoices> f {}, a {};
+            for (int v = 0; v < dsp::maxVoices; ++v)
+            {
+                f[(size_t) v] = p.getEngine().getVoice (v).getFilterEnvLevel();
+                a[(size_t) v] = p.getEngine().getVoice (v).getAmpEnvLevel();
+            }
+            t.filter.push_back (f);
+            t.amp.push_back (a);
+        }
+        return t;
+    }
+
+    void testFilterEnvSync()
+    {
+        struct Adsr { float a, d, s, r; };
+        const Adsr ampSets[] { { 0.003f, 0.8f, 0.8f, 0.35f }, { 0.25f, 0.1f, 0.3f, 0.6f }, { 0.001f, 0.05f, 0.0f, 0.05f }, { 0.6f, 1.2f, 1.0f, 0.02f } };
+        const Adsr ownSet { 0.02f, 0.4f, 0.55f, 0.9f };
+        const std::vector<Event> chord { { 0, on (48, 0.9f) }, { 0, on (55, 0.4f) }, { 0, on (62, 0.7f) },
+                                         { 30000, off (48) }, { 30000, off (55) }, { 30000, off (62) } };
+        const auto setAdsr = [] (Processor& p, const char* a, const char* d, const char* su, const char* r, Adsr x)
+        {
+            set (p, a, x.a); set (p, d, x.d); set (p, su, x.s); set (p, r, x.r);
+        };
+
+        int setIndex = 0;
+        for (const auto& amp : ampSets)
+        {
+            auto p = makeProcessor();
+            set (*p, id::vintage, 0.4f);             // per-voice envelope-time slop applies to both alike
+            set (*p, id::pmodFiltEnv, 0.3f);         // Poly-Mod from the filter env still applies
+            setAdsr (*p, id::aenvAttack, id::aenvDecay, id::aenvSustain, id::aenvRelease, amp);
+            setAdsr (*p, id::fenvAttack, id::fenvDecay, id::fenvSustain, id::fenvRelease, ownSet);
+            set (*p, id::fenvSync, 1.0f);
+            const auto t = traceEnvelopes (*p, 48000, chord);
+            int differ = 0, nonzero = 0;
+            for (size_t n = 0; n < t.filter.size(); ++n)
+                for (size_t v = 0; v < (size_t) dsp::maxVoices; ++v)
+                {
+                    if (! juce::exactlyEqual (t.filter[n][v], t.amp[n][v])) ++differ;
+                    if (t.amp[n][v] > 0.0f) ++nonzero;
+                }
+            const auto label = "ADSR set " + std::to_string (setIndex++) + ": ";
+            check (nonzero > 10000 && differ == 0, label + "synced filter env equals amp env sample for sample (" + std::to_string (differ)
+                                                       + " of " + std::to_string (nonzero) + " active samples differ)");
+            check (std::abs (get (*p, id::fenvAttack) - ownSet.a) < 1.0e-4f && std::abs (get (*p, id::fenvDecay) - ownSet.d) < 1.0e-4f
+                       && std::abs (get (*p, id::fenvSustain) - ownSet.s) < 1.0e-4f && std::abs (get (*p, id::fenvRelease) - ownSet.r) < 1.0e-4f,
+                   label + "the filter env's own ADSR values are kept while synced");
+            const auto eff = p->readSettings().effectiveFilterEnv();
+            check (juce::exactlyEqual (eff.attack, get (*p, id::aenvAttack)) && juce::exactlyEqual (eff.sustain, get (*p, id::aenvSustain))
+                       && juce::exactlyEqual (eff.velocity, get (*p, id::fenvVelAmt)),
+                   label + "effective filter env: amp ADSR, the filter's own velocity amount");
+        }
+
+        // Off again: the filter env runs its own ADSR, independent of the amp env (vintage 0: exact reference).
+        {
+            auto p = makeProcessor();
+            set (*p, id::vintage, 0.0f);
+            setAdsr (*p, id::aenvAttack, id::aenvDecay, id::aenvSustain, id::aenvRelease, ampSets[1]);
+            setAdsr (*p, id::fenvAttack, id::fenvDecay, id::fenvSustain, id::fenvRelease, ownSet);
+            set (*p, id::fenvSync, 1.0f);
+            traceEnvelopes (*p, 2000, { { 0, on (60) }, { 1000, off (60) } });
+            set (*p, id::fenvSync, 0.0f);
+            render (*p, 6 * 48000); // let the release (about 11 time constants to idle) finish
+            const auto t = traceEnvelopes (*p, 48000, { { 0, on (60) }, { 30000, off (60) } });
+
+            int voice = -1;
+            for (int v = 0; v < dsp::maxVoices && voice < 0; ++v)
+                if (t.amp[100][(size_t) v] > 0.0f) voice = v;
+            check (voice >= 0, "a voice plays after sync off");
+            if (voice >= 0)
+            {
+                dsp::Envelope reference;
+                reference.setTimes (defaultRate, ownSet.a, ownSet.d, ownSet.s, ownSet.r);
+                reference.noteOn();
+                size_t start = 0;
+                while (start < t.filter.size() && t.filter[start][(size_t) voice] == 0.0f) ++start;
+                int differ = 0, ampDiffers = 0;
+                for (size_t n = start; n < t.filter.size(); ++n)
+                {
+                    if (n == 30000) reference.noteOff();
+                    const auto expected = reference.next();
+                    if (std::abs (t.filter[n][(size_t) voice] - expected) > 1.0e-6f) ++differ;
+                    if (std::abs (t.filter[n][(size_t) voice] - t.amp[n][(size_t) voice]) > 1.0e-3f) ++ampDiffers;
+                }
+                check (differ == 0, "sync off: filter env follows its own ADSR exactly (" + std::to_string (differ) + " samples off)");
+                check (ampDiffers > 20000, "sync off: filter env independent of the amp env");
+            }
+            const auto eff = p->readSettings().effectiveFilterEnv();
+            check (juce::exactlyEqual (eff.attack, get (*p, id::fenvAttack)) && juce::exactlyEqual (eff.release, get (*p, id::fenvRelease)),
+                   "sync off restores the filter env's own ADSR");
+        }
+
+        // Audible: with Env Amount up, sync changes the sound; Env Amount 0 makes it silent-equal.
+        {
+            const auto run = [&] (float sync, float envAmt)
+            {
+                auto p = makeProcessor();
+                set (*p, id::vintage, 0.0f);
+                set (*p, id::lpfCutoff, 300.0f);
+                set (*p, id::lpfEnvAmt, envAmt);
+                set (*p, id::fenvSync, sync);
+                return render (*p, 24000, { { 0, on (48) }, { 12000, off (48) } });
+            };
+            const auto a = run (0.0f, 0.8f), b = run (1.0f, 0.8f);
+            double diff = 0.0;
+            for (size_t i = 0; i < a.left.size(); ++i) diff = std::max (diff, (double) std::abs (a.left[i] - b.left[i]));
+            check (diff > 1.0e-3, "sync changes the sound when Env Amount is up (max diff " + fmt (diff, 4) + ")");
+        }
+
+        // State: saved and restored, in sessions and user presets; old sessions without it load it off.
+        {
+            auto a = makeProcessor();
+            set (*a, id::fenvSync, 1.0f);
+            juce::MemoryBlock block;
+            a->getStateInformation (block);
+            auto b = makeProcessor();
+            b->setStateInformation (block.getData(), (int) block.getSize());
+            check (get (*b, id::fenvSync) > 0.5f, "session state restores Sync to Amp on");
+
+            const auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("prophet-sync-test" + juce::String (presets::fileExtension));
+            a->saveUserPreset (file);
+            auto c = makeProcessor();
+            c->loadUserPreset (file);
+            check (get (*c, id::fenvSync) > 0.5f, "user preset restores Sync to Amp on");
+            file.deleteFile();
+
+            auto xml = juce::AudioProcessor::getXmlFromBinary (block.getData(), (int) block.getSize());
+            for (auto* child : xml->getChildIterator())
+                if (child->getStringAttribute ("id") == id::fenvSync) { xml->removeChildElement (child, true); break; }
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            set (*b, id::fenvSync, 1.0f);
+            b->setStateInformation (old.getData(), (int) old.getSize());
+            check (get (*b, id::fenvSync) < 0.5f, "a session saved before 0.1.4 loads with Sync to Amp off");
+        }
+
+        // Random turns it on now and then.
+        {
+            auto p = makeProcessor();
+            int onCount = 0;
+            for (int seed = 0; seed < 200; ++seed)
+            {
+                juce::Random r (seed);
+                p->randomisePatch (r);
+                if (get (*p, id::fenvSync) > 0.5f) ++onCount;
+            }
+            check (onCount >= 20 && onCount <= 70, "Random syncs the filter env in about 20% of patches (" + std::to_string (onCount) + " of 200)");
+        }
+
+        // Editor: the filter ADSR knobs dim while synced; the graph shows the effective envelope.
+        {
+            auto p = makeProcessor();
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            const auto enabled = [&] (const char* pid)
+            {
+                for (auto& panel : editor->getPanels (Editor::envelopesPage))
+                    if (auto* c = panel->findControl (pid)) return ! ui::isDimmed (*c);
+                return false;
+            };
+            bool found = false;
+            for (auto& panel : editor->getPanels (Editor::envelopesPage))
+                if (panel->getTitle() == "FILTER ENVELOPE" && panel->findControl (id::fenvSync) != nullptr) found = true;
+            check (found, "Sync to Amp sits in the Filter Envelope panel");
+            editor->updateEnablement();
+            check (enabled (id::fenvAttack) && enabled (id::fenvRelease), "sync off: filter ADSR knobs live");
+            set (*p, id::fenvSync, 1.0f);
+            editor->updateEnablement();
+            check (! enabled (id::fenvAttack) && ! enabled (id::fenvDecay) && ! enabled (id::fenvSustain) && ! enabled (id::fenvRelease)
+                       && enabled (id::fenvVelAmt) && enabled (id::fenvSync) && enabled (id::aenvAttack),
+                   "sync on: filter Attack/Decay/Sustain/Release dimmed, Velocity and the amp ADSR live");
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::envelopesPage);
+            auto& graph = editor->getGraph (Editor::envelopesPage);
+            graph.refresh();
+            const auto spanBefore = ui::EnvelopeDisplay::spanSeconds (graph.getShownSettings());
+            set (*p, id::aenvRelease, 3.0f);
+            check (graph.refresh(), "moving the amp Release redraws the envelope graph");
+            const auto& shown = graph.getShownSettings();
+            check (juce::exactlyEqual (shown.effectiveFilterEnv().release, get (*p, id::aenvRelease)) && get (*p, id::aenvRelease) > 2.5f && ui::EnvelopeDisplay::spanSeconds (shown) > spanBefore,
+                   "the graph's filter envelope follows the amp Release");
+            set (*p, id::aenvAttack, 0.3f);
+            set (*p, id::aenvDecay, 1.0f);
+            set (*p, id::aenvSustain, 0.6f);
+            set (*p, id::aenvRelease, 1.2f);
+            set (*p, id::fenvVelAmt, 0.4f);
+            graph.refresh();
+            saveSnapshot (*editor, "-Envelopes-sync");
+            set (*p, id::fenvSync, 0.0f);
+            editor->updateEnablement();
+            graph.refresh();
+            check (enabled (id::fenvAttack) && std::abs (graph.getShownSettings().effectiveFilterEnv().release - get (*p, id::fenvRelease)) < 1.0e-6f,
+                   "sync off: knobs live again and the graph shows the filter's own envelope");
+        }
+    }
+
+
+    //==============================================================================
+    /** A window for the real-mouse tests: JUCE's own mouse dispatch (MouseInputSource: the component
+        under the pointer, enter / exit, down / drag / up, isMouseOver) runs exactly as for a window
+        on screen, but the window is virtual, so the test neither flashes a window nor depends on
+        what else is on the user's screen (the macOS peer refuses points under other apps' windows). */
+    class TestPeer final : public juce::ComponentPeer
+    {
+    public:
+        TestPeer (juce::Component& c, int flags) : juce::ComponentPeer (c, flags), bounds (c.getBounds()) {}
+
+        void* getNativeHandle() const override { return nullptr; }
+        void setVisible (bool) override {}
+        void setTitle (const juce::String&) override {}
+        void setBounds (const juce::Rectangle<int>& b, bool) override { bounds = b; }
+        juce::Rectangle<int> getBounds() const override { return bounds; }
+        juce::Point<float> localToGlobal (juce::Point<float> p) override { return p + bounds.getPosition().toFloat(); }
+        juce::Point<float> globalToLocal (juce::Point<float> p) override { return p - bounds.getPosition().toFloat(); }
+        void setMinimised (bool) override {}
+        bool isMinimised() const override { return false; }
+        bool isShowing() const override { return true; }
+        void setFullScreen (bool) override {}
+        bool isFullScreen() const override { return false; }
+        void setIcon (const juce::Image&) override {}
+        bool contains (juce::Point<int> p, bool) const override { return bounds.withZeroOrigin().contains (p); }
+        OptionalBorderSize getFrameSizeIfPresent() const override { return {}; }
+        juce::BorderSize<int> getFrameSize() const override { return {}; }
+        bool setAlwaysOnTop (bool) override { return true; }
+        void toFront (bool) override {}
+        void toBehind (juce::ComponentPeer*) override {}
+        bool isFocused() const override { return true; }
+        void grabFocus() override {}
+        void repaint (const juce::Rectangle<int>&) override {}
+        void performAnyPendingRepaintsNow() override {}
+        void setAlpha (float) override {}
+        juce::StringArray getAvailableRenderingEngines() override { return { "Software" }; }
+        void textInputRequired (juce::Point<int>, juce::TextInputTarget&) override {}
+
+    private:
+        juce::Rectangle<int> bounds;
+    };
+
+    /** Holds the editor in a TestPeer window at the screen origin. */
+    class TestWindow final : public juce::Component
+    {
+    public:
+        explicit TestWindow (juce::Component& content)
+        {
+            setBounds (content.getLocalBounds().withPosition (100, 80));
+            addAndMakeVisible (content);
+            content.setTopLeftPosition (0, 0);
+            addToDesktop (0);
+            setVisible (true);
+        }
+        ~TestWindow() override { removeFromDesktop(); removeAllChildren(); }
+        juce::ComponentPeer* createNewPeer (int flags, void*) override { return new TestPeer (*this, flags); }
+    };
+
+    //==============================================================================
+    /** Real mouse input through the window's peer: the same path a click on screen takes
+        (JUCE's MouseInputSource finds the component under the pointer, then enter / down / up). */
+    struct PeerMouse
+    {
+        juce::ComponentPeer& peer;
+        juce::int64 time = 1000000;
+
+        void event (juce::Point<float> pos, juce::ModifierKeys mods)
+        {
+            time += 400; // far enough apart that no two clicks make a double-click
+            peer.handleMouseEvent (juce::MouseInputSource::InputSourceType::mouse, pos, mods, juce::MouseInputSource::defaultPressure,
+                                   juce::MouseInputSource::defaultOrientation, time);
+        }
+        void click (juce::Point<float> pos)
+        {
+            event (pos, juce::ModifierKeys());
+            event (pos, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier));
+            event (pos, juce::ModifierKeys());
+        }
+        void drag (juce::Point<float> from, juce::Point<float> to)
+        {
+            event (from, juce::ModifierKeys());
+            event (from, juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier));
+            for (int i = 1; i <= 6; ++i)
+                event (from + (to - from) * ((float) i / 6.0f), juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier));
+            event (to, juce::ModifierKeys());
+        }
+    };
+
+    template <typename Fn>
+    void forEachShowing (juce::Component& root, Fn&& fn)
+    {
+        for (auto* child : root.getChildren())
+        {
+            if (! child->isShowing())
+                continue;
+            fn (*child);
+            forEachShowing (*child, fn);
+        }
+    }
+
+    void testRealMouse()
+    {
+        const std::pair<int, int> sizes[] { { 940, 600 }, { 1080, 660 }, { 2400, 1400 } };
+        for (const auto& [w, h] : sizes)
+        {
+            for (int mode = 0; mode < 2; ++mode)
+            {
+                auto p = makeProcessor();
+                auto& state = p->getState();
+                set (*p, id::osc1Mode, (float) mode);
+                set (*p, id::osc2Mode, (float) mode);
+                std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+                auto* editor = dynamic_cast<Editor*> (base.get());
+                if (editor == nullptr) { check (false, "editor"); return; }
+                editor->setSize (w, h);
+                TestWindow window (*editor);
+                auto* peer = window.getPeer();
+                check (peer != nullptr, "the editor opens in a window");
+                if (peer == nullptr) return;
+                PeerMouse mouse { *peer };
+
+                const auto label = std::to_string (w) + "x" + std::to_string (h) + (mode == 0 ? " Variable: " : " Switched: ");
+                int buttons = 0, buttonsOk = 0, knobs = 0, knobsOk = 0, segments = 0, segmentsOk = 0, hits = 0, hitsOk = 0;
+                std::vector<std::string> failures;
+                const auto fail = [&] (const juce::String& what) { if (failures.size() < 12) failures.push_back (what.toStdString()); };
+
+                for (int page = 0; page < Editor::numPages; ++page)
+                {
+                    editor->selectPage (page);
+                    editor->updateEnablement();
+                    const auto where = juce::String (Editor::pageName (page)) + " ";
+
+                    std::vector<juce::Component*> found;
+                    forEachShowing (*editor, [&] (juce::Component& c)
+                    {
+                        if (dynamic_cast<juce::Button*> (&c) != nullptr || dynamic_cast<juce::Slider*> (&c) != nullptr
+                            || dynamic_cast<juce::ComboBox*> (&c) != nullptr || dynamic_cast<ui::SegmentedToggle*> (&c) != nullptr)
+                            found.push_back (&c);
+                    });
+
+                    for (auto* c : found)
+                    {
+                        const auto name = where + (c->getComponentID().isNotEmpty() ? c->getComponentID() : c->getName());
+                        const auto centre = editor->getLocalPoint (c, c->getLocalBounds().getCentre()).toFloat();
+
+                        // Every control is the one under the pointer at its centre (nothing on top of it).
+                        ++hits;
+                        auto* hit = editor->getComponentAt (centre.roundToInt());
+                        if (hit == c || c->isParentOf (hit)) ++hitsOk;
+                        else fail (name + " is covered by " + (hit != nullptr ? hit->getComponentID() + " / " + hit->getName() : juce::String ("nothing")));
+
+                        auto* parameter = state.getParameter (c->getComponentID());
+
+                        if (auto* toggle = dynamic_cast<ui::SegmentedToggle*> (c))
+                        {
+                            for (int i = 0; i < toggle->getNumSegments(); ++i)
+                            {
+                                const auto before = toggle->getSelectedIndex();
+                                if (i == before) continue;
+                                ++segments;
+                                mouse.click (editor->getLocalPoint (c, toggle->getSegmentBounds (i).getCentre()).toFloat());
+                                if (toggle->getSelectedIndex() == i) ++segmentsOk;
+                                else fail (name + " segment " + toggle->getSegmentText (i) + " does not select");
+                                mouse.click (editor->getLocalPoint (c, toggle->getSegmentBounds (before).getCentre()).toFloat());
+                                editor->updateEnablement();
+                            }
+                        }
+                        else if (auto* button = dynamic_cast<juce::ToggleButton*> (c); button != nullptr && parameter != nullptr)
+                        {
+                            ++buttons;
+                            const auto before = parameter->getValue() > 0.5f;
+                            mouse.click (centre);
+                            const auto after = parameter->getValue() > 0.5f;
+                            if (after != before && button->getToggleState() == after) ++buttonsOk;
+                            else fail (name + juce::String (ui::isDimmed (*c) ? " (dimmed)" : "") + " does not toggle");
+                            mouse.click (centre);
+                            if ((parameter->getValue() > 0.5f) != before) fail (name + " does not toggle back");
+                        }
+                        else if (auto* textButton = dynamic_cast<juce::TextButton*> (c); textButton != nullptr && c->getComponentID().startsWith ("page_"))
+                        {
+                            ++buttons;
+                            mouse.click (centre);
+                            if (textButton->getToggleState()) ++buttonsOk;
+                            else fail (name + " does not open its page");
+                            editor->selectPage (page);
+                        }
+                        else if (auto* preset = dynamic_cast<juce::TextButton*> (c); preset != nullptr && c->getComponentID().startsWith ("voicesPreset"))
+                        {
+                            // The 5 / 6 / 10 voice buttons: dimmed outside Poly, still clickable.
+                            ++buttons;
+                            const auto count = c->getComponentID().fromFirstOccurrenceOf ("voicesPreset", false, false).getIntValue();
+                            const auto before = get (*p, id::voices);
+                            set (*p, id::voices, count == 5 ? 8.0f : 5.0f);
+                            mouse.click (centre);
+                            if (juce::roundToInt (get (*p, id::voices)) == count) ++buttonsOk;
+                            else fail (name + juce::String (ui::isDimmed (*c) ? " (dimmed)" : "") + " does not set Voices");
+                            set (*p, id::voices, before);
+                        }
+                        else if (c == &editor->getRandomButton())
+                        {
+                            // Random, then Undo and Redo through their own buttons.
+                            ++buttons;
+                            const auto snapshot = [&] { std::vector<float> v; for (auto* q : p->getParameters()) v.push_back (q->getValue()); return v; };
+                            // Undo / Redo write normalised values back through the parameter's range, so compare within a hair.
+                            const auto same = [] (const std::vector<float>& a, const std::vector<float>& b)
+                            { for (size_t k = 0; k < a.size(); ++k) if (std::abs (a[k] - b[k]) > 1.0e-5f) return false; return true; };
+                            const auto before = snapshot();
+                            mouse.click (centre);
+                            const auto randomised = snapshot();
+                            if (! same (randomised, before)) ++buttonsOk;
+                            else fail (name + " does not change the patch");
+                            for (auto* other : found)
+                                if (other->getName() == "Undo" && other->isShowing())
+                                {
+                                    ++buttons;
+                                    mouse.click (editor->getLocalPoint (other, other->getLocalBounds().getCentre()).toFloat());
+                                    if (same (snapshot(), before)) ++buttonsOk; else fail (where + "Undo does not restore the patch");
+                                }
+                            for (auto* other : found)
+                                if (other->getName() == "Redo" && other->isShowing())
+                                {
+                                    ++buttons;
+                                    mouse.click (editor->getLocalPoint (other, other->getLocalBounds().getCentre()).toFloat());
+                                    if (same (snapshot(), randomised)) ++buttonsOk; else fail (where + "Redo does not reapply the patch");
+                                    mouse.click (editor->getLocalPoint (other, other->getLocalBounds().getCentre()).toFloat());
+                                }
+                            for (auto* other : found)
+                                if (other->getName() == "Undo" && other->isShowing())
+                                    mouse.click (editor->getLocalPoint (other, other->getLocalBounds().getCentre()).toFloat());
+                            if (! same (snapshot(), before)) fail (where + "Random could not be undone after the test");
+                        }
+                        else if (auto* slider = dynamic_cast<juce::Slider*> (c); slider != nullptr && parameter != nullptr
+                                                                                && slider->getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag)
+                        {
+                            ++knobs;
+                            const auto before = parameter->getValue();
+                            const auto knobCentre = editor->getLocalPoint (c, juce::Point<int> (c->getWidth() / 2, (c->getHeight() - 16) / 2)).toFloat();
+                            const auto up = before < 0.5f ? -40.0f : 40.0f;
+                            mouse.drag (knobCentre, knobCentre + juce::Point<float> (0.0f, up));
+                            if (std::abs (parameter->getValue() - before) > 1.0e-4f) ++knobsOk;
+                            else fail (name + juce::String (ui::isDimmed (*c) ? " (dimmed)" : "") + " does not turn");
+                            parameter->setValueNotifyingHost (before);
+                        }
+                    }
+                    editor->updateEnablement();
+                }
+
+                check (hitsOk == hits, label + "every button, switch, knob and box is under the pointer at its centre (" + std::to_string (hitsOk) + " of " + std::to_string (hits) + ")");
+                check (buttons > 0 && buttonsOk == buttons, label + "every parameter toggle and page button clicks, dimmed or not (" + std::to_string (buttonsOk) + " of " + std::to_string (buttons) + ")");
+                check (segments > 0 && segmentsOk == segments, label + "every mode switch segment clicks (" + std::to_string (segmentsOk) + " of " + std::to_string (segments) + ")");
+                check (knobs > 0 && knobsOk == knobs, label + "every knob drags, dimmed or not (" + std::to_string (knobsOk) + " of " + std::to_string (knobs) + ")");
+                note (label + std::to_string (hitsOk) + "/" + std::to_string (hits) + " hit-tests, " + std::to_string (buttonsOk) + "/" + std::to_string (buttons)
+                      + " buttons, " + std::to_string (segmentsOk) + "/" + std::to_string (segments) + " switch segments, " + std::to_string (knobsOk) + "/" + std::to_string (knobs) + " knobs");
+                for (const auto& f : failures)
+                    note ("  " + f);
+            }
+        }
+
+        // The reported case, explicitly: Variable mode (the default), Oscillators page, both oscillators.
+        {
+            auto p = makeProcessor();
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            editor->setSize (1080, 660);
+            TestWindow window (*editor);
+            PeerMouse mouse { *window.getPeer() };
+            editor->selectPage (Editor::oscillatorsPage);
+            editor->updateEnablement();
+            for (auto* pid : { id::osc1Tri, id::osc1Pulse, id::osc1Sync, id::osc2Tri, id::osc2Pulse })
+            {
+                juce::Component* c = nullptr;
+                for (auto& panel : editor->getPanels (Editor::oscillatorsPage))
+                    if (auto* f = panel->findControl (pid)) c = f;
+                const auto before = get (*p, pid);
+                mouse.click (editor->getLocalPoint (c, c->getLocalBounds().getCentre()).toFloat());
+                check (! juce::exactlyEqual (get (*p, pid), before), juce::String ("Variable mode: clicking ").toStdString() + pid + " selects it");
+            }
+        }
+    }
+
     void testRandomPatch()
     {
         // The excluded parameters survive Random, even at non-default values.
@@ -1148,6 +1643,8 @@ int main()
         { "random patch",                              testRandomPatch },
         { "editor",                                    testEditor },
         { "filter graph handles",                      testFilterHandles },
+        { "filter env Sync to Amp",                    testFilterEnvSync },
+        { "real mouse: every control clicks",          testRealMouse },
     };
 
     int failedTests = 0;

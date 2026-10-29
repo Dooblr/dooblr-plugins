@@ -54,6 +54,18 @@ namespace dooblrprophet::dsp
 
         EnvSettings filterEnv { 0.005f, 0.6f, 0.3f, 0.5f, 0.3f };
         EnvSettings ampEnv { 0.003f, 0.8f, 0.8f, 0.35f, 0.3f };
+        bool filterEnvSync = false;      // filter envelope runs on the amp envelope's ADSR
+
+        /** The ADSR the filter envelope actually uses: its own, or the amp's when synced
+            (its velocity amount is always its own). */
+        EnvSettings effectiveFilterEnv() const noexcept
+        {
+            if (! filterEnvSync)
+                return filterEnv;
+            auto e = ampEnv;
+            e.velocity = filterEnv.velocity;
+            return e;
+        }
 
         float pmodFiltEnv = 0.0f, pmodOsc2 = 0.0f;
         bool pmodFreq1 = true, pmodShape1 = false, pmodFilter = false;
@@ -114,6 +126,9 @@ namespace dooblrprophet::dsp
         float getLevel() const noexcept { return active ? ampEnv.getLevel() * fade : 0.0f; }
         /** Number of oscillator 1 cycles (wraps / sync resets) rendered so far, for tests. */
         uint64_t getOsc1Cycles() const noexcept { return osc1Cycles; }
+        /** Raw envelope levels (before velocity) after the last rendered sample, for tests. */
+        float getFilterEnvLevel() const noexcept { return filterEnv.getLevel(); }
+        float getAmpEnvLevel() const noexcept { return ampEnv.getLevel(); }
 
         bool sustained = false;          // released while the sustain pedal was down
 

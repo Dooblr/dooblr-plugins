@@ -98,6 +98,7 @@ namespace dooblrprophet::randomiser
         p.set (id::aenvSustain, p.uniform (0.4f, 1.0f));
         p.set (id::aenvRelease, p.logUniform (0.05f, 2.0f));
         p.set (id::aenvVelAmt, p.uniform (0.0f, 0.5f));
+        p.setBool (id::fenvSync, p.chance (0.2f)); // now and then the filter follows the amp ADSR
 
         // Poly-Mod: about a third of patches, gently.
         const auto polyMod = p.chance (0.35f);

@@ -68,6 +68,7 @@ namespace dooblrprophet::params
         inline constexpr const char* fenvSustain = "fenvSustain";
         inline constexpr const char* fenvRelease = "fenvRelease";
         inline constexpr const char* fenvVelAmt  = "fenvVelAmt";
+        inline constexpr const char* fenvSync    = "fenvSync";   // filter envelope uses the amp envelope's ADSR
         inline constexpr const char* aenvAttack  = "aenvAttack";
         inline constexpr const char* aenvDecay   = "aenvDecay";
         inline constexpr const char* aenvSustain = "aenvSustain";
