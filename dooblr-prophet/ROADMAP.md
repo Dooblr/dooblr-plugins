@@ -26,6 +26,13 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Eight factory presets plus Init; user presets (.dprophet) with Save / Load.
 - Undo / redo (50 gesture steps), state round trip with a state version.
 
+## 0.1.1: one front panel and Random (done)
+
+- Every sound control on one panel in classic order (Poly-Mod, LFO / Wheel-Mod, Osc A,
+  Osc B / Mixer, Filter, Filter Env, Amp Env, Voices) instead of five pages. The waveform and
+  filter-response graphs of 0.1.0 were dropped to make room.
+- Random button: a musically usable random patch as one undo step.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice

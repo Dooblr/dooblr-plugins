@@ -51,6 +51,9 @@ namespace dooblrprophet
         void setPresetName (const juce::String& name);
         juce::String saveUserPreset (const juce::File& file);
         juce::String loadUserPreset (const juce::File& file);
+        /** The Random button: a new random patch (see Randomiser.h) as one undo step, shown as
+            "Random" in the preset box. Returns the number of parameters changed. */
+        int randomisePatch (juce::Random& random);
 
         /** Messages from the processor to the editor (preset changes): a change broadcaster. */
         juce::ChangeBroadcaster presetChanged;

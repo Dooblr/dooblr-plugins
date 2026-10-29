@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-prophet VERSION 0.1.0 LANGUAGES C CXX)
+project(dooblr-prophet VERSION 0.1.1 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -55,13 +55,14 @@ target_sources(DooblrProphet
         Source/DSP/SynthEngine.cpp
         Source/Parameters.cpp
         Source/Presets.cpp
+        Source/Randomiser.cpp
         Source/UndoHistory.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
         Source/UI/Theme.cpp
         Source/UI/ControlPanel.cpp
-        Source/UI/OutputMeter.cpp
-        Source/UI/Displays.cpp)
+        Source/UI/FrontPanel.cpp
+        Source/UI/OutputMeter.cpp)
 
 target_compile_definitions(DooblrProphet
     PUBLIC

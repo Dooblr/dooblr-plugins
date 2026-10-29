@@ -533,7 +533,7 @@ namespace dooblrprophet::ui
         g.setColour (hasKeyboardFocus (false) ? colour.withAlpha (0.9f) : Palette::grid.brighter (0.35f));
         g.drawRoundedRectangle (track, radius, 1.0f);
 
-        const auto fontHeight = juce::jlimit (13.0f, 17.0f, (float) getHeight() * 0.40f);
+        const auto fontHeight = juce::jlimit (10.5f, 17.0f, (float) getHeight() * 0.55f);
         g.setFont (juce::FontOptions (fontHeight, juce::Font::bold).withKerningFactor (0.06f));
 
         for (int i = 0; i < labels.size(); ++i)

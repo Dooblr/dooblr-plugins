@@ -7,8 +7,8 @@ namespace dooblrprophet
 {
     namespace id = params::id;
     namespace Palette = ui::Palette;
-    using Spec = ui::ControlPanel::Spec;
-    using Kind = ui::ControlPanel::Kind;
+    using Cell = ui::Section::Cell;
+    using Kind = ui::Section::Kind;
 
     namespace
     {
@@ -23,13 +23,17 @@ namespace dooblrprophet
         }
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
-        constexpr int headerHeight = 60, navWidth = 150, titleBarHeight = 44, margin = 12, panelGap = 8;
-        constexpr int meterWidth = 34, minGraphHeight = 120;
+        constexpr int headerHeight = 60, margin = 10, sectionGap = 8, meterWidth = 34;
         constexpr std::array<int, 3> voicePresets { 5, 6, 10 };
 
-        Spec knob (const char* pid, const char* caption) { return { pid, caption, Kind::knob }; }
-        Spec toggle (const char* pid, const char* caption) { return { pid, caption, Kind::toggle }; }
-        Spec combo (const char* pid, const char* caption) { return { pid, caption, Kind::combo }; }
+        // Section colours: the design-system palette, one per signal-path stage.
+        const juce::Colour modColour = Palette::frozen, oscColour = Palette::accent, filterColour = Palette::dynamic,
+                           envColour = Palette::master, voiceColour = Palette::spectrum;
+
+        Cell knob (const char* pid, const char* caption, float span = 1.0f) { return { Kind::knob, pid, caption, nullptr, span }; }
+        Cell toggle (const char* pid, const char* caption, float span = 1.0f) { return { Kind::toggle, pid, caption, nullptr, span }; }
+        Cell combo (const char* pid, const char* caption, float span = 1.0f) { return { Kind::combo, pid, caption, nullptr, span }; }
+        Cell extra (juce::Component& c, float span = 1.0f) { return { Kind::extra, {}, {}, &c, span }; }
 
         float valueOf (juce::AudioProcessorValueTreeState& state, const char* pid)
         {
@@ -37,12 +41,6 @@ namespace dooblrprophet
             auto* param = state.getParameter (pid);
             return param->convertFrom0to1 (param->getValue());
         }
-    }
-
-    const char* DooblrProphetEditor::pageName (int page)
-    {
-        static const char* names[] { "Oscillators", "Filters", "Envelopes", "Modulation", "Voices" };
-        return names[juce::jlimit (0, (int) numPages - 1, page)];
     }
 
     DooblrProphetEditor::DooblrProphetEditor (DooblrProphetProcessor& p)
@@ -58,10 +56,12 @@ namespace dooblrprophet
         styleLabel (subtitleLabel, "v" JucePlugin_VersionString, 13.0f, Palette::textMuted, juce::Justification::centredLeft);
         subtitleLabel.setComponentID ("version");
         styleLabel (outputCaption, "Output", 13.0f, Palette::textMuted, juce::Justification::centredRight);
-        styleLabel (statusLabel, {}, 12.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (statusLabel, {}, 11.5f, Palette::textMuted, juce::Justification::centredLeft);
         statusLabel.setComponentID ("status");
+        statusLabel.setMinimumHorizontalScale (0.85f);
+        styleLabel (voicesCaption, "Voices", 12.0f, Palette::textMuted, juce::Justification::centredLeft);
 
-        for (auto* label : { &titleLabel, &subtitleLabel, &outputCaption, &statusLabel })
+        for (auto* label : { &titleLabel, &subtitleLabel, &outputCaption })
             addAndMakeVisible (label);
 
         undoButton.setComponentID ("undo");
@@ -75,6 +75,11 @@ namespace dooblrprophet
         presetBox.setTooltip ("Factory and user presets (user presets live in " + presets::userDirectory().getFullPathName() + ")");
         presetBox.onChange = [this] { presetChosen(); };
 
+        randomButton.setComponentID ("random");
+        randomButton.setColour (juce::TextButton::buttonColourId, modColour.withAlpha (0.22f));
+        randomButton.setColour (juce::TextButton::textColourOffId, Palette::textPrimary);
+        randomButton.onClick = [this] { randomise(); };
+
         saveButton.setComponentID ("savePreset");
         saveButton.setTooltip ("Save the current patch as a user preset file (.dprophet)");
         saveButton.onClick = [this] { savePreset(); };
@@ -83,37 +88,24 @@ namespace dooblrprophet
         loadButton.onClick = [this] { loadPreset(); };
 
         outputSlider.setComponentID (id::output);
-        outputSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 70, 20);
+        outputSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 64, 20);
         outputSlider.setColour (juce::Slider::trackColourId, Palette::accent.withAlpha (0.7f));
         outputSlider.setColour (juce::Slider::backgroundColourId, Palette::divider);
         outputAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, id::output, outputSlider);
         outputSlider.setDoubleClickReturnValue (true, 0.0);
 
         for (juce::Component* c : { (juce::Component*) &undoButton, (juce::Component*) &redoButton, (juce::Component*) &presetBox,
-                                    (juce::Component*) &saveButton, (juce::Component*) &loadButton, (juce::Component*) &outputSlider,
-                                    (juce::Component*) &outputMeter })
+                                    (juce::Component*) &randomButton, (juce::Component*) &saveButton, (juce::Component*) &loadButton,
+                                    (juce::Component*) &outputSlider, (juce::Component*) &outputMeter })
             addAndMakeVisible (c);
 
-        for (int page = 0; page < numPages; ++page)
-        {
-            auto& button = pageButtons[(size_t) page];
-            button.setButtonText (pageName (page));
-            button.setComponentID ("page_" + juce::String (pageName (page)));
-            button.setRadioGroupId (2001);
-            button.setClickingTogglesState (true);
-            button.setColour (juce::TextButton::buttonOnColourId, ui::pageColour (page).withAlpha (0.35f));
-            button.onClick = [this, page] { if (pageButtons[(size_t) page].getToggleState()) selectPage (page); };
-            addAndMakeVisible (button);
-        }
-
-        buildPages();
+        buildPanel();
 
         synth.presetChanged.addChangeListener (this);
         refreshPresetBox();
         updateUndoButtons();
-        selectPage (oscillatorsPage);
         updateEnablement();
-        updatePageStatus();
+        updateStatus();
 
         setResizable (true, true);
         setResizeLimits (940, 600, 2400, 1400);
@@ -125,100 +117,69 @@ namespace dooblrprophet
     {
         stopTimer();
         synth.presetChanged.removeChangeListener (this);
+        sections.clear(); // before the extras they lay out
         setLookAndFeel (nullptr);
     }
 
     //==============================================================================
-    ui::ControlPanel& DooblrProphetEditor::addPanel (int page, const juce::String& title, const std::vector<Spec>& specs)
+    ui::Section& DooblrProphetEditor::addSection (int row, const juce::String& title, juce::Colour colour, int columns,
+                                                  const std::vector<ui::Section::Row>& sectionRows)
     {
-        auto& content = pages[(size_t) page];
-        content.panels.push_back (std::make_unique<ui::ControlPanel> (state, title, ui::pageColour (page), specs));
-        addChildComponent (*content.panels.back());
-        return *content.panels.back();
+        sections.push_back (std::make_unique<ui::Section> (state, title, colour, columns, sectionRows));
+        rows[(size_t) row].push_back ((int) sections.size() - 1);
+        addAndMakeVisible (*sections.back());
+        return *sections.back();
     }
 
-    void DooblrProphetEditor::addToggle (int page, const juce::String& caption, const juce::String& parameterId,
-                                         const juce::StringArray& labels)
+    void DooblrProphetEditor::buildPanel()
     {
-        auto& content = pages[(size_t) page];
-        content.toggles.push_back (std::make_unique<ui::SegmentedToggle> (state, parameterId, labels, ui::pageColour (page)));
-        content.toggleCaptions.add (caption);
+        // Top row: modulation and oscillators.
+        addSection (0, "Poly-Mod", modColour, 2,
+                    { { knob (id::pmodFiltEnv, "Filter Env"), knob (id::pmodOsc2, "Osc B") },
+                      { toggle (id::pmodDestFreq1, "Freq A", 2.0f) },
+                      { toggle (id::pmodDestShape1, "Shape A", 2.0f) },
+                      { toggle (id::pmodDestFilter, "Filter", 2.0f) } });
 
-        // Wide enough for the longest label in every segment.
-        const juce::Font font (juce::FontOptions (13.0f, juce::Font::bold).withKerningFactor (0.06f));
-        float widest = 0.0f;
-        for (const auto& label : labels)
-            widest = juce::jmax (widest, juce::GlyphArrangement::getStringWidth (font, label));
-        content.toggleWidths.push_back (juce::jmax ((int) ui::SegmentedToggle::minWidth, labels.size() * (juce::roundToInt (widest) + 30)));
-        addChildComponent (*content.toggles.back());
-    }
+        addSection (0, "LFO / Wheel-Mod", modColour, 5,
+                    { { combo (id::lfoWave, "Wave", 2.5f), combo (id::lfoDivision, "Sync Division", 2.5f) },
+                      { knob (id::lfoRate, "Rate", 1.25f), knob (id::lfoInitial, "Initial", 1.25f),
+                        knob (id::lfoWheel, "Wheel", 1.25f), knob (id::lfoNoiseMix, "Noise Mix", 1.25f) },
+                      { toggle (id::lfoDestFreq1, "Freq A", 5.0f / 3.0f), toggle (id::lfoDestFreq2, "Freq B", 5.0f / 3.0f),
+                        toggle (id::lfoDestShape1, "Shape A", 5.0f / 3.0f) },
+                      { toggle (id::lfoDestShape2, "Shape B", 5.0f / 3.0f), toggle (id::lfoDestLpf, "Low-Pass", 5.0f / 3.0f),
+                        toggle (id::lfoDestHpf, "High-Pass", 5.0f / 3.0f) },
+                      { toggle (id::lfoDestAmp, "Amp", 5.0f / 3.0f) } })
+            .setTitleSwitch (state, id::lfoSync, { "Free", "Sync" });
 
-    void DooblrProphetEditor::buildPages()
-    {
-        const auto source = [&p = synth] { return p.readSettings(); };
-        auto& tap = synth.getEngine().getVoiceTap();
+        addSection (0, "Oscillator A", oscColour, 4,
+                    { { knob (id::osc1Coarse, "Freq"), knob (id::osc1Fine, "Fine"), knob (id::osc1Shape, "Shape"), knob (id::osc1PW, "PW") },
+                      { toggle (id::osc1Saw, "Saw", 4.0f / 3.0f), toggle (id::osc1Tri, "Tri", 4.0f / 3.0f), toggle (id::osc1Pulse, "Pulse", 4.0f / 3.0f) },
+                      { toggle (id::osc1Sync, "Sync", 4.0f / 3.0f) } })
+            .setTitleSwitch (state, id::osc1Mode, { "Variable", "Switched" });
 
-        pages[oscillatorsPage].graph = std::make_unique<ui::OscillatorDisplay> (source);
-        pages[filtersPage].graph = std::make_unique<ui::FilterDisplay> (source);
-        pages[envelopesPage].graph = std::make_unique<ui::EnvelopeDisplay> (source);
-        pages[modulationPage].graph = std::make_unique<ui::LfoDisplay> (source, tap);
-        pages[voicesPage].graph = std::make_unique<ui::VoiceDisplay> (source, tap);
+        addSection (0, "Oscillator B", oscColour, 4,
+                    { { knob (id::osc2Coarse, "Freq"), knob (id::osc2Fine, "Fine"), knob (id::osc2Shape, "Shape"), knob (id::osc2PW, "PW") },
+                      { toggle (id::osc2Saw, "Saw", 4.0f / 3.0f), toggle (id::osc2Tri, "Tri", 4.0f / 3.0f), toggle (id::osc2Pulse, "Pulse", 4.0f / 3.0f) },
+                      { toggle (id::osc2LowFreq, "Lo Freq", 4.0f / 3.0f), toggle (id::osc2KeyTrack, "Kbd", 4.0f / 3.0f) } })
+            .setTitleSwitch (state, id::osc2Mode, { "Variable", "Switched" });
 
-        for (auto& content : pages)
-            addChildComponent (*content.graph);
+        // Bottom row: mixer, filter, envelopes, voices.
+        addSection (1, "Mixer", oscColour, 2,
+                    { { knob (id::mixOsc1, "Osc A"), knob (id::mixOsc2, "Osc B") },
+                      { knob (id::mixSub, "Sub"), knob (id::mixNoise, "Noise") } });
 
-        // Oscillators
-        addToggle (oscillatorsPage, "OSC 1", id::osc1Mode, { "Variable", "Switched" });
-        addToggle (oscillatorsPage, "OSC 2", id::osc2Mode, { "Variable", "Switched" });
-        addPanel (oscillatorsPage, "OSCILLATOR 1", { knob (id::osc1Coarse, "Coarse"), knob (id::osc1Fine, "Fine"),
-                                                     knob (id::osc1Shape, "Shape"), knob (id::osc1PW, "Pulse Width"),
-                                                     toggle (id::osc1Saw, "Saw"), toggle (id::osc1Tri, "Triangle"),
-                                                     toggle (id::osc1Pulse, "Pulse"), toggle (id::osc1Sync, "Sync") });
-        addPanel (oscillatorsPage, "OSCILLATOR 2", { knob (id::osc2Coarse, "Coarse"), knob (id::osc2Fine, "Fine"),
-                                                     knob (id::osc2Shape, "Shape"), knob (id::osc2PW, "Pulse Width"),
-                                                     toggle (id::osc2Saw, "Saw"), toggle (id::osc2Tri, "Triangle"),
-                                                     toggle (id::osc2Pulse, "Pulse"), toggle (id::osc2LowFreq, "Low Freq"),
-                                                     toggle (id::osc2KeyTrack, "Key Track") });
-        addPanel (oscillatorsPage, "MIXER", { knob (id::mixOsc1, "Osc 1"), knob (id::mixOsc2, "Osc 2"),
-                                              knob (id::mixSub, "Sub"), knob (id::mixNoise, "Noise") });
-        pages[oscillatorsPage].rows = { { 0 }, { 1 }, { 2 } };
+        addSection (1, "Filter", filterColour, 4,
+                    { { knob (id::lpfCutoff, "Cutoff"), knob (id::lpfReso, "Resonance"), knob (id::lpfEnvAmt, "Env Amt"), knob (id::lpfKeyTrack, "Kbd") },
+                      { knob (id::lpfDrive, "Drive"), knob (id::hpfCutoff, "HP Cutoff"), knob (id::hpfReso, "HP Reso"), knob (id::hpfEnvAmt, "HP Env") } })
+            .setTitleSwitch (state, id::lpfModel, { "3320", "2040" });
 
-        // Filters
-        addToggle (filtersPage, "LOW-PASS", id::lpfModel, params::lpfModelNames());
-        addPanel (filtersPage, "HIGH-PASS (2-POLE)", { knob (id::hpfCutoff, "Cutoff"), knob (id::hpfReso, "Resonance"),
-                                                       knob (id::hpfEnvAmt, "Env Amount") });
-        addPanel (filtersPage, "LOW-PASS (4-POLE LADDER)", { knob (id::lpfCutoff, "Cutoff"), knob (id::lpfReso, "Resonance"),
-                                                             knob (id::lpfDrive, "Drive"), knob (id::lpfEnvAmt, "Env Amount"),
-                                                             knob (id::lpfKeyTrack, "Key Track") });
-        pages[filtersPage].rows = { { 0, 1 } };
+        addSection (1, "Filter Envelope", envColour, 3,
+                    { { knob (id::fenvAttack, "Attack"), knob (id::fenvDecay, "Decay"), knob (id::fenvSustain, "Sustain") },
+                      { knob (id::fenvRelease, "Release"), knob (id::fenvVelAmt, "Velocity") } });
 
-        // Envelopes
-        addPanel (envelopesPage, "FILTER ENVELOPE", { knob (id::fenvAttack, "Attack"), knob (id::fenvDecay, "Decay"),
-                                                      knob (id::fenvSustain, "Sustain"), knob (id::fenvRelease, "Release"),
-                                                      knob (id::fenvVelAmt, "Velocity") });
-        addPanel (envelopesPage, "AMP ENVELOPE", { knob (id::aenvAttack, "Attack"), knob (id::aenvDecay, "Decay"),
-                                                   knob (id::aenvSustain, "Sustain"), knob (id::aenvRelease, "Release"),
-                                                   knob (id::aenvVelAmt, "Velocity") });
-        pages[envelopesPage].rows = { { 0 }, { 1 } };
-
-        // Modulation
-        addToggle (modulationPage, "LFO", id::lfoSync, { "Free", "Tempo Sync" });
-        addPanel (modulationPage, "POLY-MOD", { knob (id::pmodFiltEnv, "Filter Env"), knob (id::pmodOsc2, "Osc 2"),
-                                                toggle (id::pmodDestFreq1, "Osc 1 Freq"), toggle (id::pmodDestShape1, "Osc 1 Shape"),
-                                                toggle (id::pmodDestFilter, "Filter") });
-        addPanel (modulationPage, "LFO", { combo (id::lfoWave, "Wave"), knob (id::lfoRate, "Rate"), combo (id::lfoDivision, "Division"),
-                                           knob (id::lfoInitial, "Initial"), knob (id::lfoWheel, "Wheel"), knob (id::lfoNoiseMix, "Noise Mix") });
-        addPanel (modulationPage, "LFO DESTINATIONS", { toggle (id::lfoDestFreq1, "Osc 1 Freq"), toggle (id::lfoDestFreq2, "Osc 2 Freq"),
-                                                        toggle (id::lfoDestShape1, "Osc 1 Shape"), toggle (id::lfoDestShape2, "Osc 2 Shape"),
-                                                        toggle (id::lfoDestLpf, "Low-Pass"), toggle (id::lfoDestHpf, "High-Pass"),
-                                                        toggle (id::lfoDestAmp, "Amp") });
-        pages[modulationPage].rows = { { 0 }, { 1 }, { 2 } };
-
-        // Voices
-        addToggle (voicesPage, "MODE", id::voiceMode, { "Poly", "Unison", "Mono" });
-        auto& voicePanel = addPanel (voicesPage, "VOICES", { knob (id::voices, "Voices"), knob (id::unisonVoices, "Unison"),
-                                                             knob (id::unisonDetune, "Detune"), knob (id::glide, "Glide"),
-                                                             knob (id::vintage, "Vintage") });
+        addSection (1, "Amp Envelope", envColour, 3,
+                    { { knob (id::aenvAttack, "Attack"), knob (id::aenvDecay, "Decay"), knob (id::aenvSustain, "Sustain") },
+                      { knob (id::aenvRelease, "Release"), knob (id::aenvVelAmt, "Velocity") } });
 
         for (size_t i = 0; i < voicePresetButtons.size(); ++i)
         {
@@ -228,14 +189,25 @@ namespace dooblrprophet
             button.setComponentID ("voicesPreset" + juce::String (count));
             button.setTooltip ("Set Voices to " + juce::String (count));
             button.setClickingTogglesState (false);
-            button.setColour (juce::TextButton::buttonOnColourId, ui::pageColour (voicesPage).withAlpha (0.45f));
+            button.setColour (juce::TextButton::buttonOnColourId, voiceColour.withAlpha (0.45f));
             button.onClick = [this, count] { setVoices (count); };
-            voicePanel.addExtra (button, 44, (int) i + 1);
         }
 
-        addPanel (voicesPage, "PERFORMANCE", { knob (id::bendRange, "Bend Range"), knob (id::atFilter, "AT > Filter"),
-                                               knob (id::atLfo, "AT > LFO") });
-        pages[voicesPage].rows = { { 0 }, { 1 } };
+        addSection (1, "Voices", voiceColour, 4,
+                    { { knob (id::voices, "Voices"), knob (id::unisonVoices, "Unison"), knob (id::unisonDetune, "Detune"), knob (id::glide, "Glide") },
+                      { extra (voicesCaption), extra (voicePresetButtons[0]), extra (voicePresetButtons[1]), extra (voicePresetButtons[2]) },
+                      { knob (id::vintage, "Vintage"), knob (id::bendRange, "Bend"), knob (id::atFilter, "AT Filter"), knob (id::atLfo, "AT LFO") },
+                      { extra (statusLabel, 4.0f) } })
+            .setTitleSwitch (state, id::voiceMode, { "Poly", "Unison", "Mono" });
+    }
+
+    juce::Component* DooblrProphetEditor::findControl (const juce::String& parameterId) const
+    {
+        for (const auto& section : sections)
+            if (auto* control = section->findControl (parameterId))
+                return control;
+
+        return parameterId == id::output ? const_cast<juce::Slider*> (&outputSlider) : nullptr;
     }
 
     void DooblrProphetEditor::setVoices (int count)
@@ -251,66 +223,50 @@ namespace dooblrprophet
         updateUndoButtons();
     }
 
-    //==============================================================================
-    void DooblrProphetEditor::selectPage (int page)
+    void DooblrProphetEditor::randomise()
     {
-        selectedPage = juce::jlimit (0, (int) numPages - 1, page);
-        pageButtons[(size_t) selectedPage].setToggleState (true, juce::dontSendNotification);
-
-        for (int p = 0; p < numPages; ++p)
-        {
-            const bool shown = p == selectedPage;
-            auto& content = pages[(size_t) p];
-            content.graph->setVisible (shown);
-
-            for (auto& panel : content.panels)
-                panel->setVisible (shown);
-
-            for (auto& t : content.toggles)
-                t->setVisible (shown);
-        }
-
-        updatePageStatus();
-        resized();
-        repaint();
+        juce::Random random; // seeded from the clock: a new patch each press
+        synth.randomisePatch (random);
+        refreshPresetBox();
+        updateEnablement();
+        updateUndoButtons();
     }
 
     void DooblrProphetEditor::updateEnablement()
     {
-        const auto setEnabled = [this] (int page, const char* pid, bool enabled)
+        const auto setEnabled = [this] (const char* pid, bool enabled)
         {
-            for (auto& panel : pages[(size_t) page].panels)
-                if (auto* control = panel->findControl (pid))
-                    control->setEnabled (enabled);
+            if (auto* control = findControl (pid))
+                control->setEnabled (enabled);
         };
 
         // Variable mode uses the Shape knob; Switched mode uses the wave switches. Pulse Width acts in both.
         const bool osc1Switched = valueOf (state, id::osc1Mode) > 0.5f;
         const bool osc2Switched = valueOf (state, id::osc2Mode) > 0.5f;
-        setEnabled (oscillatorsPage, id::osc1Shape, ! osc1Switched);
-        setEnabled (oscillatorsPage, id::osc2Shape, ! osc2Switched);
+        setEnabled (id::osc1Shape, ! osc1Switched);
+        setEnabled (id::osc2Shape, ! osc2Switched);
 
         for (auto* pid : { id::osc1Saw, id::osc1Tri, id::osc1Pulse })
-            setEnabled (oscillatorsPage, pid, osc1Switched);
+            setEnabled (pid, osc1Switched);
 
         for (auto* pid : { id::osc2Saw, id::osc2Tri, id::osc2Pulse })
-            setEnabled (oscillatorsPage, pid, osc2Switched);
+            setEnabled (pid, osc2Switched);
 
         // Poly-Mod destinations only matter when a Poly-Mod source is turned up.
         const bool polyModOn = std::abs (valueOf (state, id::pmodFiltEnv)) > 1.0e-4f || valueOf (state, id::pmodOsc2) > 1.0e-4f;
 
         for (auto* pid : { id::pmodDestFreq1, id::pmodDestShape1, id::pmodDestFilter })
-            setEnabled (modulationPage, pid, polyModOn);
+            setEnabled (pid, polyModOn);
 
         const bool synced = valueOf (state, id::lfoSync) > 0.5f;
-        setEnabled (modulationPage, id::lfoRate, ! synced);
-        setEnabled (modulationPage, id::lfoDivision, synced);
+        setEnabled (id::lfoRate, ! synced);
+        setEnabled (id::lfoDivision, synced);
 
         // Voices sets the poly voice count; Unison and Detune only act in Unison mode; Mono uses one voice.
         const auto mode = juce::roundToInt (valueOf (state, id::voiceMode));
-        setEnabled (voicesPage, id::voices, mode == 0);
-        setEnabled (voicesPage, id::unisonVoices, mode == 1);
-        setEnabled (voicesPage, id::unisonDetune, mode == 1);
+        setEnabled (id::voices, mode == 0);
+        setEnabled (id::unisonVoices, mode == 1);
+        setEnabled (id::unisonDetune, mode == 1);
 
         const auto voices = juce::roundToInt (valueOf (state, id::voices));
 
@@ -319,16 +275,19 @@ namespace dooblrprophet
             voicePresetButtons[i].setEnabled (mode == 0);
             voicePresetButtons[i].setToggleState (voices == voicePresets[i], juce::dontSendNotification);
         }
+
+        voicesCaption.setEnabled (mode == 0);
+        voicesCaption.setAlpha (mode == 0 ? 1.0f : 0.5f);
     }
 
     void DooblrProphetEditor::setStatus (const juce::String& text)
     {
         transientStatus = text;
         transientStatusUntil = juce::Time::getMillisecondCounter() + 4000;
-        updatePageStatus();
+        updateStatus();
     }
 
-    void DooblrProphetEditor::updatePageStatus()
+    void DooblrProphetEditor::updateStatus()
     {
         juce::String text;
 
@@ -340,24 +299,8 @@ namespace dooblrprophet
         {
             transientStatus.clear();
             const auto s = synth.readSettings();
-
-            switch (selectedPage)
-            {
-                case oscillatorsPage:
-                {
-                    const bool fm = s.pmodFreq1 && (std::abs (s.pmodFiltEnv) > 1.0e-4f || s.pmodOsc2 > 1.0e-4f);
-                    text = fm ? "Poly-Mod FM active: 4x oversampled" : "2x oversampled";
-                    break;
-                }
-                case filtersPage:
-                    text = juce::String ("High-pass, then ") + (s.lpfModel == 1 ? "2040-style ladder" : "3320-style ladder");
-                    break;
-                case voicesPage:
-                    text = juce::String (synth.getEngine().getNumActiveVoices()) + " sounding";
-                    break;
-                default:
-                    break;
-            }
+            const bool fm = s.pmodFreq1 && (std::abs (s.pmodFiltEnv) > 1.0e-4f || s.pmodOsc2 > 1.0e-4f);
+            text = juce::String (synth.getEngine().getNumActiveVoices()) + " sounding  |  " + (fm ? "4x (Poly-Mod FM)" : "2x oversampled");
         }
 
         if (statusLabel.getText() != text)
@@ -469,7 +412,7 @@ namespace dooblrprophet
     {
         updateEnablement();
         updateUndoButtons();
-        updatePageStatus();
+        updateStatus();
 
         if (synth.getPresetName() != shownPresetName && ! presetBox.isPopupActive())
             refreshPresetBox();
@@ -518,29 +461,11 @@ namespace dooblrprophet
 
         g.setColour (Palette::panel);
         g.fillRect (headerArea);
-        g.fillRect (navArea);
-
         g.setColour (Palette::divider);
         g.fillRect (headerArea.getX(), headerArea.getBottom() - 1, headerArea.getWidth(), 1);
-        g.fillRect (navArea.getRight() - 1, navArea.getY(), 1, navArea.getHeight());
 
         g.setColour (Palette::accent);
         g.fillRect (headerArea.getX() + 20, headerArea.getY() + 14, 3, headerArea.getHeight() - 28);
-
-        const auto colour = ui::pageColour (selectedPage);
-        g.setColour (colour);
-        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-        g.drawText (juce::String (pageName (selectedPage)).toUpperCase(), titleBarArea.withWidth (160), juce::Justification::centredLeft);
-
-        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-        g.setColour (Palette::textMuted);
-        const auto& captions = pages[(size_t) selectedPage].toggleCaptions;
-
-        for (size_t i = 0; i < toggleCaptionAreas.size() && (int) i < captions.size(); ++i)
-            g.drawText (captions[(int) i], toggleCaptionAreas[i], juce::Justification::centredRight);
-
-        g.setColour (Palette::divider);
-        g.fillRect (titleBarArea.getX(), titleBarArea.getBottom() + 3, titleBarArea.getWidth(), 1);
     }
 
     void DooblrProphetEditor::resized()
@@ -562,7 +487,7 @@ namespace dooblrprophet
 
             outputMeter.setBounds (header.removeFromRight (meterWidth));
             header.removeFromRight (10);
-            const auto sliderWidth = juce::jlimit (170, 260, header.getWidth() / 3);
+            const auto sliderWidth = juce::jlimit (140, 260, header.getWidth() / 4);
             outputSlider.setBounds (header.removeFromRight (sliderWidth).withSizeKeepingCentre (sliderWidth, 24));
             outputCaption.setBounds (header.removeFromRight (52));
             header.removeFromRight (16);
@@ -571,80 +496,67 @@ namespace dooblrprophet
             header.removeFromRight (4);
             saveButton.setBounds (header.removeFromRight (46).withSizeKeepingCentre (46, 24));
             header.removeFromRight (4);
+            randomButton.setBounds (header.removeFromRight (66).withSizeKeepingCentre (66, 24));
+            header.removeFromRight (4);
             const auto presetWidth = juce::jmin (header.getWidth(), 280);
             presetBox.setBounds (header.removeFromRight (presetWidth).withSizeKeepingCentre (presetWidth, 26));
         }
 
-        navArea = bounds.removeFromLeft (navWidth);
+        panelArea = bounds.reduced (margin);
+
+        // Each row shares its width by the sections' column counts; the two rows share the
+        // height so every knob row gets the same extra room (the bottom row has two).
+        const auto rowWidths = [this] (const std::vector<int>& row)
         {
-            auto nav = navArea.reduced (12, 16);
-            const auto pitch = juce::jlimit (28, 44, nav.getHeight() / numPages);
-
-            for (auto& button : pageButtons)
-                button.setBounds (nav.removeFromTop (pitch).reduced (0, 3));
-        }
-
-        contentArea = bounds.reduced (margin);
-        layoutPage (selectedPage);
-    }
-
-    void DooblrProphetEditor::layoutPage (int page)
-    {
-        auto area = contentArea;
-        auto& content = pages[(size_t) page];
-
-        // Title bar: page title, status, then each mode switch with its caption on the right.
-        titleBarArea = area.removeFromTop (titleBarHeight - 8);
-        area.removeFromTop (8);
-        toggleCaptionAreas.clear();
-        {
-            auto bar = titleBarArea;
-            bar.removeFromLeft (160);
-
-            for (int i = (int) content.toggles.size() - 1; i >= 0; --i)
-            {
-                auto& t = *content.toggles[(size_t) i];
-                const auto width = content.toggleWidths[(size_t) i];
-                t.setBounds (bar.removeFromRight (width).withSizeKeepingCentre (width, juce::jmin (bar.getHeight(), 32)));
-                toggleCaptionAreas.insert (toggleCaptionAreas.begin(), bar.removeFromRight (58).withTrimmedRight (8));
-                bar.removeFromRight (8);
-            }
-
-            // The status line only shows where it has room (it carries no control).
-            statusLabel.setBounds (bar.reduced (4, 0));
-            statusLabel.setVisible (statusLabel.getWidth() >= 120);
-        }
-
-        // Panels from the bottom up, each row sharing its width by the panels' natural widths.
-        std::vector<int> rowHeights;
-        int panelsHeight = 0;
-
-        for (const auto& row : content.rows)
-        {
-            const auto rowWidth = (area.getWidth() - panelGap * ((int) row.size() - 1)) / (int) row.size();
-            int height = 0;
-
+            int columns = 0;
             for (auto index : row)
-                height = juce::jmax (height, content.panels[(size_t) index]->getPreferredHeight (rowWidth));
+                columns += sections[(size_t) index]->getColumns();
 
-            rowHeights.push_back (height);
-            panelsHeight += height + panelGap;
-        }
-
-        const auto graphHeight = juce::jmax (minGraphHeight, area.getHeight() - panelsHeight);
-        content.graph->setBounds (area.removeFromTop (graphHeight));
-
-        for (size_t r = 0; r < content.rows.size(); ++r)
-        {
-            area.removeFromTop (panelGap);
-            auto rowArea = area.removeFromTop (rowHeights[r]);
-            const auto& row = content.rows[r];
-            const auto rowWidth = (rowArea.getWidth() - panelGap * ((int) row.size() - 1)) / (int) row.size();
+            const auto spare = panelArea.getWidth() - sectionGap * ((int) row.size() - 1) - 2 * ui::Section::padding * (int) row.size();
+            const auto unit = (float) spare / (float) juce::jmax (1, columns);
+            std::vector<int> widths;
+            float x = 0.0f;
+            int used = 0;
 
             for (size_t i = 0; i < row.size(); ++i)
             {
-                content.panels[(size_t) row[i]]->setBounds (i + 1 == row.size() ? rowArea : rowArea.removeFromLeft (rowWidth));
-                rowArea.removeFromLeft (panelGap);
+                x += unit * (float) sections[(size_t) row[i]]->getColumns() + 2.0f * ui::Section::padding;
+                const auto right = i + 1 == row.size() ? panelArea.getWidth() - sectionGap * ((int) row.size() - 1) : juce::roundToInt (x);
+                widths.push_back (right - used);
+                used = right;
+            }
+
+            return widths;
+        };
+
+        std::array<std::vector<int>, 2> widths { rowWidths (rows[0]), rowWidths (rows[1]) };
+        std::array<int, 2> minHeights {}, knobRows {};
+
+        for (size_t r = 0; r < rows.size(); ++r)
+            for (size_t i = 0; i < rows[r].size(); ++i)
+            {
+                auto& section = *sections[(size_t) rows[r][i]];
+                section.setSize (widths[r][i], section.getHeight()); // the preferred height depends on the width
+                minHeights[r] = juce::jmax (minHeights[r], section.getPreferredHeight (ui::Section::minKnobRowHeight));
+                knobRows[r] = juce::jmax (knobRows[r], section.getNumKnobRows());
+            }
+
+        const auto spare = juce::jmax (0, panelArea.getHeight() - sectionGap - minHeights[0] - minHeights[1]);
+        const auto topHeight = minHeights[0] + spare * knobRows[0] / juce::jmax (1, knobRows[0] + knobRows[1]);
+
+        auto area = panelArea;
+        std::array<juce::Rectangle<int>, 2> rowAreas;
+        rowAreas[0] = area.removeFromTop (topHeight);
+        area.removeFromTop (sectionGap);
+        rowAreas[1] = area;
+
+        for (size_t r = 0; r < rows.size(); ++r)
+        {
+            auto rowArea = rowAreas[r];
+            for (size_t i = 0; i < rows[r].size(); ++i)
+            {
+                sections[(size_t) rows[r][i]]->setBounds (rowArea.removeFromLeft (widths[r][i]));
+                rowArea.removeFromLeft (sectionGap);
             }
         }
     }

@@ -33,6 +33,8 @@ namespace dooblrprophet::ui
                                float rotaryStartAngle, float rotaryEndAngle, juce::Slider&) override;
 
         void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
+        /** Value boxes squeeze long readouts (e.g. "12.0 kHz") rather than truncating them. */
+        juce::Label* createSliderTextBox (juce::Slider&) override;
 
         /** Vertical sliders (the layer Level faders, v0.3.3): a slim groove filled from the bottom
             and a flat cap. Other linear styles use the default look. */

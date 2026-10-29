@@ -2,6 +2,7 @@
 
 #include "Parameters.h"
 #include "PluginEditor.h"
+#include "Randomiser.h"
 #include "Presets.h"
 
 namespace dooblrprophet
@@ -221,6 +222,13 @@ namespace dooblrprophet
             return "Could not save preset: " + file.getFullPathName();
         setPresetName (name);
         return "Saved " + name;
+    }
+
+    int DooblrProphetProcessor::randomisePatch (juce::Random& random)
+    {
+        const auto changed = randomiser::apply (state, random);
+        setPresetName ("Random");
+        return changed;
     }
 
     juce::String DooblrProphetProcessor::loadUserPreset (const juce::File& file)

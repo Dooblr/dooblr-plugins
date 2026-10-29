@@ -10,6 +10,7 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "Presets.h"
+#include "Randomiser.h"
 #include "DSP/AnalogModel.h"
 #include "DSP/Primitives.h"
 #include "DSP/SynthEngine.h"
@@ -693,107 +694,132 @@ namespace
         check (constrainer != nullptr && constrainer->getMinimumWidth() == 940 && constrainer->getMinimumHeight() == 600
                    && constrainer->getMaximumWidth() == 2400 && constrainer->getMaximumHeight() == 1400, "resize limits 940 x 600 .. 2400 x 1400");
 
-        auto* version = editor->findChildWithID ("version");
-        auto* versionLabel = dynamic_cast<juce::Label*> (version);
+        auto* versionLabel = dynamic_cast<juce::Label*> (editor->findChildWithID ("version"));
         check (versionLabel != nullptr && versionLabel->getText() == "v" JucePlugin_VersionString, "version label shows v" JucePlugin_VersionString);
 
-        // Every parameter has exactly one control, and every control is bound to a parameter.
-        std::map<juce::String, int> controls;
-        for (int page = 0; page < Editor::numPages; ++page)
+        // One front panel in the classic order.
+        const std::vector<std::vector<std::string>> expectedRows {
+            { "Poly-Mod", "LFO / Wheel-Mod", "Oscillator A", "Oscillator B" },
+            { "Mixer", "Filter", "Filter Envelope", "Amp Envelope", "Voices" } };
+        const auto& sections = editor->getSections();
+        for (size_t r = 0; r < 2; ++r)
         {
-            for (auto& panel : editor->getPanels (page))
-                for (auto* r : p->getParameters())
-                {
-                    const auto pid = dynamic_cast<juce::RangedAudioParameter*> (r)->getParameterID();
-                    if (panel->findControl (pid) != nullptr) ++controls[pid];
-                }
-            for (auto& t : editor->getModeToggles (page))
-                ++controls[t->getComponentID()];
+            std::vector<std::string> titles;
+            for (auto index : editor->getRows()[r])
+                titles.push_back (sections[(size_t) index]->getTitle().toStdString());
+            check (titles == expectedRows[r], "row " + std::to_string (r + 1) + " sections in panel order");
         }
-        ++controls[id::output]; // the header Output slider
-        check (editor->findChildWithID (id::output) != nullptr, "header Output slider exists");
-        int missing = 0;
-        for (auto* r : p->getParameters())
-        {
-            const auto pid = dynamic_cast<juce::RangedAudioParameter*> (r)->getParameterID();
-            if (controls[pid] != 1) { ++missing; check (false, "parameter " + pid.toStdString() + " has one control (has " + std::to_string (controls[pid]) + ")"); }
-        }
-        check (missing == 0, "every parameter has exactly one control");
-        check (controls.size() == (size_t) p->getParameters().size(), "no control without a parameter");
 
-        // Layout at the three sizes: inside the editor, nothing overlapping.
+        // Every parameter has exactly one control, every control is bound to a parameter, all visible at once.
+        std::set<juce::String> parameterIds;
+        for (auto* r : p->getParameters())
+            parameterIds.insert (dynamic_cast<juce::RangedAudioParameter*> (r)->getParameterID());
+
+        int missing = 0;
+        for (const auto& pid : parameterIds)
+        {
+            int count = pid == id::output ? 1 : 0; // the header Output slider
+            for (auto& section : sections)
+                if (section->findControl (pid) != nullptr) ++count;
+            if (count != 1) { ++missing; check (false, "parameter " + pid.toStdString() + " has one control (has " + std::to_string (count) + ")"); }
+            if (auto* c = editor->findControl (pid))
+                check (c->isShowing() || ! editor->isShowing(), "control visible: " + pid.toStdString());
+        }
+        check (missing == 0, "every parameter has exactly one control on the one panel");
+        check (editor->findChildWithID (id::output) != nullptr, "header Output slider exists");
+
+        int unbound = 0;
+        for (auto& section : sections)
+            for (auto* child : section->getChildren())
+                if (dynamic_cast<juce::Slider*> (child) != nullptr || dynamic_cast<juce::ToggleButton*> (child) != nullptr
+                    || dynamic_cast<juce::ComboBox*> (child) != nullptr)
+                    if (parameterIds.count (child->getComponentID()) == 0) ++unbound;
+        check (unbound == 0, "no control without a parameter (" + std::to_string (unbound) + " unbound)");
+
+        // Layout at the three sizes.
         for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
         {
             editor->setSize (size.x, size.y);
-            const auto sizeLabel = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
+            const auto label = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
 
             std::vector<juce::Component*> header;
-            for (auto* cid : { "undo", "redo", "preset", "savePreset", "loadPreset", id::output, "version" })
+            for (auto* cid : { "undo", "redo", "preset", "random", "savePreset", "loadPreset", id::output, "version" })
                 if (auto* c = editor->findChildWithID (cid)) header.push_back (c);
+            check (header.size() == 8, label + "all header items present");
             for (size_t i = 0; i < header.size(); ++i)
             {
                 check (editor->getLocalBounds().contains (header[i]->getBounds()) && header[i]->getBottom() <= 60,
-                       sizeLabel + "header item inside the header: " + header[i]->getComponentID().toStdString());
+                       label + "header item inside the header: " + header[i]->getComponentID().toStdString());
                 for (size_t j = i + 1; j < header.size(); ++j)
                     check (! header[i]->getBounds().intersects (header[j]->getBounds()),
-                           sizeLabel + "header items do not overlap: " + header[i]->getComponentID().toStdString() + " / " + header[j]->getComponentID().toStdString());
+                           label + "header items do not overlap: " + header[i]->getComponentID().toStdString() + " / " + header[j]->getComponentID().toStdString());
             }
+            check (editor->findChildWithID ("preset")->getWidth() >= 140, label + "preset box at least 140 px");
 
-            for (int page = 0; page < Editor::numPages; ++page)
+            const auto panel = editor->getPanelArea();
+            check (panel.getY() >= 60, label + "panel below the header");
+            int smallestKnob = 10000, smallestToggle = 10000;
+
+            for (size_t i = 0; i < sections.size(); ++i)
             {
-                editor->selectPage (page);
-                const auto label = sizeLabel + Editor::pageName (page) + ": ";
-                const auto content = editor->getContentArea();
-                std::vector<juce::Rectangle<int>> blocks { editor->getGraph (page).getBounds() };
-                check (editor->getGraph (page).getHeight() >= 120, label + "graph at least 120 px (" + std::to_string (editor->getGraph (page).getHeight()) + ")");
-                for (auto& panel : editor->getPanels (page))
+                auto& s = *sections[i];
+                const auto name = label + s.getTitle().toStdString() + ": ";
+                check (panel.contains (s.getBounds()), name + "inside the panel");
+                check (s.getHeight() >= s.getPreferredHeight (ui::Section::minKnobRowHeight), name + "tall enough for its controls");
+                for (size_t j = i + 1; j < sections.size(); ++j)
+                    check (! s.getBounds().intersects (sections[j]->getBounds()), name + "does not overlap " + sections[j]->getTitle().toStdString());
+
+                std::vector<juce::Component*> visible;
+                for (auto* child : s.getChildren())
+                    if (child->isVisible()) visible.push_back (child);
+                for (size_t a = 0; a < visible.size(); ++a)
                 {
-                    blocks.push_back (panel->getBounds());
-                    check (panel->getHeight() >= panel->getPreferredHeight (panel->getWidth()), label + "panel fits its controls: " + panel->getTitle().toStdString());
-                    for (auto* child : panel->getChildren())
-                        if (child->isVisible())
-                            check (panel->getLocalBounds().contains (child->getBounds()), label + "control inside its panel: " + child->getComponentID().toStdString()
-                                                                                              + " in " + panel->getTitle().toStdString());
+                    const auto cid = visible[a]->getComponentID().toStdString();
+                    check (s.getLocalBounds().contains (visible[a]->getBounds()), name + "inside its section: " + cid);
+                    check (! visible[a]->getBounds().intersects (s.getTitleBounds()), name + "clear of the title: " + cid);
+                    for (size_t b = a + 1; b < visible.size(); ++b)
+                        check (! visible[a]->getBounds().intersects (visible[b]->getBounds()),
+                               name + "no overlap: " + cid + " / " + visible[b]->getComponentID().toStdString());
+                    if (auto* slider = dynamic_cast<juce::Slider*> (visible[a]))
+                        smallestKnob = std::min (smallestKnob, std::min (slider->getWidth(), slider->getHeight() - slider->getTextBoxHeight()));
+                    if (dynamic_cast<juce::ToggleButton*> (visible[a]) != nullptr)
+                        smallestToggle = std::min (smallestToggle, visible[a]->getHeight());
                 }
-                for (auto& t : editor->getModeToggles (page))
-                {
-                    blocks.push_back (t->getBounds());
-                    check (t->getWidth() >= ui::SegmentedToggle::minWidth && t->getHeight() >= ui::SegmentedToggle::minHeight - 4,
-                           label + "mode switch full size: " + t->getComponentID().toStdString());
-                }
-                for (size_t i = 0; i < blocks.size(); ++i)
-                {
-                    check (content.contains (blocks[i]), label + "block " + std::to_string (i) + " inside the content area");
-                    for (size_t j = i + 1; j < blocks.size(); ++j)
-                        check (! blocks[i].intersects (blocks[j]), label + "blocks " + std::to_string (i) + " and " + std::to_string (j) + " do not overlap");
-                }
+                if (auto* sw = s.getTitleSwitch())
+                    check (sw->getHeight() >= 18 && sw->getWidth() >= 40 * 2, name + "title switch full size (" + std::to_string (sw->getWidth()) + "x" + std::to_string (sw->getHeight()) + ")");
             }
+            check (smallestKnob >= 36, label + "knobs at least 36 px (smallest " + std::to_string (smallestKnob) + ")");
+            check (smallestToggle >= 20, label + "toggles at least 20 px tall (smallest " + std::to_string (smallestToggle) + ")");
+            note (label + "smallest knob " + std::to_string (smallestKnob) + " px");
         }
 
         editor->setSize (1080, 660);
 
         // Dimming: ignored controls follow the modes.
-        const auto enabled = [&] (int page, const char* pid)
-        {
-            for (auto& panel : editor->getPanels (page))
-                if (auto* c = panel->findControl (pid)) return c->isEnabled();
-            return false;
-        };
+        const auto enabled = [&] (const char* pid) { auto* c = editor->findControl (pid); return c != nullptr && c->isEnabled(); };
         set (*p, id::osc1Mode, 1.0f);
         editor->updateEnablement();
-        check (! enabled (Editor::oscillatorsPage, id::osc1Shape) && enabled (Editor::oscillatorsPage, id::osc1Saw), "Switched osc 1: Shape dimmed, switches live");
+        check (! enabled (id::osc1Shape) && enabled (id::osc1Saw), "Switched osc A: Shape dimmed, switches live");
         set (*p, id::osc1Mode, 0.0f);
         editor->updateEnablement();
-        check (enabled (Editor::oscillatorsPage, id::osc1Shape) && ! enabled (Editor::oscillatorsPage, id::osc1Saw), "Variable osc 1: switches dimmed, Shape live");
+        check (enabled (id::osc1Shape) && ! enabled (id::osc1Saw), "Variable osc A: switches dimmed, Shape live");
         set (*p, id::voiceMode, 1.0f);
         editor->updateEnablement();
-        check (enabled (Editor::voicesPage, id::unisonVoices) && ! enabled (Editor::voicesPage, id::voices)
-                   && ! editor->getVoicePresetButton (0).isEnabled(), "Unison: Unison / Detune live, poly Voices dimmed");
+        check (enabled (id::unisonVoices) && ! enabled (id::voices) && ! editor->getVoicePresetButton (0).isEnabled(),
+               "Unison: Unison / Detune live, poly Voices dimmed");
         set (*p, id::voiceMode, 0.0f);
         set (*p, id::lfoSync, 1.0f);
         editor->updateEnablement();
-        check (! enabled (Editor::modulationPage, id::lfoRate) && enabled (Editor::modulationPage, id::lfoDivision), "LFO Sync: Rate dimmed, Division live");
+        check (! enabled (id::lfoRate) && enabled (id::lfoDivision), "LFO Sync: Rate dimmed, Division live");
         set (*p, id::lfoSync, 0.0f);
+        set (*p, id::pmodFiltEnv, 0.0f);
+        set (*p, id::pmodOsc2, 0.0f);
+        editor->updateEnablement();
+        check (! enabled (id::pmodDestFreq1), "Poly-Mod sources at zero: destinations dimmed");
+        set (*p, id::pmodOsc2, 0.3f);
+        editor->updateEnablement();
+        check (enabled (id::pmodDestFreq1), "Poly-Mod source up: destinations live");
+        set (*p, id::pmodOsc2, 0.0f);
         editor->updateEnablement();
 
         // The 5 / 6 / 10 voice buttons set Voices in one undo step.
@@ -804,36 +830,100 @@ namespace
         p->getUndoHistory().undo();
         check (juce::roundToInt (get (*p, id::voices)) == 6, "undo returns to 6 voices");
 
+        // The Random button: a new patch, one undo step, shown as "Random".
+        auto& random = editor->getRandomButton();
+        check (random.getButtonText() == "Random" && random.getTooltip().isEmpty(), "Random button labelled, no hint text");
+        p->getUndoHistory().clear();
+        std::map<juce::String, float> before;
+        for (const auto& pid : parameterIds) before[pid] = get (*p, pid);
+        random.onClick();
+        int changed = 0;
+        for (const auto& pid : parameterIds) if (std::abs (get (*p, pid) - before[pid]) > 1.0e-5f) ++changed;
+        check (changed >= 8, "Random button changes several parameters (" + std::to_string (changed) + ")");
+        check (p->getPresetName() == "Random", "preset name shows Random");
+        p->getUndoHistory().undo();
+        int restored = 0;
+        for (const auto& pid : parameterIds) if (std::abs (get (*p, pid) - before[pid]) <= 1.0e-5f) ++restored;
+        check (restored == (int) parameterIds.size() && ! p->getUndoHistory().canUndo(), "one undo restores the whole patch");
+
         // Keys: Cmd-Z / Cmd-Shift-Z / Cmd-Y only.
         check (editor->keyPressed (juce::KeyPress ('z', juce::ModifierKeys::commandModifier, 0)), "Cmd-Z handled");
         check (editor->keyPressed (juce::KeyPress ('z', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0)), "Cmd-Shift-Z handled");
         check (! editor->keyPressed (juce::KeyPress ('a', 0, 0)) && ! editor->keyPressed (juce::KeyPress (juce::KeyPress::spaceKey)), "other keys go to the host");
 
-        // Graphs: no hint text; readouts only on hover.
-        for (int page = 0; page < Editor::numPages; ++page)
-            check (editor->getGraph (page).getReadout().isEmpty(), std::string ("no readout without hover: ") + Editor::pageName (page));
-
-        // Snapshots: a chord sounding so the live graphs show something.
-        render (*p, 24000, { { 0, on (48) }, { 0, on (55) }, { 0, on (60) }, { 0, on (64) } });
-        for (int page = 0; page < Editor::numPages; ++page)
-        {
-            editor->selectPage (page);
-            editor->getGraph (page).refresh();
-            saveSnapshot (*editor, juce::String ("-") + Editor::pageName (page));
-        }
+        // Snapshots: the factory init patch with a chord sounding (so the status shows voices).
+        p->setCurrentProgram (0);
+        p->presetChanged.dispatchPendingMessages(); // the preset box follows the change broadcast
+        editor->updateEnablement();
+        render (*p, 4800, { { 0, on (48) }, { 0, on (55) }, { 0, on (60) }, { 0, on (64) } });
         editor->setSize (940, 600);
-        editor->selectPage (Editor::oscillatorsPage);
-        editor->getGraph (Editor::oscillatorsPage).refresh();
-        saveSnapshot (*editor, "-Oscillators-940x600");
-
-        // Hover readout last, so the snapshots show the graphs without one.
+        editor->updateEnablement();
+        saveSnapshot (*editor, "-940x600");
         editor->setSize (1080, 660);
-        editor->selectPage (Editor::filtersPage);
-        auto& filterGraph = editor->getGraph (Editor::filtersPage);
-        filterGraph.setHoverPoint (filterGraph.getPlotArea().getCentre());
-        check (filterGraph.getReadout().isNotEmpty(), "filter graph hover readout ("
-                                                          + filterGraph.getReadout().toStdString() + ")");
+        saveSnapshot (*editor, "-1080x660");
+        editor->setSize (2400, 1400);
+        saveSnapshot (*editor, "-2400x1400");
         base.reset();
+    }
+
+    void testRandomPatch()
+    {
+        // The excluded parameters survive Random, even at non-default values.
+        auto p = makeProcessor();
+        set (*p, id::output, -4.0f);
+        set (*p, id::voices, 8.0f);
+        set (*p, id::bendRange, 7.0f);
+        set (*p, id::osc1Coarse, -5.0f);
+        set (*p, id::lfoSync, 1.0f);
+        std::map<juce::String, float> excludedBefore;
+        for (const auto& pid : randomiser::excludedParameters()) excludedBefore[pid] = get (*p, pid);
+
+        int minChanged = 1000, excludedMoved = 0;
+        for (int seed = 0; seed < 20; ++seed)
+        {
+            juce::Random random (seed);
+            minChanged = std::min (minChanged, p->randomisePatch (random));
+            for (const auto& [pid, value] : excludedBefore)
+                if (std::abs (get (*p, pid) - value) > 1.0e-5f) ++excludedMoved;
+        }
+        check (minChanged >= 8, "each Random changes several parameters (fewest " + std::to_string (minChanged) + ")");
+        check (excludedMoved == 0, "volume, voices, bend, tuning and LFO sync never randomised");
+        check (p->getPresetName() == "Random", "preset name is Random");
+
+        // One undo step restores everything.
+        p->getUndoHistory().clear();
+        std::vector<float> before;
+        for (auto* r : p->getParameters()) before.push_back (r->getValue());
+        juce::Random random (1234);
+        p->randomisePatch (random);
+        check (p->getUndoHistory().canUndo(), "Random is undoable");
+        p->getUndoHistory().undo();
+        bool same = true;
+        for (size_t i = 0; i < before.size(); ++i)
+            same = same && std::abs (p->getParameters()[(int) i]->getValue() - before[i]) < 1.0e-6f;
+        check (same && ! p->getUndoHistory().canUndo(), "a single undo restores the patch before Random");
+
+        // Musically usable: every random patch sounds, bounded and finite.
+        int silent = 0, loud = 0, broken = 0;
+        float lowest = 1.0e9f, highest = 0.0f;
+        for (int seed = 0; seed < 60; ++seed)
+        {
+            auto q = makeProcessor();
+            juce::Random r (1000 + seed);
+            q->randomisePatch (r);
+            const auto out = render (*q, 48000, { { 0, on (48) }, { 0, on (60) }, { 0, on (64) }, { 0, on (67) },
+                                                  { 36000, off (48) }, { 36000, off (60) }, { 36000, off (64) }, { 36000, off (67) } });
+            const auto peak = out.peak();
+            if (! out.finite()) ++broken;
+            if (peak < 1.0e-3f) ++silent;
+            if (peak > 4.0f) ++loud;
+            lowest = std::min (lowest, peak);
+            highest = std::max (highest, peak);
+        }
+        check (broken == 0, "no NaN / inf over 60 random patches");
+        check (silent == 0, "every random patch sounds (" + std::to_string (silent) + " silent)");
+        check (loud == 0, "every random patch bounded below 4.0 (" + std::to_string (loud) + " louder)");
+        note ("60 random patches: peak " + fmt (lowest, 3) + " .. " + fmt (highest, 3));
     }
 
     struct TestCase { const char* name; std::function<void()> run; };
@@ -860,6 +950,7 @@ int main()
         { "analog: HF flattening at 5 kHz",            testHfFlattening },
         { "analog: Poly-Mod exp FM raises pitch",      testPolyModRaisesPitch },
         { "real-time safety and 10-voice CPU",         testRealtimeAndCpu },
+        { "random patch",                              testRandomPatch },
         { "editor",                                    testEditor },
     };
 

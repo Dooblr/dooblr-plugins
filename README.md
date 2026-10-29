@@ -9,7 +9,7 @@ in its own folder and has its own README.
 | [`dooblr-q/`](dooblr-q/) | dooblr-q 0.9.5 | Dynamic parametric EQ (VST3 effect) |
 | [`dooblr-kick/`](dooblr-kick/) | dooblr-kick 0.3.6 | Layered kick drum designer (VST3 instrument) |
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals 0.1.0 | Pitch correction and vocal chain (VST3 effect + Standalone) |
-| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet 0.1.0 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) |
+| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet 0.1.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) |
 | [`design/`](design/) | Design files | Shared visual design system for the suite |
 
 ## Building
