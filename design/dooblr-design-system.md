@@ -861,10 +861,22 @@ SegmentedToggle (KEYED | CHROMATIC), dimmed controls, learn-range button, voice 
 - 11. `Switches.h/.cpp` were removed from V.
 - 12. `V:Theme.h` comments now say `master` = Harmony page and `fx` = Delay / Reverb pages and the routing switch.
 
+### 11.5 Key Follow strip (added 2026-10-28, commit `eddffb9`)
+Pitch page only. A 28 px strip sits between the KEYED | CHROMATIC toggle row and the pitch display (4 px above, 6 px below), full display width (`V:UI/KeyFollowStrip.cpp`, `V:PluginEditor.cpp` `resized`).
+- **Background:** `panel`, radius 4. No border.
+- **Left to right:** Key Follow toggle pill (112) · gap 6 · key readout (98, 13 px bold) · confidence bar (56×4, radius 2) · gap 14 · Lock toggle pill (72) · gap 8 · "SENS" caption (34, 11 px bold, `textMuted`) · Sensitivity linear slider (92, no text box; track `accent`, background `divider`, thumb `textPrimary`) · gap 10 · Source combo (100: Auto / Sidechain / Vocal) · gap 10 · status text (rest, 12 px, `textMuted`, right-aligned).
+- **Key readout:** "E major" / "A minor", or an em dash before any key is found. `accent` while following, `textPrimary` when a key is detected but Key Follow is off, `textMuted` with no key. When locked it shows the held key with a trailing " *".
+- **Confidence bar:** `divider` track; fill `accent` (following) or `textMuted` (off) at alpha 0.9, width = confidence 0-1.
+- **Status text** (one at a time): "No sidechain: enable it in the host", "Waiting for audio", "Holding (no signal)", "Off: detecting from <source>", "Listening to <source>", "Following <source>".
+- **Lock** is disabled (standard disabled look) while Key Follow is off.
+- **Key / Scale combos while following:** they are not changed (the parameter values are never overwritten, so automation is not fought). They use the dimmed-control half alpha (0.6, §2.8 / `dimmedControl.alphaHalf`) with the tooltip "Key Follow is using <key>; this is the fallback when Key Follow is off". The pitch display's in-key rows and the Harmony strips' "in Key Scale" label show the followed key.
+- No new colour, font size, radius or alpha token: all values above already exist in §2.
+
 ---
 
 ## 12. Changelog
 
+- **2026-10-28**: Added §11.5 dooblr-vocals Key Follow strip (commit `eddffb9`). Additive only; no existing rule, token name or value changed. JSON: `components.keyFollowStrip`, `layout.vocals.keyFollowStrip`, a `changelog` entry.
 - **2026-10-28**: §11.4 items 5-12 marked resolved by dooblr-vocals commit `29dac9a` (no rule, token name or value changed). dooblr-vocals path references updated to `~/Dropbox/dooblr_plugins/dooblr-vocals`.
 - **2026-10-28**: Added dooblr-vocals v0.2.0 (V). Additive only; no existing rule, token name or value changed.
   - §1.1 identity table; §2.1 `fx` row and a note on vocals' palette use; §2.9 vocals components; §5 drag hygiene; §7 three product rules; §9 rows; §10 two open questions; §11 vocals section with its deviations; this changelog.
