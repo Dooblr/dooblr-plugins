@@ -12,8 +12,9 @@ DC.voicing = (function () {
   function spreadMode(spread) { return spread < 34 ? 0 : (spread < 67 ? 1 : 2); }
 
   // Choose which chord tones (intervals above the root) the upper voices play.
-  function upperIntervals(chord, bassOn) {
+  function upperIntervals(chord, bassOn, maxUpperOpt) {
     var iv = C.tones(chord), maxUpper = bassOn ? 4 : 5;
+    if (maxUpperOpt >= 3 && maxUpperOpt < maxUpper) { maxUpper = Math.round(maxUpperOpt); }
     var slashIv = C.bassInterval(chord);
     if (chord.slash) { iv = removeIv(iv, slashIv); } // the bass note carries the slash tone
     var dropOrder = [chord.fifth === 7 ? 7 : -1, (bassOn && !chord.slash) ? 0 : -1, 17, 18, 13, 15];
@@ -85,13 +86,13 @@ DC.voicing = (function () {
   }
 
   // opts: { register: MIDI note for the bottom of the upper voicing,
-  //         spread: 0..100, bass: bool }
+  //         spread: 0..100, bass: bool, maxUpper: optional cap on upper voices (3..5) }
   // prev: the previous result of voice() or null.
   function voice(chord, keyRoot, opts, prev) {
     var register = Math.round(opts.register), mode = spreadMode(opts.spread);
     var bassOn = !!opts.bass;
     var rootPc = T.mod12(keyRoot + chord.root);
-    var iv = upperIntervals(chord, bassOn);
+    var iv = upperIntervals(chord, bassOn, opts.maxUpper);
     var pcs = [], i, r, k;
     for (i = 0; i < iv.length; i++) { pcs.push(T.mod12(rootPc + iv[i])); }
 

@@ -2,7 +2,7 @@
 //
 // Extension points:
 //  - PATTERNS: rhythm patterns. Each returns hits {offset, length, vel} in
-//    beats for one chord slot. Only 'sustain' ships in v0.1.0.
+//    beats for one chord slot. Only 'sustain' ships so far.
 //  - opts.strum: beats between successive voices (0 = off), low to high.
 //  The note format matches Live's add_new_notes: {pitch, start_time,
 //  duration, velocity, mute}.
@@ -19,14 +19,17 @@ DC.render = (function () {
   function clampVel(v) { return Math.max(1, Math.min(127, Math.round(v))); }
 
   // voicings: array of {notes: [...]} ; opts: {chordBeats, velocity,
-  // humanize (0..100), seed, pattern, strum}
+  // humanize (0..100), seed, pattern, strum, slots}
+  // slots (optional): [{start, duration}] per chord, in beats, for an uneven
+  // harmonic rhythm; without it every chord lasts chordBeats.
   function notes(voicings, opts) {
     var beats = opts.chordBeats, h = Math.max(0, Math.min(100, opts.humanize || 0)) / 100;
     var pattern = PATTERNS[opts.pattern || 'sustain'] || PATTERNS.sustain;
     var strum = opts.strum || 0, out = [], noteIndex = 0;
     for (var i = 0; i < voicings.length; i++) {
-      var slotStart = i * beats, slotEnd = slotStart + beats;
-      var hits = pattern(beats, i);
+      var slotBeats = (opts.slots && opts.slots[i]) ? opts.slots[i].duration : beats;
+      var slotStart = (opts.slots && opts.slots[i]) ? opts.slots[i].start : i * beats, slotEnd = slotStart + slotBeats;
+      var hits = pattern(slotBeats, i);
       var v = voicings[i].notes;
       for (var j = 0; j < hits.length; j++) {
         for (var k = 0; k < v.length; k++) {

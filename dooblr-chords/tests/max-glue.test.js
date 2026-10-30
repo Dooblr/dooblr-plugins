@@ -9,6 +9,7 @@ const path = require('path');
 const vm = require('vm');
 const { execFileSync } = require('child_process');
 const { STRIP } = require('./load-engine');
+const { buildSmf, chordNotes } = require('./smf');
 
 const ROOT = path.join(__dirname, '..');
 const DEVICE = path.join(ROOT, 'device', 'dooblr-chords');
@@ -40,11 +41,24 @@ function makeLive(ctx, opts) {
     this.unquotedpath = path;
     this.type = typeOf(path);
     this.id = '1';
+    if (path === 'live_set view detail_clip' || path === 'live_set view highlighted_clip_slot clip') {
+      live.calls.push(['path', path]);
+      this.type = 'Clip';
+      this._detail = path === 'live_set view detail_clip' ? opts.detailClip : opts.highlightedClip;
+      this.id = this._detail ? '7' : '0';
+      return;
+    }
     const m = /clip_slots (\d+)( clip)?$/.exec(path);
     this._slot = m ? live.slots[+m[1]] : null;
     if (this.type === 'Clip' && !(this._slot && this._slot.clip)) { this.id = '0'; }
   }
   LiveAPI.prototype.get = function (prop) {
+    if (this._detail) {
+      const d = this._detail;
+      const v = { is_midi_clip: d.audio ? 0 : 1, looping: d.looping ? 1 : 0, loop_start: d.loopStart || 0, loop_end: d.loopEnd || d.length,
+        start_marker: d.startMarker || 0, end_marker: d.endMarker || d.length, length: d.length, name: d.name }[prop];
+      return arr([v === undefined ? 0 : v]);
+    }
     if (prop === 'has_clip') { return arr([this._slot && this._slot.clip ? 1 : 0]); }
     return arr([0]);
   };
@@ -57,6 +71,11 @@ function makeLive(ctx, opts) {
     const args = Array.prototype.slice.call(arguments);
     live.calls.push(['call'].concat(args.map((a) => (typeof a === 'object' ? '[object]' : a))));
     const name = args[0];
+    if (this._detail) {
+      assert.strictEqual(name, 'get_notes_extended');
+      const from = args[3], len = args[4];
+      return JSON.stringify({ notes: this._detail.notes.filter((n) => n.start_time >= from && n.start_time < from + len) });
+    }
     const clip = this._slot && this._slot.clip;
     if (name === 'create_clip') {
       assert.strictEqual(this.type, 'ClipSlot');
@@ -95,6 +114,25 @@ function loadController(opts) {
   } };
   const mock = makeLive(ctx, opts);
   ctx.LiveAPI = mock.LiveAPI;
+  const files = opts.files || {};
+  const VmArray = vm.runInContext('Array', ctx);
+  ctx.File = function (p, mode) {
+    assert.strictEqual(mode, 'read');
+    this._data = files[p];
+    this.isopen = !!this._data;
+    this.eof = this._data ? this._data.length : 0;
+    this.position = 0;
+    out.fileOpens = (out.fileOpens || 0) + 1;
+  };
+  ctx.File.prototype.readbytes = function (n) {
+    assert.ok(n > 0 && n <= 1024);
+    const a = new VmArray();
+    // Max may hand back signed bytes; the reader must mask them.
+    this._data.slice(this.position, this.position + n).forEach((b) => a.push(b > 127 ? b - 256 : b));
+    this.position += a.length;
+    return a;
+  };
+  ctx.File.prototype.close = function () { this.closed = true; out.fileCloses = (out.fileCloses || 0) + 1; };
   vm.runInContext(fs.readFileSync(path.join(DEVICE, 'dooblr_chords.js'), 'utf8'), ctx, { filename: 'dooblr_chords.js' });
   const lastState = () => {
     const s = out.outlets.filter((o) => o[0] === 0 && o[1] === 'setstate');
@@ -104,7 +142,11 @@ function loadController(opts) {
     const m = (out.named[name] ? out.named[name].msgs : []).filter((x) => x[0] === 'active');
     return m.length ? m[m.length - 1][1] : undefined;
   };
-  return { ctx, out, live: mock.live, lastState, lastActive };
+  const lastMsg = (name, sel) => {
+    const m = (out.named[name] ? out.named[name].msgs : []).filter((x) => x[0] === sel);
+    return m.length ? m[m.length - 1] : undefined;
+  };
+  return { ctx, out, live: mock.live, lastState, lastActive, lastMsg };
 }
 
 // ---- controller --------------------------------------------------------------
@@ -233,6 +275,145 @@ test('shrinking Length drops locks beyond the end', () => {
   assert.strictEqual(t.lastState().locked, 0);
 });
 
+// ---- source: dropped file, USE CLIP, VAR / B ----------------------------------
+
+const AM_F_C_G = [[45, 57, 60, 64], [41, 57, 60, 65], [48, 55, 60, 64], [43, 55, 59, 62]];
+const RIFF = 'Macintosh HD:/Users/dan/MIDI/my riff.mid';
+
+test('a dropped .mid file becomes the source; Generate writes a variation of it', () => {
+  const t = loadController({ files: { [RIFF]: buildSmf(chordNotes(AM_F_C_G, 4)) }, slots: [0, 0, 0] });
+  t.ctx.init();
+  assert.strictEqual(t.lastActive('kind'), 0, 'VAR/B is dimmed without a source');
+  assert.strictEqual(t.lastActive('clearsource'), 0);
+  t.ctx.dropfile(RIFF);
+  assert.strictEqual(t.out.fileOpens, t.out.fileCloses, 'file closed');
+  const st = t.lastState();
+  assert.strictEqual(st.level, 'ok', st.status);
+  assert.match(st.status, /Loaded my riff: A Natural Minor, 4 chords/);
+  assert.deepStrictEqual(st.source.chords, ['Am', 'F', 'C', 'G']);
+  assert.strictEqual(st.heading, 'VARIATION');
+  assert.deepStrictEqual(t.lastMsg('root', 'set'), ['set', 9]);
+  assert.deepStrictEqual(t.lastMsg('mode', 'set'), ['set', 1]);
+  assert.deepStrictEqual(t.lastMsg('length', 'set'), ['set', 4]);
+  assert.match(t.lastMsg('srcinfo', 'set')[1], /my riff .* A Natural Minor .* 4 chords, 4 bars/);
+  assert.strictEqual(t.lastActive('kind'), 1);
+  assert.strictEqual(t.lastActive('clearsource'), 1);
+  assert.strictEqual(t.live.calls.length, 0, 'loading a source writes nothing');
+
+  t.ctx.generate();
+  const clip = t.live.slots[0].clip;
+  assert.ok(clip);
+  assert.strictEqual(clip.length, 16);
+  assert.match(clip.name, /^my riff \u00B7 VAR \u00B7 A min/);
+  assert.strictEqual(t.lastState().chords[0].changed, false);
+
+  t.ctx.param('kind', 1);
+  assert.strictEqual(t.lastState().heading, 'B SECTION');
+  t.ctx.write();
+  assert.match(t.live.slots[1].clip.name, /^my riff \u00B7 B /);
+  const total = t.lastState().chords.reduce((x, c) => x + c.beats, 0);
+  assert.strictEqual(t.live.slots[1].clip.length, total);
+
+  t.ctx.clearsource();
+  assert.strictEqual(t.lastState().source, null);
+  assert.strictEqual(t.lastState().heading, 'PROGRESSION');
+  assert.ok(t.lastMsg('srcdrop', 'clear'));
+  assert.strictEqual(t.lastActive('kind'), 0);
+});
+
+test('dropped files that are not usable MIDI report a warning and keep the old source', () => {
+  const bad = buildSmf(chordNotes(AM_F_C_G, 4)).slice(0, 40); // cut mid-event
+  const t = loadController({ files: { [RIFF]: buildSmf(chordNotes(AM_F_C_G, 4)), '/x/bad.mid': bad, '/x/empty.mid': buildSmf([]) } });
+  t.ctx.init();
+  t.ctx.dropfile('/x/loop.wav');
+  assert.match(t.lastState().status, /Drop a MIDI file .* loop.wav is not one/);
+  t.ctx.dropfile('/x/missing.mid');
+  assert.match(t.lastState().status, /Could not read missing.mid/);
+  t.ctx.dropfile(RIFF);
+  t.ctx.dropfile('/x/bad.mid');
+  assert.strictEqual(t.lastState().level, 'warn');
+  assert.match(t.lastState().status, /^bad.mid: .*MIDI file/);
+  t.ctx.dropfile('/x/empty.mid');
+  assert.match(t.lastState().status, /^empty.mid: The clip has no notes/);
+  assert.deepStrictEqual(t.lastState().source.chords, ['Am', 'F', 'C', 'G'], 'old source kept');
+  t.ctx.dropfile();
+  assert.deepStrictEqual(t.lastState().source.chords, ['Am', 'F', 'C', 'G'], 'empty drop ignored');
+});
+
+test('a path re-sent while the Set loads keeps the saved Root, Mode and Length', () => {
+  const t = loadController({ files: { [RIFF]: buildSmf(chordNotes(AM_F_C_G, 4)) } });
+  t.ctx.loadbang();
+  t.ctx.param('root', 2);
+  t.ctx.param('mode', 2);
+  t.ctx.param('length', 4);
+  t.ctx.dropfile(RIFF);
+  assert.strictEqual(t.lastMsg('root', 'set'), undefined);
+  assert.strictEqual(t.lastState().key, 'D Dorian');
+  assert.ok(t.lastState().source);
+  assert.strictEqual(t.live.calls.length, 0);
+});
+
+function clipNotes(chords, beats, offset) {
+  return chordNotes(chords, beats).map((n) => ({ pitch: n.pitch, start_time: n.start + (offset || 0), duration: n.duration, velocity: 90, mute: 0 }));
+}
+
+test('USE CLIP reads the Detail View clip loop, shifted to start at 0', () => {
+  const notes = clipNotes([[50, 53, 57], [43, 55, 59, 62]], 4, 8).concat(clipNotes([[48, 52, 55]], 4, 0));
+  const t = loadController({ detailClip: { name: 'Chorus', length: 16, looping: true, loopStart: 8, loopEnd: 16, notes } });
+  t.ctx.loadbang();
+  t.ctx.useclip();
+  assert.match(t.lastState().status, /still loading/);
+  t.ctx.init();
+  t.ctx.useclip();
+  const st = t.lastState();
+  assert.strictEqual(st.level, 'ok', st.status);
+  assert.deepStrictEqual(st.source.chords.length, 2);
+  assert.strictEqual(st.source.name, 'Chorus');
+  assert.strictEqual(st.source.bars, 2);
+  assert.ok(t.live.calls.some((c) => c[0] === 'path' && c[1] === 'live_set view detail_clip'));
+  assert.ok(t.lastMsg('srcdrop', 'clear'), 'a clip source clears the saved file path');
+});
+
+test('USE CLIP falls back to the highlighted slot and explains audio or missing clips', () => {
+  let t = loadController({ highlightedClip: { name: 'Pad', length: 8, notes: clipNotes(AM_F_C_G.slice(0, 2), 4) } });
+  t.ctx.init();
+  t.ctx.useclip();
+  assert.strictEqual(t.lastState().source.name, 'Pad');
+
+  t = loadController({});
+  t.ctx.init();
+  t.ctx.useclip();
+  assert.match(t.lastState().status, /No clip is selected/);
+
+  t = loadController({ detailClip: { audio: true, length: 8, notes: [] } });
+  t.ctx.init();
+  t.ctx.useclip();
+  assert.match(t.lastState().status, /audio clip/);
+
+  t = loadController({ detailClip: { name: 'Empty', length: 8, notes: [] } });
+  t.ctx.init();
+  t.ctx.useclip();
+  assert.match(t.lastState().status, /Selected clip: The clip has no notes/);
+});
+
+test('with a source, locks survive Reroll and switching VAR/B clears them', () => {
+  const t = loadController({ files: { [RIFF]: buildSmf(chordNotes(AM_F_C_G, 4)) }, slots: [0, 0, 0, 0, 0] });
+  t.ctx.init();
+  t.ctx.dropfile(RIFF);
+  t.ctx.param('kind', 1);
+  t.ctx.generate();
+  const first = t.lastState().chords;
+  t.ctx.lock(0);
+  for (let k = 0; k < 3; k++) {
+    t.ctx.reroll();
+    const now = t.lastState().chords;
+    assert.strictEqual(now.length, first.length, 'rhythm plan kept while locked');
+    assert.strictEqual(now[0].name, first[0].name);
+  }
+  t.ctx.param('kind', 0);
+  assert.strictEqual(t.lastState().locked, 0);
+});
+
 // ---- display (jsui) -----------------------------------------------------------
 
 function loadBlocks() {
@@ -275,4 +456,20 @@ test('display paints 4 and 12 chords and maps clicks to lock messages', () => {
   b.outlets.length = 0;
   b.ctx.onclick(5, 70); // second row, first block = index 6
   assert.deepStrictEqual(b.outlets[0].slice(), [0, 'lock', 6]);
+});
+
+test('display shows the source strip, the VARIATION heading and changed chords', () => {
+  const b = loadBlocks();
+  const chords = [0, 1, 2, 3].map((i) => ({ name: 'Am' + i, roman: 'i', func: 'T', source: 'diatonic', locked: false, changed: i === 2, beats: 4 }));
+  b.ctx.setstate(JSON.stringify({ chords, heading: 'VARIATION', key: 'A Natural Minor', status: '', level: 'ok', locked: 0,
+    source: { name: 'riff', detectedKey: 'A Natural Minor', chords: ['Am', 'F', 'C', 'G'] } }));
+  b.ctx.paint();
+  const texts = b.ops.filter((o) => o[0] === 'show_text').map((o) => o[1]);
+  assert.ok(texts.indexOf('VARIATION') >= 0);
+  assert.ok(texts.indexOf('SOURCE') >= 0);
+  assert.ok(texts.some((s) => /Am {3}F {3}C {3}G/.test(s)));
+  assert.strictEqual(b.ops.filter((o) => o[0] === 'ellipse').length, 1, 'one changed marker');
+  b.ctx.onclick(10, 20); // source strip: no lock
+  b.ctx.onclick(10, 50);
+  assert.deepStrictEqual(b.outlets.map((o) => o.slice()), [[0, 'lock', 0]]);
 });

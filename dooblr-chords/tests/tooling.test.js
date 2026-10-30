@@ -54,8 +54,8 @@ test('validator: catches duplicate ids, dangling lines and bad indices', () => {
 
   p = clone();
   const dial = p.patcher.boxes.find((w) => w.box.maxclass === 'live.dial').box;
-  dial.presentation_rect = [740, 150, 46, 58];
-  assert.ok(validate(p, 'x', MAIN).some((e) => /outside 760x169/.test(e)));
+  dial.presentation_rect = [880, 150, 46, 58];
+  assert.ok(validate(p, 'x', MAIN).some((e) => /outside 904x169/.test(e)));
 
   p = clone();
   const pre = p.patcher.boxes.find((w) => /^prepend param /.test(w.box.text || '')).box;

@@ -23,10 +23,11 @@ var FUNCTION_LABELS = { T: 'Tonic', PD: 'Pre-dominant', D: 'Dominant' };
 var FONT = 'Arial';
 var FONT_BOLD = 'Arial Bold';
 var HEADER_H = 16;
+var SOURCE_H = 13;   // source strip under the header when a source is loaded
 var GAP = 4;
 var MAX_PER_ROW = 8;
 
-var model = { chords: [], key: '', status: '', level: 'info', locked: 0 };
+var model = { chords: [], heading: 'PROGRESSION', key: '', status: '', level: 'info', locked: 0, source: null };
 var hits = [];
 
 function hexToRgba(hex, alpha) {
@@ -95,10 +96,11 @@ function paint() {
   mgraphics.fill();
 
   // Header line: section heading, key, status (right aligned).
-  drawText('PROGRESSION', 2, 11, FONT_BOLD, 9, PALETTE.textMuted);
+  var heading = model.heading || 'PROGRESSION';
+  drawText(heading, 2, 11, FONT_BOLD, 9, model.source ? PALETTE.accent : PALETTE.textMuted);
   mgraphics.select_font_face(FONT_BOLD);
   mgraphics.set_font_size(9);
-  var keyX = 2 + textWidth('PROGRESSION') + 8;
+  var keyX = 2 + textWidth(heading) + 8;
   drawText(model.key || '', keyX, 11, FONT, 9.5, PALETTE.textPrimary);
   mgraphics.select_font_face(FONT);
   mgraphics.set_font_size(9.5);
@@ -111,7 +113,12 @@ function paint() {
 
   var chords = model.chords || [];
   var n = chords.length;
-  var top = HEADER_H, areaH = h - HEADER_H - 1;
+  var top = HEADER_H;
+  if (model.source) {
+    drawSource(model.source, 2, top + 9, w - 4);
+    top += SOURCE_H;
+  }
+  var areaH = h - top - 1;
   if (n === 0) {
     drawText('No progression yet.', 4, top + areaH / 2 + 4, FONT, 10, PALETTE.textMuted);
     return;
@@ -142,6 +149,13 @@ function drawBlock(ch, i, x, y, bw, bh, rows) {
   mgraphics.rectangle(x + 1, y, bw - 2, 3);
   mgraphics.fill();
 
+  // A chord the variation or B section changed from the source gets a dot.
+  if (ch.changed) {
+    setColor(PALETTE.dynamic);
+    mgraphics.ellipse(x + 4, y + 6, 4, 4);
+    mgraphics.fill();
+  }
+
   if (ch.locked) {
     setColor(band);
     mgraphics.set_line_width(1.5);
@@ -170,6 +184,26 @@ function drawBlock(ch, i, x, y, bw, bh, rows) {
     var r2 = ellipsize(roman, bw - 8);
     drawText(r2, x + (bw - textWidth(r2)) / 2, y + bh - 3, FONT, romanPt, PALETTE.textMuted);
   }
+}
+
+// "SOURCE  riff  A Natural Minor   Am9  Fmaj9  Dsus4  Em7"
+function drawSource(src, x, y, maxW) {
+  drawText('SOURCE', x, y, FONT_BOLD, 8, PALETTE.textMuted);
+  mgraphics.select_font_face(FONT_BOLD);
+  mgraphics.set_font_size(8);
+  var cx = x + textWidth('SOURCE') + 8;
+  mgraphics.select_font_face(FONT);
+  mgraphics.set_font_size(9);
+  var head = (src.name || 'Clip') + '  ' + (src.detectedKey || '');
+  head = ellipsize(head, Math.max(40, (maxW - cx) * 0.45));
+  drawText(head, cx, y, FONT, 9, PALETTE.textPrimary);
+  mgraphics.select_font_face(FONT);
+  mgraphics.set_font_size(9);
+  cx += textWidth(head) + 12;
+  var chords = (src.chords || []).join('   ');
+  mgraphics.select_font_face(FONT);
+  mgraphics.set_font_size(9);
+  drawText(ellipsize(chords, x + maxW - cx), cx, y, FONT, 9, PALETTE.textMuted);
 }
 
 function setstate(json) {

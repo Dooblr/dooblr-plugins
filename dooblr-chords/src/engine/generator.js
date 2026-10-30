@@ -228,6 +228,12 @@ DC.generator = (function () {
     MATRIX: MATRIX,
     MODE_RULES: MODE_RULES,
     normalizeOptions: normalizeOptions,
-    generate: generate
+    generate: generate,
+    // Building blocks reused by derive.js (variation / B section).
+    _borrowedChord: borrowedChord,
+    _secondaryDominant: secondaryDominant,
+    _tritoneSub: tritoneSub,
+    _colorize: colorize,
+    _invert: invert
   };
 })();

@@ -180,6 +180,8 @@ DC.chords = (function () {
 
     if (c.seventh === null) {
       if (c.add9) { return (min3 ? 'm(add9)' : 'add9'); }
+      if (c.thirteen === 21 && (maj3 || min3)) { return min3 ? 'm6' : '6'; }
+      if (c.third === null && !c.sus) { return '5'; }
       if (c.sus === 4) { return 'sus4'; }
       if (c.sus === 2) { return 'sus2'; }
       if (min3 && c.fifth === 6) { return 'dim'; }

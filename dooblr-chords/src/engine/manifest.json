@@ -1,1 +1,1 @@
-["rng.js", "theory.js", "chords.js", "generator.js", "voicing.js", "render.js", "engine.js"]
+["rng.js", "theory.js", "chords.js", "generator.js", "voicing.js", "render.js", "midifile.js", "analysis.js", "derive.js", "engine.js"]

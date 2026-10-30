@@ -44,7 +44,7 @@
 		"boxanimatetime": 200,
 		"enablehscroll": 1,
 		"enablevscroll": 1,
-		"devicewidth": 760,
+		"devicewidth": 904,
 		"description": "Chord progression generator that writes clips into Session View.",
 		"digest": "",
 		"tags": "",
@@ -79,14 +79,14 @@
 					"patching_rect": [
 						0,
 						0,
-						760,
+						904,
 						169
 					],
 					"presentation": 1,
 					"presentation_rect": [
 						0,
 						0,
-						760,
+						904,
 						169
 					]
 				}
@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.1.0",
+					"text": "v0.2.0",
 					"fontname": "Arial",
 					"fontsize": 10,
 					"textcolor": [
@@ -2677,7 +2677,7 @@
 			{
 				"box": {
 					"maxclass": "comment",
-					"text": "Controls send \"param <name> <value>\" to the js. The js sends \"setstate\" to the display and \"set <seed>\" back to the Seed box.",
+					"text": "Controls send \"param <name> <value>\" to the js. The drop zone sends \"dropfile <path>\"; USE CLIP and CLEAR send \"useclip\" and \"clearsource\". The js sends \"setstate\" to the display and \"set <seed>\" back to the Seed box; it sets srcinfo, root, mode and length by varname.",
 					"numinlets": 1,
 					"numoutlets": 0,
 					"fontsize": 10,
@@ -2685,8 +2685,612 @@
 					"patching_rect": [
 						800,
 						460,
-						420,
-						32
+						520,
+						48
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 1,
+					"ignoreclick": 1,
+					"bgcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"id": "obj-63",
+					"patching_rect": [
+						760,
+						6,
+						1,
+						158
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						760,
+						6,
+						1,
+						158
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "SOURCE",
+					"fontname": "Arial Bold",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-64",
+					"patching_rect": [
+						766,
+						3,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						766,
+						3,
+						90,
+						14
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.drop",
+					"varname": "srcdrop",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"legend": "Drop a .mid file",
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"bordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Source File",
+							"parameter_shortname": "Source",
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Source File",
+					"annotation": "Drop a MIDI file (.mid) here to use its chords as the source. VAR and B then write a variation or a B section of it. The file path is saved with the Set.",
+					"id": "obj-65",
+					"patching_rect": [
+						768,
+						19,
+						128,
+						44
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						768,
+						19,
+						128,
+						44
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "useclip",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "USE CLIP",
+					"texton": "USE CLIP",
+					"fontname": "Arial Bold",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Use Clip",
+							"parameter_shortname": "Use Clip",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Use Clip",
+					"annotation": "USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.",
+					"id": "obj-66",
+					"patching_rect": [
+						768,
+						67,
+						62,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						768,
+						67,
+						62,
+						18
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "clearsource",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "CLEAR",
+					"texton": "CLEAR",
+					"fontname": "Arial Bold",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Clear Source",
+							"parameter_shortname": "Clear",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Clear Source",
+					"annotation": "CLEAR forgets the source, so Generate makes fresh progressions again.",
+					"id": "obj-67",
+					"patching_rect": [
+						834,
+						67,
+						62,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						834,
+						67,
+						62,
+						18
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "kind",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial",
+					"fontsize": 9.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Source Kind",
+							"parameter_shortname": "Kind",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"VAR",
+								"B"
+							],
+							"parameter_mmax": 1,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "VAR / B",
+					"annotation": "VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.",
+					"id": "obj-68",
+					"patching_rect": [
+						768,
+						90,
+						128,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						768,
+						90,
+						128,
+						18
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Drop a .mid file above or press USE CLIP to make a variation or B section of it.",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-69",
+					"patching_rect": [
+						766,
+						112,
+						132,
+						52
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						766,
+						112,
+						132,
+						52
+					],
+					"varname": "srcinfo"
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend dropfile",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-70",
+					"patching_rect": [
+						1250,
+						200,
+						110,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "route bang 1",
+					"numinlets": 2,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						""
+					],
+					"id": "obj-71",
+					"patching_rect": [
+						1400,
+						200,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "useclip",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-72",
+					"patching_rect": [
+						1400,
+						232,
+						60,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "route bang 1",
+					"numinlets": 2,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						""
+					],
+					"id": "obj-73",
+					"patching_rect": [
+						1500,
+						200,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "clearsource",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-74",
+					"patching_rect": [
+						1500,
+						232,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param kind",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-75",
+					"patching_rect": [
+						1400,
+						150,
+						140,
+						22
 					]
 				}
 			}
@@ -3192,6 +3796,150 @@
 					],
 					"destination": [
 						"obj-61",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-65",
+						0
+					],
+					"destination": [
+						"obj-70",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-70",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-66",
+						0
+					],
+					"destination": [
+						"obj-71",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-71",
+						0
+					],
+					"destination": [
+						"obj-72",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-71",
+						1
+					],
+					"destination": [
+						"obj-72",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-72",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-67",
+						0
+					],
+					"destination": [
+						"obj-73",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-73",
+						0
+					],
+					"destination": [
+						"obj-74",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-73",
+						1
+					],
+					"destination": [
+						"obj-74",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-74",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-68",
+						0
+					],
+					"destination": [
+						"obj-75",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-75",
+						0
+					],
+					"destination": [
+						"obj-41",
 						0
 					]
 				}
