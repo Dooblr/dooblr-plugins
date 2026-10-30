@@ -66,6 +66,14 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Tested: bypass bit-identical, 20 presets bounded with decaying tails, ping-pong timing,
   tempo sync and 44.1–192 kHz, state, undo, editor and real mouse at three sizes, CPU.
 
+## 0.3.0: Max for Live panel (done, untested in Live)
+
+- `m4l/`: a MIDI-effect device (jsui) mirroring the editor's pages, header and graphs, linked
+  to the plug-in on the same track by a channel-16 CC pairing token and OSC on 127.0.0.1.
+  The editor and the link share one layout table and one dimming rule set.
+- Tested headlessly: link codec, pairing, loopback session, layout parity; device JSON, cords,
+  ES5 syntax, .amxd round trip and a rendered preview. Next: a first run in Live.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice

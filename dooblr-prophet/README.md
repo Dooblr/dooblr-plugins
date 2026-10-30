@@ -7,7 +7,7 @@ high-pass into a switchable 4-pole ladder low-pass, and 1–10 voices with uniso
 Original design, code and sounds. "Prophet" describes the instrument family it emulates;
 see the disclaimer below.
 
-Version 0.2.0 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, and Echo and Reverb). See [ROADMAP.md](ROADMAP.md) for what is next and
+Version 0.3.0 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, Echo and Reverb, and a Max for Live panel). See [ROADMAP.md](ROADMAP.md) for what is next and
 [docs/analog-reference.md](docs/analog-reference.md) for the circuit reference the DSP follows.
 
 ## Pages and controls
@@ -84,6 +84,15 @@ writes one PNG per page.
 2. Browser → Plug-Ins → VST3 → dooblr → dooblr-prophet; drop it on a MIDI track.
 3. Open the editor with the wrench icon.
 
+### Max for Live panel (0.3.0)
+
+`m4l/` holds a Max for Live MIDI effect that shows the same pages in Live's device view, two-way
+(it follows automation, presets and Random), so the plug-in window can stay closed. Put it
+before the VST3 on the same track. It pairs with that plug-in instance through three
+channel-16 CCs and then talks OSC over 127.0.0.1. Install with `node m4l/scripts/build.js
+--install`. **Untested in Live so far**; see [m4l/README.md](m4l/README.md) for how it works and
+its limits.
+
 ## Manual validation checklist (not covered by the automated tests)
 
 - Listen through each factory preset at several octaves; check for clicks on note steal
@@ -122,7 +131,10 @@ toggle, mode segment, page button, voice-count button, Random / Undo / Redo and 
 clicked or dragged through JUCE's mouse dispatch, dimmed or not. FX: bit-identical bypass
 (also after use), all 20 presets bounded and decaying at maximum feedback / size, ping-pong
 timing (L at T, R at 2T, L at 3T), tempo-synced times at 44.1–192 kHz, preset undo and state,
-and CPU with 10 voices plus both modules on.
+and CPU with 10 voices plus both modules on. Max for Live link: the OSC codec (with fuzzed
+input), the pairing CCs (any order, notes in between, wrong check, other channel, split blocks),
+an end-to-end session over loopback UDP against the real processor (sync, edits as undo steps,
+host changes echoed, presets, Random, timeout), and editor / device layout parity.
 
 ## Licences
 

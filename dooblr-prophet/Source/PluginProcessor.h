@@ -8,6 +8,8 @@
 
 namespace dooblrprophet
 {
+    namespace link { class RemoteLink; }
+
     class DooblrProphetProcessor final : public juce::AudioProcessor
     {
     public:
@@ -42,6 +44,8 @@ namespace dooblrprophet
         ParameterUndoHistory& getUndoHistory() noexcept { return undoHistory; }
         dsp::SynthEngine& getEngine() noexcept { return engine; }
         dsp::OutputPeakTap& getPeakTap() noexcept { return peakTap; }
+        /** The Max for Live device's link (see Link/RemoteLink.h); never null. */
+        link::RemoteLink& getRemoteLink() noexcept { return *remoteLink; }
         /** The host tempo at the last block (120 until a host reports one); for the FX graph. */
         double getHostBpm() const noexcept { return hostBpm.load (std::memory_order_relaxed); }
 
@@ -74,6 +78,9 @@ namespace dooblrprophet
         dsp::OutputPeakTap peakTap;
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;
+
+        // Last, so it is destroyed first (it uses everything above).
+        std::unique_ptr<link::RemoteLink> remoteLink;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrProphetProcessor)
     };

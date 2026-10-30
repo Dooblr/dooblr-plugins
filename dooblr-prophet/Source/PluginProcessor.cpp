@@ -1,5 +1,7 @@
 #include "PluginProcessor.h"
 
+#include "Link/RemoteLink.h"
+
 #include <vector>
 
 #include "Parameters.h"
@@ -47,6 +49,7 @@ namespace dooblrprophet
     {
         state.state.setProperty ("stateVersion", params::stateVersion, nullptr);
         state.state.setProperty ("presetName", presets::factory().front().name, nullptr);
+        remoteLink = std::make_unique<link::RemoteLink> (*this);
     }
 
     DooblrProphetProcessor::~DooblrProphetProcessor() = default;
@@ -154,6 +157,9 @@ namespace dooblrprophet
     {
         juce::ScopedNoDenormals noDenormals;
 
+        // The Max for Live device's pairing token (three channel-16 CCs): a lock-free scan.
+        remoteLink->getPairing().scan (midi);
+
         const auto settings = readSettings();
         engine.setSettings (settings);
 
@@ -199,7 +205,10 @@ namespace dooblrprophet
         for (int ch = 2; ch < channels; ++ch)
             buffer.clear (ch, 0, numSamples);
 
-        peakTap.push (buffer.getMagnitude (0, 0, numSamples), buffer.getMagnitude (std::min (1, channels - 1), 0, numSamples));
+        const auto peakLeft = buffer.getMagnitude (0, 0, numSamples);
+        const auto peakRight = buffer.getMagnitude (std::min (1, channels - 1), 0, numSamples);
+        peakTap.push (peakLeft, peakRight);
+        remoteLink->getPeakTap().push (peakLeft, peakRight); // the device's meter: its own consumer
     }
 
     juce::AudioProcessorEditor* DooblrProphetProcessor::createEditor()

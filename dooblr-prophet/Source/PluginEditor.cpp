@@ -1,8 +1,10 @@
 #include "PluginEditor.h"
 
+#include "ControlRules.h"
 #include "Parameters.h"
 #include "Presets.h"
 #include "DSP/Effects.h"
+#include "UI/Layout.h"
 #include "UI/Theme.h"
 
 namespace dooblrprophet
@@ -27,11 +29,6 @@ namespace dooblrprophet
         constexpr int factoryIdBase = 1, userIdBase = 1001;
         constexpr int headerHeight = 60, navWidth = 150, titleBarHeight = 44, margin = 12, panelGap = 8;
         constexpr int meterWidth = 34, minGraphHeight = 120;
-        constexpr std::array<int, 3> voicePresets { 5, 6, 10 };
-
-        Spec knob (const char* pid, const char* caption) { return { pid, caption, Kind::knob }; }
-        Spec toggle (const char* pid, const char* caption) { return { pid, caption, Kind::toggle }; }
-        Spec combo (const char* pid, const char* caption) { return { pid, caption, Kind::combo }; }
 
         float valueOf (juce::AudioProcessorValueTreeState& state, const char* pid)
         {
@@ -43,8 +40,7 @@ namespace dooblrprophet
 
     const char* DooblrProphetEditor::pageName (int page)
     {
-        static const char* names[] { "Oscillators", "Filters", "Envelopes", "Modulation", "Voices", "FX" };
-        return names[juce::jlimit (0, (int) numPages - 1, page)];
+        return layout::pages()[(size_t) juce::jlimit (0, (int) numPages - 1, page)].name;
     }
 
     DooblrProphetEditor::DooblrProphetEditor (DooblrProphetProcessor& p)
@@ -179,99 +175,61 @@ namespace dooblrprophet
         for (auto& content : pages)
             addChildComponent (*content.graph);
 
-        // Oscillators
-        addToggle (oscillatorsPage, "OSC 1", id::osc1Mode, { "Variable", "Switched" });
-        addToggle (oscillatorsPage, "OSC 2", id::osc2Mode, { "Variable", "Switched" });
-        addPanel (oscillatorsPage, "OSCILLATOR 1", { knob (id::osc1Coarse, "Coarse"), knob (id::osc1Fine, "Fine"),
-                                                     knob (id::osc1Shape, "Shape"), knob (id::osc1PW, "Pulse Width"),
-                                                     toggle (id::osc1Saw, "Saw"), toggle (id::osc1Tri, "Triangle"),
-                                                     toggle (id::osc1Pulse, "Pulse"), toggle (id::osc1Sync, "Sync") });
-        addPanel (oscillatorsPage, "OSCILLATOR 2", { knob (id::osc2Coarse, "Coarse"), knob (id::osc2Fine, "Fine"),
-                                                     knob (id::osc2Shape, "Shape"), knob (id::osc2PW, "Pulse Width"),
-                                                     toggle (id::osc2Saw, "Saw"), toggle (id::osc2Tri, "Triangle"),
-                                                     toggle (id::osc2Pulse, "Pulse"), toggle (id::osc2LowFreq, "Low Freq"),
-                                                     toggle (id::osc2KeyTrack, "Key Track") });
-        addPanel (oscillatorsPage, "MIXER", { knob (id::mixOsc1, "Osc 1"), knob (id::mixOsc2, "Osc 2"),
-                                              knob (id::mixSub, "Sub"), knob (id::mixNoise, "Noise") });
-        pages[oscillatorsPage].rows = { { 0 }, { 1 }, { 2 } };
+        // The pages, panels and controls come from layout::pages() (shared with the remote link).
+        const auto& layoutPages = layout::pages();
+        jassert ((int) layoutPages.size() == numPages);
 
-        // Filters
-        addToggle (filtersPage, "LOW-PASS", id::lpfModel, params::lpfModelNames());
-        addPanel (filtersPage, "HIGH-PASS (2-POLE)", { knob (id::hpfCutoff, "Cutoff"), knob (id::hpfReso, "Resonance"),
-                                                       knob (id::hpfEnvAmt, "Env Amount") });
-        addPanel (filtersPage, "LOW-PASS (4-POLE LADDER)", { knob (id::lpfCutoff, "Cutoff"), knob (id::lpfReso, "Resonance"),
-                                                             knob (id::lpfDrive, "Drive"), knob (id::lpfEnvAmt, "Env Amount"),
-                                                             knob (id::lpfKeyTrack, "Key Track") });
-        pages[filtersPage].rows = { { 0, 1 } };
-
-        // Envelopes
-        addPanel (envelopesPage, "FILTER ENVELOPE", { knob (id::fenvAttack, "Attack"), knob (id::fenvDecay, "Decay"),
-                                                      knob (id::fenvSustain, "Sustain"), knob (id::fenvRelease, "Release"),
-                                                      knob (id::fenvVelAmt, "Velocity"), toggle (id::fenvSync, "Sync to Amp") });
-        addPanel (envelopesPage, "AMP ENVELOPE", { knob (id::aenvAttack, "Attack"), knob (id::aenvDecay, "Decay"),
-                                                   knob (id::aenvSustain, "Sustain"), knob (id::aenvRelease, "Release"),
-                                                   knob (id::aenvVelAmt, "Velocity") });
-        pages[envelopesPage].rows = { { 0 }, { 1 } };
-
-        // Modulation
-        addToggle (modulationPage, "LFO", id::lfoSync, { "Free", "Tempo Sync" });
-        addPanel (modulationPage, "POLY-MOD", { knob (id::pmodFiltEnv, "Filter Env"), knob (id::pmodOsc2, "Osc 2"),
-                                                toggle (id::pmodDestFreq1, "Osc 1 Freq"), toggle (id::pmodDestShape1, "Osc 1 Shape"),
-                                                toggle (id::pmodDestFilter, "Filter") });
-        addPanel (modulationPage, "LFO", { combo (id::lfoWave, "Wave"), knob (id::lfoRate, "Rate"), combo (id::lfoDivision, "Division"),
-                                           knob (id::lfoInitial, "Initial"), knob (id::lfoWheel, "Wheel"), knob (id::lfoNoiseMix, "Noise Mix") });
-        addPanel (modulationPage, "LFO DESTINATIONS", { toggle (id::lfoDestFreq1, "Osc 1 Freq"), toggle (id::lfoDestFreq2, "Osc 2 Freq"),
-                                                        toggle (id::lfoDestShape1, "Osc 1 Shape"), toggle (id::lfoDestShape2, "Osc 2 Shape"),
-                                                        toggle (id::lfoDestLpf, "Low-Pass"), toggle (id::lfoDestHpf, "High-Pass"),
-                                                        toggle (id::lfoDestAmp, "Amp") });
-        pages[modulationPage].rows = { { 0 }, { 1 }, { 2 } };
-
-        // Voices
-        addToggle (voicesPage, "MODE", id::voiceMode, { "Poly", "Unison", "Mono" });
-        auto& voicePanel = addPanel (voicesPage, "VOICES", { knob (id::voices, "Voices"), knob (id::unisonVoices, "Unison"),
-                                                             knob (id::unisonDetune, "Detune"), knob (id::glide, "Glide"),
-                                                             knob (id::vintage, "Vintage") });
-
-        for (size_t i = 0; i < voicePresetButtons.size(); ++i)
+        for (int page = 0; page < numPages; ++page)
         {
-            auto& button = voicePresetButtons[i];
-            const auto count = voicePresets[i];
-            button.setButtonText (juce::String (count));
-            button.setComponentID ("voicesPreset" + juce::String (count));
-            button.setTooltip ("Set Voices to " + juce::String (count));
-            button.setClickingTogglesState (false);
-            button.setColour (juce::TextButton::buttonOnColourId, ui::pageColour (voicesPage).withAlpha (0.45f));
-            button.onClick = [this, count] { setVoices (count); };
-            voicePanel.addExtra (button, 44, (int) i + 1);
-        }
+            const auto& def = layoutPages[(size_t) page];
 
-        addPanel (voicesPage, "PERFORMANCE", { knob (id::bendRange, "Bend Range"), knob (id::atFilter, "AT > Filter"),
-                                               knob (id::atLfo, "AT > LFO") });
-        pages[voicesPage].rows = { { 0 }, { 1 } };
+            for (const auto& t : def.toggles)
+                addToggle (page, t.caption, t.id, t.labels);
 
-        // FX: Echo, then Reverb, after the voice mix.
-        auto& echoPanel = addPanel (fxPage, "ECHO", { toggle (id::echoOn, "On"), knob (id::echoMix, "Mix"), knob (id::echoTime, "Time"),
-                                                      toggle (id::echoSync, "Sync"), combo (id::echoDivision, "Division"),
-                                                      knob (id::echoFeedback, "Feedback"), toggle (id::echoPingPong, "Ping-Pong") });
-        auto& reverbPanel = addPanel (fxPage, "REVERB", { toggle (id::reverbOn, "On"), knob (id::reverbMix, "Mix"),
-                                                          knob (id::reverbSize, "Size"), knob (id::reverbTone, "Tone") });
-
-        for (int module = 0; module < 2; ++module)
-        {
-            auto& picker = fxPresetPickers[(size_t) module];
-            const auto& names = module == 0 ? dsp::echoPresetNames() : dsp::reverbPresetNames();
-            picker.box.addItemList (names, 1);
-            picker.box.setComponentID (module == 0 ? "echoPresetBox" : "reverbPresetBox");
-            picker.box.setSelectedItemIndex (juce::roundToInt (valueOf (state, module == 0 ? id::echoPreset : id::reverbPreset)), juce::dontSendNotification);
-            picker.box.onChange = [this, module]
+            for (const auto& panelDef : def.panels)
             {
-                synth.applyFxPreset (module, fxPresetPickers[(size_t) module].box.getSelectedItemIndex());
-                updateEnablement();
-                updateUndoButtons();
-            };
-            (module == 0 ? echoPanel : reverbPanel).addExtra (picker, 150, -1, module == 0 ? id::echoMix : id::reverbMix, true);
+                std::vector<Spec> specs;
+                for (const auto& c : panelDef.controls)
+                    specs.push_back ({ c.id, c.caption, c.kind });
+                auto& panel = addPanel (page, panelDef.title, specs);
+
+                if (panelDef.voicePresets)
+                {
+                    for (size_t i = 0; i < voicePresetButtons.size(); ++i)
+                    {
+                        auto& button = voicePresetButtons[i];
+                        const auto count = layout::voicePresetCounts[i];
+                        button.setButtonText (juce::String (count));
+                        button.setComponentID (layout::voicePresetsId + juce::String (count));
+                        button.setTooltip ("Set Voices to " + juce::String (count));
+                        button.setClickingTogglesState (false);
+                        button.setColour (juce::TextButton::buttonOnColourId, ui::pageColour (voicesPage).withAlpha (0.45f));
+                        button.onClick = [this, count] { setVoices (count); };
+                        panel.addExtra (button, 44, (int) i + 1);
+                    }
+                }
+
+                if (panelDef.fxPicker >= 0)
+                {
+                    const auto module = panelDef.fxPicker;
+                    auto& picker = fxPresetPickers[(size_t) module];
+                    const auto& names = module == 0 ? dsp::echoPresetNames() : dsp::reverbPresetNames();
+                    picker.box.addItemList (names, 1);
+                    picker.setComponentID (module == 0 ? layout::echoPresetPickerId : layout::reverbPresetPickerId);
+                    picker.box.setComponentID (module == 0 ? "echoPresetBox" : "reverbPresetBox");
+                    picker.box.setSelectedItemIndex (juce::roundToInt (valueOf (state, module == 0 ? id::echoPreset : id::reverbPreset)), juce::dontSendNotification);
+                    picker.box.onChange = [this, module]
+                    {
+                        synth.applyFxPreset (module, fxPresetPickers[(size_t) module].box.getSelectedItemIndex());
+                        updateEnablement();
+                        updateUndoButtons();
+                    };
+                    panel.addExtra (picker, 150, -1, module == 0 ? id::echoMix : id::reverbMix, true);
+                }
+            }
+
+            pages[(size_t) page].rows = def.rows;
         }
-        pages[fxPage].rows = { { 0 }, { 1 } };
     }
 
     DooblrProphetEditor::FxPresetPicker::FxPresetPicker()
@@ -333,62 +291,20 @@ namespace dooblrprophet
     {
         // Ignored controls are dimmed, never disabled: a disabled JUCE component swallows clicks, so
         // the Saw / Triangle / Pulse switches could not be switched on in Variable mode (0.1.4 fix).
-        const auto setLive = [this] (int page, const char* pid, bool live)
-        {
-            for (auto& panel : pages[(size_t) page].panels)
-                if (auto* control = panel->findControl (pid))
-                    ui::setDimmed (*control, ! live);
-        };
+        // The rules live in ControlRules.cpp, shared with the remote link.
+        const auto dimmed = rules::dimmedControls ([this] (const char* pid) { return valueOf (state, pid); });
+        const auto& layoutPages = layout::pages();
 
-        // Variable mode uses the Shape knob; Switched mode uses the wave switches. Pulse Width acts in both.
-        const bool osc1Switched = valueOf (state, id::osc1Mode) > 0.5f;
-        const bool osc2Switched = valueOf (state, id::osc2Mode) > 0.5f;
-        setLive (oscillatorsPage, id::osc1Shape, ! osc1Switched);
-        setLive (oscillatorsPage, id::osc2Shape, ! osc2Switched);
-
-        for (auto* pid : { id::osc1Saw, id::osc1Tri, id::osc1Pulse })
-            setLive (oscillatorsPage, pid, osc1Switched);
-
-        for (auto* pid : { id::osc2Saw, id::osc2Tri, id::osc2Pulse })
-            setLive (oscillatorsPage, pid, osc2Switched);
-
-        // Poly-Mod destinations only matter when a Poly-Mod source is turned up.
-        const bool polyModOn = std::abs (valueOf (state, id::pmodFiltEnv)) > 1.0e-4f || valueOf (state, id::pmodOsc2) > 1.0e-4f;
-
-        for (auto* pid : { id::pmodDestFreq1, id::pmodDestShape1, id::pmodDestFilter })
-            setLive (modulationPage, pid, polyModOn);
-
-        // Filter env synced to the amp envelope: its own ADSR is kept but not used.
-        const bool envSynced = valueOf (state, id::fenvSync) > 0.5f;
-        for (auto* pid : { id::fenvAttack, id::fenvDecay, id::fenvSustain, id::fenvRelease })
-            setLive (envelopesPage, pid, ! envSynced);
-
-        const bool synced = valueOf (state, id::lfoSync) > 0.5f;
-        setLive (modulationPage, id::lfoRate, ! synced);
-        setLive (modulationPage, id::lfoDivision, synced);
-
-        // Voices sets the poly voice count; Unison and Detune only act in Unison mode; Mono uses one voice.
-        const auto mode = juce::roundToInt (valueOf (state, id::voiceMode));
-        setLive (voicesPage, id::voices, mode == 0);
-        setLive (voicesPage, id::unisonVoices, mode == 1);
-        setLive (voicesPage, id::unisonDetune, mode == 1);
-
-        // FX: a module's controls are dimmed while it is off; Time or Division by the Sync switch.
-        const bool echoOn = valueOf (state, id::echoOn) > 0.5f, reverbOn = valueOf (state, id::reverbOn) > 0.5f;
-        const bool echoSync = valueOf (state, id::echoSync) > 0.5f;
-        setLive (fxPage, id::echoMix, echoOn);
-        setLive (fxPage, id::echoFeedback, echoOn);
-        setLive (fxPage, id::echoSync, echoOn);
-        setLive (fxPage, id::echoPingPong, echoOn);
-        setLive (fxPage, id::echoTime, echoOn && ! echoSync);
-        setLive (fxPage, id::echoDivision, echoOn && echoSync);
-        for (auto* pid : { id::reverbMix, id::reverbSize, id::reverbTone })
-            setLive (fxPage, pid, reverbOn);
+        for (int page = 0; page < numPages; ++page)
+            for (size_t i = 0; i < pages[(size_t) page].panels.size(); ++i)
+                for (const auto& c : layoutPages[(size_t) page].panels[i].controls)
+                    if (auto* control = pages[(size_t) page].panels[i]->findControl (c.id))
+                        ui::setDimmed (*control, dimmed.contains (c.id));
 
         for (int module = 0; module < 2; ++module)
         {
             auto& picker = fxPresetPickers[(size_t) module];
-            ui::setDimmed (picker.box, ! (module == 0 ? echoOn : reverbOn));
+            ui::setDimmed (picker.box, dimmed.contains (module == 0 ? layout::echoPresetPickerId : layout::reverbPresetPickerId));
             const auto index = juce::roundToInt (valueOf (state, module == 0 ? id::echoPreset : id::reverbPreset));
             if (picker.box.getSelectedItemIndex() != index && ! picker.box.isPopupActive())
                 picker.box.setSelectedItemIndex (index, juce::dontSendNotification);
@@ -398,8 +314,8 @@ namespace dooblrprophet
 
         for (size_t i = 0; i < voicePresetButtons.size(); ++i)
         {
-            ui::setDimmed (voicePresetButtons[i], mode != 0);
-            voicePresetButtons[i].setToggleState (voices == voicePresets[i], juce::dontSendNotification);
+            ui::setDimmed (voicePresetButtons[i], dimmed.contains (layout::voicePresetsId));
+            voicePresetButtons[i].setToggleState (voices == layout::voicePresetCounts[i], juce::dontSendNotification);
         }
     }
 
@@ -421,25 +337,7 @@ namespace dooblrprophet
         else
         {
             transientStatus.clear();
-            const auto s = synth.readSettings();
-
-            switch (selectedPage)
-            {
-                case oscillatorsPage:
-                {
-                    const bool fm = s.pmodFreq1 && (std::abs (s.pmodFiltEnv) > 1.0e-4f || s.pmodOsc2 > 1.0e-4f);
-                    text = fm ? "Poly-Mod FM active: 4x oversampled" : "2x oversampled";
-                    break;
-                }
-                case filtersPage:
-                    text = juce::String ("High-pass, then ") + (s.lpfModel == 1 ? "2040-style ladder" : "3320-style ladder");
-                    break;
-                case voicesPage:
-                    text = juce::String (synth.getEngine().getNumActiveVoices()) + " sounding";
-                    break;
-                default:
-                    break;
-            }
+            text = rules::pageStatus (selectedPage, synth.readSettings(), synth.getEngine().getNumActiveVoices());
         }
 
         if (statusLabel.getText() != text)

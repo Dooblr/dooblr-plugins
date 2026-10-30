@@ -11,6 +11,10 @@
 #include "Parameters.h"
 #include "Presets.h"
 #include "Randomiser.h"
+#include "ControlRules.h"
+#include "Link/Osc.h"
+#include "Link/RemoteLink.h"
+#include "UI/Layout.h"
 #include "UI/ControlPanel.h"
 #include "UI/Theme.h"
 #include "UI/Displays.h"
@@ -1920,6 +1924,423 @@ namespace
         note ("60 random patches: peak " + fmt (lowest, 3) + " .. " + fmt (highest, 3));
     }
 
+    //==============================================================================
+    // 0.3.0: the Max for Live device's link (Source/Link). Loopback UDP, driven by poll() here.
+    namespace lk = dooblrprophet::link;
+
+    void testLinkOsc()
+    {
+        lk::OscMessage m ("/dp/test");
+        m.add (42).add (-7).add (0.25f).add ("abc").add ("abcd").add ("").add (1.0e-3f);
+        const auto block = lk::encode (m);
+        check (block.getSize() % 4 == 0, "OSC packet 4-byte aligned");
+        const auto back = lk::decode (block.getData(), block.getSize());
+        check (back.has_value(), "OSC round trip decodes");
+        if (back)
+        {
+            check (back->address == "/dp/test" && back->size() == 7, "address and argument count");
+            check (back->intArg (0) == 42 && back->intArg (1) == -7, "int arguments");
+            check (std::abs (back->floatArg (2) - 0.25f) < 1.0e-7f && std::abs (back->floatArg (6) - 1.0e-3f) < 1.0e-9f, "float arguments");
+            check (back->stringArg (3) == "abc" && back->stringArg (4) == "abcd" && back->stringArg (5).isEmpty(), "string arguments (padding)");
+        }
+
+        // Known bytes: "/a\0\0" ",if\0" 1 0.5f
+        const juce::uint8 known[] { '/', 'a', 0, 0, ',', 'i', 'f', 0, 0, 0, 0, 1, 0x3f, 0, 0, 0 };
+        const auto k = lk::decode (known, sizeof (known));
+        check (k && k->intArg (0) == 1 && std::abs (k->floatArg (1) - 0.5f) < 1.0e-7f, "decodes a hand-made big-endian packet");
+        check (lk::encode (*k).matches (known, sizeof (known)), "encodes the same bytes");
+
+        // Malformed input is rejected, never read past the end.
+        check (! lk::decode (known, 15), "rejects a size not a multiple of 4");
+        check (! lk::decode (known, 12), "rejects a truncated argument");
+        const juce::uint8 badTag[] { '/', 'a', 0, 0, ',', 'x', 0, 0, 0, 0, 0, 0 };
+        check (! lk::decode (badTag, sizeof (badTag)), "rejects an unknown type tag");
+        const juce::uint8 noNull[] { '/', 'a', 'b', 'c' };
+        check (! lk::decode (noNull, sizeof (noNull)), "rejects an unterminated address");
+        const juce::uint8 bundle[] { '#', 'b', 'u', 'n', 'd', 'l', 'e', 0 };
+        check (! lk::decode (bundle, sizeof (bundle)), "rejects bundles");
+        check (! lk::decode (nullptr, 0), "rejects nothing");
+
+        juce::Random random (0xf00d);
+        int decoded = 0;
+        for (int n = 0; n < 20000; ++n)
+        {
+            juce::MemoryBlock fuzz (block);
+            const auto flips = 1 + random.nextInt (6);
+            for (int f = 0; f < flips; ++f)
+                static_cast<juce::uint8*> (fuzz.getData())[random.nextInt ((int) fuzz.getSize())] = (juce::uint8) random.nextInt (256);
+            const auto size = (size_t) random.nextInt ((int) fuzz.getSize() + 1);
+            if (lk::decode (fuzz.getData(), size))
+                ++decoded;
+        }
+        note ("fuzz: 20000 mutated packets decoded or rejected without a crash (" + std::to_string (decoded) + " still valid)");
+    }
+
+    void testLinkPairing()
+    {
+        const auto scan = [] (std::initializer_list<juce::MidiMessage> messages)
+        {
+            lk::PairingDetector detector;
+            juce::MidiBuffer midi;
+            int t = 0;
+            for (const auto& m : messages)
+                midi.addEvent (m, t++);
+            detector.scan (midi);
+            const auto token = detector.take();
+            check (detector.take() == -1, "a token is taken once");
+            return token;
+        };
+
+        const auto ccs = lk::PairingDetector::messagesFor (1234);
+        check (scan ({ ccs[0], ccs[1], ccs[2] }) == 1234, "token 1234 found");
+        check (scan ({ ccs[2], ccs[0], ccs[1] }) == 1234, "any order");
+        check (scan ({ ccs[0], juce::MidiMessage::noteOn (1, 60, 0.5f), ccs[1], ccs[2] }) == 1234, "notes between the CCs are fine");
+        check (scan ({ ccs[0], ccs[1], juce::MidiMessage::controllerEvent (16, lk::pairCcCheck, (lk::pairCheck (9, 82) + 1) & 127) }) == -1,
+               "a wrong check value is ignored");
+        check (scan ({ juce::MidiMessage::controllerEvent (15, lk::pairCcHigh, 9), juce::MidiMessage::controllerEvent (15, lk::pairCcLow, 82),
+                       juce::MidiMessage::controllerEvent (15, lk::pairCcCheck, lk::pairCheck (9, 82)) }) == -1, "other channels are ignored");
+        check (scan ({ ccs[1], ccs[2] }) == -1, "an incomplete sequence is ignored");
+        const auto zero = lk::PairingDetector::messagesFor (0);
+        check (scan ({ zero[0], zero[1], zero[2] }) == -1, "token 0 is not a token");
+
+        // Across blocks: a sequence split over two blocks still pairs.
+        {
+            lk::PairingDetector detector;
+            juce::MidiBuffer first, second;
+            first.addEvent (ccs[0], 0);
+            second.addEvent (ccs[1], 0);
+            second.addEvent (ccs[2], 1);
+            detector.scan (first);
+            check (detector.take() == -1, "no token after one CC");
+            detector.scan (second);
+            check (detector.take() == 1234, "a sequence split over blocks");
+        }
+
+        // Each instance its own loopback port.
+        auto a = makeProcessor();
+        auto b = makeProcessor();
+        const auto pa = a->getRemoteLink().getPort(), pb = b->getRemoteLink().getPort();
+        check (pa >= lk::firstPort && pa < lk::firstPort + lk::numPorts, "instance A bound a link port (" + std::to_string (pa) + ")");
+        check (pb >= lk::firstPort && pb < lk::firstPort + lk::numPorts, "instance B bound a link port (" + std::to_string (pb) + ")");
+        check (pa != pb, "two instances never share a port");
+
+        // The scan in processBlock: allocation free, and the CCs do not play anything.
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        midi.ensureSize (256);
+        for (int i = 0; i < 3; ++i)
+            midi.addEvent (ccs[(size_t) i], i);
+        allocationCount = 0;
+        countAllocations = true;
+        a->processBlock (buffer, midi);
+        countAllocations = false;
+        check (allocationCount.load() == 0, "pairing scan allocation free (" + std::to_string (allocationCount.load()) + ")");
+        check (a->getEngine().getNumActiveVoices() == 0 && buffer.getMagnitude (0, blockSize) == 0.0f, "pairing CCs are silent");
+    }
+
+    /** A stand-in for the Max device: a loopback socket. */
+    struct LinkClient
+    {
+        juce::DatagramSocket socket { false };
+        int port = 0;
+        std::vector<lk::OscMessage> received;
+
+        explicit LinkClient (int bindPort = 0)
+        {
+            if (socket.bindToPort (bindPort, "127.0.0.1"))
+                port = socket.getBoundPort();
+        }
+
+        void send (int to, const lk::OscMessage& m)
+        {
+            const auto block = lk::encode (m);
+            socket.write ("127.0.0.1", to, block.getData(), (int) block.getSize());
+        }
+
+        int read (int waitMs)
+        {
+            int count = 0;
+            char buffer[65536];
+            while (socket.waitUntilReady (true, waitMs) == 1)
+            {
+                juce::String ip;
+                int from = 0;
+                const auto n = socket.read (buffer, (int) sizeof (buffer), false, ip, from);
+                if (n <= 0)
+                    break;
+                if (auto m = lk::decode (buffer, (size_t) n))
+                {
+                    received.push_back (*m);
+                    ++count;
+                }
+                waitMs = 2;
+            }
+            return count;
+        }
+
+        const lk::OscMessage* last (const juce::String& address) const
+        {
+            for (auto it = received.rbegin(); it != received.rend(); ++it)
+                if (it->address == address)
+                    return &*it;
+            return nullptr;
+        }
+
+        int countOf (const juce::String& address) const
+        {
+            return (int) std::count_if (received.begin(), received.end(), [&] (const lk::OscMessage& m) { return m.address == address; });
+        }
+    };
+
+    /** Ticks the link (as its 30 Hz timer would) and collects what the client gets. */
+    void pumpLink (Processor& p, LinkClient& client, juce::uint32& now, int ticks)
+    {
+        for (int t = 0; t < ticks; ++t)
+        {
+            p.getRemoteLink().poll (now);
+            now += 33;
+            client.read (3);
+        }
+    }
+
+    int paramIndex (Processor& p, const juce::String& pid)
+    {
+        const auto& all = p.getParameters();
+        for (int i = 0; i < all.size(); ++i)
+            if (auto* r = dynamic_cast<juce::RangedAudioParameter*> (all[i]); r != nullptr && r->getParameterID() == pid)
+                return i;
+        return -1;
+    }
+
+    void dumpLinkMessages (const std::vector<lk::OscMessage>& messages)
+    {
+        const auto path = juce::SystemStats::getEnvironmentVariable ("DOOBLRPROPHET_LINK_DUMP", {});
+        if (path.isEmpty())
+            return;
+        juce::Array<juce::var> all;
+        for (const auto& m : messages)
+        {
+            juce::Array<juce::var> entry;
+            entry.add (m.address);
+            for (const auto& a : m.args)
+                entry.add (a);
+            all.add (entry);
+        }
+        juce::File (path).replaceWithText (juce::JSON::toString (juce::var (all), true));
+        note ("link messages written to " + path.toStdString());
+    }
+
+    void testLinkEndToEnd()
+    {
+        auto p = makeProcessor();
+        auto& link = p->getRemoteLink();
+        juce::uint32 now = 100000;
+        const int token = 4321;
+
+        // The device listens on 47900 + token and sends its pairing CCs down the track.
+        LinkClient device (lk::replyPortBase + token);
+        check (device.port == lk::replyPortBase + token, "test device bound its reply port");
+
+        // An unpaired command does nothing.
+        const auto cutoffIndex = paramIndex (*p, id::lpfCutoff);
+        const auto before = get (*p, id::lpfCutoff);
+        device.send (link.getPort(), lk::OscMessage ("/dp/set").add (cutoffIndex).add (0.1f));
+        pumpLink (*p, device, now, 2);
+        check (juce::exactlyEqual (get (*p, id::lpfCutoff), before), "commands are ignored until paired");
+
+        juce::AudioBuffer<float> buffer (2, blockSize);
+        juce::MidiBuffer midi;
+        const auto ccs = lk::PairingDetector::messagesFor (token);
+        for (int i = 0; i < 3; ++i)
+            midi.addEvent (ccs[(size_t) i], i);
+        p->processBlock (buffer, midi);
+        pumpLink (*p, device, now, 1);
+        const auto* announce = device.last ("/dp/announce");
+        check (announce != nullptr && announce->intArg (0) == link.getPort() && announce->intArg (2) == token, "the instance announced its port to its own device");
+        check (announce != nullptr && announce->stringArg (1) == DOOBLRPROPHET_PROJECT_VERSION, "announce carries the version");
+
+        device.send (link.getPort(), lk::OscMessage ("/dp/hello").add (device.port));
+        // Some notes, so the voices graph has something live.
+        juce::MidiBuffer notes;
+        notes.addEvent (juce::MidiMessage::noteOn (1, 48, 0.8f), 0);
+        notes.addEvent (juce::MidiMessage::noteOn (1, 55, 0.8f), 0);
+        notes.addEvent (juce::MidiMessage::noteOn (1, 64, 0.8f), 0);
+        p->processBlock (buffer, notes);
+        for (int i = 0; i < 6; ++i)
+        {
+            juce::MidiBuffer none;
+            p->processBlock (buffer, none);
+        }
+        pumpLink (*p, device, now, 30);
+        check (link.getClientPort() == device.port, "paired with the device");
+        check (device.countOf ("/dp/synced") == 1, "one full sync");
+
+        const auto numParams = p->getParameters().size();
+        check (device.countOf ("/dp/meta") == numParams, "meta for every parameter (" + std::to_string (device.countOf ("/dp/meta")) + ")");
+        check (device.countOf ("/dp/v") == numParams, "a value for every parameter");
+        check (device.countOf ("/dp/page") == 6 && device.countOf ("/dp/layoutdone") == 1, "six pages of layout");
+        for (const auto* g : { "/dp/g/osc", "/dp/g/flt", "/dp/g/env", "/dp/g/lfo", "/dp/g/fx", "/dp/g/voc" })
+            check (device.countOf (g) == 1, std::string ("graph sent once: ") + g);
+        check (device.last ("/dp/presets") != nullptr && device.last ("/dp/presets")->intArg (0) == (int) presets::factory().size(), "preset list");
+        check (device.last ("/dp/live") != nullptr && device.last ("/dp/live")->intArg (3) == 3, "live data: 3 voices sounding");
+
+        // Every control the layout names is a parameter the device knows (or one of the 3 non-parameter controls).
+        std::set<juce::String> metaIds;
+        for (const auto& m : device.received)
+            if (m.address == "/dp/meta")
+                metaIds.insert (m.stringArg (1));
+        int unknown = 0, controls = 0;
+        for (const auto& m : device.received)
+            if (m.address == "/dp/panel")
+                for (int i = 5; i + 2 < m.size(); i += 3)
+                {
+                    ++controls;
+                    if (metaIds.count (m.stringArg (i + 1)) == 0)
+                        ++unknown;
+                }
+        for (const auto& m : device.received)
+            if (m.address == "/dp/mode" && metaIds.count (m.stringArg (3)) == 0)
+                ++unknown;
+        check (controls > 60 && unknown == 0, "every layout control maps to a parameter (" + std::to_string (controls) + " controls, " + std::to_string (unknown) + " unknown)");
+
+        // The packets stay small (one UDP datagram, well under Max's limits).
+        size_t largest = 0;
+        for (const auto& m : device.received)
+            largest = std::max (largest, lk::encode (m).getSize());
+        check (largest < 8192, "largest packet " + std::to_string (largest) + " bytes");
+
+        dumpLinkMessages (device.received);
+
+        // Device edit: a gesture; one undo step.
+        device.received.clear();
+        const auto undoSteps = p->getUndoHistory().getNumUndoableSteps();
+        device.send (link.getPort(), lk::OscMessage ("/dp/begin").add (cutoffIndex));
+        device.send (link.getPort(), lk::OscMessage ("/dp/set").add (cutoffIndex).add (0.3f));
+        device.send (link.getPort(), lk::OscMessage ("/dp/set").add (cutoffIndex).add (0.35f));
+        device.send (link.getPort(), lk::OscMessage ("/dp/end").add (cutoffIndex));
+        pumpLink (*p, device, now, 3);
+        auto* cutoff = param (*p, id::lpfCutoff);
+        check (std::abs (cutoff->getValue() - 0.35f) < 1.0e-6f, "device drag sets the parameter");
+        check (p->getUndoHistory().getNumUndoableSteps() == undoSteps + 1, "a device drag is one undo step");
+        const auto* echoValue = device.last ("/dp/v");
+        check (echoValue != nullptr && echoValue->intArg (0) == cutoffIndex && echoValue->stringArg (2).isNotEmpty(), "the new value (with its text) comes back");
+
+        // Host automation / the plugin's own window: the device follows.
+        device.received.clear();
+        set (*p, id::lpfReso, 0.7f);
+        pumpLink (*p, device, now, 2);
+        const auto resoIndex = paramIndex (*p, id::lpfReso);
+        bool followed = false;
+        for (const auto& m : device.received)
+            if (m.address == "/dp/v" && m.intArg (0) == resoIndex && std::abs (m.floatArg (1) - param (*p, id::lpfReso)->getValue()) < 1.0e-6f)
+                followed = true;
+        check (followed, "host changes reach the device");
+        check (device.countOf ("/dp/g/flt") == 1, "the filter graph is re-sent on a filter change");
+        check (device.countOf ("/dp/g/osc") == 0, "unchanged graphs are not re-sent");
+
+        // Patch commands.
+        device.send (link.getPort(), lk::OscMessage ("/dp/undo"));
+        pumpLink (*p, device, now, 2);
+        check (std::abs (cutoff->getValue() - 0.35f) > 1.0e-4f, "device undo reverts the drag");
+
+        device.send (link.getPort(), lk::OscMessage ("/dp/program").add (2));
+        pumpLink (*p, device, now, 3);
+        check (p->getPresetName() == presets::factory()[2].name, "device program change");
+        check (device.last ("/dp/preset") != nullptr && device.last ("/dp/preset")->stringArg (0) == presets::factory()[2].name, "preset name sent");
+
+        device.send (link.getPort(), lk::OscMessage ("/dp/random"));
+        pumpLink (*p, device, now, 3);
+        check (p->getPresetName() == "Random" && device.last ("/dp/preset")->stringArg (0) == "Random", "device Random");
+
+        device.send (link.getPort(), lk::OscMessage ("/dp/fxpreset").add (0).add (3));
+        device.send (link.getPort(), lk::OscMessage ("/dp/voices").add (6));
+        pumpLink (*p, device, now, 3);
+        check (juce::roundToInt (get (*p, id::echoPreset)) == 3, "device echo preset");
+        check (juce::roundToInt (get (*p, id::voices)) == 6, "device voice preset button");
+
+        device.send (link.getPort(), lk::OscMessage ("/dp/default").add (cutoffIndex));
+        device.send (link.getPort(), lk::OscMessage ("/dp/set").add (9999).add (0.5f));       // out of range: ignored
+        device.send (link.getPort(), lk::OscMessage ("/dp/set").add (cutoffIndex).add ("x")); // wrong type: ignored
+        pumpLink (*p, device, now, 2);
+        check (std::abs (cutoff->getValue() - cutoff->getDefaultValue()) < 1.0e-6f, "double-click default; bad commands ignored");
+
+        // Dimming reaches the device.
+        set (*p, id::echoOn, 0.0f);
+        pumpLink (*p, device, now, 2);
+        const auto* dim = device.last ("/dp/dim");
+        bool echoMixDimmed = false;
+        for (int i = 0; dim != nullptr && i < dim->size(); ++i)
+            echoMixDimmed |= dim->stringArg (i) == id::echoMix;
+        check (echoMixDimmed, "dimmed controls sent (Echo off dims Echo Mix)");
+
+        // Silence: the device is dropped (and its open gesture closed).
+        device.send (link.getPort(), lk::OscMessage ("/dp/begin").add (cutoffIndex));
+        pumpLink (*p, device, now, 2);
+        now += lk::RemoteLink::clientTimeoutMs + 100;
+        pumpLink (*p, device, now, 1);
+        check (link.getClientPort() == 0, "a silent device is dropped after the timeout");
+
+        // Ping works unpaired (the device's fallback discovery); bye unpairs.
+        device.received.clear();
+        device.send (link.getPort(), lk::OscMessage ("/dp/ping").add (device.port));
+        pumpLink (*p, device, now, 2);
+        check (device.last ("/dp/here") != nullptr && device.last ("/dp/here")->intArg (0) == link.getPort(), "ping answered");
+        device.send (link.getPort(), lk::OscMessage ("/dp/hello").add (device.port));
+        pumpLink (*p, device, now, 2);
+        check (link.getClientPort() == device.port, "re-paired");
+        device.send (link.getPort(), lk::OscMessage ("/dp/bye"));
+        pumpLink (*p, device, now, 2);
+        check (link.getClientPort() == 0, "bye unpairs");
+    }
+
+    void testLinkLayoutParity()
+    {
+        // The editor builds from the same layout the device gets, and both dim the same controls.
+        auto p = makeProcessor();
+        auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditorIfNeeded());
+        auto* e = dynamic_cast<Editor*> (editor.get());
+        check (e != nullptr, "editor");
+        if (e == nullptr)
+            return;
+
+        const auto& pages = layout::pages();
+        int missing = 0, total = 0;
+        for (int page = 0; page < (int) pages.size(); ++page)
+        {
+            const auto& panels = e->getPanels (page);
+            check (panels.size() == pages[(size_t) page].panels.size(), "panel count, page " + std::to_string (page));
+            for (size_t i = 0; i < panels.size() && i < pages[(size_t) page].panels.size(); ++i)
+            {
+                check (panels[i]->getTitle() == pages[(size_t) page].panels[i].title, std::string ("panel title ") + pages[(size_t) page].panels[i].title);
+                for (const auto& c : pages[(size_t) page].panels[i].controls)
+                {
+                    ++total;
+                    if (panels[i]->findControl (c.id) == nullptr)
+                        ++missing;
+                }
+            }
+        }
+        check (missing == 0, "every layout control is in the editor (" + std::to_string (total) + ")");
+
+        juce::Random random (77);
+        int mismatches = 0;
+        for (int patch = 0; patch < 40; ++patch)
+        {
+            p->randomisePatch (random);
+            if (patch % 3 == 0) set (*p, id::voiceMode, (float) (patch % 9 / 3));
+            e->updateEnablement();
+            const auto dimmed = rules::dimmedControls ([&p] (const char* pid) { return get (*p, pid); });
+            for (int page = 0; page < (int) pages.size(); ++page)
+                for (size_t i = 0; i < pages[(size_t) page].panels.size(); ++i)
+                    for (const auto& c : pages[(size_t) page].panels[i].controls)
+                        if (auto* control = e->getPanels (page)[i]->findControl (c.id))
+                            if (ui::isDimmed (*control) != dimmed.contains (c.id))
+                                ++mismatches;
+        }
+        check (mismatches == 0, "editor and device dim the same controls over 40 patches (" + std::to_string (mismatches) + " mismatches)");
+        editor.reset();
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -1953,6 +2374,10 @@ int main()
         { "FX: 20 presets bounded, tails decay",       testFxPresets },
         { "FX: echo ping-pong timing",                 testFxPingPong },
         { "FX: tempo sync and 44.1k..192k",            testFxTempoAndRates },
+        { "M4L link: OSC codec and fuzz",              testLinkOsc },
+        { "M4L link: pairing token and ports",         testLinkPairing },
+        { "M4L link: end to end over loopback",        testLinkEndToEnd },
+        { "M4L link: editor and device layout parity", testLinkLayoutParity },
     };
 
     int failedTests = 0;
