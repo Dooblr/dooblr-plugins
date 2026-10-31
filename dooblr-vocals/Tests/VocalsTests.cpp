@@ -4405,6 +4405,125 @@ namespace
         return (float) (0.5 * env * (2.0 * phase - 1.0));
     }
 
+    // Learn Range over long takes and after the plug-in has been running: 44.1 / 48 kHz, all
+    // three latency modes, host-sized blocks and editor-rate polling (15 Hz).
+    void testLearnRangeLongRuns()
+    {
+        using dooblrvocals::RangeLearner;
+        const auto semis = [] (double a, double b) { return 12.0 * std::log2 (a / b); };
+
+        for (const auto rate : { 44100.0, 48000.0 })
+        {
+            for (const auto mode : { 0, 1, 2 }) // Tracking, Mix, HQ
+            {
+                const char* modeName = mode == 0 ? "Tracking" : mode == 1 ? "Mix" : "HQ";
+
+                // Every rate / mode: a take from the start and one after 6 s of running (the
+                // reported failure). 48 kHz Mix also covers 1, 10 and 30 s takes; set
+                // DOOBLRVOCALS_LONG_LEARN=1 for the full matrix (1 / 5 / 10 / 30 s, 6 s + 5 / 10 s) everywhere.
+                struct Run { double preRoll, learn; };
+                std::vector<Run> runs { { 0.0, 5.0 }, { 6.0, 5.0 } };
+                const auto* longEnv = std::getenv ("DOOBLRVOCALS_LONG_LEARN");
+                if ((longEnv != nullptr && *longEnv == '1') || (rate == 48000.0 && mode == 1))
+                    runs = { { 0.0, 1.0 }, { 0.0, 5.0 }, { 0.0, 10.0 }, { 0.0, 30.0 }, { 6.0, 5.0 }, { 6.0, 10.0 } };
+
+                for (const auto run : runs)
+                {
+                    auto p = makeProcessor (rate, 256);
+                    setParam (*p, "pitch_on", 1.0f);
+                    setParam (*p, "latency_mode", mode == 0 ? 0.0f : 1.0f);
+                    setParam (*p, "quality", mode == 2 ? 1.0f : 0.0f);
+
+                    // A2 - E4 sweeps (2.5 s per sweep), short breath gaps.
+                    double phase = 0.0;
+                    juce::int64 clock = 0;
+                    juce::Random rng (11);
+                    auto voice = [&] (int)
+                    {
+                        const auto t = (double) clock++ / rate;
+                        const auto ph = std::fmod (t / 2.5, 1.0);
+                        const auto noteNum = 45.0 + 19.0 * (ph < 0.5 ? ph * 2.0 : 2.0 - ph * 2.0);
+                        phase += 440.0 * std::pow (2.0, (noteNum - 69.0) / 12.0) / rate;
+                        phase -= std::floor (phase);
+                        const auto gap = std::fmod (t, 1.0) > 0.92;
+                        return gap ? (rng.nextFloat() - 0.5f) * 0.01f : (float) (0.3 * (2.0 * phase - 1.0));
+                    };
+
+                    const auto poll = (int) (rate / 15.0);
+                    auto play = [&] (double seconds, bool polling)
+                    {
+                        const auto total = (int) (seconds * rate);
+                        for (int pos = 0; pos < total; pos += poll)
+                        {
+                            render (*p, voice, std::min (poll, total - pos), 256);
+                            if (polling)
+                                p->pollRangeLearn();
+                        }
+                    };
+
+                    play (run.preRoll, false);
+                    p->startRangeLearn();
+                    play (run.learn, true);
+                    const auto r = p->stopRangeLearn();
+
+                    const auto label = format (rate / 1000.0, 1) + " kHz " + modeName + ", " + format (run.preRoll, 0) + " s running, "
+                                     + format (run.learn, 0) + " s take";
+                    const auto result = r.valid ? RangeLearner::rangeText (r.lowHz, r.highHz).toStdString() : r.message.toStdString();
+                    note ("learn " + label + ": " + format (r.voicedSeconds, 2) + " s voiced, " + result);
+
+                    if (run.learn < 1.5)
+                    {
+                        check (! r.valid, label + ": a 1 s take is too short by design");
+                        continue;
+                    }
+
+                    check (r.voicedSeconds > 0.6 * run.learn, label + ": most of the take counts as voiced ("
+                               + format (r.voicedSeconds, 2) + " s of " + format (run.learn, 0) + " s)");
+                    check (r.valid && std::abs (semis (r.lowHz, 110.0)) <= 1.5 && std::abs (semis (r.highHz, 329.63)) <= 1.5,
+                           label + ": learns A2-E4 (" + result + ")");
+                }
+            }
+        }
+
+        // The engine takes every setting after its first block, not only the listed ones: Learn
+        // Range, the learned detector range and Vibrato Respect used to stay at first-block values.
+        {
+            dsp::VocalEngine engine;
+            engine.prepare (sampleRate, blockSize);
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            auto run = [&] (int blocks)
+            {
+                for (int b = 0; b < blocks; ++b)
+                {
+                    for (int i = 0; i < blockSize; ++i)
+                        buffer.setSample (0, i, sawAt (220.0, b * blockSize + i)), buffer.setSample (1, i, buffer.getSample (0, i));
+                    engine.process (buffer, blockSize);
+                }
+            };
+            dsp::VocalSettings s;
+            engine.setSettings (s);
+            run (8);
+            s.pitch.learnRange = true;
+            s.pitch.rangeLowHz = 100.0f;
+            s.pitch.rangeHighHz = 400.0f;
+            s.pitch.vibratoRespect = 0.7f;
+            engine.setSettings (s);
+            run (2);
+            const auto& got = engine.getSettings().pitch;
+            check (got.learnRange && juce::exactlyEqual (got.rangeLowHz, 100.0f) && juce::exactlyEqual (got.rangeHighHz, 400.0f),
+                   "Learn Range and the learned range reach a running engine at once");
+            run (40);
+            check (std::abs (engine.getSettings().pitch.vibratoRespect - 0.7f) < 1.0e-3f,
+                   "Vibrato Respect reaches a running engine (" + format (engine.getSettings().pitch.vibratoRespect, 4) + ")");
+            s.pitch.learnRange = false;
+            s.pitch.vibratoRespect = 0.0f;
+            engine.setSettings (s);
+            run (60);
+            check (! engine.getSettings().pitch.learnRange && juce::exactlyEqual (engine.getSettings().pitch.vibratoRespect, 0.0f),
+                   "Learn Range disarms and Vibrato Respect lands exactly on 0");
+        }
+    }
+
     void testOutputCeiling()
     {
         const auto n = (int) (4.0 * sampleRate);
@@ -4881,6 +5000,7 @@ int main()
         { "delay",                          testDelay },
         { "fx routing",                     testFxRouting },
         { "learn range",                    testRangeLearn },
+        { "learn range: long takes, running plug-in", testLearnRangeLongRuns },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

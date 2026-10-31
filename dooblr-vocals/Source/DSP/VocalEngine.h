@@ -52,7 +52,7 @@ namespace dooblrvocals::dsp
 
     private:
         void smoothTowardsTarget (int numSamples) noexcept;
-        static void lerpSettings (VocalSettings& current, const VocalSettings& to, float a) noexcept;
+        static void lerpSettings (VocalSettings& current, const VocalSettings& from, const VocalSettings& to, float a) noexcept;
 
         double sampleRate = 48000.0;
         int maxBlock = 512;

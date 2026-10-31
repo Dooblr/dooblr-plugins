@@ -44,46 +44,49 @@ namespace dooblrvocals::dsp
         smoothCounter = 0;
     }
 
-    void VocalEngine::lerpSettings (VocalSettings& current, const VocalSettings& to, float a) noexcept
+    void VocalEngine::lerpSettings (VocalSettings& current, const VocalSettings& from, const VocalSettings& to, float a) noexcept
     {
         auto& p = current.pitch;
         const auto& q = to.pitch;
-        p.retuneMs = lerp (p.retuneMs, q.retuneMs, a);
-        p.humanize = lerp (p.humanize, q.humanize, a);
-        p.amount = lerp (p.amount, q.amount, a);
-        p.a4Hz = lerp (p.a4Hz, q.a4Hz, a);
+        p.retuneMs = lerp (from.pitch.retuneMs, q.retuneMs, a);
+        p.humanize = lerp (from.pitch.humanize, q.humanize, a);
+        p.amount = lerp (from.pitch.amount, q.amount, a);
+        p.a4Hz = lerp (from.pitch.a4Hz, q.a4Hz, a);
+        p.vibratoRespect = lerp (from.pitch.vibratoRespect, q.vibratoRespect, a);
+        if (std::abs (p.vibratoRespect - q.vibratoRespect) < 1.0e-4f)
+            p.vibratoRespect = q.vibratoRespect; // lands exactly (0 = the flatten-vibrato path)
 
         auto& g = current.gate;
         const auto& h = to.gate;
-        g.thresholdDb = lerp (g.thresholdDb, h.thresholdDb, a);
-        g.attackMs = lerp (g.attackMs, h.attackMs, a);
-        g.holdMs = lerp (g.holdMs, h.holdMs, a);
-        g.releaseMs = lerp (g.releaseMs, h.releaseMs, a);
-        g.rangeDb = lerp (g.rangeDb, h.rangeDb, a);
+        g.thresholdDb = lerp (from.gate.thresholdDb, h.thresholdDb, a);
+        g.attackMs = lerp (from.gate.attackMs, h.attackMs, a);
+        g.holdMs = lerp (from.gate.holdMs, h.holdMs, a);
+        g.releaseMs = lerp (from.gate.releaseMs, h.releaseMs, a);
+        g.rangeDb = lerp (from.gate.rangeDb, h.rangeDb, a);
 
         auto& e = current.eq;
         const auto& f = to.eq;
-        e.lowFreq = lerp (e.lowFreq, f.lowFreq, a);
-        e.lowGainDb = lerp (e.lowGainDb, f.lowGainDb, a);
-        e.midFreq = lerp (e.midFreq, f.midFreq, a);
-        e.midGainDb = lerp (e.midGainDb, f.midGainDb, a);
-        e.midQ = lerp (e.midQ, f.midQ, a);
-        e.highFreq = lerp (e.highFreq, f.highFreq, a);
-        e.highGainDb = lerp (e.highGainDb, f.highGainDb, a);
+        e.lowFreq = lerp (from.eq.lowFreq, f.lowFreq, a);
+        e.lowGainDb = lerp (from.eq.lowGainDb, f.lowGainDb, a);
+        e.midFreq = lerp (from.eq.midFreq, f.midFreq, a);
+        e.midGainDb = lerp (from.eq.midGainDb, f.midGainDb, a);
+        e.midQ = lerp (from.eq.midQ, f.midQ, a);
+        e.highFreq = lerp (from.eq.highFreq, f.highFreq, a);
+        e.highGainDb = lerp (from.eq.highGainDb, f.highGainDb, a);
 
         auto& c = current.compressor;
         const auto& d = to.compressor;
-        c.thresholdDb = lerp (c.thresholdDb, d.thresholdDb, a);
-        c.ratio = lerp (c.ratio, d.ratio, a);
-        c.attackMs = lerp (c.attackMs, d.attackMs, a);
-        c.releaseMs = lerp (c.releaseMs, d.releaseMs, a);
-        c.makeupDb = lerp (c.makeupDb, d.makeupDb, a);
+        c.thresholdDb = lerp (from.compressor.thresholdDb, d.thresholdDb, a);
+        c.ratio = lerp (from.compressor.ratio, d.ratio, a);
+        c.attackMs = lerp (from.compressor.attackMs, d.attackMs, a);
+        c.releaseMs = lerp (from.compressor.releaseMs, d.releaseMs, a);
+        c.makeupDb = lerp (from.compressor.makeupDb, d.makeupDb, a);
 
         auto& l = current.limiter;
         const auto& m = to.limiter;
-        l.ceilingDb = lerp (l.ceilingDb, m.ceilingDb, a);
-        l.releaseMs = lerp (l.releaseMs, m.releaseMs, a);
-        l.outputDb = lerp (l.outputDb, m.outputDb, a);
+        l.ceilingDb = lerp (from.limiter.ceilingDb, m.ceilingDb, a);
+        l.releaseMs = lerp (from.limiter.releaseMs, m.releaseMs, a);
+        l.outputDb = lerp (from.limiter.outputDb, m.outputDb, a);
     }
 
     void VocalEngine::smoothTowardsTarget (int numSamples) noexcept
@@ -95,33 +98,19 @@ namespace dooblrvocals::dsp
             return;
         }
 
-        // Discrete / mode parameters snap; continuous ones glide.
-        settings.pitch.enabled = target.pitch.enabled;
-        settings.pitch.mode = target.pitch.mode;
-        settings.pitch.key = target.pitch.key;
-        settings.pitch.scale = target.pitch.scale;
-        settings.pitch.customMask = target.pitch.customMask;
-        settings.pitch.formant = target.pitch.formant;
-        settings.pitch.input = target.pitch.input;
-        settings.pitch.quality = target.pitch.quality;
-        settings.pitch.latency = target.pitch.latency;
-        settings.harmony = target.harmony; // the harmonizer de-zippers its own gains, pans and delays
-        settings.gate.enabled = target.gate.enabled;
-        settings.eq.enabled = target.eq.enabled;
-        settings.compressor.enabled = target.compressor.enabled;
-        settings.limiter.mode = target.limiter.mode;
-        settings.chainOrder = target.chainOrder;
-        settings.nonRealtime = target.nonRealtime;
+        // Everything snaps to the target (discrete / mode settings, Learn Range, the learned
+        // range, and any field added later), then the continuous ones glide from where they were.
+        // Listing the snapped fields one by one once left Learn Range, the learned detector range
+        // and Vibrato Respect stuck at their first-block values.
         // The FX block glides its own delay / pre-delay times and ramps its mixes and on / off,
-        // so its settings snap (a mix of 0 must reach exactly 0 for a bit-transparent path).
-        settings.reverb = target.reverb;
-        settings.delay = target.delay;
-        settings.fxRouting = target.fxRouting;
-        settings.bpm = target.bpm;
+        // so its settings snap (a mix of 0 must reach exactly 0 for a bit-transparent path); the
+        // harmonizer de-zippers its own gains, pans and delays.
+        const auto from = settings;
+        settings = target;
 
         const auto coeff = 1.0f - std::exp (-(float) std::max (1, numSamples)
                                             / (smoothMs * 0.001f * (float) sampleRate));
-        lerpSettings (settings, target, std::clamp (coeff, 0.0f, 1.0f));
+        lerpSettings (settings, from, target, std::clamp (coeff, 0.0f, 1.0f));
     }
 
     void VocalEngine::process (juce::AudioBuffer<float>& buffer, int numSamples) noexcept
