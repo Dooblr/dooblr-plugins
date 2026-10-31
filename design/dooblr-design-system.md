@@ -822,7 +822,7 @@ Read from `~/Documents/programming/audio/dooblr-vocals` (moved 2026-10-28 to `~/
 - Identity: see §1.1. CMake options use the prefix `DOOBLRVOCALS_` (`BUILD_TESTS`, `PLUGIN_FORMATS`, `JUCE_TAG` 8.0.15).
 - Window default 1080×660, resizable 940×600 to 2400×1400. Header 60, nav column 150, header meter 20 (`V:PluginEditor.h:110`). The header (undo/redo 50×24, preset combo, save/load 46, random 64, output caption 52) matches kick.
 - Editor timer 15 Hz; meters on `VBlankAttachment`. Undo: own `UndoHistory`, 0.6 s merge.
-- Presets: factory + user, combo with "Factory"/"User" headings, plus per-section menus on Delay and Reverb (§2.9).
+- Presets: factory + user, combo with "Factory"/"User" headings, plus per-section menus on Delay and Reverb (§2.9). Ten factory programs (Init … Ballad Throw, Vocal Workstation '90s); the Harmony bus panel holds Level, Formant and Lo-Fi (standard knob/toggle).
 
 ### 11.2 Pages and colours
 | Nav group | Pages | Page colour |
@@ -876,6 +876,7 @@ Pitch page only. A 28 px strip sits between the KEYED | CHROMATIC toggle row and
 
 ## 12. Changelog
 
+- **2026-10-30**: §11.1 notes ten factory programs (new "Vocal Workstation '90s", an original preset inspired by mid-1990s hardware vocal harmonizers) and the Harmony bus Lo-Fi knob (commit `4fcb339`). Additive only; standard components, no token changed.
 - **2026-10-28**: Added §11.5 dooblr-vocals Key Follow strip (commit `eddffb9`). Additive only; no existing rule, token name or value changed. JSON: `components.keyFollowStrip`, `layout.vocals.keyFollowStrip`, a `changelog` entry.
 - **2026-10-28**: §11.4 items 5-12 marked resolved by dooblr-vocals commit `29dac9a` (no rule, token name or value changed). dooblr-vocals path references updated to `~/Dropbox/dooblr_plugins/dooblr-vocals`.
 - **2026-10-28**: Added dooblr-vocals v0.2.0 (V). Additive only; no existing rule, token name or value changed.
