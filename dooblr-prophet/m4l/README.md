@@ -8,8 +8,8 @@ It is two-way: automation, presets, Random and edits made in the plug-in window 
 panel, and edits in the panel go straight to the plug-in.
 
 > **Status: untested in Live.** Only headless checks have run (patcher JSON, cord consistency,
-> jsui syntax/ES5 rules, .amxd round trip) and a rendered preview from real link messages
-> (`preview.png`). The plug-in side of the link is covered by the plug-in's unit tests.
+> jsui syntax/ES5 rules, .amxd round trip, a mock Live API test) and a rendered preview from real
+> link messages (`preview.png`). The plug-in side of the link is covered by the plug-in's unit tests.
 
 ![preview](preview.png)
 
@@ -25,6 +25,30 @@ panel, and edits in the panel go straight to the plug-in.
 Mouse: drag knobs up/down (Shift for fine), double-click to reset to default, click toggles and
 segment buttons, click menus to pick from a list, drag the filter handles (cutoff left/right,
 resonance up/down). Save/Load open the plug-in's own file dialogs.
+
+## Panel 0.3.1: Live crash fix
+
+0.3.0 crashed Live 11.3.43 (SIGABRT, a stack ~786 levels deep through `jsliveapi_constructor`)
+when the panel loaded. An observing `LiveAPI` calls its callback synchronously, both when it is
+constructed and when `.property` is set. 0.3.0 created that watcher inside `findPlugin()`, and the
+callback called `findPlugin()` again before the watcher had been assigned, so it recursed until Live
+aborted. 0.3.1:
+
+- makes no Live API call until `live.thisdevice` fires, which reaches the jsui only as a
+  `liveready` message (`loadbang` and `bang` do nothing);
+- creates the device watcher exactly once, in `liveready`, never from a callback;
+- has the watcher callback ignore the initial `id` notification and only schedule one deferred
+  look (50 ms Task, repeats coalesced); it never calls `findPlugin()` itself;
+- guards `findPlugin()` against re-entry (`inFind`, cleared in `finally`) and against running
+  before `liveready`;
+- stops the watcher and cancels pending work in `notifydeleted`.
+
+The panel posts `dooblr-prophet panel 0.3.1` to the Max window when it starts, so a stale copy
+is easy to spot. `scripts/test-liveapi.js` runs the jsui against a mock Live API that fires
+callbacks synchronously (on construction, on `.property`, and in the middle of a query); 0.3.0
+fails it with a runaway recursion, 0.3.1 passes. `scripts/check.js` also checks that
+`live.thisdevice` goes through `liveready` and that no patch cord path leads from the jsui
+back into itself (except through `udpreceive`, which only passes on network input).
 
 ## How it works, and why
 
@@ -57,17 +81,24 @@ the plug-in drops a panel after 5 s of silence and the panel shows *not answerin
 - `scripts/build.js` — writes `device/dooblr-prophet.amxd` + the js beside it; `--install` copies
   both into `~/Music/Ableton/User Library/Presets/MIDI Effects/Max MIDI Effect/dooblr-prophet/`
   (creates only that folder; Live's preferences are not touched).
-- `scripts/check.js` — headless checks; `scripts/amxd.js` — .amxd reader/writer;
+- `scripts/check.js` — headless checks; `scripts/test-liveapi.js` — mock Live API test;
+  `scripts/amxd.js` — .amxd reader/writer;
   `scripts/preview.js` — renders `preview.png` from link messages captured by the plug-in tests
   (`DOOBLRPROPHET_LINK_DUMP=/tmp/link.json ./Tests/DooblrProphetTests`; needs `@napi-rs/canvas`).
 
 ```sh
 node scripts/build.js --install
 node scripts/check.js device/dooblr-prophet.amxd
+node scripts/test-liveapi.js
 ```
+
+`--install` reads the installed files back and checks they match the build byte for byte.
 
 The device is **unfrozen**: the `.js` must stay next to the `.amxd`. To make a single
 self-contained file, open the device in the Max editor and use *Freeze Device*, then save.
+(The build does not freeze: the frozen format is undocumented, and Max 8's jsui cannot embed its
+script in the patch.) If you keep a backup of an older panel, keep it outside the User Library and
+Max's search path, or Max may load the older `dooblr-prophet-ui.js` of the same name.
 
 ## Limits and risks
 

@@ -29,5 +29,8 @@ if (process.argv.includes('--install')) {
   fs.mkdirSync(installDir, { recursive: true });
   fs.writeFileSync(path.join(installDir, 'dooblr-prophet.amxd'), device);
   fs.writeFileSync(path.join(installDir, 'dooblr-prophet-ui.js'), js);
-  console.log('installed to ' + installDir);
+  const same = Buffer.compare(fs.readFileSync(path.join(installDir, 'dooblr-prophet.amxd')), device) === 0
+    && Buffer.compare(fs.readFileSync(path.join(installDir, 'dooblr-prophet-ui.js')), js) === 0;
+  if (!same) throw new Error('installed files do not match the build');
+  console.log('installed to ' + installDir + ' (verified byte for byte)');
 }

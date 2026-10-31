@@ -7,7 +7,7 @@ high-pass into a switchable 4-pole ladder low-pass, and 1–10 voices with uniso
 Original design, code and sounds. "Prophet" describes the instrument family it emulates;
 see the disclaimer below.
 
-Version 0.3.0 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, Echo and Reverb, and a Max for Live panel). See [ROADMAP.md](ROADMAP.md) for what is next and
+Version 0.3.0 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, Echo and Reverb, and a Max for Live panel; panel 0.3.1 fixes a Live crash on load). See [ROADMAP.md](ROADMAP.md) for what is next and
 [docs/analog-reference.md](docs/analog-reference.md) for the circuit reference the DSP follows.
 
 ## Pages and controls

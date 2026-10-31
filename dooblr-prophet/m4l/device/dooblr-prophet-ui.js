@@ -20,6 +20,8 @@ var REPLY_PORT_BASE = 47900, MAX_TOKEN = 16000;
 var PAIR_STATUS = 0xBF, CC_HIGH = 102, CC_LOW = 103, CC_CHECK = 104; // CC on channel 16
 var PAIR_INTERVAL_MS = 1000, HELLO_INTERVAL_MS = 1000, LOST_AFTER_MS = 3500;
 var FX_PRESET_PARAMS = ["echoPreset", "reverbPreset"]; // param shown by each module's preset picker
+var UI_VERSION = "0.3.1"; // this panel's version (posted to the Max window by liveready)
+var FIND_DEBOUNCE_MS = 50;
 
 // Palette (Source/UI/Theme.h)
 var C = {
@@ -53,12 +55,21 @@ function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 //==============================================================================
 // Max entry points
 
-function loadbang() { schedule(); }
+// Nothing touches the Live API until live.thisdevice says Live is ready: the patch turns its bang
+// into a "liveready" message. Calling LiveAPI earlier (at load or from loadbang) is not allowed.
+var liveReady = false;
 
-// From live.thisdevice: the Live API is ready.
-function bang() {
+function loadbang() {}   // deliberately empty, see liveready()
+function bang() {}       // nothing in the patch sends a bare bang; kept so one cannot start anything
+
+function liveready() {
+    if (!liveReady) {
+        liveReady = true;
+        post("dooblr-prophet panel " + UI_VERSION + "\n");
+        watchDevices();
+    }
+    if (S.state === "waiting") S.state = "searching";
     findPlugin();
-    S.state = S.state === "waiting" ? "searching" : S.state;
     schedule();
     redraw();
 }
@@ -72,8 +83,12 @@ function schedule() {
 }
 
 function notifydeleted() {
+    liveReady = false;   // first, so a late watcher callback cannot schedule anything
     if (S.serverPort > 0) send("/dp/bye");
     if (ticker !== null) ticker.cancel();
+    if (findTask !== null) findTask.cancel();
+    findPending = false;
+    if (trackWatcher !== null) { try { trackWatcher.property = ""; } catch (e) {} trackWatcher = null; }
 }
 
 function tick() {
@@ -126,13 +141,54 @@ function send() {
 //==============================================================================
 // Live API: is there a dooblr-prophet on this track, and after this device?
 
-var trackWatcher = null;
+//
+// LiveAPI callbacks can fire synchronously: when an observing LiveAPI is constructed (with
+// "id N") and when its .property is set. 0.3.0 created the watcher inside findPlugin() and called
+// findPlugin() from the callback, so the callback re-entered findPlugin() before the watcher was
+// assigned and recursed until Live aborted. Now:
+//   - the watcher is created exactly once, by liveready(), and never from a callback;
+//   - its callback only schedules a deferred, coalesced Task; it never calls findPlugin() itself;
+//   - findPlugin() refuses to run re-entrantly or before liveready().
+
+var trackWatcher = null, watcherStarted = false;
+var findTask = null, findPending = false, inFind = false;
+
+function watchDevices() {
+    if (watcherStarted) return;
+    watcherStarted = true;              // set first: a synchronous callback must not get here again
+    try {
+        trackWatcher = new LiveAPI(onDevicesChanged, "this_device canonical_parent");
+        trackWatcher.property = "devices";
+    } catch (e) {
+        post("dooblr-prophet panel: cannot watch this track's devices: " + e + "\n");
+    }
+}
+
+function onDevicesChanged() {
+    var a = arrayfromargs(arguments);
+    if (a.length > 0 && a[0] === "id") return;   // the notification on construction, not a change
+    requestFind();
+}
+
+function requestFind() {
+    if (!liveReady || findPending) return;      // coalesce bursts into one deferred look
+    findPending = true;
+    if (findTask === null) findTask = new Task(deferredFind);
+    findTask.schedule(FIND_DEBOUNCE_MS);
+}
+
+function deferredFind() {
+    findPending = false;
+    findPlugin();
+}
+
 function findPlugin() {
+    if (!liveReady || inFind) return;
+    inFind = true;
     var found = 0;
     try {
         var self = new LiveAPI("this_device");
-        var track = new LiveAPI("this_device canonical_parent");
-        var count = track.getcount("devices");
+        var count = new LiveAPI("this_device canonical_parent").getcount("devices");
         var selfIndex = -1, pluginIndex = -1;
         for (var i = 0; i < count; ++i) {
             var d = new LiveAPI("this_device canonical_parent devices " + i);
@@ -142,19 +198,15 @@ function findPlugin() {
             if (pluginIndex < 0 && cls === "PluginDevice" && /dooblr-prophet/i.test(name)) pluginIndex = i;
         }
         found = pluginIndex < 0 ? 0 : (pluginIndex > selfIndex ? 1 : -1);
-        if (trackWatcher === null) {
-            trackWatcher = new LiveAPI(onDevicesChanged, "this_device canonical_parent");
-            trackWatcher.property = "devices";
-        }
     } catch (e) {
         found = 0;
+    } finally {
+        inFind = false;
     }
     S.deviceOnTrack = found;
     if (S.state !== "linked" && S.state !== "syncing") S.state = found === 0 ? "missing" : "searching";
     redraw();
 }
-
-function onDevicesChanged() { findPlugin(); }
 
 //==============================================================================
 // Messages from the plug-in (udpreceive outputs the OSC address as the selector)

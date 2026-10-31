@@ -280,6 +280,39 @@
 						45
 					]
 				}
+			},
+			{
+				"box": {
+					"id": "obj-13",
+					"maxclass": "message",
+					"text": "liveready",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"patching_rect": [
+						20,
+						80,
+						70,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"id": "obj-14",
+					"maxclass": "comment",
+					"text": "The jsui makes no Live API calls until live.thisdevice reports that Live is ready (the liveready message).",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"patching_rect": [
+						100,
+						80,
+						300,
+						33
+					]
+				}
 			}
 		],
 		"lines": [
@@ -287,6 +320,18 @@
 				"patchline": {
 					"source": [
 						"obj-2",
+						0
+					],
+					"destination": [
+						"obj-13",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-13",
 						0
 					],
 					"destination": [

@@ -74,6 +74,12 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Tested headlessly: link codec, pairing, loopback session, layout parity; device JSON, cords,
   ES5 syntax, .amxd round trip and a rendered preview. Next: a first run in Live.
 
+## 0.3.1: Max for Live panel crash fix (panel only; the VST3 stays 0.3.0)
+
+- The panel's Live API watcher recursed on load (synchronous LiveAPI callbacks) and crashed
+  Live. Fixed: no Live API before live.thisdevice, one watcher, deferred and coalesced device
+  checks, a re-entrancy guard. Covered by a mock Live API test; still untested in Live.
+
 ## Milestone 2: layers and split (P10 / P5 Rev4 bi-timbral)
 
 - Two independent layers with layer / split / stack modes, split point and per-layer voice
