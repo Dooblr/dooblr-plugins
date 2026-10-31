@@ -4,17 +4,24 @@ Monorepo for the **dooblr** audio plug-in suite by Dan Feinstein: VST3 plug-ins 
 (arm64, macOS 11+), built with C++20, CMake and JUCE 8.0.15. Each plug-in is self-contained
 in its own folder and has its own README.
 
-| Folder | Plug-in | Type |
-| --- | --- | --- |
-| [`dooblr-q/`](dooblr-q/) | dooblr-q 0.9.5 | Dynamic parametric EQ (VST3 effect) |
-| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick 0.3.6 | Layered kick drum designer (VST3 instrument) |
-| [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals 0.1.0 | Pitch correction and vocal chain (VST3 effect + Standalone) |
-| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument, plus a Max for Live panel 0.3.2) |
-| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe 0.1.0 | Dynamic resonance reducer (VST3 effect) |
-| [`dooblr-chords/`](dooblr-chords/) | dooblr-chords 0.2.0 | Chord progression generator (Max for Live MIDI effect) |
-| [`design/`](design/) | Design files | Shared visual design system for the suite |
+| Folder | Plug-in | Version | Type | Status |
+| --- | --- | --- | --- | --- |
+| [`dooblr-q/`](dooblr-q/) | dooblr-q | 0.9.5 | Dynamic parametric EQ (VST3 effect) | Mature; most features, see its README |
+| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.6 | Layered kick drum designer (VST3 instrument) | Active |
+| [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.2.0 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
+| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
+| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.2 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display | Early; its tests and LoadCheck pass, not yet tested in a DAW |
+| [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.2.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
+| [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12) | Updated 2026-10-31 |
+
+Versions come from each plug-in's `project(... VERSION ...)` in its `CMakeLists.txt` (dooblr-chords:
+its README / device). Status is as of the last commit; see each folder's README and ROADMAP.
 
 ## Building
+
+VST3 plug-ins (each with `scripts/build.sh`): dooblr-q, dooblr-kick, dooblr-vocals,
+dooblr-prophet, dooblr-soothe. Max for Live devices: dooblr-chords (see its README) and the
+dooblr-prophet panel 0.3.2 (`dooblr-prophet/m4l/`).
 
 Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
 host-style LoadCheck, and installs the VST3 bundle (never with sudo). Build directories live
@@ -51,6 +58,9 @@ Requirements: Xcode command-line tools, CMake 3.22+, and optionally Ninja.
   system (layout, controls, colour, typography and interaction rules).
 - [`design/dooblr-design-tokens.json`](design/dooblr-design-tokens.json): design tokens
   (colours, sizes, spacing) used by the plug-in UIs.
+- Reusable patterns (design system §12): left-column hero knob, vertical dot-slider strip,
+  toolbar with preset / A-B / undo, weighting curve overlaid on the spectrum with pill / dot
+  handles, smooth log-frequency spectrum drawing, value-text formatting.
 
 These are copies; the working originals are in `~/Dropbox/grok_plugin_design_files`.
 
