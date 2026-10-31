@@ -21,6 +21,7 @@ namespace dooblrsoothe::dsp
         std::array<float, numPoints> input {};     // dBFS (a full-scale sine reads 0 dB)
         std::array<float, numPoints> output {};    // dBFS after the reduction (before mix / trim)
         std::array<float, numPoints> reduction {}; // dB of cut, >= 0 (the larger of the channels)
+        float binHz = 0.0f;                          // the analysis bin spacing, for display smoothing
         int serial = 0;
     };
 
@@ -148,7 +149,11 @@ namespace dooblrsoothe::dsp
         int tableListen = -2;
         bool tablesValid = false;
 
+        // Display resampling: each point's bin range (for the peak where bins are dense), its
+        // fractional bin position and its width in bins (for interpolation where they are sparse).
         std::array<int, DisplayFrame::numPoints> pointLo {}, pointHi {};
+        std::array<float, DisplayFrame::numPoints> pointBin {}, pointWidth {};
+        std::vector<float> displayIn, displayOut, displayRed; // per bin, dB
         DisplayExchange display;
         int displaySerial = 0;
     };

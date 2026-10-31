@@ -31,6 +31,24 @@ namespace dooblrsoothe::dsp
         }
 
         inline float dbOf (float power) noexcept { return 10.0f * std::log10 (power + powerFloor); }
+
+        /** Monotone cubic Hermite interpolation (Fritsch-Butland tangents: the harmonic mean of the
+            neighbouring slopes, zero at local extrema) of v[first..last] at a fractional index. It
+            passes through every bin value and never overshoots, so peaks and dips keep their depth. */
+        inline float monotoneAt (const float* v, float pos, int first, int last) noexcept
+        {
+            pos = juce::jlimit ((float) first, (float) last, pos);
+            const auto i = std::min ((int) pos, last - 1);
+            if (i < first) return v[first];
+            const auto t = pos - (float) i;
+            const auto at = [&] (int k) { return v[juce::jlimit (first, last, k)]; };
+            const auto y0 = at (i - 1), y1 = at (i), y2 = at (i + 1), y3 = at (i + 2);
+            const auto d0 = y1 - y0, d1 = y2 - y1, d2 = y3 - y2;
+            const auto tangent = [] (float a, float b) { return a * b <= 0.0f ? 0.0f : 2.0f * a * b / (a + b); };
+            const auto m1 = tangent (d0, d1), m2 = tangent (d1, d2);
+            const auto t2 = t * t, t3 = t2 * t;
+            return (2.0f * t3 - 3.0f * t2 + 1.0f) * y1 + (t3 - 2.0f * t2 + t) * m1 + (-2.0f * t3 + 3.0f * t2) * y2 + (t3 - t2) * m2;
+        }
     }
 
     float DisplayFrame::pointFrequency (int point) noexcept
@@ -75,6 +93,8 @@ namespace dooblrsoothe::dsp
         detSpectrum.assign ((size_t) maxFftSize * 2, 0.0f);
         for (auto* v : { &linkPower, &linked, &temp, &amount, &attackCoeff, &releaseCoeff, &region, &levelDb })
             v->assign (maxBins, 0.0f);
+        for (auto* v : { &displayIn, &displayOut, &displayRed })
+            v->assign (maxBins, 0.0f);
         prefixPower.assign (maxBins + 1, 0.0);
 
         setQuality (newQuality);
@@ -111,6 +131,8 @@ namespace dooblrsoothe::dsp
             const auto nearest = (int) std::lround (f / binHz);
             pointLo[(size_t) p] = juce::jlimit (1, numBins - 1, std::min (lo, nearest));
             pointHi[(size_t) p] = juce::jlimit (1, numBins - 1, std::max (hi, nearest));
+            pointBin[(size_t) p] = (float) (f / binHz);
+            pointWidth[(size_t) p] = (float) (f * (step - 1.0f / step) / binHz);
         }
 
         tablesValid = false;
@@ -350,28 +372,49 @@ namespace dooblrsoothe::dsp
     {
         auto& frame = display.writeSlot();
         const auto channelScale = 1.0f / (float) numChannels;
+        const int first = 1, last = std::max (first, numBins - 1);
 
+        // Per bin (dB): the channel-averaged input and output power and the larger reduction.
+        for (int k = first; k <= last; ++k)
+        {
+            float pin = 0.0f, pout = 0.0f, red = 0.0f;
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                const auto pw = power[(size_t) ch][(size_t) k];
+                const auto g = own[(size_t) ch][(size_t) k];
+                pin += pw;
+                pout += pw * g * g;
+                red = std::max (red, smoothed[(size_t) ch][(size_t) k]);
+            }
+            displayIn[(size_t) k] = dbOf (pin * channelScale);
+            displayOut[(size_t) k] = dbOf (pout * channelScale);
+            displayRed[(size_t) k] = red;
+        }
+
+        // Resample onto the log-frequency display points. Where bins are sparse (the lows: a
+        // point is narrower than a bin) interpolate between bin centres, so the trace is a smooth
+        // curve instead of a staircase of held bins; where they are dense (the highs) keep the
+        // peak of the bins a point covers, so narrow resonances stay visible. The two cross-fade
+        // between 2 and 4 bins per point. Display only: the per-bin gains are not touched.
         for (int p = 0; p < DisplayFrame::numPoints; ++p)
         {
-            float in = 0.0f, out = 0.0f, red = 0.0f;
-            for (int k = pointLo[(size_t) p]; k <= pointHi[(size_t) p]; ++k)
+            const auto pos = pointBin[(size_t) p];
+            const auto t = juce::jlimit (0.0f, 1.0f, (pointWidth[(size_t) p] - 2.0f) * 0.5f);
+            const auto resample = [&] (const std::vector<float>& v)
             {
-                float pin = 0.0f, pout = 0.0f;
-                for (int ch = 0; ch < numChannels; ++ch)
-                {
-                    const auto pw = power[(size_t) ch][(size_t) k];
-                    const auto g = own[(size_t) ch][(size_t) k];
-                    pin += pw;
-                    pout += pw * g * g;
-                    red = std::max (red, smoothed[(size_t) ch][(size_t) k]);
-                }
-                in = std::max (in, pin * channelScale);
-                out = std::max (out, pout * channelScale);
-            }
-            frame.input[(size_t) p] = dbOf (in);
-            frame.output[(size_t) p] = dbOf (out);
-            frame.reduction[(size_t) p] = red;
+                const auto smooth = monotoneAt (v.data(), pos, first, last);
+                if (t <= 0.0f)
+                    return smooth;
+                auto peak = v[(size_t) pointLo[(size_t) p]];
+                for (int k = pointLo[(size_t) p] + 1; k <= pointHi[(size_t) p]; ++k)
+                    peak = std::max (peak, v[(size_t) k]);
+                return smooth + t * (peak - smooth);
+            };
+            frame.input[(size_t) p] = resample (displayIn);
+            frame.output[(size_t) p] = resample (displayOut);
+            frame.reduction[(size_t) p] = std::max (0.0f, resample (displayRed));
         }
+        frame.binHz = (float) (sampleRate / fftSize);
 
         frame.serial = ++displaySerial;
         display.publish();

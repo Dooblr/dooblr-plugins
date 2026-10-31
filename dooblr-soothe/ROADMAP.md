@@ -1,6 +1,15 @@
 # dooblr-soothe roadmap
 
-## 0.1.1 (now)
+## 0.1.2 (now)
+
+- Smooth spectrum and reduction drawing at the low end: monotone cubic interpolation
+  between FFT bin centres (in dB), peak blending where one display point covers several
+  bins, fractional-octave smoothing that widens toward the lows, smooth Bézier segments.
+  No more stair-stepping below a few hundred hertz; highs and real dips stay detailed.
+- Display only (the DSP gains are unchanged); paths cached per frame, paint is
+  allocation-free. New test: no flat-step runs in the drawn paths at 40–500 Hz.
+
+## 0.1.1
 
 - New layout: left column with the big Amount knob (the depth parameter) and Sharpness,
   a dot-slider strip (stereo mode, Link, Focus), a toolbar over the graph, and a bottom row

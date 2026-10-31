@@ -48,6 +48,7 @@ namespace dooblrsoothe::ui
             {
                 frame = *fresh;
                 frameSerial = fresh->serial;
+                rebuildSpectrumPaths();
                 dirty = true;
             }
         }
@@ -130,6 +131,97 @@ namespace dooblrsoothe::ui
         curveArea = area;
         background = {};
         rebuildCurve();
+        rebuildSpectrumPaths();
+    }
+
+    void ReductionGraph::smoothDisplay (const float* in, float* out, float binHz) noexcept
+    {
+        constexpr int n = dsp::DisplayFrame::numPoints, maxRadius = 12;
+        const auto spacingOct = std::log2 (dsp::DisplayFrame::maxFreq / dsp::DisplayFrame::minFreq) / (float) (n - 1);
+        for (int p = 0; p < n; ++p)
+        {
+            const auto f = dsp::DisplayFrame::pointFrequency (p);
+            const auto sigmaOct = binHz > 0.0f ? std::min (1.0f / 6.0f, 0.5f * std::log2 (1.0f + binHz / f)) : 0.0f;
+            const auto sigma = sigmaOct / spacingOct;
+            if (sigma < 0.33f)
+            {
+                out[p] = in[p];
+                continue;
+            }
+            const auto radius = std::min (maxRadius, (int) std::ceil (3.0f * sigma));
+            float sum = 0.0f, weights = 0.0f;
+            for (int j = -radius; j <= radius; ++j)
+            {
+                const auto w = std::exp (-0.5f * (float) (j * j) / (sigma * sigma));
+                sum += w * in[juce::jlimit (0, n - 1, p + j)];
+                weights += w;
+            }
+            out[p] = sum / weights;
+        }
+    }
+
+    void ReductionGraph::addSmoothCurve (juce::Path& path, const float* xs, const float* ys, int n, bool startNewSubPath)
+    {
+        if (n <= 0)
+            return;
+        if (startNewSubPath) path.startNewSubPath (xs[0], ys[0]);
+        else                 path.lineTo (xs[0], ys[0]);
+        const auto secant = [&] (int i) { const auto h = xs[i + 1] - xs[i]; return h > 1.0e-6f ? (ys[i + 1] - ys[i]) / h : 0.0f; };
+        const auto tangent = [&] (int i)
+        {
+            if (n < 2) return 0.0f;
+            if (i == 0) return secant (0);
+            if (i == n - 1) return secant (n - 2);
+            const auto a = secant (i - 1), b = secant (i);
+            return a * b <= 0.0f ? 0.0f : 2.0f * a * b / (a + b); // harmonic mean: monotone, no overshoot
+        };
+        auto m0 = tangent (0);
+        for (int i = 0; i + 1 < n; ++i)
+        {
+            const auto m1 = tangent (i + 1);
+            const auto h = (xs[i + 1] - xs[i]) / 3.0f;
+            path.cubicTo (xs[i] + h, ys[i] + m0 * h, xs[i + 1] - h, ys[i + 1] - m1 * h, xs[i + 1], ys[i + 1]);
+            m0 = m1;
+        }
+    }
+
+    void ReductionGraph::rebuildSpectrumPaths()
+    {
+        // Paths keep their storage across clear(), so after the first frame this does not allocate.
+        inputPath.clear();
+        outputPath.clear();
+        reductionPath.clear();
+        reductionEdge.clear();
+        if (frameSerial < 0 || spectrumArea.isEmpty())
+            return;
+
+        constexpr int n = dsp::DisplayFrame::numPoints;
+        smoothDisplay (frame.input.data(), drawnInput.data(), frame.binHz);
+        smoothDisplay (frame.output.data(), drawnOutput.data(), frame.binHz);
+        smoothDisplay (frame.reduction.data(), drawnReduction.data(), frame.binHz);
+
+        const auto yLevel = [this] (float db)
+        {
+            return juce::jmap (juce::jlimit (spectrumFloorDb, 0.0f, db), spectrumFloorDb, 0.0f, spectrumArea.getBottom(), spectrumArea.getY());
+        };
+        for (int i = 0; i < n; ++i)
+        {
+            pointX[(size_t) i] = xForFrequency (dsp::DisplayFrame::pointFrequency (i));
+            inputY[(size_t) i] = yLevel (drawnInput[(size_t) i]);
+            outputY[(size_t) i] = yLevel (drawnOutput[(size_t) i]);
+            reductionY[(size_t) i] = yForCurveDb (-juce::jlimit (0.0f, reductionRangeDb, drawnReduction[(size_t) i]));
+        }
+
+        inputPath.startNewSubPath (spectrumArea.getX(), spectrumArea.getBottom());
+        addSmoothCurve (inputPath, pointX.data(), inputY.data(), n, false);
+        inputPath.lineTo (spectrumArea.getRight(), spectrumArea.getBottom());
+        inputPath.closeSubPath();
+        addSmoothCurve (outputPath, pointX.data(), outputY.data(), n, true);
+        reductionPath.startNewSubPath (curveArea.getX(), curveArea.getBottom());
+        addSmoothCurve (reductionPath, pointX.data(), reductionY.data(), n, false);
+        reductionPath.lineTo (curveArea.getRight(), curveArea.getBottom());
+        reductionPath.closeSubPath();
+        addSmoothCurve (reductionEdge, pointX.data(), reductionY.data(), n, true);
     }
 
     void ReductionGraph::drawBackground()
@@ -214,32 +306,6 @@ namespace dooblrsoothe::ui
         // the 0 dB baseline that dips where the plug-in cuts.
         if (frameSerial >= 0)
         {
-            const auto n = dsp::DisplayFrame::numPoints;
-            const auto yLevel = [this] (float db)
-            {
-                return juce::jmap (juce::jlimit (spectrumFloorDb, 0.0f, db), spectrumFloorDb, 0.0f, spectrumArea.getBottom(), spectrumArea.getY());
-            };
-            inputPath.clear();
-            outputPath.clear();
-            reductionPath.clear();
-            reductionEdge.clear();
-            inputPath.startNewSubPath (spectrumArea.getX(), spectrumArea.getBottom());
-            reductionPath.startNewSubPath (curveArea.getX(), curveArea.getBottom());
-            for (int i = 0; i < n; ++i)
-            {
-                const auto x = xForFrequency (dsp::DisplayFrame::pointFrequency (i));
-                inputPath.lineTo (x, yLevel (frame.input[(size_t) i]));
-                if (i == 0) outputPath.startNewSubPath (x, yLevel (frame.output[(size_t) i]));
-                else        outputPath.lineTo (x, yLevel (frame.output[(size_t) i]));
-                const auto y = yForCurveDb (-juce::jlimit (0.0f, reductionRangeDb, frame.reduction[(size_t) i]));
-                reductionPath.lineTo (x, y);
-                if (i == 0) reductionEdge.startNewSubPath (x, y); else reductionEdge.lineTo (x, y);
-            }
-            inputPath.lineTo (spectrumArea.getRight(), spectrumArea.getBottom());
-            inputPath.closeSubPath();
-            reductionPath.lineTo (curveArea.getRight(), curveArea.getBottom());
-            reductionPath.closeSubPath();
-
             g.setColour (Palette::spectrum.withAlpha (0.10f));
             g.fillPath (inputPath);
             g.setColour (Palette::spectrum.withAlpha (0.28f));

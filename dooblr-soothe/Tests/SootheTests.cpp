@@ -376,7 +376,7 @@ namespace
         check (p->getBusCount (true) == 2 && p->getBus (true, 1) != nullptr && ! p->getBus (true, 1)->isEnabled(), "a sidechain input bus, off by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRSOOTHE_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
+        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
 
         auto layout = p->getBusesLayout();
@@ -1628,6 +1628,125 @@ namespace
                         check (v < 0.0f, "Vocal Harshness weights 3.5 kHz heavier with a negative gain (" + db (v) + ")");
     }
 
+    /** y of an open, left-to-right path at the centre of every pixel column in [x0, x1]. */
+    std::vector<float> sampleColumns (const juce::Path& path, int x0, int x1)
+    {
+        std::vector<juce::Line<float>> segments;
+        for (juce::PathFlatteningIterator it (path, {}, 0.02f); it.next();)
+            if (! it.closesSubPath && it.x2 != it.x1)
+                segments.emplace_back (it.x1, it.y1, it.x2, it.y2);
+        std::vector<float> ys;
+        for (int x = x0; x <= x1; ++x)
+        {
+            const auto fx = (float) x + 0.5f;
+            auto y = std::numeric_limits<float>::quiet_NaN();
+            for (const auto& s : segments)
+                if (fx >= std::min (s.getStartX(), s.getEndX()) && fx <= std::max (s.getStartX(), s.getEndX()))
+                {
+                    y = s.getStartY() + (s.getEndY() - s.getStartY()) * (fx - s.getStartX()) / (s.getEndX() - s.getStartX());
+                    break;
+                }
+            ys.push_back (y);
+        }
+        return ys;
+    }
+
+    struct StepStats { int steps = 0, missing = 0; float maxBend = 0.0f, maxSlope = 0.0f; };
+
+    /** Staircase detector: a step is a run of >= 3 flat columns (|dy| < 0.05 px) next to a jump
+        (|dy| > 0.6 px). maxBend is the largest column-to-column change of the slope. */
+    StepStats stepStats (const std::vector<float>& y)
+    {
+        StepStats st;
+        std::vector<float> dy;
+        for (size_t i = 0; i + 1 < y.size(); ++i)
+        {
+            if (! std::isfinite (y[i]) || ! std::isfinite (y[i + 1])) { ++st.missing; continue; }
+            dy.push_back (y[i + 1] - y[i]);
+        }
+        int flat = 0;
+        for (size_t i = 0; i < dy.size(); ++i)
+        {
+            st.maxSlope = std::max (st.maxSlope, std::abs (dy[i]));
+            if (i > 0) st.maxBend = std::max (st.maxBend, std::abs (dy[i] - dy[i - 1]));
+            if (std::abs (dy[i]) < 0.05f) { ++flat; continue; }
+            if (flat >= 3 && std::abs (dy[i]) > 0.6f) ++st.steps;
+            flat = 0;
+        }
+        return st;
+    }
+
+    void testDisplaySmoothness()
+    {
+        // A spectrally smooth input: one impulse per FFT frame through a one-pole low-pass at 60 Hz
+        // (flat below, -6 dB / octave above), so the low end of the display must be a smooth slope.
+        auto p = makeProcessor();
+        const auto period = std::max (64, p->getLatencySamples());
+        const auto n = (size_t) defaultRate;
+        Stereo in (std::vector<float> (n, 0.0f), std::vector<float> (n, 0.0f));
+        const auto a = (float) std::exp (-2.0 * juce::MathConstants<double>::pi * 60.0 / defaultRate);
+        float z = 0.0f;
+        for (size_t i = 0; i < n; ++i)
+        {
+            z = (1.0f - a) * ((i % (size_t) period) == 0 ? 8.0f : 0.0f) + a * z;
+            in.l[i] = in.r[i] = z;
+        }
+        render (*p, in);
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "smoothness: editor");
+        if (editor == nullptr) return;
+
+        for (auto size : editorSizes)
+        {
+            editor->setSize (size.x, size.y);
+            auto& graph = editor->getGraph();
+            graph.poll();
+            (void) graph.createComponentSnapshot (graph.getLocalBounds(), true, 1.0f); // builds the paths
+            const auto label = std::to_string (size.x) + "x" + std::to_string (size.y);
+            const auto x0 = (int) std::ceil (graph.xForFrequency (40.0f)), x1 = (int) std::floor (graph.xForFrequency (500.0f));
+            for (int which = 0; which < 2; ++which)
+            {
+                const auto& path = which == 0 ? graph.getOutputPath() : graph.getReductionEdge();
+                const auto st = stepStats (sampleColumns (path, x0, x1));
+                const auto name = juce::String (which == 0 ? "output spectrum" : "reduction edge").toStdString();
+                check (st.missing == 0 && st.steps == 0 && st.maxBend < 0.5f,
+                       label + ": " + name + " 40..500 Hz is smooth (" + std::to_string (st.steps) + " steps, max slope change "
+                           + fmt (st.maxBend, 3) + " px, max slope " + fmt (st.maxSlope, 2) + " px / column, " + std::to_string (x1 - x0) + " columns)");
+            }
+        }
+        base.reset();
+
+        // Real resonances stay visible: a 220 Hz sine (low end, smoothed) and a 2 kHz sine (high
+        // end, drawn as analysed) still show their reduction peaks.
+        EditorFixture f;
+        if (f.editor == nullptr) return;
+        auto& graph = f.editor->getGraph();
+        graph.poll();
+        const auto& fr = graph.getFrame();
+        const auto& drawn = graph.getDrawnReduction();
+        const auto peakNear = [] (const auto& values, float lo, float hi)
+        {
+            auto best = std::numeric_limits<float>::lowest();
+            for (int i = 0; i < dsp::DisplayFrame::numPoints; ++i)
+                if (const auto fq = dsp::DisplayFrame::pointFrequency (i); fq >= lo && fq <= hi)
+                    best = std::max (best, values[(size_t) i]);
+            return best;
+        };
+        // The low sine is a narrow spectral peak (the default low band leaves it uncut): compare its
+        // height over the level an octave below.
+        const auto lowRaw = peakNear (fr.input, 190.0f, 250.0f) - peakNear (fr.input, 100.0f, 125.0f);
+        const auto lowDrawn = peakNear (graph.getDrawnInput(), 190.0f, 250.0f) - peakNear (graph.getDrawnInput(), 100.0f, 125.0f);
+        const auto highRaw = peakNear (fr.reduction, 1800.0f, 2200.0f), highDrawn = peakNear (drawn, 1800.0f, 2200.0f);
+        check (lowRaw > 6.0f && lowDrawn >= 0.75f * lowRaw, "the 220 Hz sine still stands out of the drawn spectrum after smoothing (" + db (lowDrawn) + " of " + db (lowRaw) + ")");
+        check (highRaw > 1.0f && std::abs (highDrawn - highRaw) < 1.0e-4f, "the 2 kHz resonance is drawn as analysed (" + db (highDrawn) + " of " + db (highRaw) + ")");
+        int changedHigh = 0;
+        for (int i = 0; i < dsp::DisplayFrame::numPoints; ++i)
+            if (dsp::DisplayFrame::pointFrequency (i) >= 1500.0f && std::abs (drawn[(size_t) i] - fr.reduction[(size_t) i]) > 1.0e-4f)
+                ++changedHigh;
+        check (changedHigh == 0, "no smoothing above 1.5 kHz (" + std::to_string (changedHigh) + " points changed)");
+    }
+
     void testCompare()
     {
         auto p = makeProcessor();
@@ -1676,6 +1795,7 @@ int main()
         { "weighting: pulled down = more reduction",    testWeightingInversion },
         { "0.1.0 state and preset migration",           testStateMigration },
         { "A / B compare",                              testCompare },
+        { "display: smooth low end, detailed highs",    testDisplaySmoothness },
     };
 
     int failedTests = 0;

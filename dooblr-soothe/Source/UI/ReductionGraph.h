@@ -50,6 +50,21 @@ namespace dooblrsoothe::ui
         /** The active band whose node is under the point, or -1. */
         int bandAt (juce::Point<float> position) const;
         bool hasSpectrum() const noexcept { return frameSerial >= 0; }
+        /** The drawn spectrum / reduction outlines (open paths, left to right), for tests. */
+        const juce::Path& getInputPath() const noexcept { return inputPath; }
+        const juce::Path& getOutputPath() const noexcept { return outputPath; }
+        const juce::Path& getReductionEdge() const noexcept { return reductionEdge; }
+        /** The last analysed frame and the reduction as drawn (after the display smoothing), dB. */
+        const dsp::DisplayFrame& getFrame() const noexcept { return frame; }
+        const std::array<float, dsp::DisplayFrame::numPoints>& getDrawnReduction() const noexcept { return drawnReduction; }
+        const std::array<float, dsp::DisplayFrame::numPoints>& getDrawnInput() const noexcept { return drawnInput; }
+
+        /** Light fractional-octave smoothing of display points, wider where analysis bins are sparse:
+            a Gaussian of 0.5 x the bin spacing in octaves at that frequency, at most 1/6 octave, and
+            none where that is under a third of the point spacing (the highs stay as analysed). */
+        static void smoothDisplay (const float* in, float* out, float binHz) noexcept;
+        /** Appends a smooth curve through the points (monotone cubic segments, no overshoot). */
+        static void addSmoothCurve (juce::Path& path, const float* xs, const float* ys, int n, bool startNewSubPath);
 
         float xForFrequency (float frequency) const noexcept;
         float frequencyForX (float x) const noexcept;
@@ -77,6 +92,7 @@ namespace dooblrsoothe::ui
     private:
         void drawBackground();
         void rebuildCurve();
+        void rebuildSpectrumPaths();
         void setParam (const juce::String& id, float value);
         void beginGesture (const juce::String& id);
         void endGesture (const juce::String& id);
@@ -97,6 +113,8 @@ namespace dooblrsoothe::ui
         dsp::Bands bands {};
         bool bandsValid = false;
         juce::Path curvePath, curveFillPath, selectedBandPath, inputPath, outputPath, reductionPath, reductionEdge;
+        std::array<float, dsp::DisplayFrame::numPoints> pointX {}, drawnInput {}, drawnOutput {}, drawnReduction {},
+                                                        inputY {}, outputY {}, reductionY {};
 
         int selectedBand = 0, hoverBand = -1, dragBand = -1;
         juce::Point<float> hoverPosition { -1.0f, -1.0f }, dragPosition, lastDragMouse;
