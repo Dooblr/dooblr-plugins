@@ -194,7 +194,7 @@ namespace dooblrvocals::ui
         HistoryStrip history;
         juce::Rectangle<float> transfer;
         juce::Image background;
-        juce::Path curve;
+        juce::Path curve, kneeCurve;
         juce::uint64 lastHash = 0;
         DragKind hover = DragKind::none, dragging = DragKind::none;
         float shownInDb = -120.0f, shownGrDb = 0.0f;

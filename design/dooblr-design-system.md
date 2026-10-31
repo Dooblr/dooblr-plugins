@@ -876,6 +876,20 @@ Pitch page only. A 28 px strip sits between the KEYED | CHROMATIC toggle row and
 - **Key / Scale combos while following:** they are not changed (the parameter values are never overwritten, so automation is not fought). They use the dimmed-control half alpha (0.6, §2.8 / `dimmedControl.alphaHalf`) with the tooltip "Key Follow is using <key>; this is the fallback when Key Follow is off". The pitch display's in-key rows and the Harmony strips' "in Key Scale" label show the followed key.
 - No new colour, font size, radius or alpha token: all values above already exist in §2.
 
+### 11.6 Learn Range progress (added 2026-10-31)
+Pitch page, in the toggle row: the learned-range label (12 px, right-aligned) is followed by a progress bar, then the reset button (`V:UI/LearnProgressBar.h`, `V:PluginEditor.cpp` `resized` / `updateLearnUi`).
+- **Bar:** min(90, row width / 3) × 12 slot, 8 px gap before the reset button; a 6 px track, radius 3, `divider`. Mouse-transparent, componentID `learnProgress`. Hidden when no take has been started (idle).
+- **Progress = voiced time, not wall-clock:** the audio thread adds a block to the voiced counter only when the detector reports a voiced pitch at the learner's confidence (≥ 0.6). Full = 8 s of voiced audio; the take then finishes on its own. The value is handed to the editor through atomics and can only grow during a take.
+- **Fill colours:** listening `frozen` (same role as the armed Learn pulse, §11.4 item 4), alpha 0.5 while no voice has been heard for 0.3 s; done `accent` at full width; failed / timed out `dynamic` at the width reached.
+- **Status line** (the same label): "Waiting for voice" / "Keep singing… N%" while listening; "Done - learned low <note>, high <note>" when done; "Timed out - <reason>" after 45 s without enough voice; the learner's own "Not enough voice…" text when stopped early. Label colour `textPrimary`, `dynamic` only in the failed state.
+- No new colour, font size, radius or alpha token.
+
+### 11.7 Compressor Knee (added 2026-10-31)
+Comp page: a **Knee** knob after Ratio (`comp_knee`, 0–24 dB, default 6 dB — the fixed knee every earlier version used, so sessions and presets sound bit-identical). `V:DSP/Effects.cpp` `Compressor::staticReductionDb`, `V:UI/OutputVisuals.cpp` `DynamicsDisplay`.
+- **Law:** quadratic soft knee centred on the threshold, width = Knee; 0 dB is a hard knee. Values above 24 dB are clamped.
+- **Transfer curve:** the curve follows the Knee setting; the knee region (threshold ± Knee/2) is over-stroked 3 px in `textPrimary` at alpha 0.6 so the width is visible; the threshold handle sits on the knee-bent curve. The readout reads "<ratio>:1  knee <N> dB".
+- No new colour, font size, radius or alpha token.
+
 ---
 
 ## 12. Reusable patterns (S)
@@ -939,6 +953,8 @@ FFT bins are linear in frequency, display points are logarithmic, so at the low 
 
 ## 13. Changelog
 
+- **2026-10-31**: Added §11.7 dooblr-vocals Compressor Knee (0–24 dB soft knee, default 6 dB, knee region drawn on the transfer curve). Additive only; existing tokens only, no rule, token name or value changed.
+- **2026-10-31**: Added §11.6 dooblr-vocals Learn Range progress (bar driven by voiced time, status line, done / failed states). Additive only; existing tokens only, no rule, token name or value changed.
 - **2026-10-31**: Added §12 Reusable patterns (S = dooblr-soothe 0.1.1–0.1.2): left-column hero knob, vertical dot-slider strip, toolbar with preset / A-B / undo, weighting curve overlaid on the spectrum with pill / dot handles, smooth log-frequency spectrum drawing, value-text formatting. Changelog renumbered to §13. Additive only; no existing rule, token name or value changed. JSON: `components.heroKnobColumn`, `components.dotSliderStrip`, `components.presetAbUndoToolbar`, `components.weightingCurveOverlay`, `components.valueText`, `graphs.smoothLogSpectrum`, a `changelog` entry.
 
 - **2026-10-31**: §11.2 dooblr-vocals nav: the Limiter moves out of the re-orderable PROCESSING group into a new fixed OUTPUT group after TIME FX, matching the new signal order (the limiter now runs after the delay / reverb and the output gain). Added the signal-order line. The Reverb Decay control is now calibrated to the measured late-tail RT60 at 1 kHz (within 3 %); no visual change. No token name or value changed.

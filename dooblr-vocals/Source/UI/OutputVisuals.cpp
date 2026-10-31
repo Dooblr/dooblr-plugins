@@ -772,14 +772,15 @@ namespace dooblrvocals::ui
     juce::Point<float> DynamicsDisplay::getThresholdHandlePosition() const
     {
         const auto t = gesture.get ("comp_threshold");
-        return transferPoint (t, t + dsp::Compressor::staticReductionDb (t, t, gesture.get ("comp_ratio")) + gesture.get ("comp_makeup"));
+        return transferPoint (t, t + dsp::Compressor::staticReductionDb (t, t, gesture.get ("comp_ratio"), gesture.get ("comp_knee"))
+                                  + gesture.get ("comp_makeup"));
     }
 
     juce::uint64 DynamicsDisplay::paramHash() const
     {
         juce::uint64 hash = 31;
 
-        for (const auto* id : { "comp_on", "comp_threshold", "comp_ratio", "comp_makeup" })
+        for (const auto* id : { "comp_on", "comp_threshold", "comp_ratio", "comp_makeup", "comp_knee" })
             hash = mixHash (hash, gesture.get (id));
 
         return hash;
@@ -850,12 +851,25 @@ namespace dooblrvocals::ui
     {
         lastHash = paramHash();
         const auto threshold = gesture.get ("comp_threshold"), ratio = gesture.get ("comp_ratio"), makeup = gesture.get ("comp_makeup");
+        const auto knee = gesture.get ("comp_knee");
         curve.clear();
+        kneeCurve.clear();
+
+        // The knee region (threshold +/- knee / 2) is drawn again on top, brighter, so its width is visible.
+        if (knee > 0.0f)
+            for (int step = 0; step <= 32; ++step)
+            {
+                const auto in = threshold - 0.5f * knee + knee * (float) step / 32.0f;
+                const auto point = transferPoint (in, in + dsp::Compressor::staticReductionDb (in, threshold, ratio, knee) + makeup);
+
+                if (step == 0) kneeCurve.startNewSubPath (point);
+                else           kneeCurve.lineTo (point);
+            }
 
         for (int step = 0; step <= (int) std::lround ((dynHighDb - dynLowDb) / 0.5f); ++step)
         {
             const auto in = dynLowDb + 0.5f * (float) step;
-            const auto point = transferPoint (in, in + dsp::Compressor::staticReductionDb (in, threshold, ratio) + makeup);
+            const auto point = transferPoint (in, in + dsp::Compressor::staticReductionDb (in, threshold, ratio, knee) + makeup);
 
             if (step == 0) curve.startNewSubPath (point);
             else           curve.lineTo (point);
@@ -956,6 +970,12 @@ namespace dooblrvocals::ui
             g.setColour (on ? Palette::dynamic : Palette::textMuted.withAlpha (0.6f));
             g.strokePath (curve, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
 
+            if (! kneeCurve.isEmpty())
+            {
+                g.setColour ((on ? Palette::textPrimary : Palette::textMuted).withAlpha (0.6f));
+                g.strokePath (kneeCurve, juce::PathStrokeType (3.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
+
             const auto handle = getThresholdHandlePosition();
             const auto handleActive = hover == DragKind::thresholdHandle || dragging == DragKind::thresholdHandle;
             g.setColour (handleActive ? Palette::textPrimary : (on ? Palette::dynamic : Palette::textMuted));
@@ -973,7 +993,8 @@ namespace dooblrvocals::ui
 
         const auto t = transfer.reduced (6.0f, 4.0f);
         drawLabel (g, readout, t, juce::Justification::topLeft, on ? Palette::textPrimary : Palette::textMuted, 11.0f);
-        drawLabel (g, on ? juce::String (gesture.get ("comp_ratio"), 1) + ":1" : juce::String ("off (Dynamics tab)"),
+        drawLabel (g, on ? juce::String (gesture.get ("comp_ratio"), 1) + ":1  knee " + juce::String (juce::roundToInt (gesture.get ("comp_knee"))) + " dB"
+                      : juce::String ("off (Dynamics tab)"),
                    t.withTrimmedTop (14.0f), juce::Justification::topLeft, Palette::textMuted, 10.0f);
         drawLabel (g, "in", { transfer.getRight() - 20.0f, transfer.getBottom() - 15.0f, 16.0f, 12.0f }, juce::Justification::centredRight,
                    Palette::textMuted, 9.0f);

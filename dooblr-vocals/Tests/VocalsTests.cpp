@@ -4712,6 +4712,94 @@ namespace
         note ("program hashes: " + table.str());
     }
 
+    // Compressor Knee (0-24 dB): the gain computer's static curve at several knee widths, the 6 dB
+    // default reproducing the original fixed-knee curve bit for bit, and the knee reaching the audio.
+    void testCompressorKnee()
+    {
+        using C = dsp::Compressor;
+        auto legacy = [] (float inputDb, float thresholdDb, float ratio) // the pre-knee-control code, verbatim
+        {
+            const float kneeDb = 6.0f;
+            const auto slope = 1.0f / std::max (1.0f, ratio) - 1.0f;
+            const auto over = inputDb - thresholdDb;
+            if (2.0f * over > kneeDb) return slope * over;
+            if (2.0f * over > -kneeDb) return slope * (over + kneeDb * 0.5f) * (over + kneeDb * 0.5f) / (2.0f * kneeDb);
+            return 0.0f;
+        };
+
+        auto identical = true;
+        for (float thr : { -40.0f, -18.0f, -6.0f })
+            for (float ratio : { 1.0f, 2.5f, 4.0f, 20.0f })
+                for (float in = -80.0f; in <= 6.0f; in += 0.125f)
+                    identical = identical && juce::exactlyEqual (C::staticReductionDb (in, thr, ratio), legacy (in, thr, ratio))
+                                          && juce::exactlyEqual (C::staticReductionDb (in, thr, ratio, 6.0f), legacy (in, thr, ratio));
+        check (identical, "6 dB default knee is bit-identical to the original gain computer");
+
+        const auto thr = -20.0f, ratio = 4.0f, slope = 1.0f / ratio - 1.0f;
+        for (float knee : { 0.0f, 3.0f, 6.0f, 12.0f, 24.0f })
+        {
+            const auto k = " (knee " + format (knee, 0) + " dB)";
+            const auto half = 0.5f * knee;
+            auto below = true, above = true, monotonic = true, continuous = true;
+            auto previousOut = -1000.0f, previousGr = 0.0f;
+
+            for (float in = -60.0f; in <= 0.0f; in += 0.01f)
+            {
+                const auto gr = C::staticReductionDb (in, thr, ratio, knee);
+                if (in < thr - half - 1.0e-3f) below = below && juce::exactlyEqual (gr, 0.0f);
+                if (in > thr + half + 1.0e-3f) above = above && std::abs (gr - slope * (in - thr)) < 1.0e-4f;
+                monotonic = monotonic && in + gr >= previousOut - 1.0e-5f && gr <= previousGr + 1.0e-6f;
+                continuous = continuous && std::abs (gr - previousGr) < 0.02f;
+                previousOut = in + gr;
+                previousGr = gr;
+            }
+
+            check (below, "no reduction below the knee" + k);
+            check (above, "full ratio above the knee" + k);
+            check (monotonic && continuous, "static curve continuous and monotonic" + k);
+            check (std::abs (C::staticReductionDb (thr, thr, ratio, knee) - slope * knee / 8.0f) < 1.0e-5f,
+                   "reduction at the threshold = slope x knee / 8" + k);
+        }
+
+        check (C::staticReductionDb (-21.0f, thr, ratio, 24.0f) < C::staticReductionDb (-21.0f, thr, ratio, 6.0f) - 0.5f,
+               "wider knee starts compressing earlier");
+        check (juce::exactlyEqual (C::staticReductionDb (-10.0f, thr, ratio, 99.0f), C::staticReductionDb (-10.0f, thr, ratio, 24.0f)),
+               "knee clamped to 24 dB");
+
+        // Parameter: default 6 dB, reaches the engine (only near the threshold), default is bit-identical.
+        auto p = makeProcessor();
+        check (std::abs (getPlain (*p, "comp_knee") - 6.0f) < 1.0e-4f, "comp_knee defaults to 6 dB");
+        auto tone = [] (int i) { return (float) (0.1 * std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * i / sampleRate)); }; // -20 dBFS peak
+        auto renderWith = [&] (float knee, bool setKnee)
+        {
+            auto q = makeProcessor();
+            setParam (*q, "comp_on", 1.0f);
+            setParam (*q, "comp_threshold", -20.0f);
+            setParam (*q, "comp_ratio", 4.0f);
+            if (setKnee) setParam (*q, "comp_knee", knee);
+            return render (*q, tone, (int) sampleRate);
+        };
+        const auto base = renderWith (6.0f, false), six = renderWith (6.0f, true), hard = renderWith (0.0f, true), wide = renderWith (24.0f, true);
+        auto same = true;
+        for (int i = 0; i < base.getNumSamples(); ++i)
+            same = same && juce::exactlyEqual (base.getSample (0, i), six.getSample (0, i));
+        check (same, "knee 6 dB set explicitly renders bit-identical to the default");
+        const auto tail = [] (const juce::AudioBuffer<float>& b) { return b.getMagnitude (0, b.getNumSamples() / 2, b.getNumSamples() / 2); };
+        note ("tone at threshold, peak out: hard " + format (tail (hard), 4) + ", 6 dB " + format (tail (base), 4) + ", 24 dB " + format (tail (wide), 4));
+        check (tail (hard) > tail (base) && tail (base) > tail (wide), "a wider knee compresses a tone at the threshold more");
+
+        // Transfer curve shows the knee.
+        setParam (*p, "comp_on", 1.0f);
+        setParam (*p, "comp_knee", 18.0f);
+        std::unique_ptr<juce::AudioProcessorEditor> base2 (p->createEditorAndMakeActive());
+        if (auto* editor = dynamic_cast<Editor*> (base2.get()))
+        {
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::dynamicsPage);
+            saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-dynamics-knee");
+        }
+    }
+
     void testOutputCeiling()
     {
         const auto n = (int) (4.0 * sampleRate);
@@ -5191,6 +5279,7 @@ int main()
         { "learn range: long takes, running plug-in", testLearnRangeLongRuns },
         { "learn range: progress feedback", testLearnProgress },
         { "presets: audio bit-identical to recorded output", testPresetsBitIdentical },
+        { "compressor: knee control", testCompressorKnee },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

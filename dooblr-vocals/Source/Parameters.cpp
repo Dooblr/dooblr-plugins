@@ -205,6 +205,8 @@ namespace dooblrvocals::params
         addFloat (layout, "comp_attack", "Comp Attack", range (0.1f, 100.0f, 10.0f), 12.0f, msString(), "ms");
         addFloat (layout, "comp_release", "Comp Release", range (10.0f, 1000.0f, 100.0f), 120.0f, msString(), "ms");
         addFloat (layout, "comp_makeup", "Comp Makeup", range (0.0f, 24.0f), 0.0f, dbString(), "dB");
+        // Default 6 dB = the knee the compressor always had, so existing presets and sessions render bit-identically.
+        addFloat (layout, "comp_knee", "Comp Knee", range (0.0f, 24.0f), 6.0f, dbString(), "dB");
 
         //== Limiter / output ============================================================
         addChoice (layout, "lim_mode", "Master Mode", { "Off", "Clipper", "Limiter" }, 2);
@@ -331,7 +333,7 @@ namespace dooblrvocals::params
         eqMidFreq = getId ("eq_mid_freq"); eqMidGain = getId ("eq_mid_gain"); eqMidQ = getId ("eq_mid_q");
         eqHighFreq = getId ("eq_high_freq"); eqHighGain = getId ("eq_high_gain");
         compOn = getId ("comp_on"); compThreshold = getId ("comp_threshold"); compRatio = getId ("comp_ratio");
-        compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup");
+        compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup"); compKnee = getId ("comp_knee");
         limMode = getId ("lim_mode"); limCeiling = getId ("lim_ceiling"); limRelease = getId ("lim_release");
         outputGain = getId ("output_gain"); chainOrder = getId ("chain_order");
         latencyMode = getId ("latency_mode");
@@ -390,7 +392,7 @@ namespace dooblrvocals::params
         s.pitch.quality = (dsp::QualityMode) i (quality);
         s.gate = { b (gateOn), f (gateThreshold), f (gateAttack), f (gateHold), f (gateRelease), f (gateRange) };
         s.eq = { b (eqOn), f (eqLowFreq), f (eqLowGain), f (eqMidFreq), f (eqMidGain), f (eqMidQ), f (eqHighFreq), f (eqHighGain) };
-        s.compressor = { b (compOn), f (compThreshold), f (compRatio), f (compAttack), f (compRelease), f (compMakeup) };
+        s.compressor = { b (compOn), f (compThreshold), f (compRatio), f (compAttack), f (compRelease), f (compMakeup), f (compKnee) };
         s.limiter = { i (limMode), f (limCeiling), f (limRelease), f (outputGain) };
         s.chainOrder = i (chainOrder);
         s.pitch.latency = (dsp::LatencyMode) juce::jlimit (0, 1, i (latencyMode));

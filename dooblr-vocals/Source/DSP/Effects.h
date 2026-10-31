@@ -51,9 +51,10 @@ namespace dooblrvocals::dsp
     {
         bool enabled = false;
         float thresholdDb = -12.0f, ratio = 4.0f, attackMs = 5.0f, releaseMs = 80.0f, makeupDb = 0.0f;
+        float kneeDb = 6.0f; // soft-knee width; 6 dB is the original fixed knee, so old sessions are unchanged
     };
 
-    /** Feed-forward peak compressor, stereo linked, 6 dB soft knee. */
+    /** Feed-forward peak compressor, stereo linked, adjustable soft knee (0-24 dB, default 6 dB). */
     class Compressor
     {
     public:
@@ -61,9 +62,11 @@ namespace dooblrvocals::dsp
         void reset() { envelopeDb = 0.0f; lastMinReductionDb = 0.0f; }
         void process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const CompressorSettings&) noexcept;
 
-        static constexpr float kneeDb = 6.0f;
+        static constexpr float defaultKneeDb = 6.0f, maxKneeDb = 24.0f;
 
-        static float staticReductionDb (float inputDb, float thresholdDb, float ratio) noexcept;
+        /** Gain computer (dB of reduction, <= 0). Quadratic soft knee of width kneeDb centred on the threshold;
+            kneeDb = 0 is a hard knee. */
+        static float staticReductionDb (float inputDb, float thresholdDb, float ratio, float kneeDb = defaultKneeDb) noexcept;
         float getLastMinReductionDb() const noexcept { return lastMinReductionDb; }
 
     private:

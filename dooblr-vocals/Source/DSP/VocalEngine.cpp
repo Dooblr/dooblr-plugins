@@ -81,6 +81,7 @@ namespace dooblrvocals::dsp
         c.attackMs = lerp (from.compressor.attackMs, d.attackMs, a);
         c.releaseMs = lerp (from.compressor.releaseMs, d.releaseMs, a);
         c.makeupDb = lerp (from.compressor.makeupDb, d.makeupDb, a);
+        c.kneeDb = lerp (from.compressor.kneeDb, d.kneeDb, a);
 
         auto& l = current.limiter;
         const auto& m = to.limiter;

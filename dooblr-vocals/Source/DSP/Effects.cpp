@@ -132,10 +132,14 @@ namespace dooblrvocals::dsp
         reset();
     }
 
-    float Compressor::staticReductionDb (float inputDb, float thresholdDb, float ratio) noexcept
+    float Compressor::staticReductionDb (float inputDb, float thresholdDb, float ratio, float kneeDb) noexcept
     {
         const auto slope = 1.0f / std::max (1.0f, ratio) - 1.0f;
         const auto over = inputDb - thresholdDb;
+        kneeDb = std::min (kneeDb, maxKneeDb);
+
+        if (! (kneeDb > 0.0f)) // hard knee
+            return over > 0.0f ? slope * over : 0.0f;
 
         if (2.0f * over > kneeDb)
             return slope * over;
@@ -166,7 +170,7 @@ namespace dooblrvocals::dsp
             for (int ch = 0; ch < numChannels; ++ch)
                 peak = std::max (peak, std::abs (buffer.getSample (ch, startSample + i)));
 
-            const auto target = staticReductionDb (gainToDb (peak), s.thresholdDb, s.ratio);
+            const auto target = staticReductionDb (gainToDb (peak), s.thresholdDb, s.ratio, s.kneeDb);
             const auto coefficient = target < envelopeDb ? attack : release;
             envelopeDb = coefficient * envelopeDb + (1.0f - coefficient) * target;
             minReduction = std::min (minReduction, envelopeDb);
