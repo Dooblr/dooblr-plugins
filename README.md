@@ -9,12 +9,14 @@ in its own folder and has its own README.
 | [`dooblr-q/`](dooblr-q/) | dooblr-q 0.9.5 | Dynamic parametric EQ (VST3 effect) |
 | [`dooblr-kick/`](dooblr-kick/) | dooblr-kick 0.3.6 | Layered kick drum designer (VST3 instrument) |
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals 0.1.0 | Pitch correction and vocal chain (VST3 effect + Standalone) |
-| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet 0.3.0 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument, plus a Max for Live panel) |
+| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument, plus a Max for Live panel 0.3.2) |
+| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe 0.1.0 | Dynamic resonance reducer (VST3 effect) |
+| [`dooblr-chords/`](dooblr-chords/) | dooblr-chords 0.2.0 | Chord progression generator (Max for Live MIDI effect) |
 | [`design/`](design/) | Design files | Shared visual design system for the suite |
 
 ## Building
 
-Each plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
+Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
 host-style LoadCheck, and installs the VST3 bundle (never with sudo). Build directories live
 **outside** the repo (and outside Dropbox), in `~/dooblr-build/<plugin>`:
 
@@ -23,6 +25,7 @@ dooblr-q/scripts/build.sh        # builds in ~/dooblr-build/dooblr-q
 dooblr-kick/scripts/build.sh     # builds in ~/dooblr-build/dooblr-kick
 dooblr-vocals/scripts/build.sh   # builds in ~/dooblr-build/dooblr-vocals
 dooblr-prophet/scripts/build.sh  # builds in ~/dooblr-build/dooblr-prophet
+dooblr-soothe/scripts/build.sh   # builds in ~/dooblr-build/dooblr-soothe
 ```
 
 Useful environment variables (see the top of each `build.sh`):
@@ -30,7 +33,7 @@ Useful environment variables (see the top of each `build.sh`):
 - `BUILD_DIR`: build directory (default `~/dooblr-build/<plugin>`)
 - `CONFIG`: CMake configuration (default `Release`)
 - `RUN_TESTS=0`: skip the tests; `INSTALL_VST3=0`: don't install; `LOAD_CHECK=0`: skip LoadCheck
-- `JUCE_SOURCE_DIR` (dooblr-vocals, dooblr-prophet): JUCE 8.0.15 source; defaults to
+- `JUCE_SOURCE_DIR` (dooblr-vocals, dooblr-prophet, dooblr-soothe): JUCE 8.0.15 source; defaults to
   `~/dooblr-build/_deps/juce-src` when it exists
 
 Without the script, the build is plain CMake. JUCE 8.0.15 is fetched into the build directory:
