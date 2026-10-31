@@ -6,7 +6,7 @@ Use this guide when you build a new dooblr plugin. Every hex code and number bel
 - `K:Source/UI/Theme.h:9` means line 9 of that file in dooblr-kick.
 - Snapshot taken 2026-10-27. If the code changes, the code wins over this document.
 - The machine-readable tokens are in `dooblr-design-tokens.json`, in the same folder.
-- **Addendum 2026-10-28:** components and tokens read from **dooblr-vocals v0.2.0** (`~/Documents/programming/audio/dooblr-vocals` (moved 2026-10-28 to `~/Dropbox/dooblr_plugins/dooblr-vocals`), short form **V**) were added. Nothing from the K/Q snapshot was changed; where vocals departs from a rule below, the rule stands and the deviation is listed in §11.4. See §12 for the changelog.
+- **Addendum 2026-10-28:** components and tokens read from **dooblr-vocals v0.2.0** (`~/Documents/programming/audio/dooblr-vocals` (moved 2026-10-28 to `~/Dropbox/dooblr_plugins/dooblr-vocals`), short form **V**) were added. Nothing from the K/Q snapshot was changed; where vocals departs from a rule below, the rule stands and the deviation is listed in §11.4. See §13 for the changelog. **Addendum 2026-10-31:** §12 adds generic, reusable patterns first built in dooblr-soothe 0.1.1–0.1.2 (short form **S**).
 
 ## Table of contents
 1. [Suite identity](#1-suite-identity)
@@ -21,7 +21,8 @@ Use this guide when you build a new dooblr plugin. Every hex code and number bel
 9. [Appendix: token table](#9-appendix-token-table)
 10. [Open questions / not determinable from code](#10-open-questions--not-determinable-from-code)
 11. [dooblr-vocals (V)](#11-dooblr-vocals-v)
-12. [Changelog](#12-changelog)
+12. [Reusable patterns (S)](#12-reusable-patterns-s)
+13. [Changelog](#13-changelog)
 
 ---
 
@@ -829,8 +830,11 @@ Read from `~/Documents/programming/audio/dooblr-vocals` (moved 2026-10-28 to `~/
 |---|---|---|
 | CORRECTION | Pitch | `accent` |
 | CORRECTION | Harmony | `master` (reused, §11.4) |
-| PROCESSING (re-orderable, numbered badges) | Gate, EQ, Comp, Limiter | `dynamic` |
+| PROCESSING (re-orderable, numbered badges) | Gate, EQ, Comp | `dynamic` |
 | TIME FX | Delay, Reverb | `fx` (new) |
+| OUTPUT (fixed, no badge or drag handle) | Limiter | `dynamic` |
+
+Signal order: Pitch → Harmony → Gate / EQ / Comp (user order) → Delay / Reverb → output gain → Limiter. The limiter is always last, so the final output (wet included) stays under the ceiling and the limiter meter shows the true final output.
 
 Power buttons on the tabs and the off-tab overlay follow kick exactly (`V:PluginEditor.cpp:89-210`). The only literal colours outside `Theme.h` are the band colours (`Theme.cpp:8-9`) and the header-meter zones (`OutputMeter.cpp:11-13`), and both equal the existing tokens.
 
@@ -874,8 +878,70 @@ Pitch page only. A 28 px strip sits between the KEYED | CHROMATIC toggle row and
 
 ---
 
-## 12. Changelog
+## 12. Reusable patterns (S)
 
+Generic patterns first built in **dooblr-soothe** (`~/Dropbox/dooblr_plugins/dooblr-soothe`, short form **S**, 0.1.1–0.1.2). They are written so any dooblr plug-in can reuse them; values are S's, code wins. They use existing tokens only (no new colour or font).
+
+### 12.1 Left-column hero knob
+
+- A full-height column at the left of the editor: width `clamp(190, 400, 19 % of the window width)`, `panel` fill, radius 6, `panelGap + 2` to the content (`S:PluginEditor.cpp:518,560`).
+- Top to bottom: product name (26 px row), version + Bypass (26 px row, Bypass 86 px wide at the right), the mode toggle (32 px), the knobs, then latency and status lines (16 px each) at the bottom.
+- The plug-in's main control is the **hero** knob, centred: diameter `clamp(96, 300, min(column width, spare·2/3))`; one secondary knob below it at `clamp(52, 120, min(width/2, spare − hero))`. Captions 18 px above each, value box under each (24 px hero, 20 px secondary), 14 px between (`S:PluginEditor.cpp:576-592`).
+- The hero knob gets `accent`, the secondary `accent` @ 0.8. Double-click resets to the default; Shift-drag is fine adjustment (as §5).
+- Use it when one parameter is "how much" (depth, amount, drive). Everything else goes into the bottom row or an Advanced view, not the column.
+
+### 12.2 Vertical dot-slider strip
+
+- A narrow strip (S: between the toolbar and the graph's left edge) on a `panel` fill, radius 4 (`S:PluginEditor.cpp:526,660-670`).
+- The strip is split into equal sections, one per control; each slider is `clamp(40, 160, section/2)` px tall, 6 px below the section top, caption under it in `textMuted` (`textMuted` @ 0.6 when dimmed, §2.8).
+- Slider: a 3 px groove (radius 1.5), the value part in the control colour @ 0.7, a dot cap. Two- or three-state choices (L/R | M/S, on | off) use the same slider with snapping steps and `setSliderSnapsToMousePosition(true)`, so a click or a short drag moves it.
+- Use it for stereo / routing / focus controls that are set once and should not take panel space.
+
+### 12.3 Toolbar: preset, A / B, undo
+
+- One row over the graph, 26 px controls centred in the bar (`S:PluginEditor.cpp:623-657`).
+- Left: mode buttons (S: Sidechain, Delta), then `<` preset list `>` and a ☰ menu (Save / Load / Init). Right: Undo, Redo, A, B, the copy button (A→B or B→A, label shows the direction), Advanced. Groups 10–12 px apart, buttons 2 px apart.
+- Toggle buttons: `buttonOnColour` = `accent` @ 0.45.
+- A / B holds two full state snapshots for the editor's lifetime (not saved), B starts as a copy of A, switching clears undo. Every toolbar action is one undo step.
+- Undo / Redo also on Cmd-Z / Cmd-Shift-Z. Buttons are disabled (dimmed), never hidden, when there is nothing to undo or redo.
+
+### 12.4 Weighting curve overlaid on the spectrum
+
+- One plot, one frequency axis (labels along the top, 18 px), one dB scale (labels at the right, 30 px). The spectrum, the live result and the editable curve share it (`S:ReductionGraph.cpp:124-127`).
+- Draw order: input spectrum fill `spectrum` @ 0.10 + 1 px line @ 0.28; the reduction area hanging from 0 dB `dynamic` @ 0.26 with a 1.4 px edge @ 0.9; output spectrum 1.1 px `textPrimary` @ 0.45; then the curve fill `accent` @ 0.12, the selected band's own curve 1 px in its band colour @ 0.45, and the summed curve 2.2 px on top (`S:ReductionGraph.cpp:309-330`).
+- Handles in the band colour (§2.2): **pills** (width `2(r−2)`, height `2(r+3)`, fully rounded) for shelves and cuts, **dots** (`2r`) for bells and band passes. Unselected fill @ 0.45, selected full; outline the band colour brightened 0.3 (1.2 px), 2 px `textPrimary` when the band is soloed / listened. Hover or drag grows the radius by 1.5 px (`S:ReductionGraph.cpp:335-350`).
+- Mouse: drag (frequency + gain, one undo step, Shift = fine), wheel over a handle (Q), double-click empty space (add), double-click a handle (remove), right-click (shape / listen / remove). A hover chip (`panelRaised` @ 0.92, radius 4) reads frequency, curve and level.
+- Gain reads like an EQ: down = more of the effect where the effect is a cut. If a sign convention ever changes, migrate saved state and presets (S stores a state version).
+
+### 12.5 Smooth log-frequency spectrum drawing
+
+FFT bins are linear in frequency, display points are logarithmic, so at the low end one bin covers several points; holding the bin value draws stairs. Rules (S 0.1.2, `S:ResonanceEngine.cpp`, `S:ReductionGraph.cpp`):
+
+1. Resample per display point with **monotone cubic interpolation in dB** between bin centres (Fritsch–Butland tangents; no overshoot, no ringing).
+2. Where a point spans several bins (the highs), blend toward the **peak** of the covered bins: `t = clamp((binsPerPoint − 2)/2, 0, 1)`, so narrow peaks and dips are not averaged away.
+3. Apply a light Gaussian **fractional-octave smoothing** whose width shrinks with frequency: `σ = min(1/6 oct, 0.5·log2(1 + binHz/f))`; skip it where σ is under a third of a point (the highs stay untouched).
+4. Draw **smooth segments** (monotone cubic Bézier through the points), never a polyline at the low end.
+5. Use the same pipeline for every trace on the plot (input, output, reduction / gain), so they line up.
+6. Display only: never smooth the values the DSP applies.
+7. Build the paths once per new frame (`Path::clear()` keeps capacity); `paint()` only fills and strokes, so it allocates nothing.
+8. Test it: flatten the drawn path, sample y per pixel column and fail on flat runs of ≥ 3 columns followed by a jump (S: 40–500 Hz at every editor size), and check that a real peak still stands out and the highs are unchanged.
+
+### 12.6 Value-text formatting
+
+- One formatter for every value box, readout and host string (`S:Parameters.cpp:7-16`): round to the stated decimals, never show `-0`, never show NaN / inf (show 0).
+- Frequency: under 1 kHz whole hertz (`220 Hz`); 1–10 kHz two decimals (`2.50 kHz`); 10 kHz and up one decimal (`12.5 kHz`).
+- dB: one decimal, explicit `+` for positive gains (`+3.0 dB`, `-6.0 dB`, `0.0 dB`).
+- Percent: whole numbers (`75 %`); ms: one decimal under 10 ms, whole above (as `latencyReadout`).
+- Unit after a space; the unit lives in the formatter, not in a separate label.
+- Captions are UPPERCASE in panels (as §2.4), value text is not.
+
+---
+
+## 13. Changelog
+
+- **2026-10-31**: Added §12 Reusable patterns (S = dooblr-soothe 0.1.1–0.1.2): left-column hero knob, vertical dot-slider strip, toolbar with preset / A-B / undo, weighting curve overlaid on the spectrum with pill / dot handles, smooth log-frequency spectrum drawing, value-text formatting. Changelog renumbered to §13. Additive only; no existing rule, token name or value changed. JSON: `components.heroKnobColumn`, `components.dotSliderStrip`, `components.presetAbUndoToolbar`, `components.weightingCurveOverlay`, `components.valueText`, `graphs.smoothLogSpectrum`, a `changelog` entry.
+
+- **2026-10-31**: §11.2 dooblr-vocals nav: the Limiter moves out of the re-orderable PROCESSING group into a new fixed OUTPUT group after TIME FX, matching the new signal order (the limiter now runs after the delay / reverb and the output gain). Added the signal-order line. The Reverb Decay control is now calibrated to the measured late-tail RT60 at 1 kHz (within 3 %); no visual change. No token name or value changed.
 - **2026-10-30**: §11.1 notes ten factory programs (new "Vocal Workstation '90s", an original preset inspired by mid-1990s hardware vocal harmonizers) and the Harmony bus Lo-Fi knob (commit `4fcb339`). Additive only; standard components, no token changed.
 - **2026-10-28**: Added §11.5 dooblr-vocals Key Follow strip (commit `eddffb9`). Additive only; no existing rule, token name or value changed. JSON: `components.keyFollowStrip`, `layout.vocals.keyFollowStrip`, a `changelog` entry.
 - **2026-10-28**: §11.4 items 5-12 marked resolved by dooblr-vocals commit `29dac9a` (no rule, token name or value changed). dooblr-vocals path references updated to `~/Dropbox/dooblr_plugins/dooblr-vocals`.
