@@ -770,6 +770,32 @@ namespace
         setParam (*p, "chain_order", 5.0f);
         mid = render (*p, fill, 2048);
         check (allFinite (mid), "crossfade during reorder is finite");
+
+        // The limiter always runs last (after the time FX), so its slot in a stored order is
+        // ignored: an order with the limiter first renders exactly like the default order.
+        {
+            check (dsp::withLimiterLast ({ dsp::limiterStage, dsp::dynamicsStage, dsp::gateStage, dsp::eqStage })
+                       == dsp::ChainOrder { dsp::dynamicsStage, dsp::gateStage, dsp::eqStage, dsp::limiterStage },
+                   "withLimiterLast keeps the other stages' order");
+            const auto limiterFirst = dsp::chainOrderToIndex ({ dsp::limiterStage, dsp::gateStage, dsp::eqStage, dsp::dynamicsStage });
+            auto renderWith = [&] (int orderIndex)
+            {
+                auto q = makeProcessor();
+                setParam (*q, "pitch_on", 0.0f);
+                setParam (*q, "comp_on", 1.0f);
+                setParam (*q, "comp_makeup", 12.0f);
+                setParam (*q, "lim_mode", 2.0f);
+                setParam (*q, "lim_ceiling", -3.0f);
+                setParam (*q, "chain_order", (float) orderIndex);
+                return render (*q, [] (int i) { return sawAt (220.0, i, sampleRate, 0.8f); }, 24000);
+            };
+            const auto x = renderWith (0), y = renderWith (limiterFirst);
+            float diff = 0.0f;
+            for (int ch = 0; ch < x.getNumChannels(); ++ch)
+                for (int i = 0; i < x.getNumSamples(); ++i)
+                    diff = std::max (diff, std::abs (x.getSample (ch, i) - y.getSample (ch, i)));
+            check (diff == 0.0f, "limiter-first order renders identically to limiter-last (max diff " + format (diff, 7) + ")");
+        }
     }
 
     void testParameterAndStateRoundTrip()
@@ -1716,7 +1742,12 @@ namespace
         {
             editor->selectPage (Editor::gatePage);
             auto& gateTab = editor->getPageButton (Editor::gatePage);
-            auto& lastTab = editor->getPageButton (Editor::limiterPage);
+            auto& lastTab = editor->getPageButton (Editor::dynamicsPage); // last movable slot
+            auto& limiterTab = editor->getPageButton (Editor::limiterPage);
+            const auto limiterBefore = limiterTab.getBounds();
+            check (limiterTab.getHandleArea().isEmpty(), "the limiter tab has no drag handle (it is pinned last)");
+            check (limiterTab.getY() > editor->getPageButton (Editor::reverbPage).getY(),
+                   "the limiter tab sits after the time FX tabs");
             const auto orderBefore = p->getParameterState().getRawParameterValue ("chain_order")->load();
             const auto grab = editor->getLocalPoint (&gateTab, gateTab.getHandleArea().getCentre()).toFloat();
             const auto bottom = editor->getLocalPoint (&lastTab, lastTab.getLocalBounds().getCentre()).toFloat();
@@ -1729,7 +1760,11 @@ namespace
             const auto orderAfter = p->getParameterState().getRawParameterValue ("chain_order")->load();
             check (juce::roundToInt (orderAfter) != juce::roundToInt (orderBefore), "dragging the gate tab to the bottom reorders the chain");
             check (gestures.balanced() && gestures.events == 2, "chain reorder is one balanced gesture");
-            check (gateTab.getBounds().getY() > lastTab.getBounds().getY(), "gate tab ends in the last slot");
+            check (gateTab.getBounds().getY() > lastTab.getBounds().getY(), "gate tab ends in the last chain slot");
+            check (gateTab.getBounds().getY() < limiterTab.getBounds().getY(), "gate tab cannot pass the pinned limiter");
+            check (limiterTab.getBounds() == limiterBefore, "the limiter tab does not move");
+            check (dooblrvocals::dsp::chainOrderFromIndex (juce::roundToInt (orderAfter))[(size_t) dooblrvocals::dsp::numChainStages - 1]
+                       == dooblrvocals::dsp::limiterStage, "the stored order keeps the limiter last");
             check (! gateTab.isDraggingHandle(), "gate tab handle drag ends on release");
 
             mouse.moveTo (editor->getLocalPoint (&gateTab, gateTab.getHandleArea().getCentre()).toFloat(), 10);
@@ -2486,7 +2521,7 @@ namespace
                 const auto rt = measureRt60 (ir, sampleRate);
                 note ("reverb Decay " + format (decay, 1) + " s, size " + format (size, 1) + ": measured RT60 " + format (rt, 2) + " s ("
                       + format (100.0 * (rt / decay - 1.0), 1) + " %)");
-                check (std::abs (rt / decay - 1.0) < 0.2, "RT60 within 20 % of Decay " + format (decay, 1) + " s (size " + format (size, 1)
+                check (std::abs (rt / decay - 1.0) < 0.03, "RT60 within 3 % of Decay " + format (decay, 1) + " s (size " + format (size, 1)
                                                             + "; measured " + format (rt, 2) + " s)");
             }
         }
@@ -4210,6 +4245,259 @@ namespace
         check (side > 0.05 * mid, "preset output is stereo-wide (side/mid " + std::to_string (side / std::max (mid, 1.0e-9)) + ")");
     }
 
+    //==============================================================================
+    // Reverb calibration: every reverb section preset's mid-band RT60 against its Decay setting.
+
+    /** RT60 (s) from the Schroeder backward-integrated energy, fitted between hiDb and loDb (T20 / T30). */
+    double measureRt60Between (const std::vector<float>& ir, double rate, double hiDb, double loDb)
+    {
+        std::vector<double> edc (ir.size() + 1, 0.0);
+        for (size_t i = ir.size(); i-- > 0;)
+            edc[i] = edc[i + 1] + (double) ir[i] * (double) ir[i];
+        const auto total = std::max (1.0e-30, edc[0]);
+        double sx = 0, sy = 0, sxx = 0, sxy = 0;
+        int count = 0;
+        for (size_t i = 0; i < ir.size(); ++i)
+        {
+            const auto db = 10.0 * std::log10 (std::max (1.0e-30, edc[i] / total));
+            if (db <= hiDb && db >= loDb)
+            {
+                const auto t = (double) i / rate;
+                sx += t; sy += db; sxx += t * t; sxy += t * db; ++count;
+            }
+        }
+        if (count < 10)
+            return 0.0;
+        const auto slope = (count * sxy - sx * sy) / std::max (1.0e-30, count * sxx - sx * sx);
+        return slope < 0.0 ? -60.0 / slope : 0.0;
+    }
+
+    /** The 1 kHz octave band (707 .. 1414 Hz, 4th-order Butterworth each side) of a signal. */
+    std::vector<float> octaveBand1k (const std::vector<float>& x, double rate)
+    {
+        dsp::SimpleFilter hp1, hp2, lp1, lp2;
+        hp1.setHighPass (707.0, rate); hp2.setHighPass (707.0, rate);
+        lp1.setLowPass (1414.0, rate); lp2.setLowPass (1414.0, rate);
+        std::vector<float> y (x.size());
+        for (size_t i = 0; i < x.size(); ++i)
+            y[i] = lp2.process (0, lp1.process (0, hp2.process (0, hp1.process (0, x[i]))));
+        return y;
+    }
+
+    /** Renders a reverb's impulse response as separate L and R wet channels. */
+    std::array<std::vector<float>, 2> reverbImpulseStereo (const dsp::ReverbSettings& s, int n)
+    {
+        dsp::VocalReverb rev;
+        rev.prepare (sampleRate, blockSize);
+        std::array<std::vector<float>, 2> out { std::vector<float> ((size_t) n), std::vector<float> ((size_t) n) };
+        std::vector<float> x ((size_t) blockSize), wl ((size_t) blockSize), wr ((size_t) blockSize);
+        for (int pos = 0; pos < n; pos += blockSize)
+        {
+            const auto m = std::min (blockSize, n - pos);
+            for (int i = 0; i < m; ++i) x[(size_t) i] = pos + i == 0 ? 1.0f : 0.0f;
+            rev.renderWet (x.data(), x.data(), wl.data(), wr.data(), m, x.data(), x.data(), s, 120.0);
+            std::copy (wl.begin(), wl.begin() + m, out[0].begin() + pos);
+            std::copy (wr.begin(), wr.begin() + m, out[1].begin() + pos);
+        }
+        return out;
+    }
+
+    /** Where the late tail is on its own: after the pre-delay, the last early reflection and the input diffusers. */
+    int lateTailStart (const dsp::ReverbSettings& s)
+    {
+        const auto ms = dsp::VocalReverb::preDelayMsFor (s, 120.0) + dsp::VocalReverb::earlyTapMs (dsp::VocalReverb::numEarly - 1, s.size) + 15.0;
+        return (int) std::ceil (ms * 0.001 * sampleRate);
+    }
+
+    /** Mid-band RT60 (s): the 1 kHz octave of both wet channels, Schroeder-integrated on L^2 + R^2
+        from fromSample on (0 = the whole response, lateTailStart() = the late tail Decay sets). */
+    double midBandRt60 (const dsp::ReverbSettings& s, double hiDb, double loDb, int fromSample = 0)
+    {
+        const auto n = (int) ((s.decaySeconds * 1.4 + 1.0) * sampleRate);
+        const auto ir = reverbImpulseStereo (s, n);
+        const auto l = octaveBand1k (ir[0], sampleRate), r = octaveBand1k (ir[1], sampleRate);
+        // sqrt (L^2 + R^2) squares back to the summed energy inside measureRt60Between.
+        std::vector<float> e ((size_t) (n - fromSample));
+        for (size_t i = 0; i < e.size(); ++i)
+            e[i] = std::sqrt (l[i + (size_t) fromSample] * l[i + (size_t) fromSample] + r[i + (size_t) fromSample] * r[i + (size_t) fromSample]);
+        return measureRt60Between (e, sampleRate, hiDb, loDb);
+    }
+
+    dsp::ReverbSettings reverbFromPreset (const dooblrvocals::presets::FactoryPreset& preset)
+    {
+        dsp::ReverbSettings s;
+        s.enabled = true;
+        s.mix = 1.0f;
+        for (const auto& [id, v] : preset.values)
+        {
+            if (id == "rev_predelay") s.preDelayMs = v;
+            else if (id == "rev_predelay_sync") s.preDelaySync = juce::roundToInt (v);
+            else if (id == "rev_decay") s.decaySeconds = v;
+            else if (id == "rev_size") s.size = v;
+            else if (id == "rev_damping") s.damping = v;
+            else if (id == "rev_lowcut") s.lowCutHz = v;
+            else if (id == "rev_highcut") s.highCutHz = v;
+            else if (id == "rev_width") s.width = v;
+            else if (id == "rev_early") s.earlyLate = v;
+            else if (id == "rev_diffusion") s.diffusion = v;
+            else if (id == "rev_mod") s.modulation = v;
+            else if (id == "rev_duck_release") s.duckReleaseMs = v;
+        }
+        s.duckDb = 0.0f; // an impulse response: no dry signal to duck against
+        return s;
+    }
+
+    void testReverbPresetRt60()
+    {
+        // Decay is the RT60 of the late tail at mid frequencies: T30 (-5 .. -35 dB, extrapolated to
+        // 60 dB) of the 1 kHz octave, from where the early reflections have finished.
+        const auto& list = dooblrvocals::presets::getReverbPresets();
+        check (list.size() >= 10, "reverb presets to measure");
+        for (const auto& preset : list)
+        {
+            const auto s = reverbFromPreset (preset);
+            const auto decay = (double) s.decaySeconds;
+            const auto tail = midBandRt60 (s, -5.0, -35.0, lateTailStart (s));
+            const auto whole = midBandRt60 (s, -5.0, -35.0);
+            note ("RT60 " + preset.name.toStdString() + ": Decay " + format (decay, 2) + " s, late-tail T30 (1 kHz) " + format (tail, 3) + " s ("
+                  + format (100.0 * (tail / decay - 1.0), 1) + " %); whole response incl. early reflections " + format (whole, 3) + " s ("
+                  + format (100.0 * (whole / decay - 1.0), 1) + " %)");
+            check (std::abs (tail / decay - 1.0) <= 0.03,
+                   preset.name.toStdString() + ": late-tail RT60 within 3 % of Decay (" + format (tail, 3) + " s vs " + format (decay, 2) + " s)");
+        }
+
+        // And across the Decay / Size range on a plain (late only, undamped, unmodulated) reverb.
+        // (A 0.3 s tail in the largest room is over in a handful of loop trips, too few to fit.)
+        for (const auto decay : { 0.3f, 0.6f, 1.5f, 3.0f, 6.0f, 12.0f })
+        {
+            for (const auto size : { 0.0f, 0.5f, 1.0f })
+            {
+                if (decay < 0.5f && size > 0.6f)
+                    continue;
+                auto s = plainReverb();
+                s.decaySeconds = decay;
+                s.size = size;
+                const auto rt = midBandRt60 (s, -5.0, -35.0, lateTailStart (s));
+                note ("RT60 plain Decay " + format (decay, 1) + " s, size " + format (size, 1) + ": " + format (rt, 3) + " s ("
+                      + format (100.0 * (rt / decay - 1.0), 1) + " %)");
+                check (std::abs (rt / decay - 1.0) <= 0.03, "plain reverb RT60 within 3 % of Decay " + format (decay, 1) + " s (size "
+                                                               + format (size, 1) + ": " + format (rt, 3) + " s)");
+            }
+        }
+    }
+
+    //==============================================================================
+    // Output ceiling: the limiter is the last stage, after the delay and reverb.
+
+    float vocalLike (int i)
+    {
+        // A sung-ish line: a saw with vibrato, note changes every 0.4 s and a syllable envelope.
+        static constexpr double notes[] = { 220.0, 246.94, 261.63, 293.66, 329.63, 293.66, 261.63, 246.94 };
+        const auto t = (double) i / sampleRate;
+        const auto note = notes[(size_t) ((i / (int) (0.4 * sampleRate)) % 8)];
+        const auto hz = note * std::exp2 (0.25 / 12.0 * std::sin (2.0 * juce::MathConstants<double>::pi * 5.5 * t));
+        static double phase = 0.0;
+        if (i == 0) phase = 0.0;
+        phase += hz / sampleRate;
+        phase -= std::floor (phase);
+        const auto syllable = std::fmod (t, 0.4) / 0.4;
+        const auto env = syllable < 0.8 ? std::sin (juce::MathConstants<double>::pi * std::min (1.0, syllable / 0.8)) : 0.0;
+        return (float) (0.5 * env * (2.0 * phase - 1.0));
+    }
+
+    void testOutputCeiling()
+    {
+        const auto n = (int) (4.0 * sampleRate);
+
+        for (const auto ceilingDb : { -0.3f, -6.0f })
+        {
+            for (const auto mode : { 2, 1 })
+            {
+                auto p = makeProcessor();
+                setParam (*p, "lim_mode", (float) mode);
+                setParam (*p, "lim_ceiling", ceilingDb);
+                setParam (*p, "comp_on", 1.0f);
+                setParam (*p, "comp_makeup", 12.0f);
+                setParam (*p, "rev_on", 1.0f);
+                setParam (*p, "rev_mix", 1.0f);
+                setParam (*p, "rev_decay", 4.0f);
+                setParam (*p, "dly_on", 1.0f);
+                setParam (*p, "dly_mix", 1.0f);
+                setParam (*p, "dly_feedback", 0.9f);
+                setParam (*p, "fx_routing", 0.0f);
+                p->getMeterTap().discardAll();
+
+                const auto lat = p->getLatencySamples();
+                auto peak = 0.0f, meterPeakDb = -120.0f;
+                std::vector<dsp::MeterFrame> frames (4096);
+                juce::AudioBuffer<float> out;
+                for (int pos = 0; pos < n; pos += 8192)
+                {
+                    const auto len = std::min (8192, n - pos);
+                    out = render (*p, [pos] (int i) { return 1.6f * vocalLike (pos + i); }, len);
+                    for (int ch = 0; ch < 2; ++ch)
+                        peak = std::max (peak, out.getMagnitude (ch, 0, len));
+                    const auto got = p->getMeterTap().popFrames (frames.data(), (int) frames.size());
+                    for (int f = 0; f < got; ++f)
+                        meterPeakDb = std::max (meterPeakDb, frames[(size_t) f].limiterOutDb);
+                }
+                juce::ignoreUnused (lat);
+                const auto peakDb = juce::Decibels::gainToDecibels (peak, -120.0f);
+                const auto label = std::string (mode == 2 ? "limiter" : "clipper") + ", ceiling " + format (ceilingDb, 1) + " dB";
+                note ("output ceiling (" + label + ", reverb + delay 100 % mix): output peak " + format (peakDb, 3) + " dB, limiter meter "
+                      + format (meterPeakDb, 3) + " dB");
+                check (allFinite (out) && peak <= juce::Decibels::decibelsToGain (ceilingDb) * 1.0001f,
+                       "output peak stays at or under the ceiling with reverb and delay at full mix (" + label + ": " + format (peakDb, 3) + " dB)");
+                check (std::abs (meterPeakDb - peakDb) < 0.05f,
+                       "the limiter meter shows the final output (" + label + ": meter " + format (meterPeakDb, 3) + " dB, output " + format (peakDb, 3) + " dB)");
+            }
+        }
+
+        // Output trim sits in front of the limiter, so a boost cannot push past the ceiling.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "lim_ceiling", -1.0f);
+            setParam (*p, "output_gain", 6.0f);
+            setParam (*p, "rev_on", 1.0f);
+            setParam (*p, "rev_mix", 1.0f);
+            const auto out = render (*p, [] (int i) { return 1.5f * vocalLike (i); }, n);
+            const auto peak = std::max (out.getMagnitude (0, 0, n), out.getMagnitude (1, 0, n));
+            check (peak <= juce::Decibels::decibelsToGain (-1.0f) * 1.0001f, "+6 dB output trim still respects the ceiling");
+        }
+    }
+
+    // Loudness of every factory program on a sung-ish line (notes only; compare across builds).
+    void testPresetLoudness()
+    {
+        const auto& factory = dooblrvocals::presets::getFactoryPresets();
+        for (int i = 0; i < (int) factory.size(); ++i)
+        {
+            auto p = makeProcessor();
+            p->loadFactoryPreset (i, false);
+            const auto lat = p->getLatencySamples();
+            const auto n = lat + (int) (6.0 * sampleRate);
+            const auto out = render (*p, vocalLike, n);
+            double e = 0.0;
+            auto peak = 0.0f;
+            const auto from = lat + (int) (1.0 * sampleRate);
+            for (int ch = 0; ch < 2; ++ch)
+            {
+                for (int s = from; s < n; ++s)
+                    e += (double) out.getSample (ch, s) * out.getSample (ch, s);
+                peak = std::max (peak, out.getMagnitude (ch, from, n - from));
+            }
+            const auto rmsDb = 10.0 * std::log10 (std::max (1.0e-20, e / (2.0 * (n - from))));
+            const auto ceiling = getPlain (*p, "lim_ceiling");
+            const auto limOn = juce::roundToInt (getPlain (*p, "lim_mode")) != 0;
+            note ("loudness " + factory[(size_t) i].name.toStdString() + ": RMS " + format (rmsDb, 2) + " dBFS, peak "
+                  + format (juce::Decibels::gainToDecibels (peak, -120.0f), 2) + " dBFS (ceiling " + format (ceiling, 1) + ")");
+            check (allFinite (out), factory[(size_t) i].name.toStdString() + " renders finite");
+            if (limOn && getPlain (*p, "output_gain") <= 0.0f)
+                check (peak <= juce::Decibels::decibelsToGain (ceiling) * 1.0001f,
+                       factory[(size_t) i].name.toStdString() + " stays under its ceiling");
+        }
+    }
+
     struct TestCase
     {
         const char* name;
@@ -4601,6 +4889,9 @@ int main()
         { "key follow",                     testKeyFollow },
         { "harmony lo-fi",                  testHarmonyLoFi },
         { "vocal workstation preset",       testVocalWorkstationPreset },
+        { "reverb preset rt60",             testReverbPresetRt60 },
+        { "output ceiling",                 testOutputCeiling },
+        { "preset loudness",                testPresetLoudness },
     };
 
     int failedTests = 0;

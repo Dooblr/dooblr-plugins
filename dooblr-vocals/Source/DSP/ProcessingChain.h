@@ -15,9 +15,13 @@ namespace dooblrvocals::dsp
     ChainOrder chainOrderFromIndex (int index) noexcept;
     int chainOrderToIndex (const ChainOrder& order) noexcept;
     const char* chainStageName (int stage) noexcept;
+    /** The order with the limiter moved to the end (it runs after the time FX, so it is always last). */
+    ChainOrder withLimiterLast (const ChainOrder& order) noexcept;
 
     /**
-        Gate, EQ, compressor and limiter in a user-chosen order.
+        Gate, EQ and compressor in a user-chosen order. The limiter is not part of the chain:
+        the engine runs it last, after the delay / reverb and the output trim, so nothing can
+        push the final output past its ceiling. A limiter entry in the order is skipped here.
         prepare() allocates; process() does not.
     */
     class ProcessingChain
@@ -29,12 +33,9 @@ namespace dooblrvocals::dsp
         void process (juce::AudioBuffer<float>& buffer, int numSamples, const VocalSettings& settings,
                       const ChainOrder& order, MeterBlock* meter, MeterTap* spectrumTap) noexcept;
 
-        float getLastGainReductionDb() const noexcept { return limiter.getLastGainReductionDb(); }
-
     private:
         Gate gate;
         ThreeBandEq eq;
         Compressor compressor;
-        OutputStage limiter;
     };
 }

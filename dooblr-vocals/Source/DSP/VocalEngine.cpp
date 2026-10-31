@@ -24,6 +24,7 @@ namespace dooblrvocals::dsp
         chains[1].prepare (sampleRate, maxBlock);
         outputGain.prepare (sampleRate);
         fx.prepare (sampleRate, maxBlock);
+        limiter.prepare (sampleRate);
         reset();
     }
 
@@ -34,6 +35,7 @@ namespace dooblrvocals::dsp
         chains[1].reset();
         outputGain.reset();
         fx.reset();
+        limiter.reset();
         activeChain = 0;
         activeOrder = 0;
         fadeRemaining = 0;
@@ -138,7 +140,9 @@ namespace dooblrvocals::dsp
 
             pitch.process (slice, chunk, settings.pitch, settings.harmony, settings.nonRealtime, pitchTap);
 
-            const auto wanted = std::clamp (settings.chainOrder, 0, numChainOrders - 1);
+            // The limiter's slot in the order no longer matters (it is always last), so orders
+            // that differ only there are the same chain: no crossfade between them.
+            const auto wanted = chainOrderToIndex (withLimiterLast (chainOrderFromIndex (std::clamp (settings.chainOrder, 0, numChainOrders - 1))));
             MeterBlock meter;
 
             if (activeOrder < 0)
@@ -195,17 +199,32 @@ namespace dooblrvocals::dsp
                                                       meterBlock, meterTap);
             }
 
-            lastGrDb = chains[(size_t) (fadeRemaining > 0 ? activeChain ^ 1 : activeChain)].getLastGainReductionDb();
-
             // Time-based FX (delay + reverb) after the chain: adds no latency.
             fx.process (slice, chunk, settings.reverb, settings.delay, settings.fxRouting, settings.bpm);
 
             outputGain.process (slice, chunk, settings.limiter.outputDb);
 
+            // The limiter is the last stage, after the wet signal and the output trim, so the
+            // final output never exceeds the ceiling (the trim drives into it rather than past it).
+            const auto peakOfSlice = [&slice, chunk]
+            {
+                return std::max (slice.getMagnitude (0, 0, chunk),
+                                 slice.getNumChannels() > 1 ? slice.getMagnitude (1, 0, chunk) : 0.0f);
+            };
+
+            if (meterTap != nullptr)
+                meter.limiterIn = peakOfSlice();
+
+            auto limiterSettings = settings.limiter;
+            limiterSettings.outputDb = 0.0f; // the trim is applied above, in front of the limiter
+            limiter.process (slice, 0, chunk, limiterSettings);
+            lastGrDb = limiter.getLastGainReductionDb();
+
             if (meterTap != nullptr)
             {
-                meter.output = std::max (slice.getMagnitude (0, 0, chunk),
-                                         slice.getNumChannels() > 1 ? slice.getMagnitude (1, 0, chunk) : 0.0f);
+                meter.limiterOut = peakOfSlice();
+                meter.limiterGrDb = lastGrDb;
+                meter.output = meter.limiterOut;
                 meterTap->addBlock (meter, chunk);
             }
 

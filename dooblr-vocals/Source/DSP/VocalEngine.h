@@ -14,8 +14,9 @@ namespace dooblrvocals::dsp
 {
     /**
         Pitch correction and the harmonizer (always first; the harmonies are summed with the
-        corrected lead so Gate / EQ / Comp / Limiter process the whole stack and the limiter
-        protects the sum), then Gate / EQ / Comp / Limiter in the chosen order.
+        corrected lead so Gate / EQ / Comp process the whole stack), then Gate / EQ / Comp in
+        the chosen order, then the delay / reverb, the output trim and finally the limiter, so
+        the limiter protects the true final output (wet included) and its meter shows it.
 
         Pitch stays first so the detector sees the incoming vocal, not a compressed or
         EQ'd version: gating, EQ and dynamics after correction is the usual vocal chain.
@@ -62,6 +63,7 @@ namespace dooblrvocals::dsp
         std::array<ProcessingChain, 2> chains;
         OutputGain outputGain;
         FxBlock fx;
+        OutputStage limiter;
 
         int activeChain = 0, activeOrder = 0, fadeOrder = 0, fadeRemaining = 0, fadeLength = 1;
         juce::AudioBuffer<float> fadeBuffer;

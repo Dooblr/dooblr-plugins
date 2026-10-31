@@ -371,13 +371,23 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
             };
         }
 
+        if (p == limiterPage)
+        {
+            // Not reorderable: the limiter is always the last stage, after the delay and reverb.
+            button.setHasPowerToggle (true);
+            button.setTooltip ("Limiter - always the last stage (after the delay and reverb), so the final output stays under the ceiling");
+        }
+
         if (p >= gatePage && p <= limiterPage)
         {
             const auto stage = p - gatePage;
-            button.setTooltip (juce::String (pageName (p)) + " - drag the handle to move it in the processing chain");
-            button.onHandleDown = [this, stage] (const juce::MouseEvent& e) { chainHandleDown (stage, e); };
-            button.onHandleDrag = [this, stage] (const juce::MouseEvent& e) { chainHandleDrag (stage, e); };
-            button.onHandleUp = [this, stage] (const juce::MouseEvent& e) { chainHandleUp (stage, e); };
+            if (p != limiterPage)
+            {
+                button.setTooltip (juce::String (pageName (p)) + " - drag the handle to move it in the processing chain");
+                button.onHandleDown = [this, stage] (const juce::MouseEvent& e) { chainHandleDown (stage, e); };
+                button.onHandleDrag = [this, stage] (const juce::MouseEvent& e) { chainHandleDrag (stage, e); };
+                button.onHandleUp = [this, stage] (const juce::MouseEvent& e) { chainHandleUp (stage, e); };
+            }
 
             auto& power = powerButtons[(size_t) stage];
             power = std::make_unique<ProcessorPowerButton> (stage);
@@ -1102,6 +1112,7 @@ void DooblrVocalsAudioProcessorEditor::paint (juce::Graphics& g)
     g.drawText ("CORRECTION", correctionTitleArea, juce::Justification::centredLeft);
     g.drawText ("PROCESSING", fxTitleArea, juce::Justification::centredLeft);
     g.drawText ("TIME FX", timeFxTitleArea, juce::Justification::centredLeft);
+    g.drawText ("OUTPUT", outputTitleArea, juce::Justification::centredLeft);
 
     g.setColour (pageColour (selectedPage));
     g.drawText (selectedPage == pitchPage ? "PITCH"
@@ -1161,11 +1172,15 @@ void DooblrVocalsAudioProcessorEditor::resized()
     {
         auto nav = navArea.reduced (12, 12);
         constexpr int titleHeight = 20, groupGap = 10;
-        const auto pitch = juce::jmax (28, (nav.getHeight() - 3 * titleHeight - 2 * groupGap) / numPages);
+        const auto pitch = juce::jmax (28, (nav.getHeight() - 4 * titleHeight - 3 * groupGap) / numPages);
         const auto gap = juce::jlimit (2, 4, pitch / 14);
         correctionTitleArea = nav.removeFromTop (titleHeight);
 
-        for (int p = 0; p < numPages; ++p)
+        // Signal order: the limiter has its own OUTPUT group at the end, after the time FX.
+        constexpr Page navOrder[] { pitchPage, harmonyPage, gatePage, eqPage, dynamicsPage, delayPage, reverbPage, limiterPage };
+        static_assert (std::size (navOrder) == (size_t) numPages);
+
+        for (const auto p : navOrder)
         {
             if (p == gatePage)
             {
@@ -1179,11 +1194,17 @@ void DooblrVocalsAudioProcessorEditor::resized()
                 timeFxTitleArea = nav.removeFromTop (titleHeight);
             }
 
+            if (p == limiterPage)
+            {
+                nav.removeFromTop (groupGap);
+                outputTitleArea = nav.removeFromTop (titleHeight);
+            }
+
             const auto slot = nav.removeFromTop (pitch).reduced (0, gap);
 
             if (p >= gatePage && p <= limiterPage)
             {
-                chainSlotBounds[(size_t) (p - gatePage)] = slot;
+                chainSlotBounds[(size_t) (p - gatePage)] = slot; // the limiter's entry is its fixed OUTPUT slot
                 continue;
             }
 
@@ -1264,7 +1285,8 @@ void DooblrVocalsAudioProcessorEditor::resized()
 
 dooblrvocals::dsp::ChainOrder DooblrVocalsAudioProcessorEditor::chainOrderParameter() const
 {
-    return dooblrvocals::dsp::chainOrderFromIndex (juce::roundToInt (state.getRawParameterValue ("chain_order")->load()));
+    return dooblrvocals::dsp::withLimiterLast (
+        dooblrvocals::dsp::chainOrderFromIndex (juce::roundToInt (state.getRawParameterValue ("chain_order")->load())));
 }
 
 void DooblrVocalsAudioProcessorEditor::syncChainOrderNow()
@@ -1278,16 +1300,27 @@ void DooblrVocalsAudioProcessorEditor::syncChainOrderNow()
 
 void DooblrVocalsAudioProcessorEditor::layoutChainButtons()
 {
+    constexpr int movable = dooblrvocals::dsp::numChainStages - 1; // Gate / EQ / Comp; the limiter is pinned last
+
     for (int slot = 0; slot < dooblrvocals::dsp::numChainStages; ++slot)
     {
         const auto stage = shownOrder[(size_t) slot];
         auto& button = pageButtons[(size_t) pageForStage (stage)];
-        button.setChainSlot (slot);
         auto bounds = chainSlotBounds[(size_t) slot];
+
+        if (stage == dooblrvocals::dsp::limiterStage)
+        {
+            button.setChainSlot (-1);
+            button.setBounds (bounds);
+            powerButtons[(size_t) stage]->setBounds (button.getPowerArea());
+            continue;
+        }
+
+        button.setChainSlot (slot);
 
         if (stage == draggingStage)
         {
-            const auto top = chainSlotBounds.front().getY(), bottom = chainSlotBounds.back().getY();
+            const auto top = chainSlotBounds.front().getY(), bottom = chainSlotBounds[(size_t) movable - 1].getY();
             bounds.setY (juce::jlimit (top, bottom, dragY - dragGrabOffset));
             button.toFront (false);
         }
@@ -1319,7 +1352,7 @@ void DooblrVocalsAudioProcessorEditor::chainHandleDrag (int stage, const juce::M
     const auto first = chainSlotBounds.front();
     const auto pitchY = (float) (chainSlotBounds[1].getY() - first.getY());
     const auto centre = (float) (dragY - dragGrabOffset) + (float) first.getHeight() * 0.5f;
-    const auto target = juce::jlimit (0, dooblrvocals::dsp::numChainStages - 1,
+    const auto target = juce::jlimit (0, dooblrvocals::dsp::numChainStages - 2, // never past the pinned limiter
                                       (int) std::floor ((centre - (float) first.getY() + 0.5f * (pitchY - (float) first.getHeight())) / pitchY));
 
     auto order = shownOrder;

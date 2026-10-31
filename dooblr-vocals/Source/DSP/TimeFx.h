@@ -204,8 +204,8 @@ namespace dooblrvocals::dsp
     //==============================================================================
     /**
         The time-based FX block (delay + reverb as one unit), fixed after the processing chain
-        and before the output gain. Routing: Parallel (both fed from the block input and summed),
-        Delay > Reverb or Reverb > Delay (series: each stage mixes its own dry / wet). Ducking is
+        and before the output trim and the limiter (the limiter is always the last stage).
+        Routing: Parallel (both fed from the block input and summed), Delay > Reverb or Reverb > Delay (series: each stage mixes its own dry / wet). Ducking is
         keyed by the block input (the processed dry vocal) in every routing.
 
         Enabling, disabling and the mixes ramp (linear, 20 ms); a module that is off and fully

@@ -43,10 +43,15 @@ Plugin code `Dbvx` · bundle id `com.dooblr.vocals` · manufacturer `Dblr`
     detector. View matches the other dynamics graphs.
   - **EQ**: low shelf, mid peak with Q, high shelf, live FFT behind the curve.
   - **Compressor**: threshold, ratio, attack, release, makeup, transfer curve.
-  - **Limiter / clipper**, ceiling, release, output gain.
-  - Per-section power toggles on the tabs. User-reorderable `chain_order`
-    (24 permutations of Gate / EQ / Comp / Limiter) with a 15 ms linear
-    crossfade onto a reset copy of the chain.
+  - **Limiter / clipper**, ceiling, release, output gain. Always the last
+    stage: it runs after the delay / reverb and the output gain, so the final
+    output (wet signal included) never exceeds the ceiling, and its meter shows
+    that final output. It sits in its own OUTPUT group in the nav and cannot be
+    dragged.
+  - Per-section power toggles on the tabs. User-reorderable Gate / EQ / Comp
+    order (`chain_order`; its 24 choices are kept for session compatibility, and
+    the limiter's position in a choice is ignored) with a 15 ms linear crossfade
+    onto a reset copy of the chain.
 - **Pitch display**: detected vs corrected F0 over time against a note grid and
   keyboard. No help captions on the graph; hover/drag shows a readout. In Custom
   scale mode, click a key to toggle that pitch class (one undo step).
@@ -146,8 +151,8 @@ standalone build are meant to run here. The shipping bundle is macOS arm64.
 2. Drag **dooblr-vocals** (Plug-Ins → VST3 → dooblr) onto an **audio track**.
    It is an effect, not an instrument.
 3. Set Key / Scale (or Chromatic), Range to the singer, and Retune. Turn on
-   Gate / EQ / Comp / Limiter as needed. Drag the tab handles to reorder the
-   chain. Switch Quality to HQ when mixing if you can spare the latency.
+   Gate / EQ / Comp / Limiter as needed. Drag the tab handles to reorder
+   Gate / EQ / Comp (the limiter always runs last, after the delay and reverb). Switch Quality to HQ when mixing if you can spare the latency.
 
 ## Tests
 

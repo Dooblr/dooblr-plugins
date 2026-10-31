@@ -39,12 +39,22 @@ namespace dooblrvocals::dsp
         }
     }
 
+    ChainOrder withLimiterLast (const ChainOrder& order) noexcept
+    {
+        ChainOrder out {};
+        size_t n = 0;
+        for (const auto stage : order)
+            if (stage != limiterStage)
+                out[n++] = stage;
+        out[(size_t) numChainStages - 1] = limiterStage;
+        return out;
+    }
+
     void ProcessingChain::prepare (double sampleRate, int)
     {
         gate.prepare (sampleRate);
         eq.prepare (sampleRate);
         compressor.prepare (sampleRate);
-        limiter.prepare (sampleRate);
         reset();
     }
 
@@ -53,15 +63,11 @@ namespace dooblrvocals::dsp
         gate.reset();
         eq.reset();
         compressor.reset();
-        limiter.reset();
     }
 
     void ProcessingChain::process (juce::AudioBuffer<float>& buffer, int n, const VocalSettings& s,
                                    const ChainOrder& order, MeterBlock* meter, MeterTap* spectrumTap) noexcept
     {
-        auto limiterSettings = s.limiter;
-        limiterSettings.outputDb = 0.0f;
-
         auto peakOf = [&] () -> float
         {
             auto peak = 0.0f;
@@ -118,21 +124,9 @@ namespace dooblrvocals::dsp
                     break;
                 }
 
-                case limiterStage:
+                case limiterStage: // runs at the very end, in VocalEngine
                 default:
-                {
-                    if (meter != nullptr)
-                        meter->limiterIn = peakOf();
-
-                    limiter.process (buffer, 0, n, limiterSettings);
-
-                    if (meter != nullptr)
-                    {
-                        meter->limiterOut = peakOf();
-                        meter->limiterGrDb = limiter.getLastGainReductionDb();
-                    }
                     break;
-                }
             }
         }
     }

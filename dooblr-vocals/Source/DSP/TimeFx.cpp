@@ -142,6 +142,8 @@ namespace dooblrvocals::dsp
 
         double sizeScale (float size) noexcept { return 0.4 + 1.2 * (double) std::clamp (size, 0.0f, 1.0f); }
         constexpr double maxModMs = 0.6;
+        constexpr double calibrationHz = 1000.0; // Decay is the RT60 here
+        constexpr double maxLineGain = 0.99995;  // keeps every loop strictly lossy at DC
     }
 
     void VocalReverb::prepare (double rate, int)
@@ -199,16 +201,36 @@ namespace dooblrvocals::dsp
         const auto rt60 = std::clamp ((double) s.decaySeconds, 0.1, 30.0);
         const auto hfRatio = 1.0 - 0.85 * (double) std::clamp (s.damping, 0.0f, 1.0f); // HF RT60 / RT60
 
+        modDepth = (float) (std::clamp (s.modulation, 0.0f, 1.0f) * maxModMs * 0.001 * sampleRate);
+
+        // Decay calibration: Decay is the RT60 at mid frequencies (referenced to 1 kHz), so each
+        // line's loss is set from what one trip round its loop really does there.
+        const auto w = twoPi * calibrationHz / sampleRate;
+        // Mean magnitude of the linear-interpolated read over a sweeping fraction (modulated lines).
+        const auto interpLoss = std::sqrt (1.0 - (1.0 - std::cos (w)) / 3.0);
+
         for (size_t i = 0; i < lines.size(); ++i)
         {
-            lineDelay[i] = (float) (lineMs[i] * scale * 0.001 * sampleRate);
+            const auto modulated = lfoHz[i] > 0.0 && modDepth > 0.0f;
+            auto d = lineMs[i] * scale * 0.001 * sampleRate;
+            if (! modulated)
+                d = std::round (d); // a whole-sample read: no interpolation loss
+            lineDelay[i] = (float) d;
+
             // -60 dB after rt60 seconds: g = 10^(-3 d / (rt60 fs)).
-            const auto g = std::pow (10.0, -3.0 * (double) lineDelay[i] / (rt60 * sampleRate));
-            lineGain[i] = (float) g;
+            const auto g = std::pow (10.0, -3.0 * d / (rt60 * sampleRate));
             // One-pole absorber with DC gain 1 and Nyquist gain g^(1/hfRatio - 1), so the highs
             // fall at the rate of an RT60 of rt60 * hfRatio.
             const auto k = std::pow (g, 1.0 / hfRatio - 1.0);
-            dampCoeff[i] = (float) ((1.0 - k) / (1.0 + k));
+            const auto a = (1.0 - k) / (1.0 + k);
+            dampCoeff[i] = (float) a;
+
+            // The absorber's gain and phase delay at the reference, plus the interpolation loss.
+            const auto re = 1.0 - a * std::cos (w), im = a * std::sin (w);
+            const auto absorberGain = (1.0 - a) / std::sqrt (re * re + im * im);
+            const auto absorberDelay = std::atan2 (im, re) / w;
+            const auto loopGain = std::pow (10.0, -3.0 * (d + absorberDelay) / (rt60 * sampleRate));
+            lineGain[i] = (float) std::min (maxLineGain, loopGain / (absorberGain * (modulated ? interpLoss : 1.0)));
         }
 
         const auto earlyScale = 0.5 + (double) std::clamp (s.size, 0.0f, 1.0f);
@@ -229,8 +251,6 @@ namespace dooblrvocals::dsp
         // Keep the tail's loudness roughly independent of the decay and size.
         lateNorm = (float) (0.9 / std::sqrt ((double) numLines) / std::sqrt (std::max (0.25, rt60 / scale)));
         diffuseGain = 0.72f * std::clamp (s.diffusion, 0.0f, 1.0f);
-        modDepth = (float) (std::clamp (s.modulation, 0.0f, 1.0f) * maxModMs * 0.001 * sampleRate);
-
         lowCut.setHighPass (s.lowCutHz, sampleRate);
         highCut.setLowPass (s.highCutHz, sampleRate);
 

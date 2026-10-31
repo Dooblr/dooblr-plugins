@@ -154,7 +154,7 @@ private:
     juce::TooltipWindow tooltipWindow { this, 600 };
 
     juce::Rectangle<int> headerArea, navArea, displayArea, controlsArea;
-    juce::Rectangle<int> correctionTitleArea, fxTitleArea, timeFxTitleArea, graphTitleArea;
+    juce::Rectangle<int> correctionTitleArea, fxTitleArea, timeFxTitleArea, outputTitleArea, graphTitleArea;
 
     juce::Label titleLabel, subtitleLabel, outputCaption, statusLabel, latencyLabel;
     juce::TextButton undoButton { "Undo" }, redoButton { "Redo" };

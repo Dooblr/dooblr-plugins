@@ -7,8 +7,6 @@ namespace dooblrvocals::dsp
 {
     namespace
     {
-        constexpr float pi = 3.14159265358979323846f;
-
         float dbToGain (float db) noexcept { return std::pow (10.0f, db * 0.05f); }
         float gainToDb (float gain) noexcept { return 20.0f * std::log10 (std::max (gain, 1.0e-9f)); }
 
