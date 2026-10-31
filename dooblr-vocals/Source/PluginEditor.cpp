@@ -409,7 +409,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
         { "input_type", "Range", K::combo, 110 }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle, 88 },
         { "quality", "Quality", K::combo, 104 }, { "latency_mode", "Latency", K::combo, 112 } }));
     pagePanels[harmonyPage].push_back (std::make_unique<ControlPanel> (state, "Harmony bus", pageColour (harmonyPage), Specs {
-        { "harm_level", "Level", K::knob }, { "harm_formant", "Formant", K::toggle } }));
+        { "harm_level", "Level", K::knob }, { "harm_formant", "Formant", K::toggle }, { "harm_lofi", "Lo-Fi", K::knob } }));
     pagePanels[gatePage].push_back (std::make_unique<ControlPanel> (state, "Gate", pageColour (gatePage), Specs {
         { "gate_threshold", "Threshold", K::knob }, { "gate_attack", "Attack", K::knob }, { "gate_hold", "Hold", K::knob },
         { "gate_release", "Release", K::knob }, { "gate_range", "Range", K::knob } }));

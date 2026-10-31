@@ -291,5 +291,13 @@ namespace dooblrvocals::dsp
         bool lastVoiced = false;
         float mixSmoothed = 1.0f;
         int harmonyTail = 0;
+
+        // Harmony Lo-Fi: band-limit -> sample-and-hold at a lower rate -> quantise. Only runs when
+        // HarmonySettings::lofi > 0, so the default path is untouched.
+        struct LoFi
+        {
+            float lp1L = 0.0f, lp1R = 0.0f, lp2L = 0.0f, lp2R = 0.0f;
+            float holdL = 0.0f, holdR = 0.0f, phase = 1.0f;
+        } lofiState;
     };
 }

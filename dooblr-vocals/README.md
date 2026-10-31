@@ -50,7 +50,15 @@ Plugin code `Dbvx` · bundle id `com.dooblr.vocals` · manufacturer `Dblr`
 - **Pitch display**: detected vs corrected F0 over time against a note grid and
   keyboard. No help captions on the graph; hover/drag shows a readout. In Custom
   scale mode, click a key to toggle that pitch class (one undo step).
-- **Presets:** Init, Tight Pop, Natural, Chromatic Track, Radio Voice, HQ Mix.
+- **Presets:** Init, Tight Pop, Natural, Chromatic Track, Radio Voice, HQ Mix,
+  Harmony 3rd + 5th, Wide Oct + 5th, Ballad Throw, Vocal Workstation '90s.
+  Vocal Workstation '90s is an original take on mid-1990s rack/desktop vocal
+  harmony processors: hard keyed correction on the lead, four scale-following
+  voices (3rd and 5th above, 4th and octave below) with pitch-tracking formants,
+  small per-voice detune and onset offsets, a wide spread, **Harmony Lo-Fi**
+  (`harm_lofi`: band-limited, reduced-rate, reduced-bit harmony voices; 0 = off,
+  bit-identical) and a small room. Set Key / Scale, or turn on Key Follow (session
+  setting, not stored in presets), to choose the key the voices follow.
   User presets are `.dvocal` files in `~/Music/dooblr-vocals/Presets`.
 - **Undo/redo** (Cmd-Z / Cmd-Shift-Z) keeps 50 steps. One drag or preset load is
   one step.

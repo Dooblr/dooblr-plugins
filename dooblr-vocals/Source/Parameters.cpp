@@ -309,6 +309,9 @@ namespace dooblrvocals::params
             addFloat (layout, "key_sens", "Key Follow Sensitivity", range (0.0f, 1.0f), 0.5f, percentString());
             addBool (layout, "key_lock", "Key Follow Lock", false);
             addChoice (layout, "key_source", "Key Follow Source", keySourceChoices(), 0);
+
+            // Harmony Lo-Fi (appended after Key Follow; 0 = off and bit-identical to earlier versions).
+            addFloat (layout, "harm_lofi", "Harmony Lo-Fi", range (0.0f, 1.0f), 0.0f, percentString());
         }
 
         return layout;
@@ -333,6 +336,7 @@ namespace dooblrvocals::params
         outputGain = getId ("output_gain"); chainOrder = getId ("chain_order");
         latencyMode = getId ("latency_mode");
         harmOn = getId ("harm_on"); harmLevel = getId ("harm_level"); harmFormant = getId ("harm_formant");
+        harmLofi = getId ("harm_lofi");
 
         revOn = getId ("rev_on"); revPre = getId ("rev_predelay"); revPreSync = getId ("rev_predelay_sync");
         revDecay = getId ("rev_decay"); revSize = getId ("rev_size"); revDamping = getId ("rev_damping");
@@ -394,6 +398,7 @@ namespace dooblrvocals::params
         s.harmony.enabled = b (harmOn);
         s.harmony.levelDb = f (harmLevel);
         s.harmony.formant = b (harmFormant);
+        s.harmony.lofi = f (harmLofi);
 
         for (size_t v = 0; v < harmVoices.size(); ++v)
         {

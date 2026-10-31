@@ -176,6 +176,7 @@ namespace dooblrvocals::dsp
         float levelDb = -6.0f;     // harmony bus level
         bool formant = true;
         std::array<HarmonyVoice, numHarmonyVoices> voices;
+        float lofi = 0.0f;         // 0 = clean (bypassed, bit-identical); 1 = ~16 kHz / 10-bit early-digital voices
     };
 
     struct PitchSettings

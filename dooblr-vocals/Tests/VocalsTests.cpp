@@ -918,6 +918,7 @@ namespace
         pulse ("harm_on", sawBb, 0.0f, 1.0f, 1.0);
         pulse ("harm_level", sawBb, -30.0f, 0.0f, 1.0);
         pulse ("harm_formant", sawBb, 0.0f, 1.0f, 0.05);
+        pulse ("harm_lofi", sawBb, 0.0f, 1.0f, 0.05);
         for (int v = 1; v <= dsp::numHarmonyVoices; ++v)
         {
             const auto id = [v] (const char* suffix) { return "harm" + juce::String (v) + "_" + suffix; };
@@ -2438,7 +2439,7 @@ namespace
         juce::MemoryBlock out;
         if (xml != nullptr)
         {
-            stripParameters (*xml, { "rev_", "dly_", "fx_routing", "range_", "key_" });
+            stripParameters (*xml, { "rev_", "dly_", "fx_routing", "range_", "key_", "harm_lofi" });
             juce::AudioProcessor::copyXmlToBinary (*xml, out);
         }
         return out;
@@ -3410,7 +3411,7 @@ namespace
         {
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
-            check (ids.size() > 4 && ids[ids.size() - 5] == "vibrato" && ids[ids.size() - 4] == "key_follow",
+            check (ids.size() > 5 && ids[ids.size() - 6] == "vibrato" && ids[ids.size() - 5] == "key_follow",
                    "Vibrato Respect is the last parameter before the Key Follow group");
             check (std::abs (getPlain (*p, "vibrato")) < 1.0e-6f, "Vibrato Respect defaults to 0");
             if (auto* param = getParam (*p, "vibrato"))
@@ -3618,7 +3619,7 @@ namespace
             juce::MemoryBlock old;
             if (xml != nullptr)
             {
-                stripParameters (*xml, { "vibrato", "rev_", "dly_", "fx_routing", "range_", "key_" });
+                stripParameters (*xml, { "vibrato", "rev_", "dly_", "fx_routing", "range_", "key_", "harm_lofi" });
                 juce::AudioProcessor::copyXmlToBinary (*xml, old);
             }
             auto q = makeProcessor();
@@ -3804,9 +3805,9 @@ namespace
         {
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
-            check (ids.size() >= 4 && ids[ids.size() - 4] == "key_follow" && ids[ids.size() - 3] == "key_sens"
-                       && ids[ids.size() - 2] == "key_lock" && ids[ids.size() - 1] == "key_source",
-                   "key_follow, key_sens, key_lock, key_source are appended last");
+            check (ids.size() >= 5 && ids[ids.size() - 5] == "key_follow" && ids[ids.size() - 4] == "key_sens"
+                       && ids[ids.size() - 3] == "key_lock" && ids[ids.size() - 2] == "key_source",
+                   "key_follow, key_sens, key_lock, key_source are appended after Vibrato Respect (only Harmony Lo-Fi follows)");
             check (getPlain (*p, "key_follow") < 0.5f && std::abs (getPlain (*p, "key_sens") - 0.5f) < 1.0e-4f
                        && getPlain (*p, "key_lock") < 0.5f && juce::roundToInt (getPlain (*p, "key_source")) == 0,
                    "defaults: Off, 50 %, unlocked, Auto");
@@ -4038,6 +4039,175 @@ namespace
             p->editorBeingDeleted (editor);
             base.reset();
         }
+    }
+
+    //==============================================================================
+    // Harmony Lo-Fi (harm_lofi) and the "Vocal Workstation '90s" factory preset.
+    void testHarmonyLoFi()
+    {
+        const auto sawA = [] (int i) { return sawAt (220.0, i, sampleRate, 0.35f); };
+
+        // Appended last, 0 .. 100 %, default 0.
+        {
+            auto p = makeProcessor();
+            const auto ids = allParameterIds (*p);
+            check (! ids.isEmpty() && ids[ids.size() - 1] == "harm_lofi", "harm_lofi is the last parameter");
+            check (std::abs (getPlain (*p, "harm_lofi")) < 1.0e-6f, "Harmony Lo-Fi defaults to 0");
+            check (! dooblrvocals::presets::isSessionOnlyParameter ("harm_lofi"), "Harmony Lo-Fi is stored in presets");
+            if (auto* param = getParam (*p, "harm_lofi"))
+                check (param->getCurrentValueAsText().contains ("%") && param->getName (64) == "Harmony Lo-Fi", "shown as a percentage");
+        }
+
+        const auto setupHarmony = [] (Processor& p)
+        {
+            setParam (p, "harm_on", 1.0f);
+            for (int v = 1; v <= dsp::numHarmonyVoices; ++v)
+                setParam (p, "harm" + juce::String (v) + "_on", 1.0f);
+        };
+        const auto lat = liveLatency();
+        const auto n = lat + 16384;
+
+        // 0 = bypassed: identical, sample for sample, to a processor that never touched the control,
+        // and to one that was driven at 100 % and then returned to 0 and reset.
+        {
+            auto a = makeProcessor();
+            setupHarmony (*a);
+            const auto outA = render (*a, sawA, n);
+
+            auto b = makeProcessor();
+            setupHarmony (*b);
+            setParam (*b, "harm_lofi", 1.0f);
+            render (*b, sawA, 4096);
+            setParam (*b, "harm_lofi", 0.0f);
+            b->prepareToPlay (sampleRate, blockSize);
+            const auto outB = render (*b, sawA, n);
+
+            auto exact = true;
+            for (int ch = 0; ch < 2 && exact; ++ch)
+                for (int i = 0; i < n; ++i)
+                    if (! juce::exactlyEqual (outA.getSample (ch, i), outB.getSample (ch, i))) { exact = false; break; }
+            check (exact, "Harmony Lo-Fi at 0 is bit-identical to the default path");
+        }
+
+        // > 0: audible on the harmony bus only, finite, bounded, no allocations.
+        {
+            auto a = makeProcessor();
+            setupHarmony (*a);
+            const auto clean = render (*a, sawA, n);
+
+            auto b = makeProcessor();
+            setupHarmony (*b);
+            setParam (*b, "harm_lofi", 1.0f);
+            int allocations = 0;
+            render (*b, sawA, 4096, blockSize, &allocations);
+            b->prepareToPlay (sampleRate, blockSize);
+            const auto crushed = render (*b, sawA, n);
+            check (allocations == 0, "Harmony Lo-Fi does not allocate on the audio thread");
+            check (allFinite (crushed) && crushed.getMagnitude (lat, n - lat) < 4.0f, "Harmony Lo-Fi output is finite and bounded");
+            const auto diff = bufferDiff (clean, crushed, lat + 512);
+            check (diff > 1.0, "Harmony Lo-Fi changes the harmony voices (diff " + std::to_string (diff) + ")");
+
+            // Harmony off: the control does nothing.
+            auto c = makeProcessor();
+            setParam (*c, "harm_lofi", 1.0f);
+            const auto offA = render (*c, sawA, n);
+            auto d = makeProcessor();
+            const auto offB = render (*d, sawA, n);
+            check (juce::exactlyEqual (bufferDiff (offA, offB, 0), 0.0), "Harmony Lo-Fi is silent when the harmony bus is off");
+        }
+
+        // State round-trip, and an older session (no harm_lofi) loads with it off.
+        {
+            auto src = makeProcessor();
+            setParam (*src, "harm_lofi", 0.4f);
+            setParam (*src, "corr_key", 7.0f);
+            juce::MemoryBlock blob;
+            src->getStateInformation (blob);
+            auto q = makeProcessor();
+            q->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (std::abs (getPlain (*q, "harm_lofi") - 0.4f) < 0.01f, "Harmony Lo-Fi round-trips");
+
+            auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+            juce::MemoryBlock old;
+            if (xml != nullptr)
+            {
+                stripParameters (*xml, { "harm_lofi" });
+                juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            }
+            auto r = makeProcessor();
+            setParam (*r, "harm_lofi", 0.9f);
+            r->setStateInformation (old.getData(), (int) old.getSize());
+            check (old.getSize() > 32 && std::abs (getPlain (*r, "harm_lofi")) < 1.0e-6f && std::abs (getPlain (*r, "corr_key") - 7.0f) < 0.1f,
+                   "an older session loads with Harmony Lo-Fi at 0 and keeps its settings");
+        }
+    }
+
+    void testVocalWorkstationPreset()
+    {
+        const juce::String name ("Vocal Workstation '90s");
+        auto p = makeProcessor();
+        int index = -1;
+        for (int i = 0; i < p->getNumPrograms(); ++i)
+            if (p->getProgramName (i) == name)
+                index = i;
+        check (index > 0, "factory preset \"Vocal Workstation '90s\" exists");
+        if (index <= 0)
+            return;
+
+        // No third-party names anywhere a user can see them.
+        {
+            auto clean = true;
+            for (int i = 0; i < p->getNumPrograms(); ++i)
+            {
+                const auto n = p->getProgramName (i);
+                clean = clean && ! n.containsIgnoreCase ("digitech") && ! n.containsIgnoreCase ("vocalist");
+            }
+            for (auto* param : p->getParameters())
+            {
+                const auto n = param->getName (128);
+                clean = clean && ! n.containsIgnoreCase ("digitech") && ! n.containsIgnoreCase ("vocalist");
+            }
+            check (clean, "no preset or parameter name carries a hardware brand or model name");
+        }
+
+        setParam (*p, "key_follow", 1.0f);
+        p->setCurrentProgram (index);
+        const auto is = [&p] (const char* id, float v, float tol = 0.02f) { return std::abs (getPlain (*p, id) - v) <= tol; };
+
+        check (is ("corr_mode", 0) && is ("corr_scale", 0) && getPlain (*p, "retune_speed") <= 8.0f
+                   && is ("corr_amount", 1) && getPlain (*p, "humanize") <= 0.1f,
+               "lead: keyed, major scale, hard and fast correction");
+        check (is ("harm_on", 1) && is ("harm_formant", 0) && getPlain (*p, "harm_lofi") > 0.3f,
+               "harmony bus on, formants follow the shift (gender-style artifacts), lo-fi voices");
+        auto scaleVoices = 0, onVoices = 0;
+        float minPan = 1.0f, maxPan = -1.0f;
+        for (int v = 1; v <= dsp::numHarmonyVoices; ++v)
+        {
+            const auto id = [v] (const char* suffix) { return "harm" + juce::String (v) + "_" + suffix; };
+            if (getPlain (*p, id ("on")) > 0.5f) ++onVoices;
+            if (juce::roundToInt (getPlain (*p, id ("mode"))) == 0) ++scaleVoices;
+            minPan = std::min (minPan, getPlain (*p, id ("pan")));
+            maxPan = std::max (maxPan, getPlain (*p, id ("pan")));
+        }
+        check (onVoices == 4 && scaleVoices >= 3, "four harmony voices, scale-following");
+        check (is ("harm1_degree", 2) && is ("harm2_degree", 4) && is ("harm3_degree", -3) && is ("harm4_semis", -12),
+               "voicing: 3rd and 5th above, 4th below, octave below");
+        check (minPan <= -0.7f && maxPan >= 0.7f, "voices panned in a wide spread");
+        check (is ("rev_on", 1) && getPlain (*p, "rev_decay") <= 1.5f && getPlain (*p, "rev_mix") <= 0.25f,
+               "modest room reverb");
+        check (getPlain (*p, "key_follow") > 0.5f, "loading the preset leaves Key Follow (session-only) alone");
+
+        const auto lat = p->getLatencySamples();
+        const auto out = render (*p, [] (int i) { return sawAt (220.0, i, sampleRate, 0.3f); }, lat + 16384);
+        double side = 0.0, mid = 0.0;
+        for (int i = lat + 4096; i < out.getNumSamples(); ++i)
+        {
+            const auto l = (double) out.getSample (0, i), r = (double) out.getSample (1, i);
+            side += (l - r) * (l - r);
+            mid += (l + r) * (l + r);
+        }
+        check (allFinite (out) && mid > 1.0, "preset renders");
+        check (side > 0.05 * mid, "preset output is stereo-wide (side/mid " + std::to_string (side / std::max (mid, 1.0e-9)) + ")");
     }
 
     struct TestCase
@@ -4429,6 +4599,8 @@ int main()
         { "mode toggle",                    testModeToggle },
         { "design fixes (t13u)",            testDesignFixes },
         { "key follow",                     testKeyFollow },
+        { "harmony lo-fi",                  testHarmonyLoFi },
+        { "vocal workstation preset",       testVocalWorkstationPreset },
     };
 
     int failedTests = 0;

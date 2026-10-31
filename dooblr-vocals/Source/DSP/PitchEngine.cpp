@@ -780,6 +780,7 @@ namespace dooblrvocals::dsp
         harmonizer.reset();
         mode = ProcessMode::mix;
         harmonyTail = 0;
+        lofiState = {};
     }
 
     int PitchEngine::latencySamples (const PitchSettings& s, bool nonRealtime) const noexcept
@@ -966,6 +967,21 @@ namespace dooblrvocals::dsp
         const auto period = [this] { return lastEstimate.hz > 20.0f ? (float) sampleRate / lastEstimate.hz
                                                                     : (float) sampleRate / 200.0f; };
 
+        // Harmony Lo-Fi, per block. The voices' rate drops from 32 kHz (amount just above 0) to
+        // 16 kHz (amount 1), band-limited to ~0.42 of that rate by two one-poles, then held
+        // (some aliasing is the point) and quantised from 14 down to 10 bits.
+        const auto lofiAmount = std::clamp (harmony.lofi, 0.0f, 1.0f);
+        const auto lofiOn = lofiAmount > 0.0f;
+        float lofiStep = 1.0f, lofiCoeff = 1.0f, lofiQ = 1.0f;
+        if (lofiOn)
+        {
+            const auto targetRate = std::min ((float) sampleRate, 32000.0f - 16000.0f * lofiAmount);
+            lofiStep = targetRate / (float) sampleRate;
+            const auto cutoff = std::min (0.42f * targetRate, 0.45f * (float) sampleRate);
+            lofiCoeff = 1.0f - std::exp (-2.0f * juce::MathConstants<float>::pi * cutoff / (float) sampleRate);
+            lofiQ = std::exp2 (14.0f - 4.0f * lofiAmount - 1.0f);
+        }
+
         for (int i = 0; i < n; ++i)
         {
             delayL[(size_t) writePos] = left[i];
@@ -1009,6 +1025,21 @@ namespace dooblrvocals::dsp
                 harmonyTail = harmony.enabled ? (int) (0.1 * sampleRate) : harmonyTail - 1;
                 float hL = 0.0f, hR = 0.0f;
                 harmonizer.processSample (tOut, newest, period(), causal, harmony, hL, hR);
+                if (lofiOn)
+                {
+                    auto& z = lofiState;
+                    z.lp1L += lofiCoeff * (hL - z.lp1L);  z.lp2L += lofiCoeff * (z.lp1L - z.lp2L);
+                    z.lp1R += lofiCoeff * (hR - z.lp1R);  z.lp2R += lofiCoeff * (z.lp1R - z.lp2R);
+                    z.phase += lofiStep;
+                    if (z.phase >= 1.0f)
+                    {
+                        z.phase -= 1.0f;
+                        z.holdL = std::round (z.lp2L * lofiQ) / lofiQ;
+                        z.holdR = std::round (z.lp2R * lofiQ) / lofiQ;
+                    }
+                    hL = z.holdL;
+                    hR = z.holdR;
+                }
                 if (channels > 1)
                 {
                     outL += hL;

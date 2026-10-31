@@ -135,6 +135,37 @@ namespace dooblrvocals::presets
                 presets.push_back ({ "Ballad Throw", std::move (v) });
             }
 
+            {
+                // Mid-90s desktop harmony processor: four scale-following (diatonic) voices in one
+                // key, fast hard-ish correction on the lead, "gender"-style formants that move with
+                // each voice (formant off: upper voices brighter, lower voices darker), small fixed
+                // detune and onset offsets per voice, a wide spread, early-digital band-limited
+                // voices (Lo-Fi) and a modest room.
+                ValueList v;
+                add (v, { { "corr_mode", 0 }, { "corr_key", 0 }, { "corr_scale", 0 },
+                          { "retune_speed", 5 }, { "humanize", 0.05f }, { "corr_amount", 1 }, { "formant", 1 },
+                          { "quality", 0 },
+                          { "harm_on", 1 }, { "harm_level", -4 }, { "harm_formant", 0 }, { "harm_lofi", 0.55f },
+                          { "harm1_on", 1 }, { "harm1_mode", 0 }, { "harm1_degree", 2 }, { "harm1_level", -4 },
+                          { "harm1_pan", -0.75f }, { "harm1_detune", 6 }, { "harm1_delay", 4 },
+                          { "harm2_on", 1 }, { "harm2_mode", 0 }, { "harm2_degree", 4 }, { "harm2_level", -5 },
+                          { "harm2_pan", 0.75f }, { "harm2_detune", -5 }, { "harm2_delay", 9 },
+                          { "harm3_on", 1 }, { "harm3_mode", 0 }, { "harm3_degree", -3 }, { "harm3_level", -6 },
+                          { "harm3_pan", 0.4f }, { "harm3_detune", 4 }, { "harm3_delay", 6 },
+                          { "harm4_on", 1 }, { "harm4_mode", 1 }, { "harm4_semis", -12 }, { "harm4_level", -9 },
+                          { "harm4_pan", -0.4f }, { "harm4_detune", -7 }, { "harm4_delay", 12 },
+                          { "eq_on", 1 }, { "eq_low_freq", 110 }, { "eq_low_gain", -2 },
+                          { "eq_mid_freq", 2200 }, { "eq_mid_gain", 1.5f }, { "eq_mid_q", 1.0f },
+                          { "eq_high_freq", 9000 }, { "eq_high_gain", -1.5f },
+                          { "comp_on", 1 }, { "comp_threshold", -18 }, { "comp_ratio", 3 },
+                          { "comp_attack", 10 }, { "comp_release", 100 }, { "comp_makeup", 2 },
+                          { "lim_mode", 2 }, { "lim_ceiling", -0.5f },
+                          { "rev_on", 1 }, { "rev_predelay", 12 }, { "rev_decay", 1.1f }, { "rev_size", 0.35f },
+                          { "rev_damping", 0.55f }, { "rev_lowcut", 250 }, { "rev_highcut", 7500 }, { "rev_width", 1.0f },
+                          { "rev_early", 0.45f }, { "rev_diffusion", 0.7f }, { "rev_mod", 0.15f }, { "rev_mix", 0.16f } });
+                presets.push_back ({ "Vocal Workstation '90s", std::move (v) });
+            }
+
             return presets;
         }
 
