@@ -1,6 +1,16 @@
 # dooblr-soothe roadmap
 
-## 0.1.2 (now)
+## 0.1.3 (now)
+
+- Calmer analyzer by default: the drawn spectrum and reduction follow the analysis with
+  rise / fall ballistics (Medium: 100 ms rise, 800 ms fall to 90 %), timed from the real
+  elapsed time so the speed does not depend on the frame rate.
+- Advanced panel: Analyzer speed (Slow / Medium / Fast / Very Fast). Display only, saved
+  with the session as a UI preference (not automatable, not in presets or A / B).
+- New tests: 90 % step times per setting at 60 and 144 fps, the default slower than 0.1.2,
+  the editor's drawn spectrum, state round trip, the selector's hit-test.
+
+## 0.1.2
 
 - Smooth spectrum and reduction drawing at the low end: monotone cubic interpolation
   between FFT bin centres (in dB), peak blending where one display point covers several

@@ -7,6 +7,7 @@
 #include "DSP/OutputPeakTap.h"
 #include "DSP/ResonanceEngine.h"
 #include "UndoHistory.h"
+#include "UI/DisplayBallistics.h"
 
 namespace dooblrsoothe
 {
@@ -66,6 +67,11 @@ namespace dooblrsoothe
 
         juce::ChangeBroadcaster presetChanged;
 
+        /** Analyzer Speed (ui::AnalyzerSpeed index): a display preference saved with the session,
+            kept out of the parameters (not automatable, not in presets, A / B or undo). */
+        int getAnalyzerSpeed() const noexcept { return analyzerSpeed.load (std::memory_order_relaxed); }
+        void setAnalyzerSpeed (int index) noexcept { analyzerSpeed.store ((int) ui::analyzerSpeedFromIndex (index), std::memory_order_relaxed); }
+
         /** A / B compare: two complete settings snapshots (not saved with the session). The
             current one is live; selecting the other stores the live settings in this slot and
             recalls the other (the first time, the other slot starts as a copy). Clears undo. */
@@ -88,6 +94,7 @@ namespace dooblrsoothe
         int currentProgram = 0;
         int compareSlot = 0;
         std::array<juce::ValueTree, 2> compareStore;
+        std::atomic<int> analyzerSpeed { (int) ui::defaultAnalyzerSpeed };
         int preparedQuality = -1;
 
         juce::AudioBuffer<float> procIn, detIn, wetOut, dryOut;

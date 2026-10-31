@@ -42,16 +42,24 @@ namespace dooblrsoothe::ui
     {
         bool dirty = false;
 
-        if (const auto* fresh = processor.getEngine().getDisplay().read())
+        bool fresh = false;
+        if (const auto* latest = processor.getEngine().getDisplay().read())
         {
-            if (fresh->serial != frameSerial)
+            if (latest->serial != frameSerial)
             {
-                frame = *fresh;
-                frameSerial = fresh->serial;
-                rebuildSpectrumPaths();
-                dirty = true;
+                target = *latest;
+                frameSerial = latest->serial;
+                fresh = true;
             }
         }
+
+        // Ballistics from the real elapsed time (frame-rate independent); a long stall (hidden
+        // window) is clamped so the display glides rather than jumps when it comes back.
+        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+        const auto dt = lastTickMs > 0.0 ? std::clamp ((nowMs - lastTickMs) * 0.001, 0.0, 0.25) : 0.0;
+        lastTickMs = nowMs;
+        if (frameSerial >= 0 && (fresh || settling || ! shownValid))
+            dirty = advanceDisplay (dt) || fresh;
 
         const auto now = processor.readBands();
         if (! bandsValid || now != bands)
@@ -65,6 +73,44 @@ namespace dooblrsoothe::ui
         if (dirty)
             repaint();
         return dirty;
+    }
+
+    bool ReductionGraph::advanceDisplay (double dtSeconds)
+    {
+        if (frameSerial < 0)
+            return false;
+
+        if (! shownValid)
+        {
+            snapDisplay();
+            return true;
+        }
+
+        const auto times = analyzerTimes (analyzerSpeedFromIndex (processor.getAnalyzerSpeed()));
+        constexpr auto n = (std::size_t) dsp::DisplayFrame::numPoints;
+        auto biggest = applyBallistics (target.input.data(), frame.input.data(), n, dtSeconds, times);
+        biggest = std::max (biggest, applyBallistics (target.output.data(), frame.output.data(), n, dtSeconds, times));
+        biggest = std::max (biggest, applyBallistics (target.reduction.data(), frame.reduction.data(), n, dtSeconds, times));
+        frame.binHz = target.binHz;
+        frame.serial = target.serial;
+
+        // Keep animating until within a hundredth of a dB per step of the target.
+        settling = biggest > 0.01f;
+        if (biggest <= 0.0f)
+            return false;
+        rebuildSpectrumPaths();
+        return true;
+    }
+
+    void ReductionGraph::snapDisplay()
+    {
+        if (frameSerial < 0)
+            return;
+        frame = target;
+        shownValid = true;
+        settling = false;
+        rebuildSpectrumPaths();
+        repaint();
     }
 
     //==============================================================================

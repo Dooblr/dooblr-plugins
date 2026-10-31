@@ -10,7 +10,7 @@ in its own folder and has its own README.
 | [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.6 | Layered kick drum designer (VST3 instrument) | Active |
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.2.0 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
 | [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
-| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.2 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display | Early; its tests and LoadCheck pass, not yet tested in a DAW |
+| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.3 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display, Analyzer speed setting | Early; its tests and LoadCheck pass, not yet tested in a DAW |
 | [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.2.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
 | [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12) | Updated 2026-10-31 |
 

@@ -6,6 +6,7 @@
 
 #include "../DSP/DepthCurve.h"
 #include "../DSP/ResonanceEngine.h"
+#include "DisplayBallistics.h"
 
 namespace dooblrsoothe
 {
@@ -40,6 +41,15 @@ namespace dooblrsoothe::ui
         /** Polls the engine and the bands (VBlank does this); returns true if a repaint was queued. */
         bool poll();
 
+        /** Moves the drawn spectrum / reduction dtSeconds toward the latest analysis frame at the
+            processor's Analyzer Speed (poll does this with the real elapsed time; the first
+            frame is shown at once). Returns true if the drawing changed. */
+        bool advanceDisplay (double dtSeconds);
+        /** Shows the latest analysis frame at once (no ballistics), for tests. */
+        void snapDisplay();
+        /** The latest analysis frame (what the display is moving toward). */
+        const dsp::DisplayFrame& getTargetFrame() const noexcept { return target; }
+
         /** The spectrum and the weighting curve share one plot (the same rectangle). */
         juce::Rectangle<float> getSpectrumArea() const noexcept { return spectrumArea; }
         juce::Rectangle<float> getCurveArea() const noexcept { return curveArea; }
@@ -54,7 +64,8 @@ namespace dooblrsoothe::ui
         const juce::Path& getInputPath() const noexcept { return inputPath; }
         const juce::Path& getOutputPath() const noexcept { return outputPath; }
         const juce::Path& getReductionEdge() const noexcept { return reductionEdge; }
-        /** The last analysed frame and the reduction as drawn (after the display smoothing), dB. */
+        /** The frame as shown (after the Analyzer Speed ballistics) and the reduction as drawn
+            (after the display smoothing), dB. */
         const dsp::DisplayFrame& getFrame() const noexcept { return frame; }
         const std::array<float, dsp::DisplayFrame::numPoints>& getDrawnReduction() const noexcept { return drawnReduction; }
         const std::array<float, dsp::DisplayFrame::numPoints>& getDrawnInput() const noexcept { return drawnInput; }
@@ -108,8 +119,10 @@ namespace dooblrsoothe::ui
         juce::Image background;
         float backgroundScale = 0.0f;
 
-        dsp::DisplayFrame frame;
+        dsp::DisplayFrame frame, target; // frame: as shown (ballistics); target: the latest analysis
         int frameSerial = -1;
+        bool shownValid = false, settling = false;
+        double lastTickMs = 0.0;
         dsp::Bands bands {};
         bool bandsValid = false;
         juce::Path curvePath, curveFillPath, selectedBandPath, inputPath, outputPath, reductionPath, reductionEdge;

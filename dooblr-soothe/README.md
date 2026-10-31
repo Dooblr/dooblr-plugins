@@ -5,7 +5,7 @@ out of a sound's spectral envelope — harshness, ringing, sibilance, boomy room
 turns them down only while, and only as much as, they stick out. Broadband material passes
 nearly untouched.
 
-Version 0.1.2. Built with JUCE 8.0.15 (C++20, CMake).
+Version 0.1.3. Built with JUCE 8.0.15 (C++20, CMake).
 
 ## How it works
 
@@ -34,7 +34,7 @@ so Mix, Delta and Bypass are sample-aligned with the processed signal.
 | Toolbar | Sidechain (SC), Delta, preset < list > and a menu (Save / Load), Undo / Redo, A / B compare with copy (A→B or B→A), Advanced |
 | Graph | One plot, frequency labelled along the top, one dB scale at the right: faint input and output spectrum, the live reduction as a filled area hanging from the 0 dB baseline (it dips where the plug-in cuts), and the weighting curve on top (bright line, light fill) with handles: pills for shelves and cuts, dots for bells and band passes. Output meter at the right |
 | Bottom row, band view | Band tabs 1–8; Use, Shape (bell, low shelf, high shelf, low cut, high cut, band pass), Freq, Gain, Q; Listen |
-| Bottom row, Advanced | Selectivity, Attack, Release, Max Cut, Wet Trim, Mix, Output, Quality (Standard / High / Ultra) |
+| Bottom row, Advanced | Selectivity, Attack, Release, Max Cut, Wet Trim, Mix, Output, Quality (Standard / High / Ultra), Analyzer speed (Slow / Medium / Fast / Very Fast) |
 
 Spectrum drawing (0.1.2): the analyser runs at FFT resolution (about 23 Hz per bin at
 48 kHz, Standard / High), which is coarser than the 256 log-spaced display points below a
@@ -45,6 +45,23 @@ smoothing that is widest at the low end (up to 1/6 octave, none where bins are f
 the display), and draws smooth curve segments. The input and output spectrum and the
 reduction fill use the same pipeline. This is display only: the gains applied to the audio
 are unchanged. The paths are rebuilt once per new frame and paint allocates nothing.
+
+Analyzer speed (0.1.3): the drawn input and output spectrum and the reduction fill follow
+the analysis with ballistics, a one-pole per display point in dB with separate rise and
+fall times, so peaks come up quickly and decay slowly. The times below are the time to
+cover 90 % of a step; the smoothing uses the real elapsed time between frames, so it looks
+the same at any refresh rate.
+
+| Analyzer speed | Rise (90 %) | Fall (90 %) |
+| --- | --- | --- |
+| Slow | 250 ms | 2000 ms |
+| Medium (default) | 100 ms | 800 ms |
+| Fast | 40 ms | 250 ms |
+| Very Fast (close to 0.1.2, which drew each frame as it came) | 15 ms | 60 ms |
+
+It is display only (no effect on the audio or the latency) and a UI preference: saved with
+the session, but not a parameter, so it is not automatable and is not part of presets,
+A / B or undo. Sessions from 0.1.2 open at Medium.
 
 Graph mouse: drag a node (frequency and gain, one undo step; Shift = fine), mouse wheel over
 a node (Q), double-click empty space (add a band there), double-click a node (remove it),
@@ -94,7 +111,10 @@ mouse events (through a virtual window peer) on every control in both bottom-row
 (band and Advanced), the toolbar (preset < >, A / B, copy, Undo / Redo) and the graph nodes, and a display smoothness check (the drawn output spectrum and the
 reduction edge have no flat-step runs between 40 and 500 Hz at all three editor sizes,
 a 220 Hz peak still stands out after smoothing, and the reduction above 1.5 kHz is drawn
-unchanged).
+unchanged), and the Analyzer speed ballistics (each setting's 90 % rise and fall time at
+60 and 144 frames per second, the default slower than 0.1.2, elapsed-time rather than
+frame-count dependence, the drawn spectrum's fall in the editor, session save / restore
+and the selector in the Advanced panel).
 
 ## Notes
 

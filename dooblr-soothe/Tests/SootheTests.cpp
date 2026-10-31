@@ -376,7 +376,7 @@ namespace
         check (p->getBusCount (true) == 2 && p->getBus (true, 1) != nullptr && ! p->getBus (true, 1)->isEnabled(), "a sidechain input bus, off by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRSOOTHE_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
+        check (juce::String (JucePlugin_VersionString) == "0.1.3", "version 0.1.3");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
 
         auto layout = p->getBusesLayout();
@@ -1676,6 +1676,156 @@ namespace
         return st;
     }
 
+    void testAnalyzerSpeed()
+    {
+        using ui::AnalyzerSpeed;
+        // A -80 -> 0 dB step (rise) and back (fall): the time to cover 90 % of it matches each
+        // setting at 60 and 144 frames per second (frame-rate independent).
+        const auto t90 = [] (float from, float to, double dt, ui::AnalyzerTimes times)
+        {
+            float target = to, shown = from;
+            double t = 0.0;
+            while (std::abs (shown - from) < 0.9f * std::abs (to - from) && t < 10.0)
+            {
+                ui::applyBallistics (&target, &shown, 1, dt, times);
+                t += dt;
+            }
+            return t * 1000.0;
+        };
+        std::string summary;
+        for (int s = 0; s < ui::numAnalyzerSpeeds; ++s)
+        {
+            const auto speed = ui::analyzerSpeedFromIndex (s);
+            const auto times = ui::analyzerTimes (speed);
+            const auto name = std::string (ui::analyzerSpeedName (speed));
+            check (times.fallMs > times.riseMs, name + ": peaks rise faster than they fall");
+            for (const auto fps : { 60.0, 144.0 })
+            {
+                const auto dt = 1.0 / fps;
+                const auto rise = t90 (-80.0f, 0.0f, dt, times), fall = t90 (0.0f, -80.0f, dt, times);
+                // Discrete steps land within one frame after the exact 90 % time.
+                const auto ok = [&] (double got, float want) { return got >= want - 0.01 && got <= want + dt * 1000.0 + 0.01; };
+                check (ok (rise, times.riseMs) && ok (fall, times.fallMs),
+                       name + " at " + fmt (fps, 0) + " fps: 90 % rise " + fmt (rise, 1) + " ms (expected " + fmt (times.riseMs, 0)
+                           + "), fall " + fmt (fall, 1) + " ms (expected " + fmt (times.fallMs, 0) + ")");
+            }
+            summary += name + " " + fmt (times.riseMs, 0) + "/" + fmt (times.fallMs, 0) + " ms  ";
+        }
+        std::cout << "    analyzer 90 % rise / fall: " << summary << "\n";
+
+        // The default (Medium) is slower than 0.1.2, which drew each analysis frame as it came
+        // (a step was fully shown on the next frame: <= 1 / 60 s).
+        check (ui::defaultAnalyzerSpeed == AnalyzerSpeed::medium, "the default Analyzer Speed is Medium");
+        const auto def = ui::analyzerTimes (ui::defaultAnalyzerSpeed);
+        check (t90 (-80.0f, 0.0f, 1.0 / 60.0, def) > 4.0 * 1000.0 / 60.0 && t90 (0.0f, -80.0f, 1.0 / 60.0, def) > 30.0 * 1000.0 / 60.0,
+               "the default display is much slower than 0.1.2's (one frame): rise " + fmt (def.riseMs, 0) + " ms, fall " + fmt (def.fallMs, 0) + " ms");
+        {
+            // Same elapsed time in a few big frames or many small ones: the same result.
+            float target = 0.0f, a = -60.0f, b = -60.0f;
+            for (int i = 0; i < 6; ++i)  ui::applyBallistics (&target, &a, 1, 0.05, def);
+            for (int i = 0; i < 43; ++i) ui::applyBallistics (&target, &b, 1, 0.3 / 43.0, def);
+            check (std::abs (a - b) < 1.0e-3f, "ballistics depend on elapsed time, not frame count (" + fmt (a, 4) + " vs " + fmt (b, 4) + " dB)");
+        }
+
+        // State: saved with the session (by name), restored; older sessions get the default; not
+        // a parameter, not in the parameter tree, and untouched by A / B.
+        {
+            auto p = makeProcessor();
+            check (p->getAnalyzerSpeed() == (int) AnalyzerSpeed::medium, "a new instance uses Medium");
+            check (p->getState().getParameter ("analyzerSpeed") == nullptr, "Analyzer Speed is not a (automatable) parameter");
+            juce::MemoryBlock oldState;
+            p->getStateInformation (oldState); // Medium
+            p->setAnalyzerSpeed ((int) AnalyzerSpeed::slow);
+            juce::MemoryBlock saved;
+            p->getStateInformation (saved);
+            auto q = makeProcessor();
+            q->setStateInformation (saved.getData(), (int) saved.getSize());
+            check (q->getAnalyzerSpeed() == (int) AnalyzerSpeed::slow, "Analyzer Speed is restored from the session");
+            check (! q->getState().state.hasProperty ("analyzerSpeed"), "Analyzer Speed is kept out of the parameter tree (presets, A / B)");
+            auto xml = juce::AudioProcessor::getXmlFromBinary (saved.getData(), (int) saved.getSize());
+            if (xml != nullptr) xml->removeAttribute ("analyzerSpeed");
+            juce::MemoryBlock legacy;
+            if (xml != nullptr) juce::AudioProcessor::copyXmlToBinary (*xml, legacy);
+            q->setStateInformation (legacy.getData(), (int) legacy.getSize());
+            check (q->getAnalyzerSpeed() == (int) AnalyzerSpeed::medium, "a session without it (0.1.2) gets the default");
+            q->setAnalyzerSpeed ((int) AnalyzerSpeed::fast);
+            q->selectCompareSlot (1);
+            q->selectCompareSlot (0);
+            check (q->getAnalyzerSpeed() == (int) AnalyzerSpeed::fast, "A / B leaves Analyzer Speed alone");
+            q->setAnalyzerSpeed (99);
+            check (q->getAnalyzerSpeed() == (int) AnalyzerSpeed::veryFast, "out-of-range values are clamped");
+        }
+
+        // The graph: after a drop in level the shown spectrum falls at the setting's rate (the
+        // fraction of the drop still to go after 0.1 s is 10^(-0.1 s / fall time)).
+        EditorFixture f;
+        if (f.editor == nullptr) return;
+        auto& p = *f.processor;
+        auto* editor = f.editor;
+        editor->setSize (1080, 660);
+        auto& graph = editor->getGraph();
+        const auto n = (size_t) (defaultRate / 4);
+        const Stereo silence (std::vector<float> (n, 0.0f), std::vector<float> (n, 0.0f));
+        const auto loud = resonantMix (n);
+        std::string graphSummary;
+        for (int s = 0; s < ui::numAnalyzerSpeeds; ++s)
+        {
+            const auto speed = ui::analyzerSpeedFromIndex (s);
+            render (p, loud);
+            graph.poll();
+            graph.snapDisplay();      // the loud spectrum is shown
+            p.setAnalyzerSpeed (s);
+            render (p, silence);
+            graph.poll();             // the quiet frame arrives (poll may advance a little real time)
+            const auto start = graph.getFrame().input;
+            const auto changed = graph.advanceDisplay (0.1);
+            const auto& now = graph.getFrame().input;
+            const auto& target = graph.getTargetFrame().input;
+            double sum = 0.0;
+            int count = 0;
+            for (size_t i = 0; i < start.size(); ++i)
+                if (start[i] - target[i] > 6.0f)
+                {
+                    sum += (now[i] - target[i]) / (start[i] - target[i]);
+                    ++count;
+                }
+            const auto got = count > 0 ? sum / count : -1.0;
+            const auto expected = std::pow (10.0, -0.1 / (ui::analyzerTimes (speed).fallMs * 0.001));
+            check (changed && count > 20 && std::abs (got - expected) < 0.02,
+                   std::string ("graph at ") + ui::analyzerSpeedName (speed) + ": " + fmt (100.0 * got, 1) + " % of the drop left after 0.1 s (expected "
+                       + fmt (100.0 * expected, 1) + " %, " + std::to_string (count) + " points)");
+            graphSummary += std::string (ui::analyzerSpeedName (speed)) + " " + fmt (100.0 * got, 1) + " % ";
+        }
+        std::cout << "    graph, drop left after 0.1 s: " << graphSummary << "\n";
+        graph.snapDisplay();
+        check (graph.getFrame().input == graph.getTargetFrame().input, "snapDisplay shows the latest frame");
+
+        // The Advanced panel's selector: visible there, under the mouse (not covered), lists the
+        // four speeds, and choosing one sets the processor; a session change updates it.
+        p.setAnalyzerSpeed ((int) AnalyzerSpeed::medium);
+        TestWindow window (*editor);
+        editor->setAdvancedShown (false);
+        auto& box = editor->getAnalyzerSpeedBox();
+        check (! box.isShowing(), "the Analyzer Speed selector is hidden in the band view");
+        editor->setAdvancedShown (true);
+        editor->refresh();
+        const auto centre = editor->getLocalPoint (&box, box.getLocalBounds().getCentre());
+        auto* hit = editor->getComponentAt (centre);
+        check (box.isShowing() && box.getWidth() >= 80 && box.getHeight() >= 20 && (hit == &box || box.isParentOf (hit)),
+               "the Analyzer Speed selector is in the Advanced panel and under the mouse (" + std::to_string (box.getWidth()) + "x" + std::to_string (box.getHeight()) + ")");
+        check (box.getNumItems() == ui::numAnalyzerSpeeds && box.getItemText (0) == "Slow" && box.getItemText (3) == "Very Fast"
+                   && box.getText() == "Medium" && box.getTooltip().isNotEmpty(),
+               "the selector lists Slow / Medium / Fast / Very Fast, shows Medium, has a tooltip");
+        box.setSelectedId ((int) AnalyzerSpeed::slow + 1, juce::sendNotificationSync);
+        check (p.getAnalyzerSpeed() == (int) AnalyzerSpeed::slow, "choosing Slow in the selector sets the analyzer speed");
+        p.setAnalyzerSpeed ((int) AnalyzerSpeed::veryFast);
+        editor->refresh();
+        check (box.getText() == "Very Fast", "the selector follows a change from the session");
+        p.setAnalyzerSpeed ((int) AnalyzerSpeed::medium);
+        editor->refresh();
+        editor->setAdvancedShown (false);
+    }
+
     void testDisplaySmoothness()
     {
         // A spectrally smooth input: one impulse per FFT frame through a one-pole low-pass at 60 Hz
@@ -1796,6 +1946,7 @@ int main()
         { "0.1.0 state and preset migration",           testStateMigration },
         { "A / B compare",                              testCompare },
         { "display: smooth low end, detailed highs",    testDisplaySmoothness },
+        { "display: Analyzer Speed ballistics and setting", testAnalyzerSpeed },
     };
 
     int failedTests = 0;

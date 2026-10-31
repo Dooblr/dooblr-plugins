@@ -341,6 +341,8 @@ namespace dooblrsoothe
     {
         auto copy = state.copyState();
         copy.setProperty ("stateVersion", stateVersion, nullptr);
+        // A display preference, not a parameter: saved with the session only.
+        copy.setProperty ("analyzerSpeed", ui::analyzerSpeedName (ui::analyzerSpeedFromIndex (getAnalyzerSpeed())), nullptr);
         if (const auto xml = copy.createXml())
             copyXmlToBinary (*xml, destData);
     }
@@ -358,6 +360,16 @@ namespace dooblrsoothe
                 if (child.hasType ("PARAM") && params::isBandGainId (child.getProperty ("id").toString()))
                     child.setProperty ("value", -(double) child.getProperty ("value"), nullptr);
         tree.setProperty ("stateVersion", stateVersion, nullptr);
+
+        // Analyzer Speed (by name, so the order can change); older sessions get the default.
+        auto speed = (int) ui::defaultAnalyzerSpeed;
+        const auto savedSpeed = tree.getProperty ("analyzerSpeed").toString();
+        for (int i = 0; i < ui::numAnalyzerSpeeds; ++i)
+            if (savedSpeed == ui::analyzerSpeedName (ui::analyzerSpeedFromIndex (i)))
+                speed = i;
+        setAnalyzerSpeed (speed);
+        tree.removeProperty ("analyzerSpeed", nullptr);
+
         state.replaceState (tree);
         undoHistory.clear();
         presetChanged.sendChangeMessage();

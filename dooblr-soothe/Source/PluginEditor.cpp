@@ -154,7 +154,7 @@ namespace dooblrsoothe
         compareCopy.onClick = [this] { processor.copyToOtherCompareSlot(); setStatus ("Copied to " + juce::String (processor.getCompareSlot() == 0 ? "B" : "A")); };
 
         advancedButton.setComponentID ("advanced");
-        advancedButton.setTooltip ("Show the advanced settings (selectivity, timing, output, quality) or the band controls");
+        advancedButton.setTooltip ("Show the advanced settings (selectivity, timing, output, quality, analyzer speed) or the band controls");
         advancedButton.setClickingTogglesState (false);
         advancedButton.setColour (juce::TextButton::buttonOnColourId, Palette::accent.withAlpha (0.45f));
         advancedButton.onClick = [this] { setAdvancedShown (! advancedShown); };
@@ -173,6 +173,22 @@ namespace dooblrsoothe
             { id::wetTrim, "Wet trim" }, { id::mix, "Mix" }, { id::output, "Output" }, { id::quality, "Quality", Kind::combo, 112 } });
         if (auto* quality = dynamic_cast<juce::ComboBox*> (advancedPanel->findControl (id::quality)))
             quality->setTooltip ("FFT resolution: higher quality resolves lows better, with more latency and CPU");
+
+        // Analyzer Speed: display only (how fast the drawn spectrum and reduction follow the
+        // audio); saved with the session, not automatable and not part of presets or A / B.
+        analyzerSpeed.caption.setText ("Analyzer", juce::dontSendNotification);
+        analyzerSpeed.box.setComponentID ("analyzerSpeed");
+        for (int i = 0; i < ui::numAnalyzerSpeeds; ++i)
+            analyzerSpeed.box.addItem (ui::analyzerSpeedName (ui::analyzerSpeedFromIndex (i)), i + 1);
+        analyzerSpeed.box.setSelectedId (processor.getAnalyzerSpeed() + 1, juce::dontSendNotification);
+        analyzerSpeed.box.setTooltip ("Analyzer speed: how fast the spectrum and reduction display follow the audio "
+                                      "(display only; slower is calmer, peaks rise quicker than they fall)");
+        analyzerSpeed.box.onChange = [this]
+        {
+            if (const auto selected = analyzerSpeed.box.getSelectedId(); selected > 0)
+                processor.setAnalyzerSpeed (selected - 1);
+        };
+        advancedPanel->addExtra (analyzerSpeed, 112, -1, {}, true);
         addChildComponent (*advancedPanel);
 
         // Bottom row, band view.
@@ -336,6 +352,10 @@ namespace dooblrsoothe
     void DooblrSootheEditor::refresh()
     {
         updateUndoButtons();
+
+        // A session load can change Analyzer Speed while the editor is open.
+        if (analyzerSpeed.box.getSelectedId() != processor.getAnalyzerSpeed() + 1)
+            analyzerSpeed.box.setSelectedId (processor.getAnalyzerSpeed() + 1, juce::dontSendNotification);
 
         const auto listen = juce::roundToInt (valueOf (state, id::listenBand)) - 1;
         for (int b = 0; b < params::numBands; ++b)

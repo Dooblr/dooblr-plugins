@@ -14,6 +14,34 @@
 
 namespace dooblrsoothe
 {
+    namespace ui
+    {
+        /** A caption over a combo box, laid out like a ControlPanel combo cell (for a setting
+            that is not a parameter, such as Analyzer Speed). */
+        struct CaptionedCombo final : public juce::Component
+        {
+            juce::Label caption;
+            juce::ComboBox box;
+
+            CaptionedCombo()
+            {
+                caption.setFont (juce::FontOptions (12.0f));
+                caption.setColour (juce::Label::textColourId, Palette::textMuted);
+                caption.setJustificationType (juce::Justification::centred);
+                caption.setInterceptsMouseClicks (false, false);
+                addAndMakeVisible (caption);
+                addAndMakeVisible (box);
+            }
+
+            void resized() override
+            {
+                auto area = getLocalBounds();
+                caption.setBounds (area.removeFromTop (16));
+                box.setBounds (area.removeFromTop (28).reduced (0, 1));
+            }
+        };
+    }
+
     /**
         Left column: name, version, Bypass, the Soft / Hard switch, the big Amount knob (the
         depth parameter) and Sharpness, latency and status. Right of it a thin strip of
@@ -40,6 +68,8 @@ namespace dooblrsoothe
         juce::Component* findControl (const juce::String& parameterId) const;
         std::vector<ui::ControlPanel*> getPanels() const;
         ui::ReductionGraph& getGraph() noexcept { return graph; }
+        /** The Advanced panel's Analyzer Speed selector (a display preference, not a parameter). */
+        juce::ComboBox& getAnalyzerSpeedBox() noexcept { return analyzerSpeed.box; }
         int getSelectedBand() const noexcept { return selectedBand; }
         void selectBand (int band);
         juce::TextButton& getBandTab (int band) { return bandTabs[(size_t) band]; }
@@ -87,6 +117,7 @@ namespace dooblrsoothe
 
         ui::ReductionGraph graph;
         std::unique_ptr<ui::ControlPanel> advancedPanel;
+        ui::CaptionedCombo analyzerSpeed;
         std::array<std::unique_ptr<ui::ControlPanel>, params::numBands> bandPanels;
         std::array<juce::TextButton, params::numBands> bandTabs;
         int selectedBand = 1;
