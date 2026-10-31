@@ -14,6 +14,7 @@
 #include "UI/GateDisplay.h"
 #include "UI/HarmonyDisplay.h"
 #include "UI/KeyFollowStrip.h"
+#include "UI/LearnProgressBar.h"
 #include "UI/OutputMeter.h"
 #include "UI/OutputVisuals.h"
 #include "UI/PitchDisplay.h"
@@ -101,6 +102,12 @@ public:
     /** The Learn Range button: start, or stop and apply. */
     void toggleRangeLearn();
     void refreshLearnUiNow() { updateLearnUi(); }
+    /** One editor-timer step of a take at a given time (ms): polls, finishes at 100 % or the
+        timeout, updates the bar and the status line; for tests. */
+    void learnTickNow (double nowMs) { updateLearnProgress (nowMs); }
+    const dooblrvocals::ui::LearnProgressBar& getLearnProgressBar() const noexcept { return learnProgressBar; }
+    /** Wall-clock limit of a take (s): at the limit it finishes if there was enough voice, else fails. */
+    static constexpr double learnTimeoutSeconds = 45.0;
     /** One VBlank frame of the Learn Range pulse at a given time (ms); for tests. */
     void pulseLearnNow (double nowMs) { updateLearnPulse (nowMs); }
     void refreshEnablementNow() { updateEnablement(); updateLearnUi(); }
@@ -146,6 +153,8 @@ private:
     void updateLatencyLabel();
     void updateLearnUi();
     void updateLearnPulse (double nowMs);
+    void updateLearnProgress (double nowMs);
+    void finishRangeLearn (bool timedOut);
     void sectionPresetChosen (int page);
 
     DooblrVocalsAudioProcessor& audioProcessor;
@@ -185,6 +194,11 @@ private:
     juce::TextButton learnButton { "Learn Range" }, learnResetButton { "Reset" };
     juce::Label learnLabel;
     juce::String learnMessage;
+    /** Learn Range take state: idle, listening, done (shows the learned notes), failed / timed out. */
+    enum class LearnState { idle, listening, done, failed };
+    LearnState learnState = LearnState::idle;
+    double learnStartMs = 0.0;
+    dooblrvocals::ui::LearnProgressBar learnProgressBar;
     dooblrvocals::ui::OutputMeter outputMeter;
     std::vector<float> meterSpectrumScratch;
     std::vector<dooblrvocals::dsp::MeterFrame> meterFrameScratch;

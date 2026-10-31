@@ -81,6 +81,24 @@ public:
     void resetLearnedRange();
     dooblrvocals::dsp::PitchTap& getLearnTap() noexcept { return learnTap; }
 
+    /** Voiced time (s) a take needs to complete on its own: progress = voiced / this. */
+    static constexpr float learnTargetSeconds = 8.0f;
+    /** How long after the last confident voiced reading "hearing voice" stays true. */
+    static constexpr float learnVoiceHoldSeconds = 0.3f;
+    /**
+        Learn Range progress, written by the audio thread (atomics, any thread may read).
+        Voiced time counts the samples of blocks whose pitch estimate is voiced with at least
+        RangeLearner::minConfidence - the same test the learner applies - so it never goes
+        backwards while a take runs and wall-clock time without voice adds nothing.
+    */
+    struct LearnProgress
+    {
+        float voicedSeconds = 0.0f;
+        float progress = 0.0f;   // 0..1, voicedSeconds / learnTargetSeconds
+        bool hearingVoice = false;
+    };
+    LearnProgress getLearnProgress() const noexcept;
+
     //== Key Follow ============================================================================
     /** What the editor shows (any thread). appliedKey is -1 unless Key Follow is overriding. */
     struct KeyFollowStatus
@@ -111,6 +129,8 @@ private:
     dooblrvocals::RangeLearner rangeLearner;
     std::vector<dooblrvocals::dsp::PitchFrame> learnScratch = std::vector<dooblrvocals::dsp::PitchFrame> (512);
     std::atomic<bool> learnArmed { false };
+    std::atomic<juce::int64> learnVoicedSamples { 0 }, learnSamplesSinceVoice { 1 << 30 };
+    std::atomic<double> learnSampleRate { 48000.0 };
     std::atomic<float> reverbDuckDb { 0.0f }, delayDuckDb { 0.0f };
     std::atomic<double> hostBpm { 120.0 };
     dooblrvocals::dsp::VocalEngine engine;

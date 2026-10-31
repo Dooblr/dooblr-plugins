@@ -4524,6 +4524,194 @@ namespace
         }
     }
 
+    // Learn Range progress: voiced time (not wall-clock) drives a monotonic 0..1 bar, the status
+    // line says "Waiting for voice" / "Keep singing... N%", 100 % finishes the take on its own
+    // (done state with the learned low / high notes), and the timeout fails a take with no voice.
+    void testLearnProgress()
+    {
+        using Bar = dooblrvocals::ui::LearnProgressBar;
+        const auto rate = 48000.0;
+        auto p = makeProcessor (rate, 256);
+        setParam (*p, "pitch_on", 1.0f);
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "editor for learn progress");
+        if (editor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+        editor->selectPage (Editor::pitchPage);
+        auto& button = editor->getLearnButton();
+        const auto& bar = editor->getLearnProgressBar();
+
+        double phase = 0.0;
+        juce::int64 clock = 0;
+        auto voice = [&] (int)
+        {
+            const auto t = (double) clock++ / rate;
+            const auto ph = std::fmod (t / 2.5, 1.0);
+            const auto noteNum = 45.0 + 19.0 * (ph < 0.5 ? ph * 2.0 : 2.0 - ph * 2.0);
+            phase += 440.0 * std::pow (2.0, (noteNum - 69.0) / 12.0) / rate;
+            phase -= std::floor (phase);
+            return std::fmod (t, 1.0) > 0.92 ? 0.0f : (float) (0.3 * (2.0 * phase - 1.0));
+        };
+        auto silence = [] (int) { return 0.0f; };
+        const auto tick = (int) (rate / 15.0); // the editor timer
+
+        // Running for a while first (the reported case), then arm.
+        render (*p, voice, (int) (6.0 * rate), 256);
+        button.onClick();
+        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+        double audioMs = 0.0;
+        editor->learnTickNow (t0);
+        check (p->isLearningRange() && bar.isVisible() && juce::exactlyEqual (p->getLearnProgress().progress, 0.0f),
+               "arming shows the progress bar at 0");
+
+        // 1 s of silence: nothing counts, the status says so.
+        for (int i = 0; i < 15; ++i)
+        {
+            render (*p, silence, tick, 256);
+            audioMs += 1000.0 / 15.0;
+            editor->learnTickNow (t0 + audioMs);
+        }
+        check (juce::exactlyEqual (p->getLearnProgress().progress, 0.0f) && ! p->getLearnProgress().hearingVoice,
+               "silence adds no progress");
+        check (editor->getLearnLabel().getText() == "Waiting for voice",
+               "no voice: \"Waiting for voice\" (" + editor->getLearnLabel().getText().toStdString() + ")");
+
+        // Sing until the take finishes by itself.
+        float last = 0.0f;
+        bool monotonic = true, sawKeepSinging = false, sawPercent = false;
+        int ticks = 0;
+        while (p->isLearningRange() && ticks < 15 * 30)
+        {
+            render (*p, voice, tick, 256);
+            audioMs += 1000.0 / 15.0;
+            const auto progress = p->getLearnProgress().progress;
+            monotonic = monotonic && progress >= last;
+            last = progress;
+            editor->learnTickNow (t0 + audioMs);
+            if (p->isLearningRange())
+            {
+                const auto text = editor->getLearnLabel().getText();
+                sawKeepSinging = sawKeepSinging || text.startsWith ("Keep singing");
+                sawPercent = sawPercent || (text.endsWith ("%") && progress > 0.3f && progress < 0.9f
+                                            && text.contains (juce::String (juce::roundToInt (progress * 100.0f)) + "%"));
+                monotonic = monotonic && bar.getFraction() + 1.0f / 256.0f >= progress - 1.0f / 256.0f;
+                if (ticks == 60)
+                    saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learn-progress");
+            }
+            ++ticks;
+        }
+        note ("learn progress: finished after " + format (audioMs / 1000.0, 1) + " s of audio, "
+              + format (last, 3) + " at the end; label \"" + editor->getLearnLabel().getText().toStdString() + "\"");
+        check (monotonic, "progress never goes backwards");
+        check (last >= 1.0f, "progress reaches 1.0");
+        check (sawKeepSinging && sawPercent, "status shows \"Keep singing... N%\" with the real percentage");
+        check (audioMs / 1000.0 >= DooblrVocalsAudioProcessor::learnTargetSeconds,
+               "progress is voiced time: it takes at least the target of audio");
+        check (! p->isLearningRange() && getPlain (*p, "range_custom") > 0.5f,
+               "100 % finishes the take and applies the range");
+        const auto doneText = editor->getLearnLabel().getText();
+        check (doneText.startsWith ("Done") && doneText.contains ("low A") && doneText.contains ("high D")
+                   && bar.isVisible() && bar.getState() == Bar::State::done,
+               "done state shows the learned low and high notes (" + doneText.toStdString() + ")");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learn-done");
+
+        // Timeout with no voice: failed state.
+        button.onClick();
+        const auto t1 = juce::Time::getMillisecondCounterHiRes();
+        for (int i = 0; i < 15; ++i)
+            render (*p, silence, tick, 256);
+        editor->learnTickNow (t1 + 1000.0);
+        check (p->isLearningRange(), "no timeout after 1 s");
+        editor->learnTickNow (t1 + (Editor::learnTimeoutSeconds + 1.0) * 1000.0);
+        const auto failText = editor->getLearnLabel().getText();
+        check (! p->isLearningRange() && failText.startsWith ("Timed out") && failText.containsIgnoreCase ("not enough voice")
+                   && bar.getState() == Bar::State::failed,
+               "timeout with no voice: timed-out state (" + failText.toStdString() + ")");
+        saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learn-timeout");
+
+        // Stopped early with too little voice: failed (no timeout wording), range unchanged.
+        const auto lowBefore = getPlain (*p, "range_low");
+        button.onClick();
+        render (*p, voice, (int) (0.5 * rate), 256);
+        button.onClick();
+        editor->refreshLearnUiNow();
+        check (bar.getState() == Bar::State::failed && editor->getLearnLabel().getText().containsIgnoreCase ("not enough voice")
+                   && ! editor->getLearnLabel().getText().startsWith ("Timed out")
+                   && std::abs (getPlain (*p, "range_low") - lowBefore) < 0.01f,
+               "an early stop with little voice fails and changes nothing");
+
+        // A new take starts from 0.
+        button.onClick();
+        check (juce::exactlyEqual (p->getLearnProgress().progress, 0.0f) && bar.getState() == Bar::State::listening,
+               "a new take starts from 0");
+        p->editorBeingDeleted (editor);
+        base.reset();
+        check (! p->isLearningRange(), "closing the editor cancels the take");
+    }
+
+    // Existing presets / sessions stay bit-identical: every factory program renders a fixed synthetic
+    // vocal (gliding saw + breath noise, two channels) and the output's float bits must hash to the value
+    // recorded before the Learn progress / noise reducer / HPF / knee / dynamic-EQ work. New features
+    // that default off (or default to the old behaviour) leave these hashes untouched.
+    std::uint64_t renderProgramHash (int program, double rate)
+    {
+        auto p = makeProcessor (rate, 256);
+        p->setCurrentProgram (program);
+        std::uint32_t seed = 12345u;
+        double phase = 0.0;
+        auto voice = [&] (int i)
+        {
+            const auto t = (double) i / rate;
+            const auto midi = 52.0 + 7.0 * std::sin (2.0 * juce::MathConstants<double>::pi * 0.4 * t);
+            phase += 440.0 * std::pow (2.0, (midi - 69.0) / 12.0) / rate;
+            phase -= std::floor (phase);
+            seed = seed * 1664525u + 1013904223u;
+            const auto noise = ((double) (seed >> 8) / 16777216.0 - 0.5) * 0.02;
+            const auto env = std::fmod (t, 1.5) < 1.2 ? 1.0 : 0.0;
+            return (float) (env * 0.35 * (2.0 * phase - 1.0) + noise);
+        };
+        const auto out = render (*p, voice, (int) (2.5 * rate), 256);
+        std::uint64_t hash = 1469598103934665603ull;
+
+        for (int ch = 0; ch < out.getNumChannels(); ++ch)
+            for (int i = 0; i < out.getNumSamples(); ++i)
+            {
+                std::uint32_t bits = 0;
+                const auto v = out.getSample (ch, i);
+                std::memcpy (&bits, &v, sizeof (bits));
+                hash = (hash ^ bits) * 1099511628211ull;
+            }
+
+        return hash;
+    }
+
+    void testPresetsBitIdentical()
+    {
+        // Recorded after the Learn Range fix (8347233), before the feature work; 48 kHz, 256-sample blocks.
+        static const std::uint64_t golden[] = { 0xafc4dfcbff0eb6afull, 0x38d0761b04c503e8ull, 0x4a7e2fbc6265b107ull, 0x9805fbc873492103ull, 0x33f8e57fa24c91bbull,
+                                                0xb1f38eb25d552864ull, 0xfb7a9eadfb4d2a93ull, 0x8b21d649bbb702b2ull, 0xc95a50e483253d3eull, 0xe6f500061d1879d3ull };
+        const auto numGolden = (int) (sizeof (golden) / sizeof (golden[0]));
+        auto probe = makeProcessor();
+        const auto numPrograms = probe->getNumPrograms();
+        check (renderProgramHash (1, sampleRate) == renderProgramHash (1, sampleRate), "program render is deterministic");
+        std::ostringstream table;
+
+        for (int program = 0; program < numPrograms; ++program)
+        {
+            const auto hash = renderProgramHash (program, sampleRate);
+            table << "0x" << std::hex << hash << "ull, ";
+
+            if (program < numGolden && golden[program] != 0)
+                check (hash == golden[program], "program " + std::to_string (program) + " (" + probe->getProgramName (program).toStdString()
+                                                    + ") renders bit-identical to the recorded output");
+        }
+
+        check (numGolden >= numPrograms && golden[0] != 0, "golden hashes recorded for every program");
+        note ("program hashes: " + table.str());
+    }
+
     void testOutputCeiling()
     {
         const auto n = (int) (4.0 * sampleRate);
@@ -5001,6 +5189,8 @@ int main()
         { "fx routing",                     testFxRouting },
         { "learn range",                    testRangeLearn },
         { "learn range: long takes, running plug-in", testLearnRangeLongRuns },
+        { "learn range: progress feedback", testLearnProgress },
+        { "presets: audio bit-identical to recorded output", testPresetsBitIdentical },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

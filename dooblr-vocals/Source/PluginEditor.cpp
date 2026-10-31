@@ -491,9 +491,11 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     {
         audioProcessor.resetLearnedRange();
         learnMessage = {};
+        learnState = LearnState::idle;
         updateLearnUi();
     };
     addChildComponent (learnResetButton);
+    addChildComponent (learnProgressBar);
 
     for (auto& panels : pagePanels)
         for (auto& panel : panels)
@@ -690,14 +692,63 @@ void DooblrVocalsAudioProcessorEditor::toggleRangeLearn()
     {
         audioProcessor.startRangeLearn();
         learnMessage = {};
+        learnState = LearnState::listening;
+        learnStartMs = juce::Time::getMillisecondCounterHiRes();
+        learnProgressBar.set (0.0f, dooblrvocals::ui::LearnProgressBar::State::listening, false);
+        resized(); // the bar takes its slot in the pitch page bar
     }
     else
     {
-        const auto result = audioProcessor.stopRangeLearn();
-        learnMessage = result.valid ? juce::String() : result.message;
-        if (result.valid)
-            setStatus ("Learned range " + dooblrvocals::RangeLearner::rangeText (result.lowHz, result.highHz)
-                       + " (" + juce::String (result.voicedSeconds, 1) + " s of voice)");
+        finishRangeLearn (false);
+    }
+
+    updateLearnUi();
+}
+
+void DooblrVocalsAudioProcessorEditor::finishRangeLearn (bool timedOut)
+{
+    const auto reached = audioProcessor.getLearnProgress().progress;
+    const auto result = audioProcessor.stopRangeLearn();
+    using Bar = dooblrvocals::ui::LearnProgressBar;
+
+    if (result.valid)
+    {
+        // Done: the learned notes themselves (the detector range adds a margin around them).
+        const auto note = [] (float hz) { return params::noteName (juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0))); };
+        learnState = LearnState::done;
+        learnMessage = "Done - learned low " + note (result.lowHz) + ", high " + note (result.highHz);
+        learnProgressBar.set (1.0f, Bar::State::done, false);
+        setStatus ("Learned range " + dooblrvocals::RangeLearner::rangeText (result.lowHz, result.highHz)
+                   + " (" + juce::String (result.voicedSeconds, 1) + " s of voice)");
+    }
+    else
+    {
+        learnState = LearnState::failed;
+        learnMessage = (timedOut ? "Timed out - " : "") + result.message;
+        learnProgressBar.set (reached, Bar::State::failed, false);
+    }
+
+    resized();
+}
+
+void DooblrVocalsAudioProcessorEditor::updateLearnProgress (double nowMs)
+{
+    if (audioProcessor.isLearningRange())
+    {
+        audioProcessor.pollRangeLearn();
+
+        if (learnState != LearnState::listening)
+        {
+            // Armed from elsewhere (not through the button): start the clock now.
+            learnState = LearnState::listening;
+            learnStartMs = nowMs;
+            resized();
+        }
+
+        if (audioProcessor.getLearnProgress().progress >= 1.0f)
+            finishRangeLearn (false);
+        else if (nowMs - learnStartMs >= learnTimeoutSeconds * 1000.0)
+            finishRangeLearn (true);
     }
 
     updateLearnUi();
@@ -722,12 +773,23 @@ void DooblrVocalsAudioProcessorEditor::updateLearnUi()
     const auto& learner = audioProcessor.getRangeLearner();
     juce::String buttonText = "Learn Range", labelText;
 
+    if (! learning && learnState == LearnState::listening)
+    {
+        learnState = LearnState::idle; // cancelled (e.g. by the processor)
+        resized();
+    }
+
     if (learning)
     {
         const auto hz = learner.getLastVoicedHz();
         buttonText = "Stop" + (hz > 0.0f ? juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 ")) + params::noteName (juce::roundToInt (69.0 + 12.0 * std::log2 (hz / 440.0)))
                                          : juce::String());
-        labelText = "Listening - sing low to high, then Stop (" + juce::String (learner.getVoicedSeconds(), 1) + " s voiced)";
+        // Progress is voiced time (the learner's confidence test), never wall-clock time.
+        const auto progress = audioProcessor.getLearnProgress();
+        labelText = progress.hearingVoice
+                        ? juce::String (juce::CharPointer_UTF8 ("Keep singing\xe2\x80\xa6 ")) + juce::String (juce::roundToInt (progress.progress * 100.0f)) + "%"
+                        : juce::String ("Waiting for voice");
+        learnProgressBar.set (progress.progress, dooblrvocals::ui::LearnProgressBar::State::listening, progress.hearingVoice);
         // Pulse while armed: the VBlank drives it (updateLearnPulse); this only sets the first frame.
         if (! learnButton.isColourSpecified (juce::TextButton::buttonColourId))
             updateLearnPulse (juce::Time::getMillisecondCounterHiRes());
@@ -751,7 +813,8 @@ void DooblrVocalsAudioProcessorEditor::updateLearnUi()
     learnButton.getProperties().set ("armed", learning);
     if (learnLabel.getText() != labelText)
         learnLabel.setText (labelText, juce::dontSendNotification);
-    learnLabel.setColour (juce::Label::textColourId, learnMessage.isNotEmpty() && ! learning ? Palette::dynamic : Palette::textPrimary);
+    learnLabel.setColour (juce::Label::textColourId, learnState == LearnState::failed && ! learning ? Palette::dynamic : Palette::textPrimary);
+    learnProgressBar.setVisible (selectedPage == pitchPage && learnState != LearnState::idle);
     learnResetButton.setVisible (selectedPage == pitchPage && ! learning && state.getRawParameterValue ("range_custom")->load() > 0.5f);
 }
 
@@ -1046,9 +1109,7 @@ void DooblrVocalsAudioProcessorEditor::timerCallback()
     if (selectedPage == reverbPage)
         reverbDisplay.refresh (audioProcessor.getReverbDuckDb(), audioProcessor.getHostBpm());
 
-    if (audioProcessor.isLearningRange())
-        audioProcessor.pollRangeLearn();
-    updateLearnUi();
+    updateLearnProgress (juce::Time::getMillisecondCounterHiRes());
 
     if (presetBox.getText() != audioProcessor.getPresetName() && ! presetBox.isPopupActive())
         refreshPresetBox();
@@ -1261,6 +1322,15 @@ void DooblrVocalsAudioProcessorEditor::resized()
             // The learned range (or the learn message) and its reset, between the switch and the status.
             learnResetButton.setBounds (bar.removeFromRight (54).withSizeKeepingCentre (54, 22));
             bar.removeFromRight (6);
+            if (learnState != LearnState::idle)
+            {
+                learnProgressBar.setBounds (bar.removeFromRight (juce::jmin (90, bar.getWidth() / 3)).withSizeKeepingCentre (juce::jmin (90, bar.getWidth() / 3), 12));
+                bar.removeFromRight (8);
+            }
+            else
+            {
+                learnProgressBar.setBounds ({});
+            }
             learnLabel.setBounds (bar.withSizeKeepingCentre (bar.getWidth(), 20));
             if (audioProcessor.isLearningRange() || learnMessage.isNotEmpty())
                 statusLabel.setBounds (statusLabel.getBounds().withWidth (0));

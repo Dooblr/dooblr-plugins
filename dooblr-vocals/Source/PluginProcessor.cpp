@@ -36,6 +36,7 @@ void DooblrVocalsAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     engine.setPitchTap (&pitchTap);
     engine.setLearnTap (&learnTap);
     engine.prepare (sampleRate, juce::jmax (1, samplesPerBlock));
+    learnSampleRate.store (sampleRate);
 
     // Keep the detected key across re-prepares at the same rate (hosts re-prepare often).
     if (! juce::exactlyEqual (sampleRate, keyDetectorRate))
@@ -203,6 +204,23 @@ void DooblrVocalsAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     engine.setSettings (settings);
     engine.process (mainBus, mainBus.getNumSamples());
     gainReductionDb.store (engine.getGainReductionDb());
+
+    if (settings.pitch.learnRange)
+    {
+        // Learn Range progress for the editor: voiced time by the learner's own confidence test.
+        const auto estimate = engine.getLastPitch();
+        const auto block = (juce::int64) mainBus.getNumSamples();
+
+        if (estimate.voiced && estimate.hz > 20.0f && estimate.confidence >= dooblrvocals::RangeLearner::minConfidence)
+        {
+            learnVoicedSamples.fetch_add (block, std::memory_order_relaxed);
+            learnSamplesSinceVoice.store (0, std::memory_order_relaxed);
+        }
+        else
+        {
+            learnSamplesSinceVoice.fetch_add (block, std::memory_order_relaxed);
+        }
+    }
     reverbDuckDb.store (engine.getReverbDuckDb());
     delayDuckDb.store (engine.getDelayDuckDb());
 
@@ -239,7 +257,19 @@ void DooblrVocalsAudioProcessor::startRangeLearn()
 {
     rangeLearner.clear();
     learnTap.discardAll();
+    learnVoicedSamples.store (0);
+    learnSamplesSinceVoice.store (1 << 30);
     learnArmed.store (true);
+}
+
+DooblrVocalsAudioProcessor::LearnProgress DooblrVocalsAudioProcessor::getLearnProgress() const noexcept
+{
+    LearnProgress out;
+    const auto rate = std::max (1.0, learnSampleRate.load (std::memory_order_relaxed));
+    out.voicedSeconds = (float) ((double) learnVoicedSamples.load (std::memory_order_relaxed) / rate);
+    out.progress = std::clamp (out.voicedSeconds / learnTargetSeconds, 0.0f, 1.0f);
+    out.hearingVoice = (double) learnSamplesSinceVoice.load (std::memory_order_relaxed) < learnVoiceHoldSeconds * rate;
+    return out;
 }
 
 void DooblrVocalsAudioProcessor::pollRangeLearn()
