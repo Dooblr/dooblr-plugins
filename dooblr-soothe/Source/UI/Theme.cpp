@@ -95,6 +95,27 @@ namespace dooblrsoothe::ui
             return;
         }
 
+        if ((bool) slider.getProperties().getWithDefault ("dotSlider", false))
+        {
+            // Strip dot-slider: a thin groove filled from the bottom and a round dot.
+            const auto area = juce::Rectangle<int> (x, y, width, height).toFloat();
+            const auto cx = area.getCentreX();
+            const auto groove = juce::Rectangle<float> (cx - 1.5f, area.getY(), 3.0f, area.getHeight());
+            g.setColour (Palette::divider);
+            g.fillRoundedRectangle (groove, 1.5f);
+            const auto dim = isDimmed (slider);
+            const auto colour = dim ? Palette::textMuted : slider.findColour (juce::Slider::trackColourId);
+            g.setColour (colour.withAlpha (0.7f));
+            g.fillRoundedRectangle (groove.withTop (sliderPos), 1.5f);
+            const auto r = juce::jmin (6.0f, area.getWidth() * 0.5f - 1.0f);
+            g.setColour (colour);
+            g.fillEllipse (juce::Rectangle<float> (2.0f * r, 2.0f * r).withCentre ({ cx, sliderPos }));
+            g.setColour (Palette::background);
+            g.drawEllipse (juce::Rectangle<float> (2.0f * r, 2.0f * r).withCentre ({ cx, sliderPos }), 1.2f);
+            juce::ignoreUnused (minSliderPos, maxSliderPos);
+            return;
+        }
+
         const auto area = juce::Rectangle<int> (x, y, width, height).toFloat();
         const auto faderScaleShift = (bool) slider.getProperties().getWithDefault ("faderScale", false) ? 5.0f : 0.0f;
         const auto cx = area.getCentreX() + faderScaleShift; // room for the dB labels on the left

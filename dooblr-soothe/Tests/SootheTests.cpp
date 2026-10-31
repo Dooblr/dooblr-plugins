@@ -376,7 +376,7 @@ namespace
         check (p->getBusCount (true) == 2 && p->getBus (true, 1) != nullptr && ! p->getBus (true, 1)->isEnabled(), "a sidechain input bus, off by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRSOOTHE_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
 
         auto layout = p->getBusesLayout();
@@ -883,10 +883,10 @@ namespace
         };
         for (int b = 0; b < numBands; ++b)
         {
-            const std::vector<std::pair<juce::String, float>> audible { { bandActive (b), 1.0f }, { bandShape (b), 0.0f }, { bandGain (b), 12.0f }, { bandFreq (b), 2000.0f } };
-            contexts[bandActive (b)] = { { bandShape (b), 0.0f }, { bandGain (b), 12.0f }, { bandFreq (b), 2000.0f } };
+            const std::vector<std::pair<juce::String, float>> audible { { bandActive (b), 1.0f }, { bandShape (b), 0.0f }, { bandGain (b), -12.0f }, { bandFreq (b), 2000.0f } };
+            contexts[bandActive (b)] = { { bandShape (b), 0.0f }, { bandGain (b), -12.0f }, { bandFreq (b), 2000.0f } };
             contexts[bandShape (b)] = audible;
-            contexts[bandFreq (b)] = { { bandActive (b), 1.0f }, { bandShape (b), 0.0f }, { bandGain (b), 12.0f }, { bandQ (b), 4.0f } };
+            contexts[bandFreq (b)] = { { bandActive (b), 1.0f }, { bandShape (b), 0.0f }, { bandGain (b), -12.0f }, { bandQ (b), 4.0f } };
             contexts[bandGain (b)] = { { bandActive (b), 1.0f }, { bandShape (b), 0.0f }, { bandFreq (b), 2000.0f } };
             contexts[bandQ (b)] = audible;
         }
@@ -1180,8 +1180,11 @@ namespace
             editor->setSize (size.x, size.y);
             const auto label = std::to_string (size.x) + "x" + std::to_string (size.y);
             int overlaps = 0, outside = 0, tooSmall = 0, controls = 0;
-            for (int band = 0; band < numBands; ++band)
+            for (int page = 0; page <= numBands; ++page)
             {
+                // Pages 0..7: the band view for each band; page 8: the Advanced view.
+                const auto band = std::min (page, numBands - 1);
+                editor->setAdvancedShown (page == numBands);
                 editor->selectBand (band);
                 editor->refresh();
                 std::vector<std::pair<juce::Component*, juce::Rectangle<int>>> rects;
@@ -1216,6 +1219,30 @@ namespace
                     for (size_t j = i + 1; j < blocks.size(); ++j)
                         if (! blocks[i].getIntersection (blocks[j]).isEmpty()) { ++overlaps; check (false, label + ": panels / graph overlap"); }
             }
+            editor->setAdvancedShown (false);
+
+            // The reference layout: the Amount knob (depth) is the big one in the left column, left of
+            // the dot-slider strip, which is left of the graph; the toolbar sits above the graph.
+            {
+                auto* amount = editor->findControl (id::depth);
+                auto* sharp = editor->findControl (id::sharpness);
+                auto* link = editor->findControl (id::link);
+                auto* preset = findById (*editor, "preset");
+                const auto graphBounds = editor->getGraph().getBounds();
+                const auto amountBounds = amount != nullptr ? editor->getLocalArea (amount->getParentComponent(), amount->getBounds()) : juce::Rectangle<int>();
+                const auto sharpBounds = sharp != nullptr ? editor->getLocalArea (sharp->getParentComponent(), sharp->getBounds()) : juce::Rectangle<int>();
+                const auto linkBounds = link != nullptr ? editor->getLocalArea (link->getParentComponent(), link->getBounds()) : juce::Rectangle<int>();
+                const auto presetBounds = preset != nullptr ? preset->getBounds() : juce::Rectangle<int>();
+                check (amount != nullptr && sharp != nullptr && link != nullptr && preset != nullptr
+                           && amountBounds.getRight() <= linkBounds.getX() && linkBounds.getRight() <= graphBounds.getX()
+                           && amountBounds.getRight() < size.x / 4 && presetBounds.getBottom() <= graphBounds.getY()
+                           && amountBounds.getWidth() * amountBounds.getHeight() > 2 * sharpBounds.getWidth() * sharpBounds.getHeight(),
+                       label + ": left column (Amount " + amountBounds.toString().toStdString() + " larger than Sharpness " + sharpBounds.toString().toStdString()
+                           + "), strip, graph " + graphBounds.toString().toStdString() + ", toolbar above");
+                const auto& graph = editor->getGraph();
+                check (graph.getCurveArea() == graph.getSpectrumArea() && ! graph.getCurveFillPath().isEmpty(),
+                       label + ": the weighting curve is overlaid on the spectrum (one plot, light fill)");
+            }
             check (overlaps == 0 && outside == 0 && tooSmall == 0, label + ": " + std::to_string (controls) + " visible controls fit, no overlaps");
             check (editor->getGraph().getHeight() >= 150, label + ": graph height " + std::to_string (editor->getGraph().getHeight()) + " >= 150");
             editor->selectBand (1);
@@ -1236,6 +1263,11 @@ namespace
         editor->selectBand (6);
         editor->refresh();
         saveSnapshot (*editor, "-1080x660-band7");
+        editor->selectBand (1);
+        editor->setAdvancedShown (true);
+        editor->refresh();
+        saveSnapshot (*editor, "-1080x660-advanced");
+        editor->setAdvancedShown (false);
     }
 
     void doubleClick (PeerMouse& mouse, juce::Point<float> pos)
@@ -1341,8 +1373,17 @@ namespace
 
             int controls = 0, hits = 0, toggles = 0, togglesOk = 0, segments = 0, segmentsOk = 0, knobs = 0, knobsOk = 0, tabs = 0, tabsOk = 0, listens = 0, listensOk = 0;
             std::set<juce::String> seen;
-            for (int band = 0; band < numBands; ++band)
+            for (int page = 0; page <= numBands; ++page)
             {
+                // Pages 0..7: the band view for each band; page 8: the Advanced view, opened by
+                // clicking the Advanced button.
+                const auto band = std::min (page, numBands - 1);
+                if (page == numBands)
+                {
+                    if (auto* adv = findById (*editor, "advanced"))
+                        mouse.click (editor->getLocalPoint (adv, adv->getLocalBounds().getCentre()).toFloat());
+                    if (! editor->isAdvancedShown()) fail ("the Advanced button opens the advanced panel");
+                }
                 editor->selectBand (band);
                 editor->refresh();
                 std::vector<juce::Component*> list;
@@ -1411,7 +1452,8 @@ namespace
                         const auto track = slider->getLookAndFeel().getSliderLayout (*slider).sliderBounds.getCentre();
                         const auto from = slider->isRotary() ? editor->getLocalPoint (c, juce::Point<int> (c->getWidth() / 2, (c->getHeight() - 16) / 2)).toFloat()
                                                              : editor->getLocalPoint (c, track).toFloat();
-                        const auto step = slider->isRotary() ? juce::Point<float> (0.0f, -40.0f) : juce::Point<float> (40.0f, 0.0f);
+                        const auto step = slider->isRotary() || slider->getSliderStyle() == juce::Slider::LinearVertical
+                                              ? juce::Point<float> (0.0f, -40.0f) : juce::Point<float> (40.0f, 0.0f);
                         mouse.drag (from, from + step);
                         if (std::abs (parameter->getValue() - before) < 1.0e-4f)
                             mouse.drag (from, from - step);
@@ -1420,6 +1462,58 @@ namespace
                         parameter->setValueNotifyingHost (before);
                     }
                 }
+            }
+
+            if (auto* adv = findById (*editor, "advanced"))
+                mouse.click (editor->getLocalPoint (adv, adv->getLocalBounds().getCentre()).toFloat());
+            if (editor->isAdvancedShown()) fail ("the Advanced button returns to the band view");
+
+            // Preset prev / next by mouse.
+            {
+                auto* prev = findById (*editor, "presetPrev");
+                auto* next = findById (*editor, "presetNext");
+                const auto& factory = presets::factory();
+                p.setCurrentProgram (0);
+                editor->refresh();
+                if (prev != nullptr && next != nullptr)
+                {
+                    mouse.click (editor->getLocalPoint (next, next->getLocalBounds().getCentre()).toFloat());
+                    const auto afterNext = p.getPresetName();
+                    mouse.click (editor->getLocalPoint (prev, prev->getLocalBounds().getCentre()).toFloat());
+                    const auto afterPrev = p.getPresetName();
+                    check (afterNext == factory[1].name && afterPrev == factory[0].name,
+                           label + ": preset > / < step through the list (" + afterNext.toStdString() + ", " + afterPrev.toStdString() + ")");
+                }
+                else
+                    fail ("preset prev / next buttons found");
+            }
+
+            // A / B compare and copy by mouse.
+            {
+                auto* a = findById (*editor, "compareA");
+                auto* b = findById (*editor, "compareB");
+                auto* copy = findById (*editor, "compareCopy");
+                if (a != nullptr && b != nullptr && copy != nullptr)
+                {
+                    const auto click = [&] (juce::Component* c) { mouse.click (editor->getLocalPoint (c, c->getLocalBounds().getCentre()).toFloat()); };
+                    set (p, id::depth, 20.0f);
+                    click (b);
+                    const auto bStart = get (p, id::depth);
+                    set (p, id::depth, 80.0f);
+                    click (a);
+                    const auto aBack = get (p, id::depth);
+                    click (b);
+                    const auto bBack = get (p, id::depth);
+                    click (copy); // B -> A
+                    click (a);
+                    const auto aCopied = get (p, id::depth);
+                    check (p.getCompareSlot() == 0 && std::abs (bStart - 20.0f) < 0.05f && std::abs (aBack - 20.0f) < 0.05f
+                               && std::abs (bBack - 80.0f) < 0.05f && std::abs (aCopied - 80.0f) < 0.05f,
+                           label + ": A / B switch and copy (B starts " + fmt (bStart, 1) + ", A " + fmt (aBack, 1) + ", B " + fmt (bBack, 1) + ", copied " + fmt (aCopied, 1) + ")");
+                    set (p, id::depth, 35.0f);
+                }
+                else
+                    fail ("A / B buttons found");
             }
 
             // Undo / Redo buttons by mouse after a knob drag.
@@ -1449,11 +1543,107 @@ namespace
             check (hits == controls, label + ": " + std::to_string (hits) + " / " + std::to_string (controls) + " controls are under the mouse at their centre");
             check (togglesOk == toggles && toggles >= 3 + numBands, label + ": " + std::to_string (togglesOk) + " / " + std::to_string (toggles) + " toggles flip");
             check (segmentsOk == segments && segments >= 1, label + ": segmented Soft / Hard selects");
-            check (knobsOk == knobs && knobs >= 11 + 3 * numBands, label + ": " + std::to_string (knobsOk) + " / " + std::to_string (knobs) + " knobs / sliders move");
+            check (knobsOk == knobs && knobs >= 12 + 3 * numBands, label + ": " + std::to_string (knobsOk) + " / " + std::to_string (knobs) + " knobs / sliders move");
             check (tabsOk == tabs && tabs >= numBands, label + ": " + std::to_string (tabsOk) + " / " + std::to_string (tabs) + " band tabs select");
             check (listensOk == listens && listens == numBands, label + ": Listen works on all " + std::to_string (listens) + " bands");
             note (label + ": " + std::to_string (controls) + " controls hit-tested; " + std::to_string (toggles) + " toggles, " + std::to_string (knobs) + " knobs, " + std::to_string (tabs) + " tabs, " + std::to_string (listens) + " listen clicks");
         }
+    }
+
+    void testWeightingInversion()
+    {
+        // 0.1.1: band Gain reads like an EQ cut. Pulling a 2 kHz bell down weights the 2 kHz
+        // resonance heavier (more reduction); pushing it up weights it lighter.
+        const auto n = (size_t) (3.0 * defaultRate);
+        Stereo in (noise (n, 0.05f, 41), noise (n, 0.05f, 42));
+        addSine (in.l, defaultRate, 2000.0, 0.3f);
+        addSine (in.r, defaultRate, 2000.0, 0.3f, 0.7);
+
+        const auto cutWith = [&] (float gain)
+        {
+            auto p = makeProcessor();
+            for (int b = 0; b < numBands; ++b)
+                set (*p, bandActive (b), 0.0f);
+            if (gain != 0.0f)
+            {
+                set (*p, bandActive (1), 1.0f);
+                set (*p, bandShape (1), (float) (int) Shape::bell);
+                set (*p, bandFreq (1), 2000.0f);
+                set (*p, bandQ (1), 1.0f);
+                set (*p, bandGain (1), gain);
+                const auto bands = p->readBands();
+                check (gain < 0 ? dsp::curveDb (bands, 2000.0f) < -6.0f && dsp::curveAmount (bands, 2000.0f) > 2.0f
+                                : dsp::curveDb (bands, 2000.0f) > 6.0f && dsp::curveAmount (bands, 2000.0f) < 0.5f,
+                       "the curve shows " + db (gain) + " at 2 kHz as " + db (dsp::curveDb (bands, 2000.0f)) + " (amount " + fmt (dsp::curveAmount (bands, 2000.0f), 2) + ")");
+            }
+            return sineReductionDb (in, render (*p, in), p->getLatencySamples(), defaultRate, 2000.0);
+        };
+        const auto flat = cutWith (0.0f), down = cutWith (-12.0f), up = cutWith (12.0f);
+        check (down > flat + 1.0, "a band pulled down at 2 kHz reduces the 2 kHz resonance more (" + db (down) + " vs flat " + db (flat) + ")");
+        check (up < flat - 1.0, "a band pushed up at 2 kHz reduces it less (" + db (up) + " vs flat " + db (flat) + ")");
+        note ("2 kHz cut: flat " + db (flat) + ", bell -12 dB " + db (down) + ", bell +12 dB " + db (up));
+    }
+
+    void testStateMigration()
+    {
+        // A 0.1.0 session (stateVersion 1, Gain > 0 meant more reduction) loads with Gain negated.
+        auto p = makeProcessor();
+        set (*p, bandGain (1), 6.0f);
+        set (*p, bandGain (2), -4.0f);
+        set (*p, id::depth, 50.0f);
+        auto tree = p->getState().copyState();
+        tree.setProperty ("stateVersion", 1, nullptr);
+        juce::MemoryBlock block;
+        if (auto xml = tree.createXml())
+            juce::AudioProcessor::copyXmlToBinary (*xml, block);
+        auto q = makeProcessor();
+        q->setStateInformation (block.getData(), (int) block.getSize());
+        check (std::abs (get (*q, bandGain (1)) + 6.0f) < 0.01f && std::abs (get (*q, bandGain (2)) - 4.0f) < 0.01f && std::abs (get (*q, id::depth) - 50.0f) < 0.01f,
+               "a version-1 session negates band Gain only (" + db (get (*q, bandGain (1))) + ", " + db (get (*q, bandGain (2))) + ")");
+
+        // A current session keeps the sign.
+        p->getStateInformation (block);
+        auto r = makeProcessor();
+        r->setStateInformation (block.getData(), (int) block.getSize());
+        check (std::abs (get (*r, bandGain (1)) - 6.0f) < 0.01f, "a version-2 session keeps band Gain (" + db (get (*r, bandGain (1))) + ")");
+
+        // A version-1 preset file, too.
+        auto file = juce::File::getSpecialLocation (juce::File::tempDirectory).getChildFile ("dooblr-soothe-v1-preset" + juce::String (presets::fileExtension));
+        check (presets::save (p->getState(), file, "Old"), "a preset saves");
+        if (auto xml = juce::XmlDocument::parse (file))
+        {
+            xml->setAttribute ("stateVersion", 1);
+            xml->writeTo (file);
+        }
+        auto s = makeProcessor();
+        const auto error = presets::load (s->getState(), file);
+        check (error.isEmpty() && std::abs (get (*s, bandGain (1)) + 6.0f) < 0.01f, "a version-1 preset file negates band Gain (" + db (get (*s, bandGain (1))) + ")");
+        file.deleteFile();
+
+        // The factory presets read like EQ cuts: Vocal Harshness pulls its 3.5 kHz bell down.
+        for (auto& f : presets::factory())
+            if (f.name == "Vocal Harshness")
+                for (auto& [pid, v] : f.values)
+                    if (pid == bandGain (1))
+                        check (v < 0.0f, "Vocal Harshness weights 3.5 kHz heavier with a negative gain (" + db (v) + ")");
+    }
+
+    void testCompare()
+    {
+        auto p = makeProcessor();
+        set (*p, id::depth, 60.0f);
+        p->selectCompareSlot (1);
+        check (p->getCompareSlot() == 1 && std::abs (get (*p, id::depth) - 60.0f) < 0.05f, "B starts as a copy of A");
+        set (*p, id::depth, 10.0f);
+        set (*p, bandFreq (4), 4321.0f);
+        p->selectCompareSlot (0);
+        check (std::abs (get (*p, id::depth) - 60.0f) < 0.05f && std::abs (get (*p, bandFreq (4)) - 4321.0f) > 10.0f, "A restores its settings");
+        p->selectCompareSlot (1);
+        check (std::abs (get (*p, id::depth) - 10.0f) < 0.05f && std::abs (get (*p, bandFreq (4)) - 4321.0f) < 1.0f, "B restores its settings");
+        p->copyToOtherCompareSlot();
+        p->selectCompareSlot (0);
+        check (std::abs (get (*p, id::depth) - 10.0f) < 0.05f, "copy B -> A");
+        check (! p->getUndoHistory().canUndo(), "switching A / B clears undo");
     }
 
     struct TestCase { const char* name; std::function<void()> run; };
@@ -1483,6 +1673,9 @@ int main()
         { "editor: size, version, one control each, layout fit", testEditor },
         { "graph: node drag, wheel, add / remove",      testGraphMouse },
         { "real mouse: every control at 3 sizes",       testRealMouse },
+        { "weighting: pulled down = more reduction",    testWeightingInversion },
+        { "0.1.0 state and preset migration",           testStateMigration },
+        { "A / B compare",                              testCompare },
     };
 
     int failedTests = 0;

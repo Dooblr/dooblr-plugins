@@ -90,19 +90,20 @@ namespace dooblrsoothe::dsp
         if (anyPass)
             mask *= passUnion;
 
-        return std::pow (10.0f, db / 20.0f) * mask;
+        // Gain reads like an EQ: below 0 dB means more reduction, above means less.
+        return std::pow (10.0f, -db / 20.0f) * mask;
     }
 
-    float curveDb (const Bands& bands, float frequency, float floorDb) noexcept
+    float curveDb (const Bands& bands, float frequency, float ceilingDb) noexcept
     {
-        return toDb (curveAmount (bands, frequency), floorDb);
+        return -toDb (curveAmount (bands, frequency), -ceilingDb);
     }
 
-    float bandDb (const Band& b, float frequency, float floorDb) noexcept
+    float bandDb (const Band& b, float frequency, float ceilingDb) noexcept
     {
         const auto octaves = octavesFrom (frequency, b.freq);
         if (b.shape == Shape::lowCut || b.shape == Shape::highCut)
-            return toDb (cutMask (octaves, b.q, b.shape == Shape::lowCut), floorDb);
+            return -toDb (cutMask (octaves, b.q, b.shape == Shape::lowCut), -ceilingDb);
         return contributionDb (b, octaves);
     }
 

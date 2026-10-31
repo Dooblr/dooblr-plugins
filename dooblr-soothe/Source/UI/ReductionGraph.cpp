@@ -81,13 +81,13 @@ namespace dooblrsoothe::ui
 
     float ReductionGraph::yForCurveDb (float db) const noexcept
     {
-        return juce::jmap (juce::jlimit (-curveRangeDb, curveRangeDb, db), curveRangeDb, -curveRangeDb,
-                           curveArea.getY() + nodeRadius, curveArea.getBottom() - nodeRadius);
+        return juce::jmap (juce::jlimit (scaleBottomDb, scaleTopDb, db), scaleTopDb, scaleBottomDb,
+                           curveArea.getY() + nodeRadius + 3.0f, curveArea.getBottom());
     }
 
     float ReductionGraph::curveDbForY (float y) const noexcept
     {
-        const auto db = juce::jmap (y, curveArea.getY() + nodeRadius, curveArea.getBottom() - nodeRadius, curveRangeDb, -curveRangeDb);
+        const auto db = juce::jmap (y, curveArea.getY() + nodeRadius + 3.0f, curveArea.getBottom(), scaleTopDb, scaleBottomDb);
         return juce::jlimit (-curveRangeDb, curveRangeDb, db);
     }
 
@@ -119,14 +119,14 @@ namespace dooblrsoothe::ui
     //==============================================================================
     void ReductionGraph::resized()
     {
-        auto area = getLocalBounds().toFloat().reduced (8.0f);
-        area.removeFromLeft (34.0f);
-        area.removeFromRight (30.0f);
-        area.removeFromBottom (16.0f);
-        area.removeFromTop (18.0f);
-        const auto gap = 22.0f;
-        spectrumArea = area.removeFromTop ((area.getHeight() - gap) * 0.58f);
-        area.removeFromTop (gap);
+        auto area = getLocalBounds().toFloat().reduced (4.0f);
+        area.removeFromTop (18.0f);   // frequency labels along the top
+        area.removeFromRight (30.0f); // dB labels at the right edge
+        area.removeFromLeft (2.0f);
+        area.removeFromBottom (2.0f);
+        // One plot: the weighting curve and the reduction share the right-hand dB scale and are
+        // drawn over the spectrum on the same frequency axis.
+        spectrumArea = area;
         curveArea = area;
         background = {};
         rebuildCurve();
@@ -142,68 +142,38 @@ namespace dooblrsoothe::ui
         g.addTransform (juce::AffineTransform::scale (scale));
 
         g.fillAll (Palette::panel);
-        g.setFont (juce::FontOptions (10.5f));
+        g.setColour (Palette::background);
+        g.fillRoundedRectangle (curveArea, 4.0f);
+        g.setFont (juce::FontOptions (11.0f));
 
-        const auto caption = [&g] (juce::Rectangle<float> pane, const juce::String& text)
-        {
-            g.setColour (Palette::textMuted);
-            g.drawText (text, pane.withY (pane.getY() - 17.0f).withHeight (15.0f).toNearestInt(), juce::Justification::centredLeft);
-        };
-        caption (spectrumArea, "SPECTRUM / REDUCTION");
-        caption (curveArea, "DEPTH CURVE");
-
-        for (auto pane : { spectrumArea, curveArea })
-        {
-            g.setColour (Palette::background);
-            g.fillRoundedRectangle (pane, 4.0f);
-        }
-
-        // Frequency grid, shared by both panes.
-        for (float f : { 50.0f, 100.0f, 200.0f, 500.0f, 1000.0f, 2000.0f, 5000.0f, 10000.0f })
+        // Frequency grid, labelled along the top.
+        for (float f : { 100.0f, 250.0f, 500.0f, 1000.0f, 2000.0f, 4000.0f, 8000.0f, 16000.0f })
         {
             const auto x = xForFrequency (f);
             g.setColour (Palette::grid);
-            g.drawVerticalLine (juce::roundToInt (x), spectrumArea.getY(), spectrumArea.getBottom());
             g.drawVerticalLine (juce::roundToInt (x), curveArea.getY(), curveArea.getBottom());
             g.setColour (Palette::textMuted);
             const auto label = f >= 1000.0f ? juce::String ((int) (f / 1000.0f)) + "k" : juce::String ((int) f);
-            g.drawText (label, juce::Rectangle<float> (x - 20.0f, curveArea.getBottom() + 2.0f, 40.0f, 14.0f).toNearestInt(),
+            g.drawText (label, juce::Rectangle<float> (x - 20.0f, curveArea.getY() - 17.0f, 40.0f, 14.0f).toNearestInt(),
                         juce::Justification::centred);
         }
 
-        // Spectrum levels (left) and reduction (right).
-        for (float db : { -72.0f, -54.0f, -36.0f, -18.0f })
-        {
-            const auto y = juce::jmap (db, spectrumFloorDb, 0.0f, spectrumArea.getBottom(), spectrumArea.getY());
-            g.setColour (Palette::grid);
-            g.drawHorizontalLine (juce::roundToInt (y), spectrumArea.getX(), spectrumArea.getRight());
-            g.setColour (Palette::textMuted);
-            g.drawText (juce::String ((int) db), juce::Rectangle<float> (spectrumArea.getX() - 34.0f, y - 7.0f, 30.0f, 14.0f).toNearestInt(),
-                        juce::Justification::centredRight);
-        }
-        for (float cut : { 10.0f, 20.0f })
-        {
-            const auto y = spectrumArea.getY() + cut / reductionRangeDb * spectrumArea.getHeight();
-            g.setColour (Palette::dynamic.withAlpha (0.7f));
-            g.drawText ("-" + juce::String ((int) cut), juce::Rectangle<float> (spectrumArea.getRight() + 4.0f, y - 7.0f, 28.0f, 14.0f).toNearestInt(),
-                        juce::Justification::centredLeft);
-        }
-
-        // Depth curve scale.
-        for (float db : { -12.0f, -6.0f, 0.0f, 6.0f, 12.0f })
+        // One dB scale at the right edge: the weighting curve and the reduction below 0 dB.
+        for (float db : { 12.0f, 6.0f, 0.0f, -6.0f, -12.0f, -18.0f })
         {
             const auto y = yForCurveDb (db);
-            g.setColour (db == 0.0f ? Palette::divider : Palette::grid);
+            g.setColour (db == 0.0f ? Palette::divider.brighter (0.25f) : Palette::grid);
             g.drawHorizontalLine (juce::roundToInt (y), curveArea.getX(), curveArea.getRight());
             g.setColour (Palette::textMuted);
-            g.drawText ((db > 0 ? "+" : "") + juce::String ((int) db), juce::Rectangle<float> (curveArea.getX() - 34.0f, y - 7.0f, 30.0f, 14.0f).toNearestInt(),
-                        juce::Justification::centredRight);
+            g.drawText ((db > 0 ? "+" : "") + juce::String ((int) db), juce::Rectangle<float> (curveArea.getRight() + 4.0f, y - 7.0f, 28.0f, 14.0f).toNearestInt(),
+                        juce::Justification::centredLeft);
         }
     }
 
     void ReductionGraph::rebuildCurve()
     {
         curvePath.clear();
+        curveFillPath.clear();
         selectedBandPath.clear();
         if (curveArea.isEmpty())
             return;
@@ -213,16 +183,21 @@ namespace dooblrsoothe::ui
         {
             const auto x = curveArea.getX() + curveArea.getWidth() * (float) i / (float) steps;
             const auto f = frequencyForX (x);
-            const auto y = yForCurveDb (dsp::curveDb (bands, f, -curveRangeDb - 6.0f));
+            const auto y = yForCurveDb (dsp::curveDb (bands, f, curveRangeDb + 6.0f));
             if (i == 0) curvePath.startNewSubPath (x, y); else curvePath.lineTo (x, y);
 
             const auto& sel = bands[(size_t) selectedBand];
             if (sel.active)
             {
-                const auto sy = yForCurveDb (dsp::bandDb (sel, f, -curveRangeDb - 6.0f));
+                const auto sy = yForCurveDb (dsp::bandDb (sel, f, curveRangeDb + 6.0f));
                 if (i == 0) selectedBandPath.startNewSubPath (x, sy); else selectedBandPath.lineTo (x, sy);
             }
         }
+
+        curveFillPath = curvePath;
+        curveFillPath.lineTo (curveArea.getRight(), yForCurveDb (0.0f));
+        curveFillPath.lineTo (curveArea.getX(), yForCurveDb (0.0f));
+        curveFillPath.closeSubPath();
     }
 
     void ReductionGraph::paint (juce::Graphics& g)
@@ -232,7 +207,11 @@ namespace dooblrsoothe::ui
             drawBackground();
         g.drawImage (background, getLocalBounds().toFloat());
 
-        // Spectrum and reduction.
+        g.saveState();
+        g.reduceClipRegion (curveArea.toNearestInt());
+
+        // Spectrum (faint, its own level mapping) and the reduction, a filled area hanging from
+        // the 0 dB baseline that dips where the plug-in cuts.
         if (frameSerial >= 0)
         {
             const auto n = dsp::DisplayFrame::numPoints;
@@ -243,49 +222,49 @@ namespace dooblrsoothe::ui
             inputPath.clear();
             outputPath.clear();
             reductionPath.clear();
+            reductionEdge.clear();
             inputPath.startNewSubPath (spectrumArea.getX(), spectrumArea.getBottom());
-            reductionPath.startNewSubPath (spectrumArea.getX(), spectrumArea.getY());
+            reductionPath.startNewSubPath (curveArea.getX(), curveArea.getBottom());
             for (int i = 0; i < n; ++i)
             {
                 const auto x = xForFrequency (dsp::DisplayFrame::pointFrequency (i));
                 inputPath.lineTo (x, yLevel (frame.input[(size_t) i]));
                 if (i == 0) outputPath.startNewSubPath (x, yLevel (frame.output[(size_t) i]));
                 else        outputPath.lineTo (x, yLevel (frame.output[(size_t) i]));
-                const auto cut = juce::jlimit (0.0f, reductionRangeDb, frame.reduction[(size_t) i]);
-                reductionPath.lineTo (x, spectrumArea.getY() + cut / reductionRangeDb * spectrumArea.getHeight());
+                const auto y = yForCurveDb (-juce::jlimit (0.0f, reductionRangeDb, frame.reduction[(size_t) i]));
+                reductionPath.lineTo (x, y);
+                if (i == 0) reductionEdge.startNewSubPath (x, y); else reductionEdge.lineTo (x, y);
             }
             inputPath.lineTo (spectrumArea.getRight(), spectrumArea.getBottom());
             inputPath.closeSubPath();
-            reductionPath.lineTo (spectrumArea.getRight(), spectrumArea.getY());
+            reductionPath.lineTo (curveArea.getRight(), curveArea.getBottom());
             reductionPath.closeSubPath();
 
-            g.saveState();
-            g.reduceClipRegion (spectrumArea.toNearestInt());
-            g.setColour (Palette::spectrum.withAlpha (0.11f));
+            g.setColour (Palette::spectrum.withAlpha (0.10f));
             g.fillPath (inputPath);
-            g.setColour (Palette::spectrum.withAlpha (0.32f));
+            g.setColour (Palette::spectrum.withAlpha (0.28f));
             g.strokePath (inputPath, juce::PathStrokeType (1.0f));
-            g.setColour (Palette::textPrimary.withAlpha (0.75f));
-            g.strokePath (outputPath, juce::PathStrokeType (1.3f));
-            g.setColour (Palette::dynamic.withAlpha (0.45f));
+            g.setColour (Palette::dynamic.withAlpha (0.26f));
             g.fillPath (reductionPath);
-            g.setColour (Palette::dynamic);
-            g.strokePath (reductionPath, juce::PathStrokeType (1.2f));
-            g.restoreState();
+            g.setColour (Palette::dynamic.withAlpha (0.9f));
+            g.strokePath (reductionEdge, juce::PathStrokeType (1.4f));
+            g.setColour (Palette::textPrimary.withAlpha (0.45f));
+            g.strokePath (outputPath, juce::PathStrokeType (1.1f));
         }
 
-        // Depth curve and nodes.
-        g.saveState();
-        g.reduceClipRegion (curveArea.toNearestInt());
+        // The weighting curve on top: a light fill to 0 dB and a bright line.
+        g.setColour (Palette::accent.withAlpha (0.12f));
+        g.fillPath (curveFillPath);
         if (! selectedBandPath.isEmpty())
         {
             g.setColour (bandColour (selectedBand).withAlpha (0.45f));
             g.strokePath (selectedBandPath, juce::PathStrokeType (1.0f));
         }
-        g.setColour (Palette::accent);
-        g.strokePath (curvePath, juce::PathStrokeType (2.0f));
+        g.setColour (Palette::accent.brighter (0.35f));
+        g.strokePath (curvePath, juce::PathStrokeType (2.2f));
         g.restoreState();
 
+        // Nodes: pill handles for the shelf / cut ends, round dots for bells and band passes.
         const auto listen = (int) state.getRawParameterValue (id::listenBand)->load() - 1;
         for (int b = 0; b < numBands; ++b)
         {
@@ -293,26 +272,35 @@ namespace dooblrsoothe::ui
                 continue;
             const auto c = getNodePosition (b);
             const auto colour = bandColour (b);
-            const auto r = nodeRadius + (b == hoverBand || b == dragBand ? 1.5f : 0.0f);
-            g.setColour (b == selectedBand ? colour : colour.withAlpha (0.35f));
-            g.fillEllipse (c.x - r, c.y - r, r * 2.0f, r * 2.0f);
-            g.setColour (b == listen ? Palette::textPrimary : colour);
-            g.drawEllipse (c.x - r, c.y - r, r * 2.0f, r * 2.0f, b == listen ? 2.0f : 1.2f);
+            const auto grow = (b == hoverBand || b == dragBand ? 1.5f : 0.0f);
+            const auto pill = isPillShape (bands[(size_t) b].shape);
+            const auto r = nodeRadius + grow;
+            const auto box = pill ? juce::Rectangle<float> (2.0f * (r - 2.0f), 2.0f * (r + 3.0f)).withCentre (c)
+                                  : juce::Rectangle<float> (2.0f * r, 2.0f * r).withCentre (c);
+            const auto corner = box.getWidth() * 0.5f;
+            g.setColour (b == selectedBand ? colour : colour.withAlpha (0.45f));
+            g.fillRoundedRectangle (box, corner);
+            g.setColour (b == listen ? Palette::textPrimary : colour.brighter (0.3f));
+            g.drawRoundedRectangle (box, corner, b == listen ? 2.0f : 1.2f);
             g.setColour (b == selectedBand ? Palette::background : Palette::textPrimary);
-            g.setFont (juce::FontOptions (10.0f, juce::Font::bold));
-            g.drawText (juce::String (b + 1), juce::Rectangle<float> (c.x - r, c.y - r, r * 2.0f, r * 2.0f).toNearestInt(), juce::Justification::centred);
+            g.setFont (juce::FontOptions (pill ? 9.0f : 10.0f, juce::Font::bold));
+            g.drawText (juce::String (b + 1), box.toNearestInt(), juce::Justification::centred);
         }
 
-        // Hover readout.
+        // Hover readout, in a chip at the plot's top right.
         if (hovering || dragBand >= 0)
         {
             const auto text = readoutText();
             if (text.isNotEmpty())
             {
-                g.setFont (juce::FontOptions (11.5f));
+                const auto font = juce::Font (juce::FontOptions (11.5f));
+                const auto w = juce::GlyphArrangement::getStringWidth (font, text) + 16.0f;
+                const auto chip = juce::Rectangle<float> (curveArea.getRight() - w - 6.0f, curveArea.getY() + 6.0f, w, 18.0f);
+                g.setColour (Palette::panelRaised.withAlpha (0.92f));
+                g.fillRoundedRectangle (chip, 4.0f);
+                g.setFont (font);
                 g.setColour (Palette::textPrimary);
-                g.drawText (text, juce::Rectangle<float> (spectrumArea.getX(), 6.0f, spectrumArea.getWidth(), 14.0f).toNearestInt(),
-                            juce::Justification::centredRight);
+                g.drawText (text, chip.toNearestInt(), juce::Justification::centred);
             }
         }
     }
@@ -334,9 +322,11 @@ namespace dooblrsoothe::ui
             return {};
         const auto f = frequencyForX (hoverPosition.x);
         auto text = formatFrequency (f);
+        if (! curveArea.contains (hoverPosition))
+            return {};
         if (curveArea.contains (hoverPosition))
-            text << "  curve " << params::formatValue (dsp::curveDb (bands, f, -60.0f), 1) << " dB";
-        else if (frameSerial >= 0)
+            text << "  curve " << params::formatValue (dsp::curveDb (bands, f, 60.0f), 1) << " dB";
+        if (frameSerial >= 0)
         {
             const auto t = std::log (f / dsp::DisplayFrame::minFreq) / logSpan;
             const auto i = juce::jlimit (0, dsp::DisplayFrame::numPoints - 1, juce::roundToInt (t * (dsp::DisplayFrame::numPoints - 1)));

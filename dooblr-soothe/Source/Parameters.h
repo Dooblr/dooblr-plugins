@@ -4,8 +4,13 @@
 
 namespace dooblrsoothe::params
 {
-    /** State-tree version written with every saved state (bump when a migration is needed). */
-    inline constexpr int stateVersion = 1;
+    /** State-tree version written with every saved state (bump when a migration is needed).
+        1: 0.1.0 (band Gain > 0 meant more reduction). 2: 0.1.1, band Gain reads like an EQ cut:
+        pulling a band down (< 0 dB) reduces more there, pushing it up reduces less. */
+    inline constexpr int stateVersion = 2;
+
+    /** True for the parameter IDs whose stored value is negated when migrating version-1 states. */
+    bool isBandGainId (const juce::String& parameterId);
 
     inline constexpr int numBands = 8;
 

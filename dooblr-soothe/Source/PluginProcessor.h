@@ -1,5 +1,7 @@
 #pragma once
 
+#include <array>
+
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "DSP/OutputPeakTap.h"
@@ -64,6 +66,14 @@ namespace dooblrsoothe
 
         juce::ChangeBroadcaster presetChanged;
 
+        /** A / B compare: two complete settings snapshots (not saved with the session). The
+            current one is live; selecting the other stores the live settings in this slot and
+            recalls the other (the first time, the other slot starts as a copy). Clears undo. */
+        int getCompareSlot() const noexcept { return compareSlot; }
+        void selectCompareSlot (int slot);
+        /** Copies the live settings into the other slot (A -> B while on A, B -> A on B). */
+        void copyToOtherCompareSlot();
+
         static constexpr int maxChunk = 512;
 
     private:
@@ -76,6 +86,8 @@ namespace dooblrsoothe
         dsp::OutputPeakTap peakTap;
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;
+        int compareSlot = 0;
+        std::array<juce::ValueTree, 2> compareStore;
         int preparedQuality = -1;
 
         juce::AudioBuffer<float> procIn, detIn, wetOut, dryOut;

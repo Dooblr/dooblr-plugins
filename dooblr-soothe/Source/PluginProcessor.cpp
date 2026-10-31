@@ -286,6 +286,27 @@ namespace dooblrsoothe
         return juce::isPositiveAndBelow (index, (int) all.size()) ? all[(size_t) index].name : juce::String();
     }
 
+    void DooblrSootheProcessor::selectCompareSlot (int slot)
+    {
+        slot = juce::jlimit (0, 1, slot);
+        if (slot == compareSlot)
+            return;
+
+        compareStore[(size_t) compareSlot] = state.copyState();
+        if (! compareStore[(size_t) slot].isValid())
+            compareStore[(size_t) slot] = compareStore[(size_t) compareSlot].createCopy();
+
+        compareSlot = slot;
+        state.replaceState (compareStore[(size_t) slot].createCopy());
+        undoHistory.clear();
+        presetChanged.sendChangeMessage();
+    }
+
+    void DooblrSootheProcessor::copyToOtherCompareSlot()
+    {
+        compareStore[(size_t) (1 - compareSlot)] = state.copyState();
+    }
+
     juce::String DooblrSootheProcessor::getPresetName() const
     {
         return state.state.getProperty ("presetName").toString();
@@ -331,7 +352,11 @@ namespace dooblrsoothe
             return;
 
         auto tree = juce::ValueTree::fromXml (*xml);
-        // stateVersion 1 is the first format; future versions migrate here before replacing.
+        // Version 1 (0.1.0) stored band Gain with the opposite sign: negate it.
+        if ((int) tree.getProperty ("stateVersion", 1) < 2)
+            for (auto child : tree)
+                if (child.hasType ("PARAM") && params::isBandGainId (child.getProperty ("id").toString()))
+                    child.setProperty ("value", -(double) child.getProperty ("value"), nullptr);
         tree.setProperty ("stateVersion", stateVersion, nullptr);
         state.replaceState (tree);
         undoHistory.clear();

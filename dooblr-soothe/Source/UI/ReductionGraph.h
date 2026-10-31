@@ -15,9 +15,12 @@ namespace dooblrsoothe
 namespace dooblrsoothe::ui
 {
     /**
-        The main display. Top pane: the input spectrum (filled), the output spectrum (line) and
-        the live reduction hanging from the top edge (dB of cut, right-hand scale). Bottom pane:
-        the depth curve (+-18 dB) with a node per active band.
+        The main display, one plot on one log-frequency axis (labelled along the top): the input
+        and output spectrum (faint), the live reduction as a filled area hanging from the 0 dB
+        baseline that dips where the plug-in cuts, and on top the weighting curve (a bright line
+        with a light fill to 0 dB) with a handle per active band: pills for shelves and cuts, dots
+        for bells and band passes. The curve and the reduction share the dB scale at the right
+        edge. The curve reads like an EQ: where it dips, more is reduced.
 
         Nodes: drag to move frequency and gain (one undo step; Shift for fine moves), mouse
         wheel for Q, double-click to remove, right-click for shape / listen / remove. Double-click
@@ -37,8 +40,11 @@ namespace dooblrsoothe::ui
         /** Polls the engine and the bands (VBlank does this); returns true if a repaint was queued. */
         bool poll();
 
+        /** The spectrum and the weighting curve share one plot (the same rectangle). */
         juce::Rectangle<float> getSpectrumArea() const noexcept { return spectrumArea; }
         juce::Rectangle<float> getCurveArea() const noexcept { return curveArea; }
+        /** The filled region under / over the curve (between the curve and 0 dB). */
+        const juce::Path& getCurveFillPath() const noexcept { return curveFillPath; }
         /** Where a band's node is drawn (the node's centre), in local coordinates. */
         juce::Point<float> getNodePosition (int band) const;
         /** The active band whose node is under the point, or -1. */
@@ -50,7 +56,12 @@ namespace dooblrsoothe::ui
         float yForCurveDb (float db) const noexcept;
         float curveDbForY (float y) const noexcept;
 
-        static constexpr float spectrumFloorDb = -90.0f, reductionRangeDb = 30.0f, curveRangeDb = 18.0f;
+        /** The shared dB scale: +18 at the top (room for the curve), -24 at the bottom (the deepest
+            reduction drawn). Band gains span +-curveRangeDb. */
+        static constexpr float spectrumFloorDb = -90.0f, reductionRangeDb = 24.0f, curveRangeDb = 18.0f,
+                               scaleTopDb = 18.0f, scaleBottomDb = -24.0f;
+        /** Shelves and cuts get a pill handle, bells and band passes a round dot. */
+        static bool isPillShape (params::Shape s) noexcept { return s != params::Shape::bell && s != params::Shape::bandPass; }
         static constexpr float nodeRadius = 7.0f;
 
         void paint (juce::Graphics&) override;
@@ -85,7 +96,7 @@ namespace dooblrsoothe::ui
         int frameSerial = -1;
         dsp::Bands bands {};
         bool bandsValid = false;
-        juce::Path curvePath, selectedBandPath, inputPath, outputPath, reductionPath;
+        juce::Path curvePath, curveFillPath, selectedBandPath, inputPath, outputPath, reductionPath, reductionEdge;
 
         int selectedBand = 0, hoverBand = -1, dragBand = -1;
         juce::Point<float> hoverPosition { -1.0f, -1.0f }, dragPosition, lastDragMouse;

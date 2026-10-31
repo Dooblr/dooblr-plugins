@@ -20,6 +20,14 @@ namespace dooblrsoothe::params
         return "b" + juce::String (band + 1) + field;
     }
 
+    bool isBandGainId (const juce::String& parameterId)
+    {
+        for (int b = 0; b < numBands; ++b)
+            if (parameterId == bandGain (b))
+                return true;
+        return false;
+    }
+
     juce::StringArray shapeNames()
     {
         return { "Bell", "Low shelf", "High shelf", "Low cut", "High cut", "Band pass" };
@@ -33,13 +41,13 @@ namespace dooblrsoothe::params
     BandDefault bandDefault (int band)
     {
         // Bands 1-3 are in the curve by default: a gentle low cut on the detection (so bass
-        // notes are left alone), a broad presence emphasis and a top-end shelf. The rest are
+        // notes are left alone), a broad presence dip (more reduction there) and a top-end shelf that eases off the air. The rest are
         // free slots, spread out so a newly added band lands somewhere sensible.
         switch (band)
         {
             case 0:  return { true,  Shape::lowCut,    60.0f,    0.0f, 1.0f };
-            case 1:  return { true,  Shape::bell,      3000.0f,  3.0f, 0.8f };
-            case 2:  return { true,  Shape::highShelf, 9000.0f, -3.0f, 0.7f };
+            case 1:  return { true,  Shape::bell,      3000.0f, -3.0f, 0.8f };
+            case 2:  return { true,  Shape::highShelf, 9000.0f,  3.0f, 0.7f };
             case 3:  return { false, Shape::bell,      150.0f,   0.0f, 1.0f };
             case 4:  return { false, Shape::bell,      400.0f,   0.0f, 1.0f };
             case 5:  return { false, Shape::bell,      1000.0f,  0.0f, 1.0f };
