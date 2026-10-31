@@ -38,37 +38,54 @@ namespace dooblrprophet::link
     //==============================================================================
     void PairingDetector::scan (const juce::MidiBuffer& midi) noexcept
     {
+        juce::uint32 seen = 0, onChannel = 0;
         for (const auto metadata : midi)
         {
+            ++seen;
             if (metadata.numBytes != 3)
                 continue;
             const auto* d = metadata.data;
             if (d[0] != (juce::uint8) (0xb0 | (pairChannel - 1)))
                 continue;
+            ++onChannel;
 
             // Order independent: a host may deliver the three CCs in any order within a block.
             const int cc = d[1], value = d[2] & 127;
-            if (cc == pairCcHigh)       high = value;
-            else if (cc == pairCcLow)   low = value;
-            else if (cc == pairCcCheck) check = value;
-            else continue;
+            if (cc == pairCcHigh)            feed (main, 0, value);
+            else if (cc == pairCcLow)        feed (main, 1, value);
+            else if (cc == pairCcCheck)      feed (main, 2, value);
+            else if (cc == pairCcHighAlt)    feed (alt, 0, value);
+            else if (cc == pairCcLowAlt)     feed (alt, 1, value);
+            else if (cc == pairCcCheckAlt)   feed (alt, 2, value);
+        }
+        if (seen > 0)
+            events.fetch_add (seen, std::memory_order_relaxed);
+        if (onChannel > 0)
+            channelCcs.fetch_add (onChannel, std::memory_order_relaxed);
+    }
 
-            if (high >= 0 && low >= 0 && check >= 0 && check == pairCheck (high, low))
+    void PairingDetector::feed (Partial& part, int which, int value) noexcept
+    {
+        (which == 0 ? part.high : which == 1 ? part.low : part.check) = value;
+
+        if (part.high >= 0 && part.low >= 0 && part.check >= 0 && part.check == pairCheck (part.high, part.low))
+        {
+            const auto token = (part.high << 7) | part.low;
+            if (token >= 1 && token <= maxToken)
             {
-                const auto token = (high << 7) | low;
-                if (token >= 1 && token <= maxToken)
-                    pending.store (token);
-                high = low = check = -1;
+                pending.store (token);
+                tokens.fetch_add (1, std::memory_order_relaxed);
             }
+            part = {};
         }
     }
 
-    std::array<juce::MidiMessage, 3> PairingDetector::messagesFor (int token)
+    std::array<juce::MidiMessage, 3> PairingDetector::messagesFor (int token, bool alt)
     {
         const auto high = (token >> 7) & 127, low = token & 127;
-        return { juce::MidiMessage::controllerEvent (pairChannel, pairCcHigh, high),
-                 juce::MidiMessage::controllerEvent (pairChannel, pairCcLow, low),
-                 juce::MidiMessage::controllerEvent (pairChannel, pairCcCheck, pairCheck (high, low)) };
+        return { juce::MidiMessage::controllerEvent (pairChannel, alt ? pairCcHighAlt : pairCcHigh, high),
+                 juce::MidiMessage::controllerEvent (pairChannel, alt ? pairCcLowAlt : pairCcLow, low),
+                 juce::MidiMessage::controllerEvent (pairChannel, alt ? pairCcCheckAlt : pairCcCheck, pairCheck (high, low)) };
     }
 
     //==============================================================================
@@ -147,7 +164,10 @@ namespace dooblrprophet::link
         {
             const auto reply = m.intArg (0);
             if (reply >= 1024 && reply <= 65535)
-                sendNow (reply, OscMessage ("/dp/here").add (port).add (JucePlugin_VersionString).add (clientPort != 0 ? 1 : 0));
+                sendNow (reply, OscMessage ("/dp/here").add (port).add (JucePlugin_VersionString).add (clientPort != 0 ? 1 : 0)
+                                     .add ((int) (pairing.eventsSeen() & 0x7fffffff))
+                                     .add ((int) (pairing.channelCcsSeen() & 0x7fffffff))
+                                     .add ((int) (pairing.tokensSeen() & 0x7fffffff)));
             return;
         }
 

@@ -2003,6 +2003,28 @@ namespace
         const auto zero = lk::PairingDetector::messagesFor (0);
         check (scan ({ zero[0], zero[1], zero[2] }) == -1, "token 0 is not a token");
 
+        // 0.3.1: the same token on the General Purpose CCs 16-18 (hosts that drop undefined CCs).
+        const auto alt = lk::PairingDetector::messagesFor (1234, true);
+        check (alt[0].getControllerNumber() == 16 && alt[1].getControllerNumber() == 17 && alt[2].getControllerNumber() == 18
+                   && alt[0].getChannel() == 16, "the alternate set is channel-16 CC 16/17/18");
+        check (scan ({ alt[1], alt[2], alt[0] }) == 1234, "token found on the alternate CCs alone");
+        check (scan ({ alt[0], ccs[1], alt[2] }) == -1, "the two sets are never mixed");
+        check (scan ({ ccs[0], alt[0], ccs[1], alt[1], ccs[2], alt[2] }) == 1234, "both sets together give the token");
+
+        // Diagnostics counters.
+        {
+            lk::PairingDetector detector;
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, 0.5f), 0);
+            midi.addEvent (juce::MidiMessage::controllerEvent (1, 1, 10), 1);
+            for (int i = 0; i < 3; ++i)
+                midi.addEvent (alt[(size_t) i], 2 + i);
+            detector.scan (midi);
+            check (detector.eventsSeen() == 5 && detector.channelCcsSeen() == 3 && detector.tokensSeen() == 1,
+                   "counters: events " + std::to_string (detector.eventsSeen()) + ", ch16 CCs " + std::to_string (detector.channelCcsSeen())
+                       + ", tokens " + std::to_string (detector.tokensSeen()));
+        }
+
         // Across blocks: a sequence split over two blocks still pairs.
         {
             lk::PairingDetector detector;
@@ -2293,6 +2315,61 @@ namespace
         check (link.getClientPort() == 0, "bye unpairs");
     }
 
+    /** 0.3.1: the device pairs with no MIDI at all when there is one instance: it pings every link
+        port from its reply port, sees exactly one unpaired /dp/here, and says hello. */
+    void testLinkPairingWithoutMidi()
+    {
+        auto p = makeProcessor();
+        auto& link = p->getRemoteLink();
+        juce::uint32 now = 1000;
+        check (link.getPort() > 0, "instance bound a link port");
+
+        // Some MIDI first, so /dp/here's counters have something to report.
+        {
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::controllerEvent (16, 20, 1), 0);
+            midi.addEvent (juce::MidiMessage::controllerEvent (1, 1, 1), 1);
+            p->processBlock (buffer, midi);
+        }
+
+        LinkClient device (lk::replyPortBase + 777);
+        check (device.port == lk::replyPortBase + 777, "test device bound its reply port");
+        for (int candidate = lk::firstPort; candidate < lk::firstPort + lk::numPorts; ++candidate)
+            device.send (candidate, lk::OscMessage ("/dp/ping").add (device.port));
+        pumpLink (*p, device, now, 3);
+
+        int heres = 0;
+        const lk::OscMessage* here = nullptr;
+        for (const auto& m : device.received)
+            if (m.address == "/dp/here" && m.intArg (0) == link.getPort())
+            {
+                ++heres;
+                here = &m;
+            }
+        check (heres == 1, "exactly one /dp/here from this instance (" + std::to_string (heres) + ")");
+        check (here != nullptr && here->size() >= 6, "/dp/here carries the diagnostics");
+        if (here != nullptr && here->size() >= 6)
+        {
+            check (here->stringArg (1) == DOOBLRPROPHET_PROJECT_VERSION && here->intArg (2) == 0, "unpaired, with the version");
+            check (here->intArg (3) == 2 && here->intArg (4) == 1 && here->intArg (5) == 0,
+                   "counters: events " + std::to_string (here->intArg (3)) + ", ch16 CCs " + std::to_string (here->intArg (4))
+                       + ", tokens " + std::to_string (here->intArg (5)));
+        }
+        check (link.getClientPort() == 0, "a ping does not pair");
+
+        device.received.clear();
+        device.send (link.getPort(), lk::OscMessage ("/dp/hello").add (device.port));
+        pumpLink (*p, device, now, 30);
+        check (link.getClientPort() == device.port, "hello pairs without any MIDI token");
+        check (device.last ("/dp/syncstart") != nullptr && device.last ("/dp/synced") != nullptr, "a full sync follows");
+
+        device.received.clear();
+        device.send (link.getPort(), lk::OscMessage ("/dp/ping").add (device.port));
+        pumpLink (*p, device, now, 2);
+        check (device.last ("/dp/here") != nullptr && device.last ("/dp/here")->intArg (2) == 1, "now reported as paired");
+    }
+
     void testLinkLayoutParity()
     {
         // The editor builds from the same layout the device gets, and both dim the same controls.
@@ -2377,6 +2454,7 @@ int main()
         { "M4L link: OSC codec and fuzz",              testLinkOsc },
         { "M4L link: pairing token and ports",         testLinkPairing },
         { "M4L link: end to end over loopback",        testLinkEndToEnd },
+        { "M4L link: pairing without MIDI",            testLinkPairingWithoutMidi },
         { "M4L link: editor and device layout parity", testLinkLayoutParity },
     };
 

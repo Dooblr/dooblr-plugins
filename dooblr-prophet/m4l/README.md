@@ -26,6 +26,43 @@ Mouse: drag knobs up/down (Shift for fine), double-click to reset to default, cl
 segment buttons, click menus to pick from a list, drag the filter handles (cutoff left/right,
 resonance up/down). Save/Load open the plug-in's own file dialogs.
 
+## Panel 0.3.2 / plug-in 0.3.1: "not answering" fix
+
+Seen in Live 11.3.43 on Oct 31, 2026: panel 0.3.1 showed *"dooblr-prophet is not answering"*. That
+message means the panel found the plug-in on its track (after itself) but no `/dp/announce` came
+back for its pairing token. On the running set:
+
+- the plug-in (0.3.0) was listening on `127.0.0.1:47810` and answered `/dp/ping` (unpaired);
+- the panel's `udpreceive` moved to a new `47900 + token` port every second, so the panel was
+  running and its `port` retargeting worked; the firewall was off;
+- a test `/dp/announce` sent to the panel's current port with the matching token linked it at
+  once, and the plug-in then reported a client: the whole OSC path works both ways.
+
+So the plug-in never saw the channel-16 CC102-104 token in `processBlock`. Live hands MIDI CC to a
+VST3 only through the plug-in's MIDI-mapping proxy parameters, and older Live 11 builds are reported
+to drop CCs the MIDI spec calls "undefined" (102-104 are). Which of those drops them was not
+established; it does not matter for the fix:
+
+- **Pairing without MIDI.** Every second while unlinked the panel also sends `/dp/ping <replyPort>` to
+  every link port (47810-47873). If this track has the plug-in after the panel, exactly one
+  instance answers unpaired, and the whole Live set (all tracks, returns, master, inside racks)
+  holds exactly one dooblr-prophet, the panel links to it. That covers the usual one-synth set and
+  works with plug-in 0.3.0 too.
+- **More than one instance** still needs the MIDI token, so the panel now sends it twice: CC102-104
+  and the same values on the defined General Purpose CCs 16-18 (plug-in 0.3.1 reads both; the
+  engine ignores both). If neither arrives the panel says *"Waiting for this track's
+  dooblr-prophet"* instead of guessing.
+- **Diagnostics.** Plug-in 0.3.1's `/dp/here` adds three counters: MIDI events seen, channel-16 CCs
+  seen, tokens found. The panel posts them to the Max window when it cannot link, e.g.
+  `dooblr-prophet panel: not linked (several 47810 v0.3.1 midi 120/0/0, ...)`: 0 channel-16 CCs
+  means Live passed none of the pairing CCs.
+
+`scripts/test-pairing.js` runs the panel against a mock set and mock instances with no MIDI
+delivered: one instance links by ping; two instances, a second answering host, a rack-nested
+second instance, a taken instance or a plug-in before the panel do not; the announce path still
+links. The 0.3.1 panel fails it. The plug-in's own test "M4L link: pairing without MIDI" checks
+ping, the counters and hello-only pairing over real loopback sockets.
+
 ## Panel 0.3.1: Live crash fix
 
 0.3.0 crashed Live 11.3.43 (SIGABRT, a stack ~786 levels deep through `jsliveapi_constructor`)
@@ -103,8 +140,9 @@ Max's search path, or Max may load the older `dooblr-prophet-ui.js` of the same 
 ## Limits and risks
 
 - Untested in Live (see above). Things that could need fixing on first run:
-  - Live must pass the channel-16 CCs from the M4L device through to the VST3 (JUCE exposes MIDI
-    CC to VST3 via proxy parameters). If it doesn't, the panel will stay on *connecting…*.
+  - Live 11.3.43 did not pass the channel-16 CC102-104 to the VST3 (seen Oct 31, 2026). With one
+    instance the panel now links without MIDI; with several it needs CC16-18 to get through
+    (untested in Live).
   - The `port` message used to retarget `udpreceive`/`udpsend` at run time.
   - Live may drop a CC repeating the previous value; each new token differs in all three values
     to avoid this.

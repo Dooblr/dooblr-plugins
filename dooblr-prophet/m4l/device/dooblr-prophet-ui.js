@@ -18,9 +18,13 @@ mgraphics.autofill = 0;
 // Link constants (must match Source/Link/RemoteLink.h)
 var REPLY_PORT_BASE = 47900, MAX_TOKEN = 16000;
 var PAIR_STATUS = 0xBF, CC_HIGH = 102, CC_LOW = 103, CC_CHECK = 104; // CC on channel 16
+var CC_HIGH_ALT = 16, CC_LOW_ALT = 17, CC_CHECK_ALT = 18;  // the same token on defined CCs (plug-in 0.3.1+)
+var LINK_FIRST_PORT = 47810, LINK_PORTS = 64;               // where plug-in instances listen
+var DIRECT_AFTER_MS = 250;                                  // ping replies are judged this long after a sweep
+var SET_WALK_LIMIT = 4000;                                  // most devices the set count looks at
 var PAIR_INTERVAL_MS = 1000, HELLO_INTERVAL_MS = 1000, LOST_AFTER_MS = 3500;
 var FX_PRESET_PARAMS = ["echoPreset", "reverbPreset"]; // param shown by each module's preset picker
-var UI_VERSION = "0.3.1"; // this panel's version (posted to the Max window by liveready)
+var UI_VERSION = "0.3.2"; // this panel's version (posted to the Max window by liveready)
 var FIND_DEBOUNCE_MS = 50;
 
 // Palette (Source/UI/Theme.h)
@@ -40,6 +44,7 @@ var S = {
     state: "waiting",        // waiting (no Live API yet) | missing | searching | syncing | linked
     deviceOnTrack: 0,         // 0 none, 1 after this device (good), -1 before this device
     token: 0, lastPair: [-1, -1, -1], lastPairMs: 0,
+    heard: [], judged: true, why: "", whyPosted: "",  // ping replies since the last sweep (pairing without MIDI)
     serverPort: 0, replyPort: 0, version: "", lastHeardMs: 0, lastHelloMs: 0,
     meta: [], val: [], byId: {}, pages: [], fxNames: [[], []], voicePresets: [],
     dim: {}, status: [], note: "", noteSerial: -1, noteUntil: 0,
@@ -94,7 +99,8 @@ function notifydeleted() {
 function tick() {
     var t = now();
     if (S.state === "searching" || S.state === "missing") {
-        if (t - S.lastPairMs >= PAIR_INTERVAL_MS) pair(t);
+        if (!S.judged && t - S.lastPairMs >= DIRECT_AFTER_MS) judgeReplies();
+        if ((S.state === "searching" || S.state === "missing") && t - S.lastPairMs >= PAIR_INTERVAL_MS) pair(t);
     } else if (S.state === "syncing" || S.state === "linked") {
         if (t - S.lastHelloMs >= HELLO_INTERVAL_MS) { S.lastHelloMs = t; send("/dp/hello", S.replyPort); }
         if (t - S.lastHeardMs > LOST_AFTER_MS) lost();
@@ -107,9 +113,14 @@ function tick() {
 
 function redraw() { S.dirty = true; }
 
-// Pairing: a fresh token on channel-16 CCs through this track's MIDI; the plug-in that sees it
-// answers on 47900 + token. Every value differs from the last attempt, so a host that drops a
-// repeated CC value cannot stall pairing.
+// Pairing, two ways at once, every second while unlinked:
+//  1. MIDI: a fresh token on channel-16 CCs through this track's MIDI (both the 102-104 set and the
+//     defined 16-18 set); the plug-in that sees it answers /dp/announce on 47900 + token. Every
+//     value differs from the last attempt, so a host that drops a repeated CC value cannot stall it.
+//  2. No MIDI (0.3.2): /dp/ping to every link port; each instance answers /dp/here. When this track
+//     has the plug-in after this device, exactly one instance answers unpaired, and the whole Live
+//     set holds exactly one dooblr-prophet, that one is ours (judgeReplies). Live 11 does not pass
+//     the pairing CCs to the VST3 on every system, so this is what links the usual one-instance case.
 function pair(t) {
     S.lastPairMs = t;
     var h, l, c, token, tries = 0;
@@ -121,12 +132,93 @@ function pair(t) {
     S.lastPair = [h, l, c];
     S.token = token;
     S.replyPort = REPLY_PORT_BASE + token;
+    S.heard = [];
+    S.judged = false;
     outlet(2, "port", S.replyPort);
-    outlet(1, [PAIR_STATUS, CC_HIGH, h, PAIR_STATUS, CC_LOW, l, PAIR_STATUS, CC_CHECK, c]);
+    outlet(1, [PAIR_STATUS, CC_HIGH, h, PAIR_STATUS, CC_LOW, l, PAIR_STATUS, CC_CHECK, c,
+               PAIR_STATUS, CC_HIGH_ALT, h, PAIR_STATUS, CC_LOW_ALT, l, PAIR_STATUS, CC_CHECK_ALT, c]);
+    for (var p = LINK_FIRST_PORT; p < LINK_FIRST_PORT + LINK_PORTS; ++p) {
+        outlet(0, "port", p);
+        outlet(0, "/dp/ping", S.replyPort);
+    }
+}
+
+// The no-MIDI decision, once per sweep, from the /dp/here replies that came back.
+function judgeReplies() {
+    S.judged = true;
+    var heard = S.heard, unpaired = [], i;
+    for (i = 0; i < heard.length; ++i) if (heard[i].paired === 0) unpaired.push(heard[i]);
+    var why = "";
+    if (S.deviceOnTrack !== 1) why = "";
+    else if (heard.length === 0) why = "none";
+    else if (heard.length === 1 && unpaired.length === 0) why = "taken";
+    else if (heard.length > 1) why = "several";
+    else {
+        var inSet = countPluginsInSet();
+        if (inSet === 1) { connect(unpaired[0].port, unpaired[0].version); why = ""; }
+        else why = inSet > 1 ? "several" : "count";
+    }
+    if (why !== S.why) { S.why = why; redraw(); }
+    var diag = why === "" ? "" : why + " " + heard.map(function (r) {
+        return r.port + " v" + r.version + (r.paired ? " paired" : "") + (r.events >= 0 ? " midi " + r.events + "/" + r.ccs + "/" + r.tokens : "");
+    }).join(", ");
+    if (diag !== S.whyPosted) {
+        S.whyPosted = diag;
+        if (diag !== "") post("dooblr-prophet panel: not linked (" + diag + ")\n");
+    }
+}
+
+// How many dooblr-prophet plug-ins the whole Live set holds (tracks, returns, master, inside racks);
+// -1 if the Live API could not be read. Plain reads only: no observers, so no callbacks.
+function countPluginsInSet() {
+    if (!liveReady || inFind) return -1;
+    inFind = true;
+    var found = 0, visited = 0;
+    function walk(path, depth) {
+        var n = new LiveAPI(path).getcount("devices");
+        for (var i = 0; i < n && visited < SET_WALK_LIMIT; ++i) {
+            ++visited;
+            var dp = path + " devices " + i, d = new LiveAPI(dp);
+            if (String(d.get("class_name")) === "PluginDevice" && /dooblr-prophet/i.test(String(d.get("name")))) ++found;
+            if (depth < 4 && Number(d.get("can_have_chains")) === 1) {
+                var kinds = ["chains", "return_chains"];
+                for (var k = 0; k < kinds.length; ++k) {
+                    var cn = d.getcount(kinds[k]);
+                    for (var j = 0; j < cn; ++j) walk(dp + " " + kinds[k] + " " + j, depth + 1);
+                }
+            }
+        }
+    }
+    try {
+        var set = new LiveAPI("live_set");
+        var kinds = ["tracks", "return_tracks"];
+        for (var k = 0; k < kinds.length; ++k) {
+            var tn = set.getcount(kinds[k]);
+            for (var t = 0; t < tn; ++t) walk("live_set " + kinds[k] + " " + t, 0);
+        }
+        walk("live_set master_track", 0);
+    } catch (e) {
+        found = -1;
+    } finally {
+        inFind = false;
+    }
+    return visited >= SET_WALK_LIMIT ? -1 : found;
+}
+
+function connect(port, version) {
+    S.serverPort = port;
+    S.version = str(version);
+    S.why = "";
+    outlet(0, "port", S.serverPort);
+    S.state = "syncing";
+    S.lastHeardMs = S.lastHelloMs = now();
+    send("/dp/hello", S.replyPort);
+    redraw();
 }
 
 function lost() {
     S.serverPort = 0;
+    S.heard = []; S.judged = true;
     S.state = S.deviceOnTrack === 0 ? "missing" : "searching";
     S.menu = null; S.drag = null;
     S.lastPairMs = 0;
@@ -216,16 +308,16 @@ function anything() {
 }
 
 function handle(address, a) {
-    if (address === "/dp/announce" || address === "/dp/here") {
-        if (address === "/dp/announce" && a[2] !== S.token) return;
-        if (S.state === "linked" || S.state === "syncing") return;
-        S.serverPort = a[0];
-        S.version = str(a[1]);
-        outlet(0, "port", S.serverPort);
-        S.state = "syncing";
-        S.lastHeardMs = S.lastHelloMs = now();
-        send("/dp/hello", S.replyPort);
-        redraw();
+    if (address === "/dp/announce") {
+        if (a[2] !== S.token || S.state === "linked" || S.state === "syncing") return;
+        connect(a[0], a[1]);
+        return;
+    }
+    if (address === "/dp/here") {   // a ping reply: port version paired [events ch16CCs tokens] (0.3.1+)
+        if (S.state === "linked" || S.state === "syncing" || S.judged) return;
+        for (var r = 0; r < S.heard.length; ++r) if (S.heard[r].port === a[0]) return;
+        S.heard.push({ port: a[0], version: str(a[1]), paired: a[2] === 1 ? 1 : 0,
+                       events: a.length > 5 ? a[3] : -1, ccs: a.length > 5 ? a[4] : -1, tokens: a.length > 5 ? a[5] : -1 });
         return;
     }
     if (S.serverPort <= 0) return;
@@ -540,6 +632,12 @@ function paintAbsent(W) {
         detail = "Move this device in front of dooblr-prophet so its MIDI reaches the plug-in.";
     } else if (S.state === "syncing") {
         title = "Connecting to dooblr-prophet\u2026"; detail = "";
+    } else if (S.why === "taken") {
+        title = "dooblr-prophet is linked to another panel";
+        detail = "Linking resumes on its own when that panel is removed.";
+    } else if (S.why === "several") {
+        title = "Waiting for this track's dooblr-prophet";
+        detail = "Several are open, so this panel needs its track's MIDI to tell them apart.";
     } else {
         title = "dooblr-prophet is not answering";
         detail = "It needs version 0.3.0 or later. Linking resumes on its own when it answers.";
