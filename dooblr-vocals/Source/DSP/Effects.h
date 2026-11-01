@@ -33,7 +33,49 @@ namespace dooblrvocals::dsp
         bool hpfOn = false;      // high-pass (low cut), off by default so existing sessions are unchanged
         float hpfFreq = 80.0f;
         int hpfSlope = 1;        // 0 = 12, 1 = 24, 2 = 48 dB/oct
+
+        /** Per-band dynamic EQ (low shelf, mid bell, high shelf), off by default so existing sessions
+            and presets are unchanged. Same law and ranges as dooblr-q's dynamic bands. */
+        struct BandDynamics
+        {
+            bool on = false;
+            float rangeDb = 0.0f;       // -24..24: negative = the band cuts as it gets louder, positive = boosts
+            float thresholdDb = -24.0f; // -60..0 dBFS, detector level
+            float attackMs = 10.0f;     // 0.1..200
+            float releaseMs = 120.0f;   // 5..2000
+        };
+        std::array<BandDynamics, 3> dynamics {};
     };
+
+    /** Dynamic EQ helpers copied from dooblr-q (Source/DSP/DynamicEQBand.cpp, SvfFilter.cpp, read-only
+        there): the gain law and the side-chain detector filter, so both plug-ins behave the same. */
+    namespace eqdynamics
+    {
+        /** dB of gain change per dB above threshold (a 2:1 ratio-style law), soft knee, total clamp. */
+        inline constexpr float dynamicSlope = 0.5f, kneeWidthDb = 6.0f, maxTotalGainDb = 30.0f;
+
+        /** Detector level (dB) to the signed dynamic gain offset (dB), |offset| <= |range|. */
+        float computeDynamicGainDb (float levelDb, float thresholdDb, float rangeDb) noexcept;
+
+        /** TPT state-variable filter (Simper / Zavalishin), used as the side-chain detector. */
+        struct SvfCoefficients { double a1 = 0, a2 = 0, a3 = 0, m0 = 1, m1 = 0, m2 = 0; };
+        struct SvfState { double ic1 = 0, ic2 = 0; void reset() noexcept { ic1 = ic2 = 0; } };
+
+        enum class DetectorShape { lowShelf, bell, highShelf };
+        /** Low shelf: low-pass at the corner; high shelf: high-pass; bell: unity-peak band-pass from Q. */
+        SvfCoefficients makeDetectorCoefficients (DetectorShape shape, double frequency, double q, double sampleRate) noexcept;
+
+        inline float processSvf (float input, SvfState& s, const SvfCoefficients& c) noexcept
+        {
+            const auto v0 = (double) input;
+            const auto v3 = v0 - s.ic2;
+            const auto v1 = c.a1 * s.ic1 + c.a2 * v3;
+            const auto v2 = s.ic2 + c.a2 * s.ic1 + c.a3 * v3;
+            s.ic1 = 2.0 * v1 - s.ic1;
+            s.ic2 = 2.0 * v2 - s.ic2;
+            return (float) (c.m0 * v0 + c.m1 * v1 + c.m2 * v2);
+        }
+    }
 
     /** Butterworth high-pass, 12 / 24 / 48 dB/oct as 1 / 2 / 4 cascaded second-order sections. */
     class HighPass
@@ -65,8 +107,20 @@ namespace dooblrvocals::dsp
         void reset();
         void process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const EqSettings&) noexcept;
 
+        /** Dynamic EQ: coefficients are recomputed every subBlock samples while any band is dynamic. */
+        static constexpr int subBlock = 16;
+        /** The dynamic gain offset (dB) a band is applying now (0 when its dynamics are off). */
+        float getDynamicGainDb (int band) const noexcept { return band >= 0 && band < 3 ? dynamicGainDb[(size_t) band] : 0.0f; }
+        static bool isDynamic (const EqSettings::BandDynamics& d) noexcept { return d.on && std::abs (d.rangeDb) > 1.0e-3f; }
+
     private:
+        void setBandCoefficients (int band, const EqSettings&, float extraGainDb) noexcept;
+        void processDynamic (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const EqSettings&) noexcept;
+
         double sampleRate = 48000.0;
+        std::array<float, 3> dynamicGainDb {}, envelope {};
+        std::array<std::array<eqdynamics::SvfState, 2>, 3> detectorState {};
+        std::array<bool, 3> dynamicApplied {};
         Biquad low, mid, high;
         HighPass hpf;
         EqSettings last;

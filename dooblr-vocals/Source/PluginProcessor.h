@@ -58,6 +58,11 @@ public:
     juce::String getPresetName() const { return presetName; }
 
     float getGainReductionDb() const noexcept { return gainReductionDb.load(); }
+    /** Any thread: the dynamic EQ gain (dB) band 0 / 1 / 2 (low / mid / high) is applying. */
+    float getEqDynamicGainDb (int band) const noexcept
+    {
+        return band >= 0 && band < 3 ? eqDynamicGainDb[(size_t) band].load (std::memory_order_relaxed) : 0.0f;
+    }
 
     dooblrvocals::dsp::MeterTap& getMeterTap() noexcept { return meterTap; }
     dooblrvocals::dsp::PitchTap& getPitchTap() noexcept { return pitchTap; }
@@ -148,6 +153,7 @@ private:
     std::atomic<int> appliedKey { -1 };
 
     std::atomic<float> gainReductionDb { 0.0f };
+    std::array<std::atomic<float>, 3> eqDynamicGainDb {};
     int currentProgram = 0;
     juce::String presetName { "Init" };
     int reportedLatency = -1;

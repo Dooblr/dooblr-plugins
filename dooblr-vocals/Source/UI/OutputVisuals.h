@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <initializer_list>
 #include <vector>
 
@@ -90,6 +91,12 @@ namespace dooblrvocals::ui
 
         juce::ToggleButton& getPeakHoldButton() noexcept { return peakHoldButton; }
 
+        /** Dynamic EQ: where to read each band's live dynamic gain (dB; message thread). While any band's
+            Dynamic switch is on, the live response is drawn in the dynamic colour, shaded against the static curve. */
+        void setDynamicGainSource (std::function<float (int band)> source) { dynamicGainSource = std::move (source); }
+        bool isShowingDynamicCurve() const noexcept { return ! dynamicLine.isEmpty(); }
+        float getShownDynamicGainDb (int band) const noexcept { return band >= 0 && band < numBands ? shownDynamicDb[(size_t) band] : 0.0f; }
+
         void paint (juce::Graphics& g) override;
         void resized() override;
         void mouseMove (const juce::MouseEvent& e) override;
@@ -129,7 +136,9 @@ namespace dooblrvocals::ui
 
         juce::Rectangle<float> plot;
         juce::Image background;
-        juce::Path spectrumFill, spectrumLine, peakLine, curveLine, curveFill;
+        juce::Path spectrumFill, spectrumLine, peakLine, curveLine, curveFill, dynamicLine, dynamicFill;
+        std::function<float (int)> dynamicGainSource;
+        std::array<float, 3> shownDynamicDb {};
         std::vector<float> columnFreqs, columnLevels;
         juce::uint64 lastHash = 0;
         int hoverBand = -1, dragBand = -1;

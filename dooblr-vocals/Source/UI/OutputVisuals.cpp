@@ -363,7 +363,7 @@ namespace dooblrvocals::ui
         juce::uint64 hash = 17;
 
         for (const auto* id : { "eq_on", "eq_low_freq", "eq_low_gain", "eq_mid_freq", "eq_mid_gain", "eq_mid_q", "eq_high_freq", "eq_high_gain",
-                                "eq_hpf_on", "eq_hpf_freq", "eq_hpf_slope" })
+                                "eq_hpf_on", "eq_hpf_freq", "eq_hpf_slope", "eq_low_dyn_on", "eq_mid_dyn_on", "eq_high_dyn_on" })
             hash = mixHash (hash, gesture.get (id));
 
         return hash;
@@ -457,6 +457,44 @@ namespace dooblrvocals::ui
 
         curveFill.lineTo (plot.getX() + (float) columnFreqs.size() - 1.0f, gainToY (0.0f));
         curveFill.closeSubPath();
+
+        // Live dynamic response (as dooblr-q draws it): the static curve with each dynamic band's
+        // current gain offset, shaded against the static curve.
+        dynamicLine.clear();
+        dynamicFill.clear();
+        const bool dynOn[] { gesture.get ("eq_low_dyn_on") > 0.5f, gesture.get ("eq_mid_dyn_on") > 0.5f, gesture.get ("eq_high_dyn_on") > 0.5f };
+
+        if (! (dynOn[0] || dynOn[1] || dynOn[2]))
+            return;
+
+        const auto withDynamic = [this] (const char* gainId, int band)
+        {
+            return juce::jlimit (-dsp::eqdynamics::maxTotalGainDb, dsp::eqdynamics::maxTotalGainDb, gesture.get (gainId) + shownDynamicDb[(size_t) band]);
+        };
+        dsp::Biquad lowLive, midLive, highLive;
+        lowLive.setParameters (dsp::Biquad::Type::lowShelf, gesture.get ("eq_low_freq"), 0.707, withDynamic ("eq_low_gain", 0), rate);
+        midLive.setParameters (dsp::Biquad::Type::peak, gesture.get ("eq_mid_freq"), gesture.get ("eq_mid_q"), withDynamic ("eq_mid_gain", 1), rate);
+        highLive.setParameters (dsp::Biquad::Type::highShelf, gesture.get ("eq_high_freq"), 0.707, withDynamic ("eq_high_gain", 2), rate);
+        std::vector<juce::Point<float>> staticPoints;
+        staticPoints.reserve (columnFreqs.size());
+
+        for (size_t i = 0; i < columnFreqs.size(); ++i)
+        {
+            const auto f = (double) columnFreqs[i];
+            const auto hp = hpfOn ? highPass.magnitudeAt (f, rate) : 1.0;
+            const auto live = lowLive.magnitudeAt (f, rate) * midLive.magnitudeAt (f, rate) * highLive.magnitudeAt (f, rate) * hp;
+            const auto still = lowFilter.magnitudeAt (f, rate) * midFilter.magnitudeAt (f, rate) * highFilter.magnitudeAt (f, rate) * hp;
+            const auto toY = [this] (double m) { return gainToY (juce::jlimit (-30.0f, 30.0f, (float) (20.0 * std::log10 (std::max (1.0e-9, m))))); };
+            const auto point = juce::Point<float> (plot.getX() + (float) i, toY (live));
+            staticPoints.push_back ({ point.x, toY (still) });
+
+            if (i == 0) { dynamicLine.startNewSubPath (point); dynamicFill.startNewSubPath (point); }
+            else        { dynamicLine.lineTo (point); dynamicFill.lineTo (point); }
+        }
+
+        for (auto it = staticPoints.rbegin(); it != staticPoints.rend(); ++it)
+            dynamicFill.lineTo (*it);
+        dynamicFill.closeSubPath();
     }
 
     void EqDisplay::rebuildSpectrum()
@@ -525,7 +563,19 @@ namespace dooblrvocals::ui
             changed = true;
         }
 
-        if (paramHash() != lastHash)
+        // Live dynamic EQ gain: redraw the dynamic curve when any band has moved by 0.05 dB or more.
+        auto dynamicMoved = false;
+        for (int band = 0; band < numBands; ++band)
+        {
+            const auto live = dynamicGainSource != nullptr ? dynamicGainSource (band) : 0.0f;
+            if (std::abs (live - shownDynamicDb[(size_t) band]) >= 0.05f || (live == 0.0f && shownDynamicDb[(size_t) band] != 0.0f))
+            {
+                shownDynamicDb[(size_t) band] = live;
+                dynamicMoved = true;
+            }
+        }
+
+        if (paramHash() != lastHash || dynamicMoved)
         {
             rebuildCurve();
             updateReadout (dragBand >= 0 ? dragBand : hoverBand);
@@ -583,6 +633,14 @@ namespace dooblrvocals::ui
             g.fillPath (curveFill);
             g.setColour (colour);
             g.strokePath (curveLine, juce::PathStrokeType (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            if (on && ! dynamicLine.isEmpty())
+            {
+                g.setColour (Palette::dynamic.withAlpha (0.18f));
+                g.fillPath (dynamicFill);
+                g.setColour (Palette::dynamic);
+                g.strokePath (dynamicLine, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+            }
         }
 
         for (int b = 0; b < numBands; ++b)

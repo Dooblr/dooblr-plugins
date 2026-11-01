@@ -33,6 +33,8 @@ namespace dooblrvocals::dsp
         void process (juce::AudioBuffer<float>& buffer, int numSamples, const VocalSettings& settings,
                       const ChainOrder& order, MeterBlock* meter, MeterTap* spectrumTap) noexcept;
 
+        const ThreeBandEq& getEq() const noexcept { return eq; }
+
     private:
         Gate gate;
         ThreeBandEq eq;

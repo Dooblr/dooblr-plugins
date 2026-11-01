@@ -5030,6 +5030,263 @@ namespace
         }
     }
 
+    // Dynamic EQ (ported from dooblr-q): the gain law, static response unchanged while Dynamic is off,
+    // gain reduction following the threshold on a tone, attack / release timing, band-selective
+    // detectors, and the panel / live curve.
+    void testEqDynamics()
+    {
+        namespace dyn = dsp::eqdynamics;
+        auto tone = [] (double hz, float amplitude, int samples, double rate = sampleRate, int offset = 0)
+        {
+            juce::AudioBuffer<float> b (2, samples);
+            for (int i = 0; i < samples; ++i)
+            {
+                const auto x = amplitude * (float) std::sin (2.0 * juce::MathConstants<double>::pi * hz * (i + offset) / rate);
+                b.setSample (0, i, x); b.setSample (1, i, x);
+            }
+            return b;
+        };
+        auto midDynamic = [] (float rangeDb, float thresholdDb, float attackMs, float releaseMs)
+        {
+            dsp::EqSettings s;
+            s.enabled = true;
+            s.midFreq = 1000.0f; s.midQ = 1.0f; s.midGainDb = 0.0f;
+            s.dynamics[1] = { true, rangeDb, thresholdDb, attackMs, releaseMs };
+            return s;
+        };
+
+        // 1. Gain law, as in dooblr-q: 2:1 above threshold, 6 dB soft knee, clamped to the range, signed by it.
+        check (std::abs (dyn::computeDynamicGainDb (-14.0f, -24.0f, -6.0f) + 5.0f) < 1.0e-5f, "10 dB over at range -6: -5 dB");
+        check (std::abs (dyn::computeDynamicGainDb (0.0f, -24.0f, -6.0f) + 6.0f) < 1.0e-5f, "clamped to the range");
+        check (std::abs (dyn::computeDynamicGainDb (-24.0f, -24.0f, 12.0f) - 0.375f) < 1.0e-5f, "knee: +0.375 dB at the threshold for a positive range");
+        check (dyn::computeDynamicGainDb (-28.0f, -24.0f, -12.0f) == 0.0f, "no change below the knee");
+
+        // 2. Dynamic off: the static response is bit-identical whatever the dynamic controls say.
+        {
+            const auto input = tone (1000.0, 0.5f, (int) sampleRate);
+            dsp::EqSettings plain;
+            plain.enabled = true; plain.lowGainDb = 3.0f; plain.midGainDb = -4.0f; plain.highGainDb = 2.0f;
+            auto moved = plain;
+            for (auto& d : moved.dynamics) d = { false, -18.0f, -50.0f, 1.0f, 50.0f };
+            auto zeroRange = plain;
+            for (auto& d : zeroRange.dynamics) d = { true, 0.0f, -50.0f, 1.0f, 50.0f };
+            auto run = [&] (const dsp::EqSettings& s)
+            {
+                dsp::ThreeBandEq eq; eq.prepare (sampleRate);
+                auto b = input;
+                for (int pos = 0; pos < b.getNumSamples(); pos += 32)
+                    eq.process (b, pos, std::min (32, b.getNumSamples() - pos), s);
+                return b;
+            };
+            const auto a = run (plain), b = run (moved), c = run (zeroRange);
+            auto same = true;
+            for (int i = 0; i < a.getNumSamples(); ++i)
+                same = same && juce::exactlyEqual (a.getSample (0, i), b.getSample (0, i)) && juce::exactlyEqual (a.getSample (0, i), c.getSample (0, i));
+            check (same, "Dynamic off (or Range 0): EQ output bit-identical to the static EQ");
+
+            // On, then off again: back on the static curve exactly.
+            dsp::ThreeBandEq eq; eq.prepare (sampleRate);
+            auto on = plain; on.dynamics[1] = { true, -12.0f, -40.0f, 5.0f, 50.0f };
+            auto b2 = input;
+            const auto half = b2.getNumSamples() / 2;
+            for (int pos = 0; pos < b2.getNumSamples(); pos += 32)
+                eq.process (b2, pos, std::min (32, b2.getNumSamples() - pos), pos < half ? on : plain);
+            float maxDiff = 0.0f;
+            for (int i = half + 4800; i < b2.getNumSamples(); ++i)
+                maxDiff = std::max (maxDiff, std::abs (b2.getSample (0, i) - a.getSample (0, i)));
+            check (maxDiff < 1.0e-4f, "switching Dynamic off restores the static response (max diff " + format (maxDiff, 7) + ")");
+            check (eq.getDynamicGainDb (1) == 0.0f, "no dynamic gain reported once off");
+        }
+
+        // Reference: the documented detector (one-pole peak follower, separate attack / release, on the
+        // rectified band signal) run on an ideal sine; returns the envelope after each 16-sample sub-block.
+        auto referenceEnvelope = [] (double hz, float amplitude, float attackMs, float releaseMs, int samples)
+        {
+            const auto a = std::exp (-1.0 / (attackMs * 0.001 * sampleRate)), r = std::exp (-1.0 / (releaseMs * 0.001 * sampleRate));
+            std::vector<double> perBlock;
+            double env = 0.0;
+            for (int i = 0; i < samples; ++i)
+            {
+                const auto level = std::abs (amplitude * std::sin (2.0 * juce::MathConstants<double>::pi * hz * i / sampleRate));
+                env = level + (level > env ? a : r) * (env - level);
+                if ((i + 1) % 16 == 0)
+                    perBlock.push_back (env);
+            }
+            return perBlock;
+        };
+
+        // 3. Gain reduction follows the threshold: steady 1 kHz tones at several levels through a dynamic
+        //    mid bell (Range -12, attack 10 ms, release 120 ms) at two thresholds. On a sine the follower
+        //    settles about 1 dB under the peak, so the reference is the law applied to the reference envelope.
+        std::map<std::pair<int, int>, float> measuredGain;
+        for (float threshold : { -30.0f, -20.0f })
+            for (float levelDb : { -50.0f, -26.0f, -15.0f, -6.0f, 0.0f })
+            {
+                dsp::ThreeBandEq eq; eq.prepare (sampleRate);
+                const auto s = midDynamic (-12.0f, threshold, 10.0f, 120.0f);
+                const auto amplitude = juce::Decibels::decibelsToGain (levelDb);
+                auto b = tone (1000.0, amplitude, (int) sampleRate);
+                for (int pos = 0; pos < b.getNumSamples(); pos += 32)
+                    eq.process (b, pos, std::min (32, b.getNumSamples() - pos), s);
+                const auto inRms = (double) amplitude / std::sqrt (2.0);
+                const auto outRms = (double) b.getRMSLevel (0, b.getNumSamples() / 2, b.getNumSamples() / 2);
+                const auto measured = (float) (20.0 * std::log10 (outRms / inRms));
+                const auto ref = referenceEnvelope (1000.0, amplitude, 10.0f, 120.0f, (int) sampleRate).back();
+                const auto expected = dyn::computeDynamicGainDb (juce::Decibels::gainToDecibels ((float) ref, -120.0f), threshold, -12.0f);
+                measuredGain[{ (int) threshold, (int) levelDb }] = measured;
+                const auto k = "level " + format (levelDb, 0) + " dBFS, threshold " + format (threshold, 0) + " dB";
+                note ("dynamic mid at " + k + ": gain " + format (measured, 2) + " dB (reference " + format (expected, 2)
+                      + ", law at the peak " + format (dyn::computeDynamicGainDb (levelDb, threshold, -12.0f), 2) + ", reported " + format (eq.getDynamicGainDb (1), 2) + ")");
+                check (std::abs (measured - expected) < 0.15f, "gain reduction matches the gain law on the detector envelope (" + k + ")");
+                check (std::abs (eq.getDynamicGainDb (1) - measured) < 0.25f, "reported dynamic gain matches the output (" + k + ")");
+            }
+        check (std::abs ((measuredGain[{ -30, -6 }] - measuredGain[{ -30, -15 }]) + 4.5f) < 0.1f, "2:1 above the threshold: 9 dB more level, 4.5 dB more cut");
+        check (std::abs ((measuredGain[{ -20, -15 }] - measuredGain[{ -30, -15 }]) - 5.0f) < 0.1f
+               && std::abs ((measuredGain[{ -20, -6 }] - measuredGain[{ -30, -6 }]) - 5.0f) < 0.1f, "raising the threshold 10 dB takes 5 dB off the cut");
+        check (std::abs (measuredGain[{ -30, 0 }] + 12.0f) < 0.05f, "the cut stops at the Range (-12 dB)");
+        check (std::abs (measuredGain[{ -30, -50 }]) < 0.01f && std::abs (measuredGain[{ -20, -26 }]) < 0.01f, "below the threshold (and knee): no change");
+
+        // 4. Timing. Release: after a loud tone stops, the detector decays exactly with the release time,
+        //    so the gain recovers 3.01 dB (6.02 dB of level at 2:1) in release * ln 2.
+        //    Attack: the time for the cut to build to half the level (-16.99 dB of a -20 dB cut) matches the
+        //    reference follower on the same tone, and ten times the attack takes ~ten times as long.
+        auto releaseTime = [&] (float releaseMs)
+        {
+            dsp::ThreeBandEq eq; eq.prepare (sampleRate);
+            const auto s = midDynamic (-24.0f, -40.0f, 1.0f, releaseMs);
+            auto loud = tone (1000.0, 1.0f, (int) (0.5 * sampleRate));
+            for (int pos = 0; pos < loud.getNumSamples(); pos += 16)
+                eq.process (loud, pos, 16, s);
+            const auto start = eq.getDynamicGainDb (1);
+            juce::AudioBuffer<float> quiet (2, 16);
+            for (int n = 1; n < (int) sampleRate; ++n)
+            {
+                quiet.clear();
+                eq.process (quiet, 0, 16, s);
+                if (eq.getDynamicGainDb (1) >= start + 3.0103f)
+                    return std::pair<double, float> { 1000.0 * n * 16 / sampleRate, start };
+            }
+            return std::pair<double, float> { -1.0, start };
+        };
+        auto attackTime = [&] (float attackMs)
+        {
+            dsp::ThreeBandEq eq; eq.prepare (sampleRate);
+            const auto s = midDynamic (-24.0f, -40.0f, attackMs, 1000.0f);
+            auto loud = tone (1000.0, 1.0f, (int) sampleRate);
+            // Final gain about -0.5 * 40 = -20 dB; time for the detector to reach half the level (-6 dB):
+            // the gain then reads -0.5 * (40 - 6.02) = -16.99 dB.
+            for (int pos = 0; pos < loud.getNumSamples(); pos += 16)
+            {
+                eq.process (loud, pos, 16, s);
+                if (eq.getDynamicGainDb (1) <= -16.99f)
+                    return 1000.0 * (pos + 16) / sampleRate;
+            }
+            return -1.0;
+        };
+        for (float release : { 50.0f, 120.0f, 500.0f })
+        {
+            const auto [ms, start] = releaseTime (release);
+            const auto expected = release * std::log (2.0);
+            note ("release " + format (release, 0) + " ms: 3 dB recovery in " + format (ms, 2) + " ms (expected " + format (expected, 2) + ", from " + format (start, 2) + " dB)");
+            check (std::abs (ms - expected) < 0.02 * expected + 0.5, "release time constant (" + format (release, 0) + " ms)");
+        }
+        auto referenceAttack = [&] (float attackMs)
+        {
+            const auto env = referenceEnvelope (1000.0, 1.0f, attackMs, 1000.0f, (int) sampleRate);
+            for (size_t n = 0; n < env.size(); ++n)
+                if (dyn::computeDynamicGainDb (juce::Decibels::gainToDecibels ((float) env[n], -120.0f), -40.0f, -24.0f) <= -16.99f)
+                    return 1000.0 * (double) (n + 1) * 16.0 / sampleRate;
+            return -1.0;
+        };
+        for (float attack : { 1.0f, 5.0f, 50.0f })
+        {
+            const auto ms = attackTime (attack), ref = referenceAttack (attack);
+            note ("attack " + format (attack, 0) + " ms: cut half built in " + format (ms, 2) + " ms (reference follower " + format (ref, 2)
+                  + " ms; one-pole on a steady level " + format (attack * std::log (2.0), 2) + " ms)");
+            // Allowance: two 16-sample sub-blocks (0.67 ms) for the detector filter ringing up at the onset.
+            check (ref > 0.0 && std::abs (ms - ref) < 0.05 * ref + 0.7, "attack time matches the reference follower (" + format (attack, 0) + " ms)");
+        }
+        const auto fast = attackTime (5.0f), slow = attackTime (50.0f);
+        check (slow / fast > 8.0 && slow / fast < 12.0, "ten times the attack, ~ten times as long (" + format (slow / fast, 2) + "x)");
+
+        // 5. Each band's detector hears its own region: a dynamic high shelf (8 kHz) reacts to 10 kHz, not to 200 Hz.
+        {
+            auto highGain = [&] (double hz)
+            {
+                dsp::ThreeBandEq eq; eq.prepare (sampleRate);
+                dsp::EqSettings s; s.enabled = true;
+                s.dynamics[2] = { true, -12.0f, -30.0f, 5.0f, 100.0f };
+                auto b = tone (hz, 0.5f, (int) (0.5 * sampleRate));
+                for (int pos = 0; pos < b.getNumSamples(); pos += 32)
+                    eq.process (b, pos, 32, s);
+                return eq.getDynamicGainDb (2);
+            };
+            const auto sib = highGain (10000.0), lowTone = highGain (200.0);
+            note ("dynamic high shelf: 10 kHz tone " + format (sib, 2) + " dB, 200 Hz tone " + format (lowTone, 2) + " dB");
+            check (sib < -8.0f && lowTone > -0.01f, "the high band's detector is band-selective");
+        }
+
+        // 6. Through the plug-in: defaults off, presets / sessions unchanged, dynamic cut reaches the output.
+        {
+            auto input = [] (int i) { return (float) (0.5 * std::sin (2.0 * juce::MathConstants<double>::pi * 1000.0 * i / sampleRate)); };
+            auto a = makeProcessor(), b = makeProcessor();
+            for (auto* p : { a.get(), b.get() }) { setParam (*p, "pitch_on", 0.0f); setParam (*p, "eq_on", 1.0f); setParam (*p, "eq_mid_gain", 2.0f); }
+            for (const auto* band : { "low", "mid", "high" })
+            {
+                const auto id = [band] (const char* what) { return juce::String ("eq_") + band + "_dyn_" + what; };
+                check (getPlain (*a, id ("on")) < 0.5f && std::abs (getPlain (*a, id ("range"))) < 1.0e-6f
+                       && std::abs (getPlain (*a, id ("thresh")) + 24.0f) < 0.01f && std::abs (getPlain (*a, id ("attack")) - 10.0f) < 0.01f
+                       && std::abs (getPlain (*a, id ("release")) - 120.0f) < 0.1f,
+                       std::string ("dynamic defaults (") + band + "): off, 0 dB, -24 dB, 10 ms, 120 ms");
+                setParam (*b, id ("range"), -18.0f);
+                setParam (*b, id ("thresh"), -50.0f);
+                setParam (*b, id ("attack"), 1.0f);
+            }
+            const auto outA = render (*a, input, (int) sampleRate), outB = render (*b, input, (int) sampleRate);
+            auto same = true;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < outA.getNumSamples(); ++i)
+                    same = same && juce::exactlyEqual (outA.getSample (ch, i), outB.getSample (ch, i));
+            check (same, "plug-in: Dynamic off, moved dynamic controls render bit-identical");
+
+            setParam (*b, "eq_mid_dyn_on", 1.0f);
+            const auto outC = render (*b, input, (int) sampleRate);
+            const auto before = juce::Decibels::gainToDecibels (outA.getRMSLevel (0, outA.getNumSamples() / 2, outA.getNumSamples() / 2));
+            const auto after = juce::Decibels::gainToDecibels (outC.getRMSLevel (0, outC.getNumSamples() / 2, outC.getNumSamples() / 2));
+            note ("plug-in, 1 kHz at -6 dBFS: dynamic mid (Range -18, Threshold -50) " + format (after - before, 2) + " dB, reported "
+                  + format (b->getEqDynamicGainDb (1), 2) + " dB");
+            check (after - before < -15.0f, "plug-in: the dynamic mid cut reaches the output");
+            check (b->getEqDynamicGainDb (1) < -15.0f && b->getEqDynamicGainDb (0) == 0.0f, "plug-in reports the live dynamic gain per band");
+
+            // Panel and live curve.
+            setParam (*b, "eq_mid_gain", 4.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> base (b->createEditorAndMakeActive());
+            if (auto* editor = dynamic_cast<Editor*> (base.get()))
+            {
+                editor->setSize (1080, 660);
+                editor->selectPage (Editor::eqPage);
+                editor->setEqDynamicBand (1);
+                auto* dynPanel = editor->getEqDynamicBandBox().findParentComponentOfClass<dooblrvocals::ui::ControlPanel>();
+                check (dynPanel != nullptr, "Dynamic EQ band box sits in a panel");
+                auto shown = [&] (const juce::String& id) { return dynPanel != nullptr && dynPanel->isShown (id); };
+                check (shown ("eq_mid_dyn_range") && ! shown ("eq_low_dyn_range") && ! shown ("eq_high_dyn_range"), "Mid band's dynamic controls shown");
+                editor->setEqDynamicBand (2);
+                check (shown ("eq_high_dyn_on") && ! shown ("eq_mid_dyn_on"), "band box switches to the High band's controls");
+                const auto slot = dynPanel != nullptr ? dynPanel->getSlotBounds (1) : juce::Rectangle<int>();
+                editor->setEqDynamicBand (0);
+                check (dynPanel != nullptr && dynPanel->getSlotBounds (1) == slot, "switching bands never moves the controls");
+                editor->setEqDynamicBand (1);
+                juce::HeapBlock<float> silence (64, true);
+                editor->getEqDisplay().update (silence.get(), 0, sampleRate, 0.0);
+                check (editor->getEqDisplay().isShowingDynamicCurve(), "EQ display draws the live dynamic curve");
+                check (std::abs (editor->getEqDisplay().getShownDynamicGainDb (1) - b->getEqDynamicGainDb (1)) < 0.06f, "live curve uses the band's current dynamic gain");
+                const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+                saveSnapshot (image, "-eq-dynamic");
+                check (image.isValid(), "EQ page renders with the Dynamic EQ panel");
+            }
+        }
+    }
+
     void testCompressorKnee()
     {
         using C = dsp::Compressor;
@@ -5598,6 +5855,7 @@ int main()
         { "compressor: knee control", testCompressorKnee },
         { "eq: high-pass filter", testEqHighPass },
         { "noise reducer: spectral denoise", testNoiseReducer },
+        { "eq: dynamic EQ", testEqDynamics },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

@@ -76,6 +76,11 @@ namespace dooblrvocals::dsp
         e.highFreq = lerp (from.eq.highFreq, f.highFreq, a);
         e.highGainDb = lerp (from.eq.highGainDb, f.highGainDb, a);
         e.hpfFreq = lerp (from.eq.hpfFreq, f.hpfFreq, a);
+        for (size_t band = 0; band < e.dynamics.size(); ++band)
+        {
+            e.dynamics[band].rangeDb = lerp (from.eq.dynamics[band].rangeDb, f.dynamics[band].rangeDb, a);
+            e.dynamics[band].thresholdDb = lerp (from.eq.dynamics[band].thresholdDb, f.dynamics[band].thresholdDb, a);
+        }
 
         auto& c = current.compressor;
         const auto& d = to.compressor;

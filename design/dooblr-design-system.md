@@ -906,6 +906,14 @@ Pitch page: a third panel, **Noise reducer**, after Detector: Denoise pill toggl
 - **Short windows:** with three panels the Pitch page could squeeze the display at the 940 × 600 minimum. When a page's panels would leave the display less than 200 px (Pitch page: plus the 34 px key-follow strip), every panel on that page uses compact rows (`ControlPanel::compactKnobHeight` 68 px instead of 84). Otherwise the layout is unchanged.
 - No new colour, font size, radius or alpha token.
 
+### 11.10 Dynamic EQ (added 2026-11-01)
+EQ page: a third panel, **Dynamic EQ**, after High-pass. It starts with a band picker combo (Low / Mid / High, 84 px; editor view state, not a parameter), then the picked band's controls in fixed slots, so switching bands never moves anything: **Dynamic** pill toggle (96 px), **Range** knob (−24…+24 dB, default 0; fill in `Palette::dynamic`), **Threshold** (−60…0 dB, default −24), **Attack** (0.1–200 ms, default 10), **Release** (5–2000 ms, default 120). While a band's Dynamic switch is off its four knobs are dimmed (alpha 0.4). Parameters `eq_{low,mid,high}_dyn_{on,range,thresh,attack,release}`; all off / neutral by default, so presets and sessions render bit-identical. `V:DSP/Effects.cpp` `ThreeBandEq::processDynamic`; `V:PluginEditor.cpp` `setEqDynamicBand`.
+- **Ported from dooblr-q (copied, dooblr-q unchanged):** the gain law `computeDynamicGainDb` (2:1 above the threshold, 6 dB soft knee, clamped to the Range and signed by it, so a negative range cuts and a positive range boosts; total band gain clamped to ±30 dB), the SVF detector filters (low shelf → low-pass, bell → band-pass at the band's frequency and Q, high shelf → high-pass) and the one-pole peak envelope with separate attack / release. Marked in `Effects.h` as copied from dooblr-q.
+- **Signal path:** each band's detector listens to that band's input in the series EQ, stereo-linked (max of the channels). The band's coefficients follow the gain every 16 samples. With no band dynamic, the EQ runs its original static loop.
+- **Display:** while a band is dynamic, the EQ curve gains a second, live curve in `Palette::dynamic` (1.5 px), shaded against the static curve at alpha 0.18. It redraws when a band's live gain moves by 0.05 dB.
+- **Deviation from dooblr-q:** the RangeRing (the ring around the gain knob showing the dynamic range) is not ported; the live curve and the dimmed controls carry that information here.
+- Short windows: the page's three panels use the compact rows of §11.9 when needed. No new colour, font size, radius or alpha token.
+
 ---
 
 ## 12. Reusable patterns (S)
@@ -969,6 +977,7 @@ FFT bins are linear in frequency, display points are logarithmic, so at the low 
 
 ## 13. Changelog
 
+- **2026-11-01**: Added §11.10 dooblr-vocals Dynamic EQ panel (EQ page: band picker, per-band Dynamic / Range / Threshold / Attack / Release, live dynamic curve), ported from dooblr-q (no RangeRing). Additive only; existing tokens only.
 - **2026-11-01**: Added §11.9 dooblr-vocals Noise reducer panel (Pitch page: Denoise, Noise floor Learned/Auto, Amount, Sensitivity, Learn Noise, status readout). Additive only; existing tokens only.
 - **2026-10-31**: Added §11.8 dooblr-vocals EQ high-pass (low-cut 20–500 Hz, 12 / 24 / 48 dB/oct, off by default, drawn on the EQ curve). Additive only; existing tokens only.
 - **2026-10-31**: Added §11.7 dooblr-vocals Compressor Knee (0–24 dB soft knee, default 6 dB, knee region drawn on the transfer curve). Additive only; existing tokens only, no rule, token name or value changed.

@@ -201,6 +201,18 @@ namespace dooblrvocals::params
         addFloat (layout, "eq_hpf_freq", "EQ High-Pass Freq", logRange (20.0f, 500.0f), 80.0f, hzString(), "Hz");
         addChoice (layout, "eq_hpf_slope", "EQ High-Pass Slope", { "12 dB/oct", "24 dB/oct", "48 dB/oct" }, 1);
 
+        // Dynamic EQ per band (ranges / defaults as in dooblr-q). Off by default: presets are unchanged.
+        for (const auto* band : { "low", "mid", "high" })
+        {
+            const auto id = [band] (const char* what) { return juce::String ("eq_") + band + "_dyn_" + what; };
+            const auto name = juce::String ("EQ ") + (juce::String (band) == "low" ? "Low" : (juce::String (band) == "mid" ? "Mid" : "High"));
+            addBool (layout, id ("on"), name + " Dynamic", false);
+            addFloat (layout, id ("range"), name + " Dyn Range", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
+            addFloat (layout, id ("thresh"), name + " Dyn Threshold", range (-60.0f, 0.0f), -24.0f, suffixed (" dB", 1), "dB");
+            addFloat (layout, id ("attack"), name + " Dyn Attack", logRange (0.1f, 200.0f), 10.0f, msString(), "ms");
+            addFloat (layout, id ("release"), name + " Dyn Release", logRange (5.0f, 2000.0f), 120.0f, msString(), "ms");
+        }
+
         // Spectral noise reducer (first in the chain). Off by default: presets are unchanged.
         {
             const dsp::NoiseReducerSettings nr;
@@ -335,7 +347,7 @@ namespace dooblrvocals::params
 
     SettingsReader::SettingsReader (juce::AudioProcessorValueTreeState& s) : state (s)
     {
-        auto getId = [this] (const char* id) { return state.getRawParameterValue (id); };
+        auto getId = [this] (const juce::String& id) { return state.getRawParameterValue (id); };
 
         pitchOn = getId ("pitch_on"); corrMode = getId ("corr_mode"); corrKey = getId ("corr_key");
         corrScale = getId ("corr_scale"); corrMask = getId ("corr_mask");
@@ -347,6 +359,12 @@ namespace dooblrvocals::params
         eqMidFreq = getId ("eq_mid_freq"); eqMidGain = getId ("eq_mid_gain"); eqMidQ = getId ("eq_mid_q");
         eqHighFreq = getId ("eq_high_freq"); eqHighGain = getId ("eq_high_gain");
         eqHpfOn = getId ("eq_hpf_on"); eqHpfFreq = getId ("eq_hpf_freq"); eqHpfSlope = getId ("eq_hpf_slope");
+        for (size_t band = 0; band < 3; ++band)
+        {
+            const juce::String prefix = juce::String ("eq_") + (band == 0 ? "low" : (band == 1 ? "mid" : "high")) + "_dyn_";
+            eqDyn[band] = { getId (prefix + "on"), getId (prefix + "range"), getId (prefix + "thresh"),
+                            getId (prefix + "attack"), getId (prefix + "release") };
+        }
         nrOn = getId ("nr_on"); nrMode = getId ("nr_mode"); nrAmount = getId ("nr_amount"); nrSensitivity = getId ("nr_sensitivity");
         compOn = getId ("comp_on"); compThreshold = getId ("comp_threshold"); compRatio = getId ("comp_ratio");
         compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup"); compKnee = getId ("comp_knee");
@@ -415,6 +433,11 @@ namespace dooblrvocals::params
         s.eq.hpfOn = b (eqHpfOn);
         s.eq.hpfFreq = f (eqHpfFreq);
         s.eq.hpfSlope = juce::jlimit (0, 2, i (eqHpfSlope));
+        for (size_t band = 0; band < 3; ++band)
+        {
+            const auto& d = eqDyn[band];
+            s.eq.dynamics[band] = { b (d.on), f (d.range), f (d.threshold), f (d.attack), f (d.release) };
+        }
         s.compressor = { b (compOn), f (compThreshold), f (compRatio), f (compAttack), f (compRelease), f (compMakeup), f (compKnee) };
         s.limiter = { i (limMode), f (limCeiling), f (limRelease), f (outputGain) };
         s.chainOrder = i (chainOrder);

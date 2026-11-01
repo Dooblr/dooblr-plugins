@@ -120,6 +120,66 @@ namespace dooblrvocals::dsp
     }
 
     //==============================================================================
+    // Copied from dooblr-q (Source/DSP/DynamicEQBand.cpp computeDynamicGainDb and
+    // Source/DSP/SvfFilter.cpp prewarp / finalise / makeDetectorCoefficients); dooblr-q is unchanged.
+    namespace eqdynamics
+    {
+        float computeDynamicGainDb (float levelDb, float thresholdDb, float rangeDb) noexcept
+        {
+            const auto over = levelDb - thresholdDb;
+            const auto halfKnee = 0.5f * kneeWidthDb;
+
+            float overWithKnee = 0.0f;
+
+            if (over >= halfKnee)
+                overWithKnee = over;
+            else if (over > -halfKnee)
+                overWithKnee = (over + halfKnee) * (over + halfKnee) / (2.0f * kneeWidthDb);
+
+            const auto magnitude = std::min (std::abs (rangeDb), dynamicSlope * overWithKnee);
+            return rangeDb < 0.0f ? -magnitude : magnitude;
+        }
+
+        namespace
+        {
+            double prewarp (double frequency, double sampleRate) noexcept
+            {
+                const auto f = std::clamp (frequency, 10.0, 0.49 * sampleRate);
+                return std::tan (juce::MathConstants<double>::pi * f / sampleRate);
+            }
+
+            SvfCoefficients finalise (double g, double k, double m0, double m1, double m2) noexcept
+            {
+                SvfCoefficients c;
+                c.a1 = 1.0 / (1.0 + g * (g + k));
+                c.a2 = g * c.a1;
+                c.a3 = g * c.a2;
+                c.m0 = m0;
+                c.m1 = m1;
+                c.m2 = m2;
+                return c;
+            }
+        }
+
+        SvfCoefficients makeDetectorCoefficients (DetectorShape shape, double frequency, double q, double sampleRate) noexcept
+        {
+            const auto w = prewarp (frequency, sampleRate);
+            constexpr auto butterworthK = 1.4142135623730951;
+
+            switch (shape)
+            {
+                case DetectorShape::lowShelf:  return finalise (w, butterworthK, 0.0, 0.0, 1.0);
+                case DetectorShape::highShelf: return finalise (w, butterworthK, 1.0, -butterworthK, -1.0);
+                case DetectorShape::bell:      break;
+            }
+
+            // k * band-pass output has unity gain at the centre frequency.
+            const auto k = 1.0 / std::max (q, 0.025);
+            return finalise (w, k, 0.0, k, 0.0);
+        }
+    }
+
+    //==============================================================================
     void ThreeBandEq::prepare (double newSampleRate)
     {
         sampleRate = newSampleRate;
@@ -133,12 +193,121 @@ namespace dooblrvocals::dsp
         mid.reset();
         high.reset();
         hpf.reset();
+        for (auto& band : detectorState)
+            for (auto& state : band)
+                state.reset();
+        envelope.fill (0.0f);
+        dynamicGainDb.fill (0.0f);
+        hasCoefficients = false; // also drops any dynamic gain left in the coefficients
+        dynamicApplied.fill (false);
+    }
+
+    void ThreeBandEq::setBandCoefficients (int band, const EqSettings& s, float extraGainDb) noexcept
+    {
+        const auto total = [extraGainDb] (float gainDb)
+        {
+            return extraGainDb == 0.0f ? (double) gainDb
+                                       : (double) std::clamp (gainDb + extraGainDb, -eqdynamics::maxTotalGainDb, eqdynamics::maxTotalGainDb);
+        };
+
+        if (band == 0)      low.setParameters (Biquad::Type::lowShelf, s.lowFreq, 0.707, total (s.lowGainDb), sampleRate);
+        else if (band == 1) mid.setParameters (Biquad::Type::peak, s.midFreq, s.midQ, total (s.midGainDb), sampleRate);
+        else                high.setParameters (Biquad::Type::highShelf, s.highFreq, 0.707, total (s.highGainDb), sampleRate);
+    }
+
+    void ThreeBandEq::processDynamic (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const EqSettings& s) noexcept
+    {
+        using namespace eqdynamics;
+        const auto onePole = [this] (float ms)
+        {
+            const auto samples = (double) ms * 0.001 * sampleRate;
+            return samples > 0.0 ? (float) std::exp (-1.0 / samples) : 0.0f;
+        };
+
+        std::array<bool, 3> dyn {};
+        std::array<float, 3> attack {}, release {};
+        std::array<SvfCoefficients, 3> detector {};
+        const DetectorShape shapes[] { DetectorShape::lowShelf, DetectorShape::bell, DetectorShape::highShelf };
+        const float freqs[] { s.lowFreq, s.midFreq, s.highFreq };
+
+        for (size_t b = 0; b < 3; ++b)
+        {
+            dyn[b] = isDynamic (s.dynamics[b]);
+
+            if (dyn[b])
+            {
+                attack[b] = onePole (s.dynamics[b].attackMs);
+                release[b] = onePole (s.dynamics[b].releaseMs);
+                detector[b] = makeDetectorCoefficients (shapes[b], freqs[b], b == 1 ? s.midQ : 0.707, sampleRate);
+            }
+            else if (dynamicApplied[b])
+            {
+                setBandCoefficients ((int) b, s, 0.0f); // back to the static curve
+                dynamicApplied[b] = false;
+                envelope[b] = dynamicGainDb[b] = 0.0f;
+                for (auto& state : detectorState[b]) state.reset();
+            }
+        }
+
+        const auto numChannels = std::min (2, buffer.getNumChannels());
+        std::array<float*, 2> data {};
+        for (int ch = 0; ch < numChannels; ++ch)
+            data[(size_t) ch] = buffer.getWritePointer (ch, startSample);
+
+        for (int pos = 0; pos < numSamples; pos += subBlock)
+        {
+            const auto n = std::min (subBlock, numSamples - pos);
+
+            // Coefficients for this sub-block, from the dynamic gain measured up to its start.
+            for (size_t b = 0; b < 3; ++b)
+                if (dyn[b])
+                {
+                    setBandCoefficients ((int) b, s, dynamicGainDb[b]);
+                    dynamicApplied[b] = true;
+                }
+
+            for (int i = pos; i < pos + n; ++i)
+            {
+                std::array<float, 3> level {}; // stereo linked: the louder channel drives each band
+
+                for (int ch = 0; ch < numChannels; ++ch)
+                {
+                    auto x = data[(size_t) ch][i];
+
+                    if (s.hpfOn)
+                        x = hpf.process (ch, x);
+
+                    // Each band's detector listens to that band's own input.
+                    if (dyn[0]) level[0] = std::max (level[0], std::abs (processSvf (x, detectorState[0][(size_t) ch], detector[0])));
+                    x = low.process (ch, x);
+                    if (dyn[1]) level[1] = std::max (level[1], std::abs (processSvf (x, detectorState[1][(size_t) ch], detector[1])));
+                    x = mid.process (ch, x);
+                    if (dyn[2]) level[2] = std::max (level[2], std::abs (processSvf (x, detectorState[2][(size_t) ch], detector[2])));
+                    data[(size_t) ch][i] = high.process (ch, x);
+                }
+
+                for (size_t b = 0; b < 3; ++b)
+                    if (dyn[b])
+                    {
+                        auto& env = envelope[b];
+                        env = level[b] + (level[b] > env ? attack[b] : release[b]) * (env - level[b]);
+                    }
+            }
+
+            for (size_t b = 0; b < 3; ++b)
+                if (dyn[b])
+                    dynamicGainDb[b] = computeDynamicGainDb (juce::Decibels::gainToDecibels (envelope[b], -120.0f),
+                                                             s.dynamics[b].thresholdDb, s.dynamics[b].rangeDb);
+        }
     }
 
     void ThreeBandEq::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const EqSettings& s) noexcept
     {
         if (! s.enabled)
+        {
+            dynamicGainDb.fill (0.0f);
             return;
+        }
 
         const auto changed = ! hasCoefficients
                           || std::abs (s.lowFreq - last.lowFreq) > 1.0e-4f || std::abs (s.lowGainDb - last.lowGainDb) > 1.0e-4f
@@ -165,7 +334,27 @@ namespace dooblrvocals::dsp
             high.setParameters (Biquad::Type::highShelf, s.highFreq, 0.707, s.highGainDb, sampleRate);
             last = s;
             hasCoefficients = true;
+            dynamicApplied.fill (false);
         }
+
+        if (isDynamic (s.dynamics[0]) || isDynamic (s.dynamics[1]) || isDynamic (s.dynamics[2]))
+        {
+            processDynamic (buffer, startSample, numSamples, s);
+            return;
+        }
+
+        for (size_t b = 0; b < 3; ++b) // dynamics just switched off: restore the static curve
+            if (dynamicApplied[b])
+            {
+                setBandCoefficients ((int) b, s, 0.0f);
+                dynamicApplied[b] = false;
+            }
+
+        envelope.fill (0.0f);
+        dynamicGainDb.fill (0.0f);
+        for (auto& band : detectorState)
+            for (auto& state : band)
+                state.reset();
 
         for (int ch = 0; ch < std::min (2, buffer.getNumChannels()); ++ch)
         {

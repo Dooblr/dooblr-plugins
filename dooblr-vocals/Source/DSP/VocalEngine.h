@@ -54,6 +54,8 @@ namespace dooblrvocals::dsp
 
         ProcessMode getProcessMode() const noexcept { return pitch.currentMode(); }
         float getGainReductionDb() const noexcept { return lastGrDb; }
+        /** Audio thread: the dynamic gain (dB) each EQ band is applying now (0 = static). */
+        float getEqDynamicGainDb (int band) const noexcept { return chains[(size_t) activeChain].getEq().getDynamicGainDb (band); }
         float getReverbDuckDb() const noexcept { return fx.getReverbDuckDb(); }
         float getDelayDuckDb() const noexcept { return fx.getDelayDuckDb(); }
         PitchEstimate getLastPitch() const noexcept { return pitch.getLastEstimate(); }
