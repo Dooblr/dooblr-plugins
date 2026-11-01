@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.2.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.3.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -53,22 +53,25 @@ Version 0.2.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 
 ## Controls
 
+The layout is 724 x 169 px in five columns. The controls you use most are
+large and bright; the ones you set once are small and grey but always there.
+
 | Section | Control | What it does |
 |---|---|---|
-| Header | **Generate** | Picks a new seed, clears locks and writes a clip to the next empty slot. |
+| Actions (left) | **Generate** | The largest button. Picks a new seed, clears locks and writes a clip to the next empty slot. |
 | | **Reroll** | Picks a new seed, keeps locked chords and writes a clip. It is dimmed until a chord is locked. |
-| | **Write** | Writes the progression shown into the next empty slot again, unchanged. |
-| | **Seed** | The current seed. Type a number to recall a progression. It is drawn at 60% when every chord is locked, because it then only affects Humanize. |
-| KEY | Root, Mode, Length, Bars per Chord | Key, scale, number of chords and chord length. |
-| TENSION | Color, Chromatic | Extensions and chromatic substitutions. |
-| VOICING | Register, Spread, Bass | Lowest upper note, voicing width and the bass note on or off. |
-| OUTPUT | Velocity, Humanize | Note velocity and human feel. |
-| SOURCE | drop zone | Drop a `.mid` file to load it as the source. The path is saved with the Set. |
+| | Write (small) | Writes the progression shown into the next empty slot again, unchanged. |
+| | Seed (small) | The current seed. Type a number to recall a progression. It is drawn at 60% when every chord is locked, because it then only affects Humanize. |
+| KEY | **Root**, **Mode**, **Length**, Bars per Chord | Key, scale, number of chords and chord length. |
+| TENSION | **Color**, **Chromatic** (large dials) | Extensions and chromatic substitutions. |
+| ADVANCED | Register, Spread, Bass | Lowest upper note, voicing width and the bass note on or off. Small grey dials. |
+| | Velocity, Humanize | Note velocity and human feel. Small grey dials. |
+| SOURCE (right) | drop zone | Drop a `.mid` file to load it as the source. The path is saved with the Set. |
 | | **USE CLIP** | Loads the MIDI clip shown in the Detail View (else the clip in the highlighted slot). Uses the loop if looping, else start to end marker. |
-| | **CLEAR** | Forgets the source. Generate makes fresh progressions again. |
+| | CLEAR (small) | Forgets the source. Generate makes fresh progressions again. |
 | | **VAR / B** | Variation or B section of the source. Dimmed without a source. |
-| | info line | Source name, detected key, chord and bar count. |
-| PROGRESSION | chord blocks | Each block shows the chord name and Roman numeral. Click a block to lock or unlock it. With a source the heading reads VARIATION or B SECTION, and a SOURCE strip shows the source's name, detected key and chords. |
+| | info line | Source name, detected key, chord and bar count, or a hint while there is no source. |
+| PROGRESSION | chord blocks | Each block shows the chord name over its Roman numeral. Click a block to lock or unlock it. The header shows the heading (VARIATION or B SECTION with a source, plus the B key area), and the last status message on the right; hover over the blocks to read a long status in full. With a source a SOURCE strip lists the source's chords. |
 
 Changing a control updates the preview but does not write anything. Only
 Generate, Reroll and Write create clips. Clips are named like
@@ -104,8 +107,12 @@ npm test             # engine, glue and tooling tests
 npm run check:es5    # every Max-side js file must parse as ES5
 npm run build        # writes device/dooblr-chords/*
 npm run validate -- --built
-npm run verify       # all of the above
+npm run verify       # all of the above (builds before testing)
 ```
+
+`node scripts/render-layout.js | python3 scripts/render-layout.py out.png`
+draws a mockup of the panel (needs Pillow). The chord blocks come from the
+real jsui paint code; Live's own widgets are approximated.
 
 Source layout:
 
@@ -124,7 +131,7 @@ src/engine/      pure ES5 music engine (no Max APIs); manifest.json sets the loa
 src/max/main.js  Max glue: parameters, buttons, locks, source loading, Live API clip reading/writing
 src/max/blocks.js  jsui chord display
 src/patcher/dooblr-chords.maxpat  the device patcher (source of truth)
-scripts/         build, amxd reader/writer, patcher validator, ES5 check
+scripts/         build, amxd reader/writer, patcher validator, ES5 check, layout mockup
 tests/           node:test suites (the engine and the built Max files in a mocked runtime)
 device/dooblr-chords/  built output (committed)
 docs/amxd-format.md    the container format and its uncertainties
@@ -177,9 +184,14 @@ the files in `device/`, because they are generated.
     are not restored.
 13. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
     send the js the message `ascii 1`.
-14. The device is now 904 px wide. The SOURCE column sits right of the
-    divider, with the drop zone, USE CLIP, CLEAR, VAR/B and the info line all
-    inside the device. VAR/B and CLEAR are dimmed.
+14. The device is 724 px wide with five columns: actions, KEY/TENSION/
+    ADVANCED over the chord blocks, and SOURCE. Generate, Reroll, Root, Mode,
+    Length, Color, Chromatic, USE CLIP and VAR/B are the large, bright
+    controls; Write, Seed, CLEAR and the ADVANCED dials are small and grey.
+    Every label is readable, nothing is clipped or overlapping, and the
+    ADVANCED dials can be dragged and double-clicked to type a value. VAR/B
+    and CLEAR are dimmed. Hover over the blocks: the hint ends with the full
+    status text.
 15. Drag a `.mid` file with block chords (for example Am F C G, one bar each)
     from Finder onto the drop zone. The status reads "Loaded <name>: A Natural
     Minor, 4 chords…", Root/Mode/Length change to A, Natural Minor and 4, the
@@ -253,4 +265,8 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
-* The wider (904 px) device in Live's device chain.
+* The 0.3.0 layout: how `live.dial` draws at 42 x 36 px with its name and
+  value shown (the arc may be very small), the 8.5 pt and 9 pt fonts on
+  `live.*` objects, `textcolor` dimming on the grey Seed box, and how the
+  724 px device sits in Live's device chain. `scripts/render-layout.py` only
+  approximates Live's widgets.

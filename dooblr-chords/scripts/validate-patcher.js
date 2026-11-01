@@ -76,6 +76,18 @@ function validate(patcher, label, mainSource) {
     }
   });
 
+  // Controls and labels must not overlap in presentation (panels are backdrops).
+  const shown = p.boxes.map((w) => w.box).filter((b) => b && b.presentation && b.maxclass !== 'panel' &&
+    Array.isArray(b.presentation_rect) && b.presentation_rect.length === 4);
+  for (let i = 0; i < shown.length; i++) {
+    for (let j = i + 1; j < shown.length; j++) {
+      const r = shown[i].presentation_rect, q = shown[j].presentation_rect;
+      if (r[0] < q[0] + q[2] && q[0] < r[0] + r[2] && r[1] < q[1] + q[3] && q[1] < r[1] + r[3]) {
+        err(shown[i].id + ' and ' + shown[j].id + ' overlap in presentation');
+      }
+    }
+  }
+
   p.lines.forEach((wrap, i) => {
     const l = wrap.patchline;
     if (!l || !Array.isArray(l.source) || !Array.isArray(l.destination)) { err('line #' + i + ' malformed'); return; }

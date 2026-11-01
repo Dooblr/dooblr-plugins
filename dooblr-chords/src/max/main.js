@@ -37,7 +37,7 @@ var settings = E.normalize(E.DEFAULTS);
 var locks = [];
 var current = null;
 var ready = false;
-var statusText = 'Press Generate to write a progression into the next empty clip slot.';
+var statusText = 'Press Generate to write a clip into the next empty slot.';
 var statusLevel = 'info';
 var source = null;        // analysis of the source clip or file (DC.analysis.analyze)
 var MAX_FILE_BYTES = 4 * 1024 * 1024;
@@ -86,7 +86,7 @@ function generate() {
 function reroll() {
   if (!guard()) { return; }
   if (lockCount() === 0) {
-    setStatus('info', 'Lock a chord first: click a chord block, then Reroll keeps it and changes the rest.');
+    setStatus('info', 'Lock a chord first: click a block, then press Reroll.');
     refresh();
     return;
   }
@@ -154,12 +154,12 @@ function useclip() {
   if (!guard()) { return; }
   var clip = findSourceClip();
   if (!clip) {
-    setStatus('warn', 'No clip is selected. Click a MIDI clip so it shows in the Detail View, then press USE CLIP.');
+    setStatus('warn', 'No clip is selected. Select a MIDI clip, then press USE CLIP.');
     sendState();
     return;
   }
   if (Number(firstValue(clip.get('is_midi_clip'))) !== 1) {
-    setStatus('warn', 'The selected clip is an audio clip. Select a MIDI clip, then press USE CLIP.');
+    setStatus('warn', 'The selected clip is an audio clip. Select a MIDI clip.');
     sendState();
     return;
   }
@@ -199,7 +199,7 @@ function clearsource() {
   source = null;
   locks = [];
   clearDrop();
-  setStatus('info', 'Source cleared. Generate makes fresh progressions again.');
+  setStatus('info', 'Source cleared.');
   refresh();
 }
 
@@ -216,8 +216,7 @@ function setSource(an, applyKey) {
     setControl('length', settings.length);
   }
   var shown = E.sourceDisplay(an, settings.root, settings.mode);
-  setStatus('ok', 'Loaded ' + shown.name + ': ' + shown.detectedKey + ', ' + shown.chords.length + ' chords. ' +
-    'Generate writes a ' + (settings.kind === 1 ? 'B section' : 'variation') + ' of it.');
+  setStatus('ok', 'Loaded ' + shown.name + ': ' + shown.detectedKey + ', ' + shown.chords.length + ' chords.');
   refresh();
 }
 
@@ -323,7 +322,7 @@ function clearDrop() {
 }
 
 function updateSourceInfo() {
-  var text = 'Drop a .mid file above or press USE CLIP to make a variation or B section of it.';
+  var text = 'Drop a .mid file or press USE CLIP.';
   if (source) {
     var d = E.sourceDisplay(source, settings.root, settings.mode);
     text = d.name + ' \u00B7 ' + d.detectedKey + ' \u00B7 ' + d.chords.length + ' chords, ' + d.bars + ' bars';
@@ -342,6 +341,9 @@ function sendState() {
     chords: current.display,
     heading: current.derived ? current.derived.heading : 'PROGRESSION',
     key: current.keyName + (current.derived && current.derived.regionText ? ' \u00B7 ' + current.derived.regionText : ''),
+    // The Root and Mode menus already show the key, so the display only
+    // draws the region a B section moves to.
+    region: (current.derived && current.derived.regionText) ? current.derived.regionText : '',
     seed: current.settings.seed,
     status: statusText,
     level: statusLevel,
@@ -365,12 +367,16 @@ function setActive(varname, on, annotation) {
 
 // Partly ignored controls are drawn at 60% opacity (the text colour alpha);
 // fully ignored ones are deactivated, which uses the 38% inactive colours.
+// `base` is the control's normal text colour: advanced controls (Seed) use
+// the muted colour, so dimming must not turn them bright.
 var TEXT_PRIMARY = [0.902, 0.910, 0.922];
-function setPartlyIgnored(varname, partly, annotation) {
+var TEXT_MUTED = [0.541, 0.569, 0.612];
+function setPartlyIgnored(varname, partly, annotation, base) {
+  var c = base || TEXT_PRIMARY;
   try {
     var obj = self.patcher.getnamed(varname);
     if (!obj) { return; }
-    obj.message('textcolor', TEXT_PRIMARY[0], TEXT_PRIMARY[1], TEXT_PRIMARY[2], partly ? 0.6 : 1);
+    obj.message('textcolor', c[0], c[1], c[2], partly ? 0.6 : 1);
     if (annotation) { obj.message('annotation', annotation); }
   } catch (e) {
     post('dooblr-chords: could not update ' + varname + ': ' + e + '\n');
@@ -391,7 +397,7 @@ function updateButtons() {
   setActive('clearsource', !!source, BUTTON_HINTS.clearsource + (source ? '' : ' It is dimmed because no source is loaded.'));
   setActive('kind', !!source, BUTTON_HINTS.kind + (source ? '' : ' It is dimmed because no source is loaded: drop a .mid file or press USE CLIP first.'));
   setPartlyIgnored('seed', allLocked, SEED_HINT +
-    (allLocked ? ' Every chord is locked, so the seed only changes Humanize. Unlock a chord to use it fully.' : ''));
+    (allLocked ? ' Every chord is locked, so the seed only changes Humanize. Unlock a chord to use it fully.' : ''), TEXT_MUTED);
 }
 
 // ---- Live API ---------------------------------------------------------------
@@ -489,13 +495,13 @@ function writeClip() {
   if (!current) { return false; }
   var track = findTrack();
   if (!track) {
-    setStatus('warn', 'Could not find the track this device is on, so no clip was written.');
+    setStatus('warn', 'Could not find this track, so no clip was written.');
     sendState();
     return false;
   }
   var slot = findEmptySlot(track);
   if (!slot) {
-    setStatus('warn', 'Every clip slot on this track is full. Add a scene or delete a clip, then press Write.');
+    setStatus('warn', 'Every clip slot on this track is full. Add a scene, then press Write.');
     sendState();
     return false;
   }
@@ -509,7 +515,7 @@ function writeClip() {
   clip.set('name', current.clipName);
   var method = addNotes(clip, current.notes, current.lengthBeats);
   if (!method) {
-    setStatus('warn', 'Created a clip in slot ' + (slot.index + 1) + ' but could not add its notes. See the Max window.');
+    setStatus('warn', 'Clip in slot ' + (slot.index + 1) + ' has no notes: see the Max window.');
   } else {
     setStatus('ok', 'Wrote ' + current.clipName + ' to slot ' + (slot.index + 1) + '.');
   }

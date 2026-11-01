@@ -44,7 +44,7 @@
 		"boxanimatetime": 200,
 		"enablehscroll": 1,
 		"enablevscroll": 1,
-		"devicewidth": 904,
+		"devicewidth": 724,
 		"description": "Chord progression generator that writes clips into Session View.",
 		"digest": "",
 		"tags": "",
@@ -86,7 +86,7 @@
 					"presentation_rect": [
 						0,
 						0,
-						904,
+						724,
 						169
 					]
 				}
@@ -125,7 +125,7 @@
 					"presentation_rect": [
 						0,
 						0,
-						146,
+						136,
 						169
 					]
 				}
@@ -162,10 +162,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						10,
 						12,
+						10,
 						3,
-						32
+						30
 					]
 				}
 			},
@@ -176,7 +176,7 @@
 					"numoutlets": 0,
 					"text": "dooblr-chords",
 					"fontname": "Arial Bold",
-					"fontsize": 16,
+					"fontsize": 14,
 					"textcolor": [
 						0.902,
 						0.91,
@@ -194,10 +194,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						18,
-						10,
-						124,
-						22
+						20,
+						8,
+						112,
+						18
 					]
 				}
 			},
@@ -206,9 +206,9 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.2.0",
+					"text": "v0.3.0",
 					"fontname": "Arial",
-					"fontsize": 10,
+					"fontsize": 9,
 					"textcolor": [
 						0.541,
 						0.569,
@@ -226,10 +226,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						18,
-						32,
-						124,
-						16
+						20,
+						26,
+						60,
+						14
 					]
 				}
 			},
@@ -248,7 +248,7 @@
 					"text": "Generate",
 					"texton": "Generate",
 					"fontname": "Arial Bold",
-					"fontsize": 11,
+					"fontsize": 14,
 					"activebgcolor": [
 						0.373,
 						0.702,
@@ -333,10 +333,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						10,
-						56,
-						126,
-						24
+						12,
+						46,
+						112,
+						42
 					]
 				}
 			},
@@ -355,7 +355,7 @@
 					"text": "Reroll",
 					"texton": "Reroll",
 					"fontname": "Arial Bold",
-					"fontsize": 9.5,
+					"fontsize": 11,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -440,10 +440,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						10,
-						84,
-						61,
-						20
+						12,
+						94,
+						74,
+						24
 					]
 				}
 			},
@@ -461,8 +461,8 @@
 					"mode": 0,
 					"text": "Write",
 					"texton": "Write",
-					"fontname": "Arial Bold",
-					"fontsize": 9.5,
+					"fontname": "Arial",
+					"fontsize": 9,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -476,9 +476,9 @@
 						1
 					],
 					"activetextcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activetextoncolor": [
@@ -500,9 +500,9 @@
 						0.38
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						0.38
 					],
 					"textoncolor": [
@@ -547,10 +547,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						75,
-						84,
-						61,
-						20
+						90,
+						94,
+						34,
+						24
 					]
 				}
 			},
@@ -561,7 +561,7 @@
 					"numoutlets": 0,
 					"text": "Seed",
 					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontsize": 9,
 					"textcolor": [
 						0.541,
 						0.569,
@@ -579,10 +579,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						10,
-						113,
-						34,
-						16
+						12,
+						129,
+						28,
+						14
 					]
 				}
 			},
@@ -598,7 +598,7 @@
 					],
 					"parameter_enable": 1,
 					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontsize": 9,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -606,9 +606,9 @@
 						1
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"tricolor": [
@@ -618,15 +618,15 @@
 						1
 					],
 					"activetricolor": [
-						0.373,
-						0.702,
-						0.631,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activeslidercolor": [
-						0.373,
-						0.702,
-						0.631,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"bordercolor": [
@@ -661,42 +661,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						46,
-						112,
-						90,
+						42,
+						128,
+						82,
 						18
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Clips go into the next empty slot on this track.",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-11",
-					"patching_rect": [
-						10,
-						136,
-						128,
-						28
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						10,
-						136,
-						128,
-						28
 					]
 				}
 			},
@@ -732,7 +700,7 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						146,
+						136,
 						0,
 						1,
 						169
@@ -764,73 +732,9 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						156,
-						3,
+						146,
+						4,
 						60,
-						14
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Root",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-14",
-					"patching_rect": [
-						156,
-						17,
-						40,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						156,
-						17,
-						40,
-						14
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Mode",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-15",
-					"patching_rect": [
-						200,
-						17,
-						80,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						200,
-						17,
-						80,
 						14
 					]
 				}
@@ -848,7 +752,7 @@
 					],
 					"parameter_enable": 1,
 					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontsize": 11,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -929,10 +833,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						158,
-						31,
-						38,
-						16
+						146,
+						20,
+						44,
+						22
 					]
 				}
 			},
@@ -949,7 +853,7 @@
 					],
 					"parameter_enable": 1,
 					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontsize": 11,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -1025,10 +929,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						202,
-						31,
-						86,
-						16
+						194,
+						20,
+						104,
+						22
 					]
 				}
 			},
@@ -1057,8 +961,8 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						156,
-						49,
+						146,
+						46,
 						44,
 						14
 					]
@@ -1089,9 +993,9 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						200,
-						49,
-						90,
+						194,
+						46,
+						104,
 						14
 					]
 				}
@@ -1108,7 +1012,7 @@
 					],
 					"parameter_enable": 1,
 					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontsize": 11,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -1171,10 +1075,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						158,
-						63,
-						38,
-						16
+						146,
+						60,
+						44,
+						22
 					]
 				}
 			},
@@ -1193,7 +1097,7 @@
 					"num_lines_patching": 1,
 					"num_lines_presentation": 1,
 					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontsize": 10,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -1283,10 +1187,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						202,
-						63,
-						86,
-						16
+						194,
+						60,
+						104,
+						22
 					]
 				}
 			},
@@ -1322,10 +1226,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						292,
+						306,
 						6,
 						1,
-						72
+						84
 					]
 				}
 			},
@@ -1354,8 +1258,8 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						294,
-						3,
+						314,
+						4,
 						90,
 						14
 					]
@@ -1411,7 +1315,7 @@
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 10,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Color",
@@ -1438,10 +1342,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						296,
-						20,
-						46,
-						58
+						314,
+						18,
+						56,
+						72
 					]
 				}
 			},
@@ -1495,7 +1399,7 @@
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 10,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Chromatic",
@@ -1522,10 +1426,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						346,
-						20,
-						46,
-						58
+						374,
+						18,
+						56,
+						72
 					]
 				}
 			},
@@ -1561,10 +1465,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						396,
+						438,
 						6,
 						1,
-						72
+						84
 					]
 				}
 			},
@@ -1573,7 +1477,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "VOICING",
+					"text": "ADVANCED",
 					"fontname": "Arial Bold",
 					"fontsize": 9,
 					"textcolor": [
@@ -1593,8 +1497,8 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						398,
-						3,
+						446,
+						4,
 						90,
 						14
 					]
@@ -1620,21 +1524,21 @@
 						1
 					],
 					"activedialcolor": [
-						0.373,
-						0.702,
-						0.631,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"needlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activeneedlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"panelcolor": [
@@ -1644,13 +1548,13 @@
 						1
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 8.5,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Register",
@@ -1677,10 +1581,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						400,
-						20,
-						46,
-						58
+						446,
+						18,
+						42,
+						36
 					]
 				}
 			},
@@ -1704,21 +1608,21 @@
 						1
 					],
 					"activedialcolor": [
-						0.373,
-						0.702,
-						0.631,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"needlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activeneedlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"panelcolor": [
@@ -1728,13 +1632,13 @@
 						1
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 8.5,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Spread",
@@ -1761,10 +1665,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						450,
-						20,
-						46,
-						58
+						492,
+						18,
+						42,
+						36
 					]
 				}
 			},
@@ -1775,7 +1679,7 @@
 					"numoutlets": 0,
 					"text": "Bass",
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 8.5,
 					"textcolor": [
 						0.541,
 						0.569,
@@ -1793,10 +1697,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						500,
-						20,
-						44,
-						14
+						538,
+						18,
+						42,
+						12
 					]
 				}
 			},
@@ -1814,8 +1718,8 @@
 					"mode": 1,
 					"text": "Off",
 					"texton": "On",
-					"fontname": "Arial Bold",
-					"fontsize": 9.5,
+					"fontname": "Arial",
+					"fontsize": 9,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -1904,81 +1808,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						500,
-						36,
-						40,
+						538,
+						32,
+						42,
 						18
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "panel",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"mode": 0,
-					"border": 0,
-					"rounded": 0,
-					"background": 1,
-					"ignoreclick": 1,
-					"bgcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"bgfillcolor_type": "color",
-					"bgfillcolor_color": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"id": "obj-32",
-					"patching_rect": [
-						548,
-						6,
-						1,
-						72
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						548,
-						6,
-						1,
-						72
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "OUTPUT",
-					"fontname": "Arial Bold",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-33",
-					"patching_rect": [
-						550,
-						3,
-						90,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						550,
-						3,
-						90,
-						14
 					]
 				}
 			},
@@ -2002,21 +1835,21 @@
 						1
 					],
 					"activedialcolor": [
-						0.373,
-						0.702,
-						0.631,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"needlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activeneedlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"panelcolor": [
@@ -2026,13 +1859,13 @@
 						1
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 8.5,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Velocity",
@@ -2059,10 +1892,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						552,
-						20,
-						46,
-						58
+						446,
+						56,
+						42,
+						36
 					]
 				}
 			},
@@ -2086,21 +1919,21 @@
 						1
 					],
 					"activedialcolor": [
-						0.373,
-						0.702,
-						0.631,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"needlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activeneedlecolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"panelcolor": [
@@ -2110,13 +1943,13 @@
 						1
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 9,
+					"fontsize": 8.5,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Humanize",
@@ -2143,81 +1976,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						604,
-						20,
-						50,
-						58
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "panel",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"mode": 0,
-					"border": 0,
-					"rounded": 0,
-					"background": 1,
-					"ignoreclick": 1,
-					"bgcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"bgfillcolor_type": "color",
-					"bgfillcolor_color": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"id": "obj-36",
-					"patching_rect": [
-						660,
-						6,
-						1,
-						72
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						660,
-						6,
-						1,
-						72
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Click a chord below to lock it. Reroll keeps locked chords and changes the rest.",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-37",
-					"patching_rect": [
-						664,
-						6,
-						90,
-						72
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						664,
-						6,
-						90,
-						72
+						492,
+						56,
+						42,
+						36
 					]
 				}
 			},
@@ -2236,17 +1998,17 @@
 					"annotation": "Click a chord to lock it. Locked chords stay the same when you press Reroll.",
 					"id": "obj-38",
 					"patching_rect": [
-						158,
-						84,
-						594,
-						79
+						146,
+						96,
+						434,
+						68
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						158,
-						84,
-						594,
-						79
+						146,
+						96,
+						434,
+						68
 					]
 				}
 			},
@@ -2722,7 +2484,7 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						760,
+						588,
 						6,
 						1,
 						158
@@ -2754,8 +2516,8 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						766,
-						3,
+						596,
+						4,
 						90,
 						14
 					]
@@ -2817,10 +2579,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						768,
-						19,
-						128,
-						44
+						596,
+						20,
+						120,
+						34
 					]
 				}
 			},
@@ -2839,7 +2601,7 @@
 					"text": "USE CLIP",
 					"texton": "USE CLIP",
 					"fontname": "Arial Bold",
-					"fontsize": 9.5,
+					"fontsize": 10,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -2924,10 +2686,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						768,
-						67,
-						62,
-						18
+						596,
+						58,
+						78,
+						22
 					]
 				}
 			},
@@ -2945,8 +2707,8 @@
 					"mode": 0,
 					"text": "CLEAR",
 					"texton": "CLEAR",
-					"fontname": "Arial Bold",
-					"fontsize": 9.5,
+					"fontname": "Arial",
+					"fontsize": 8.5,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -2960,9 +2722,9 @@
 						1
 					],
 					"activetextcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						1
 					],
 					"activetextoncolor": [
@@ -2984,9 +2746,9 @@
 						0.38
 					],
 					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
+						0.541,
+						0.569,
+						0.612,
 						0.38
 					],
 					"textoncolor": [
@@ -3031,10 +2793,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						834,
-						67,
-						62,
-						18
+						678,
+						58,
+						38,
+						22
 					]
 				}
 			},
@@ -3052,8 +2814,8 @@
 					"parameter_enable": 1,
 					"num_lines_patching": 1,
 					"num_lines_presentation": 1,
-					"fontname": "Arial",
-					"fontsize": 9.5,
+					"fontname": "Arial Bold",
+					"fontsize": 11,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -3142,10 +2904,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						768,
-						90,
-						128,
-						18
+						596,
+						84,
+						120,
+						26
 					]
 				}
 			},
@@ -3154,7 +2916,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "Drop a .mid file above or press USE CLIP to make a variation or B section of it.",
+					"text": "Drop a .mid file or press USE CLIP.",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -3174,10 +2936,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						766,
-						112,
-						132,
-						52
+						594,
+						114,
+						124,
+						50
 					],
 					"varname": "srcinfo"
 				}

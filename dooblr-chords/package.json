@@ -1,6 +1,6 @@
 {
   "name": "dooblr-chords",
-  "version": "0.1.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Max for Live MIDI effect that writes chord progressions into Session View clip slots.",
   "scripts": {
@@ -8,7 +8,7 @@
     "check:es5": "node scripts/check-es5.js",
     "validate": "node scripts/validate-patcher.js",
     "build": "node scripts/build.js",
-    "verify": "npm run check:es5 && npm test && npm run build && npm run validate -- --built"
+    "verify": "npm run check:es5 && npm run build && npm test && npm run validate -- --built"
   },
   "devDependencies": {
     "acorn": "^8.12.1"

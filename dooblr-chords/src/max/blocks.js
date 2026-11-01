@@ -27,7 +27,7 @@ var SOURCE_H = 13;   // source strip under the header when a source is loaded
 var GAP = 4;
 var MAX_PER_ROW = 8;
 
-var model = { chords: [], heading: 'PROGRESSION', key: '', status: '', level: 'info', locked: 0, source: null };
+var model = { chords: [], heading: 'PROGRESSION', key: '', region: '', status: '', level: 'info', locked: 0, source: null };
 var hits = [];
 
 function hexToRgba(hex, alpha) {
@@ -95,20 +95,26 @@ function paint() {
   mgraphics.rectangle(0, 0, w, h);
   mgraphics.fill();
 
-  // Header line: section heading, key, status (right aligned).
+  // Header line: section heading, the B-section region (if any), status
+  // right aligned. The key itself is on the Root and Mode menus.
   var heading = model.heading || 'PROGRESSION';
   drawText(heading, 2, 11, FONT_BOLD, 9, model.source ? PALETTE.accent : PALETTE.textMuted);
   mgraphics.select_font_face(FONT_BOLD);
   mgraphics.set_font_size(9);
-  var keyX = 2 + textWidth(heading) + 8;
-  drawText(model.key || '', keyX, 11, FONT, 9.5, PALETTE.textPrimary);
-  mgraphics.select_font_face(FONT);
-  mgraphics.set_font_size(9.5);
-  var statusLeft = keyX + textWidth(model.key || '') + 12;
+  var statusLeft = 2 + textWidth(heading) + 8;
+  if (model.region) {
+    mgraphics.select_font_face(FONT);
+    mgraphics.set_font_size(9);
+    var region = ellipsize(model.region, Math.max(40, (w - statusLeft) * 0.4));
+    drawText(region, statusLeft, 11, FONT, 9, PALETTE.textPrimary);
+    statusLeft += textWidth(region) + 12;
+  }
   if (model.status) {
+    mgraphics.select_font_face(FONT);
+    mgraphics.set_font_size(9);
     var st = ellipsize(model.status, w - statusLeft - 2);
     var sw = textWidth(st);
-    drawText(st, w - 2 - sw, 11, FONT, 9.5, STATUS_COLORS[model.level] || PALETTE.textMuted);
+    drawText(st, w - 2 - sw, 11, FONT, 9, STATUS_COLORS[model.level] || PALETTE.textMuted);
   }
 
   var chords = model.chords || [];
@@ -132,12 +138,12 @@ function paint() {
   for (var i = 0; i < n; i++) {
     var row = Math.floor(i / perRow), col = i % perRow;
     var x = col * (bw + GAP), y = top + row * (bh + GAP);
-    drawBlock(chords[i], i, x, y, bw, bh, rows);
+    drawBlock(chords[i], i, x, y, bw, bh);
     hits.push([x, y, x + bw, y + bh]);
   }
 }
 
-function drawBlock(ch, i, x, y, bw, bh, rows) {
+function drawBlock(ch, i, x, y, bw, bh) {
   var band = BANDS[i % BANDS.length];
 
   setColor(ch.locked ? PALETTE.panelRaised : PALETTE.panel);
@@ -167,26 +173,26 @@ function drawBlock(ch, i, x, y, bw, bh, rows) {
   var name = ch.name || '';
   var roman = ch.roman || '';
   var pad = ch.locked ? 14 : 6;
-  var namePt = fitSize(name, FONT_BOLD, rows === 1 ? 14 : 11, bw - 2 * pad, 7);
+  // Tall blocks: 14 pt name over a 9.5 pt numeral. Short blocks (two rows,
+  // or a source strip above) use smaller type; the numeral is dropped only
+  // when there is no room for it at all.
+  var tall = bh >= 44;
+  var namePt = fitSize(name, FONT_BOLD, tall ? 14 : 11, bw - 2 * pad, 7);
   var nameW = textWidth(name);
-  var romanPt = rows === 1 ? 9.5 : 8.5;
-
-  if (rows === 1) {
-    drawText(name, x + (bw - nameW) / 2, y + bh * 0.5 + 3, FONT_BOLD, namePt, PALETTE.textPrimary);
+  var romanPt = tall ? 9.5 : 8;
+  var showRoman = bh >= 21;
+  var nameY = showRoman ? y + 3 + (bh - 3) * (tall ? 0.5 : 0.48) + namePt * 0.2 : y + 3 + (bh - 3) / 2 + namePt * 0.35;
+  drawText(name, x + (bw - nameW) / 2, nameY, FONT_BOLD, namePt, PALETTE.textPrimary);
+  if (showRoman) {
     mgraphics.select_font_face(FONT);
     mgraphics.set_font_size(romanPt);
-    var r1 = ellipsize(roman, bw - 8);
-    drawText(r1, x + (bw - textWidth(r1)) / 2, y + bh - 8, FONT, romanPt, PALETTE.textMuted);
-  } else {
-    drawText(name, x + (bw - nameW) / 2, y + bh * 0.5 + 2, FONT_BOLD, namePt, PALETTE.textPrimary);
-    mgraphics.select_font_face(FONT);
-    mgraphics.set_font_size(romanPt);
-    var r2 = ellipsize(roman, bw - 8);
-    drawText(r2, x + (bw - textWidth(r2)) / 2, y + bh - 3, FONT, romanPt, PALETTE.textMuted);
+    var r = ellipsize(roman, bw - 8);
+    drawText(r, x + (bw - textWidth(r)) / 2, y + bh - (tall ? 8 : 3), FONT, romanPt, PALETTE.textMuted);
   }
 }
 
-// "SOURCE  riff  A Natural Minor   Am9  Fmaj9  Dsus4  Em7"
+// "SOURCE   Am9   Fmaj9   Dsus4   Em7" (name and key are in the SOURCE
+// column's info line, so the strip shows only the chords to compare with).
 function drawSource(src, x, y, maxW) {
   drawText('SOURCE', x, y, FONT_BOLD, 8, PALETTE.textMuted);
   mgraphics.select_font_face(FONT_BOLD);
@@ -194,16 +200,8 @@ function drawSource(src, x, y, maxW) {
   var cx = x + textWidth('SOURCE') + 8;
   mgraphics.select_font_face(FONT);
   mgraphics.set_font_size(9);
-  var head = (src.name || 'Clip') + '  ' + (src.detectedKey || '');
-  head = ellipsize(head, Math.max(40, (maxW - cx) * 0.45));
-  drawText(head, cx, y, FONT, 9, PALETTE.textPrimary);
-  mgraphics.select_font_face(FONT);
-  mgraphics.set_font_size(9);
-  cx += textWidth(head) + 12;
   var chords = (src.chords || []).join('   ');
-  mgraphics.select_font_face(FONT);
-  mgraphics.set_font_size(9);
-  drawText(ellipsize(chords, x + maxW - cx), cx, y, FONT, 9, PALETTE.textMuted);
+  drawText(ellipsize(chords, x + maxW - cx), cx, y, FONT, 9, PALETTE.textPrimary, 0.8);
 }
 
 function setstate(json) {
@@ -221,6 +219,8 @@ function updateHint() {
   var text = n
     ? 'Click a chord to lock or unlock it. Locked chords stay the same when you press Reroll. ' + n + ' locked.'
     : 'Click a chord to lock it. Locked chords stay the same when you press Reroll.';
+  // The header may cut a long status short; the hover text has all of it.
+  if (model.status) { text += ' Status: ' + model.status; }
   try { box.message('annotation', text); } catch (e) { /* not fatal */ }
 }
 

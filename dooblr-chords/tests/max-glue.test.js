@@ -261,6 +261,8 @@ test('Seed is drawn partly ignored when every chord is locked', () => {
   t.ctx.lock(1);
   const msgs = t.out.named.seed.msgs.filter((m) => m[0] === 'textcolor');
   assert.strictEqual(msgs[msgs.length - 1][4], 0.6);
+  // Seed is an advanced control: it dims from the muted colour, not white.
+  assert.deepStrictEqual(msgs[msgs.length - 1].slice(1, 4), [0.541, 0.569, 0.612]);
   t.ctx.lock(1);
   const again = t.out.named.seed.msgs.filter((m) => m[0] === 'textcolor');
   assert.strictEqual(again[again.length - 1][4], 1);
@@ -289,7 +291,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.strictEqual(t.out.fileOpens, t.out.fileCloses, 'file closed');
   const st = t.lastState();
   assert.strictEqual(st.level, 'ok', st.status);
-  assert.match(st.status, /Loaded my riff: A Natural Minor, 4 chords/);
+  assert.match(st.status, /^Loaded my riff: A Natural Minor, 4 chords\.$/);
   assert.deepStrictEqual(st.source.chords, ['Am', 'F', 'C', 'G']);
   assert.strictEqual(st.heading, 'VARIATION');
   assert.deepStrictEqual(t.lastMsg('root', 'set'), ['set', 9]);
@@ -309,6 +311,8 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
 
   t.ctx.param('kind', 1);
   assert.strictEqual(t.lastState().heading, 'B SECTION');
+  assert.strictEqual(t.lastState().region.length > 0, true, 'B section state carries its region for the header');
+  assert.ok(t.lastState().key.indexOf(t.lastState().region) > 0);
   t.ctx.write();
   assert.match(t.live.slots[1].clip.name, /^my riff \u00B7 B /);
   const total = t.lastState().chords.reduce((x, c) => x + c.beats, 0);
@@ -422,18 +426,19 @@ function loadBlocks() {
   vm.runInContext(STRIP, ctx);
   const ops = [];
   const outlets = [];
+  const annotations = [];
   const mg = new Proxy({}, { get: (o, k) => {
     if (k === 'text_measure') { return (s) => { const a = new (vm.runInContext('Array', ctx))(); a.push(String(s).length * 6, 10); return a; }; }
     if (k in o) { return o[k]; }
     return function () { ops.push([k].concat(Array.prototype.slice.call(arguments))); };
   }, set: (o, k, v) => { o[k] = v; return true; } });
   ctx.mgraphics = mg;
-  ctx.box = { rect: [158, 84, 752, 163], message: () => {} };
+  ctx.box = { rect: [146, 96, 580, 164], message: (...a) => { annotations.push(a); } };
   ctx.post = () => {};
   ctx.outlet = function () { outlets.push(Array.prototype.slice.call(arguments)); };
   ctx.setinletassist = ctx.setoutletassist = () => {};
   vm.runInContext(fs.readFileSync(path.join(DEVICE, 'dooblr_blocks.js'), 'utf8'), ctx, { filename: 'dooblr_blocks.js' });
-  return { ctx, ops, outlets };
+  return { ctx, ops, outlets, annotations };
 }
 
 test('display paints 4 and 12 chords and maps clicks to lock messages', () => {
@@ -444,8 +449,12 @@ test('display paints 4 and 12 chords and maps clicks to lock messages', () => {
   const texts = b.ops.filter((o) => o[0] === 'show_text').map((o) => o[1]);
   assert.ok(texts.indexOf('PROGRESSION') >= 0);
   assert.strictEqual(texts.filter((s) => s === 'C\u266Dmaj7').length, 4);
+  assert.ok(texts.indexOf('Wrote x to slot 2.') >= 0);
+  assert.ok(texts.indexOf('C Natural Minor') < 0, 'the key is on the menus, not repeated in the header');
+  assert.ok(texts.indexOf('\u266DII') >= 0, 'one-row blocks show the Roman numeral');
+  assert.ok(b.annotations.some((m) => m[0] === 'annotation' && /Status: Wrote x to slot 2\./.test(m[1])));
   b.ctx.onclick(10, 40);
-  b.ctx.onclick(594 - 5, 70);
+  b.ctx.onclick(434 - 5, 60);
   b.ctx.onclick(10, 2); // header: no lock
   assert.deepStrictEqual(b.outlets.map((o) => o.slice()), [[0, 'lock', 0], [0, 'lock', 3]]);
 
@@ -453,8 +462,9 @@ test('display paints 4 and 12 chords and maps clicks to lock messages', () => {
   b.ctx.setstate(JSON.stringify({ chords: chords(12), key: 'C', status: '', level: 'info', locked: 0 }));
   b.ctx.paint();
   assert.strictEqual(b.ops.filter((o) => o[0] === 'show_text' && o[1] === 'C\u266Dmaj7').length, 12);
+  assert.strictEqual(b.ops.filter((o) => o[0] === 'show_text' && o[1] === '\u266DII').length, 12, 'two rows still fit the numeral');
   b.outlets.length = 0;
-  b.ctx.onclick(5, 70); // second row, first block = index 6
+  b.ctx.onclick(5, 60); // second row, first block = index 6
   assert.deepStrictEqual(b.outlets[0].slice(), [0, 'lock', 6]);
 });
 
@@ -468,6 +478,7 @@ test('display shows the source strip, the VARIATION heading and changed chords',
   assert.ok(texts.indexOf('VARIATION') >= 0);
   assert.ok(texts.indexOf('SOURCE') >= 0);
   assert.ok(texts.some((s) => /Am {3}F {3}C {3}G/.test(s)));
+  assert.ok(!texts.some((s) => /riff/.test(s)), 'the source name is in the SOURCE column, not the strip');
   assert.strictEqual(b.ops.filter((o) => o[0] === 'ellipse').length, 1, 'one changed marker');
   b.ctx.onclick(10, 20); // source strip: no lock
   b.ctx.onclick(10, 50);
