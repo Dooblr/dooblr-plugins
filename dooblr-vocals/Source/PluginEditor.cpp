@@ -26,7 +26,7 @@ namespace
 
     const char* pageName (int page)
     {
-        static const char* names[] { "Pitch", "Harmony", "Gate", "EQ", "Comp", "Limiter", "Delay", "Reverb" };
+        static const char* names[] { "Pitch", "Harmony", "Gate", "EQ", "Comp", "Limiter", "Delay", "Reverb", "De-Ess" };
         return names[page];
     }
 
@@ -34,7 +34,7 @@ namespace
     {
         return page == DooblrVocalsAudioProcessorEditor::pitchPage     ? Palette::accent
              : page == DooblrVocalsAudioProcessorEditor::harmonyPage ? Palette::master
-             : page >= DooblrVocalsAudioProcessorEditor::delayPage   ? Palette::fx
+             : page == DooblrVocalsAudioProcessorEditor::delayPage || page == DooblrVocalsAudioProcessorEditor::reverbPage ? Palette::fx
                                                                      : Palette::dynamic;
     }
 
@@ -81,6 +81,14 @@ ProcessorPowerButton::ProcessorPowerButton (int stageIndex)
         return;
     }
 
+    if (stage == deEssStage)
+    {
+        setComponentID ("power_deess");
+        setTooltip ("De-esser on/off (fixed after the Gate / EQ / Comp chain, before the delay and reverb)");
+        setClickingTogglesState (true);
+        return;
+    }
+
     setComponentID (ids[stage]);
     setTooltip (juce::String (names[stage]) + " on/off");
     setClickingTogglesState (false);
@@ -93,6 +101,7 @@ void ProcessorPowerButton::paintButton (juce::Graphics& g, bool highlighted, boo
                                     : stage == harmonyStage ? (int) DooblrVocalsAudioProcessorEditor::harmonyPage
                                     : stage == delayStage   ? (int) DooblrVocalsAudioProcessorEditor::delayPage
                                     : stage == reverbStage  ? (int) DooblrVocalsAudioProcessorEditor::reverbPage
+                                    : stage == deEssStage   ? (int) DooblrVocalsAudioProcessorEditor::deEssPage
                                                             : DooblrVocalsAudioProcessorEditor::pageForStage (stage));
     auto circle = getLocalBounds().toFloat().withSizeKeepingCentre ((float) size, (float) size).reduced (1.0f);
 
@@ -265,6 +274,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
       limiterDisplay (processorToEdit.getParameterState()),
       delayDisplay (processorToEdit.getParameterState()),
       reverbDisplay (processorToEdit.getParameterState()),
+      deEsserDisplay (processorToEdit.getParameterState()),
       delayRouting (processorToEdit.getParameterState()),
       reverbRouting (processorToEdit.getParameterState()),
       outputMeter (&processorToEdit.getOutputPeakTap())
@@ -371,6 +381,21 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
             };
         }
 
+        if (p == deEssPage)
+        {
+            // Not reorderable: a fixed slot after the Gate / EQ / Comp chain (see VocalEngine::process).
+            deEssPower = std::make_unique<ProcessorPowerButton> (ProcessorPowerButton::deEssStage);
+            button.setHasPowerToggle (true);
+            button.setTooltip ("De-esser - fixed after the Gate / EQ / Comp chain (catches EQ and makeup boosts), before the delay and reverb");
+            button.addAndMakeVisible (*deEssPower);
+            deEssPowerAttachment = std::make_unique<ButtonAttachment> (state, "deess_on", *deEssPower);
+            deEssPower->onStateChange = [this]
+            {
+                if (deEssPower != nullptr)
+                    pageButtons[(size_t) deEssPage].setProcessorOn (deEssPower->getToggleState());
+            };
+        }
+
         if (p == limiterPage)
         {
             // Not reorderable: the limiter is always the last stage, after the delay and reverb.
@@ -407,6 +432,7 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     addChildComponent (limiterDisplay);
     addChildComponent (delayDisplay);
     addChildComponent (reverbDisplay);
+    addChildComponent (deEsserDisplay);
     meterSpectrumScratch.resize (1 << 15);
     meterFrameScratch.resize (1 << 11);
     pitchFrameScratch.resize (1 << 11);
@@ -452,6 +478,10 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
         { "comp_attack", "Attack", K::knob }, { "comp_release", "Release", K::knob }, { "comp_makeup", "Makeup", K::knob } }));
     pagePanels[limiterPage].push_back (std::make_unique<ControlPanel> (state, "Limiter", pageColour (limiterPage), Specs {
         { "lim_mode", "Mode", K::combo, 0, 1 }, { "lim_ceiling", "Ceiling", K::knob }, { "lim_release", "Release", K::knob } }));
+
+    pagePanels[deEssPage].push_back (std::make_unique<ControlPanel> (state, "De-esser", pageColour (deEssPage), Specs {
+        { "deess_freq", "Frequency", K::knob }, { "deess_thresh", "Threshold", K::knob }, { "deess_range", "Range", K::knob },
+        { "deess_mode", "Mode", K::combo, 96 }, { "deess_listen", "Listen", K::toggle, 88 } }));
 
     // v0.3 time FX: Delay and Reverb pages (each with its section presets and the shared routing).
     pagePanels[delayPage].push_back (std::make_unique<ControlPanel> (state, "Delay", pageColour (delayPage), Specs {
@@ -634,6 +664,7 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     limiterDisplay.setVisible (selectedPage == limiterPage);
     delayDisplay.setVisible (selectedPage == delayPage);
     reverbDisplay.setVisible (selectedPage == reverbPage);
+    deEsserDisplay.setVisible (selectedPage == deEssPage);
     learnLabel.setVisible (selectedPage == pitchPage);
     modeToggle->setVisible (selectedPage == pitchPage);
     keyFollowStrip->setVisible (selectedPage == pitchPage);
@@ -647,6 +678,7 @@ void DooblrVocalsAudioProcessorEditor::selectPage (int page)
     if (selectedPage == eqPage) eqDisplay.reset();
     if (selectedPage == dynamicsPage) dynamicsDisplay.reset();
     if (selectedPage == limiterPage) limiterDisplay.reset();
+    if (selectedPage == deEssPage) deEsserDisplay.reset();
     if (selectedPage == delayPage) delayDisplay.refresh (audioProcessor.getDelayDuckDb(), audioProcessor.getHostBpm());
     if (selectedPage == reverbPage) reverbDisplay.refresh (audioProcessor.getReverbDuckDb(), audioProcessor.getHostBpm());
 
@@ -1018,6 +1050,8 @@ void DooblrVocalsAudioProcessorEditor::refreshPowerButtonsNow()
         pageButtons[(size_t) pitchPage].setProcessorOn (pitchPower->getToggleState());
     if (harmonyPower != nullptr)
         pageButtons[(size_t) harmonyPage].setProcessorOn (harmonyPower->getToggleState());
+    if (deEssPower != nullptr)
+        pageButtons[(size_t) deEssPage].setProcessorOn (deEssPower->getToggleState());
 }
 
 //==============================================================================
@@ -1179,7 +1213,7 @@ void DooblrVocalsAudioProcessorEditor::readMeters()
 
     while (audioProcessor.getPitchTap().pop (pitchFrameScratch.data(), (int) pitchFrameScratch.size()) > 0) {}
 
-    if (selectedPage == harmonyPage || selectedPage >= delayPage)
+    if (selectedPage == harmonyPage || selectedPage == delayPage || selectedPage == reverbPage)
     {
         tap.discardAll();
         return;
@@ -1200,6 +1234,8 @@ void DooblrVocalsAudioProcessorEditor::readMeters()
         gateDisplay.update (meterFrameScratch.data(), frames, elapsed);
     else if (selectedPage == dynamicsPage)
         dynamicsDisplay.update (meterFrameScratch.data(), frames, elapsed);
+    else if (selectedPage == deEssPage)
+        deEsserDisplay.update (meterFrameScratch.data(), frames, elapsed);
     else
         limiterDisplay.update (meterFrameScratch.data(), frames, elapsed);
 }
@@ -1309,6 +1345,7 @@ void DooblrVocalsAudioProcessorEditor::paint (juce::Graphics& g)
                 : selectedPage == eqPage ? "OUTPUT EQ"
                 : selectedPage == dynamicsPage ? "COMPRESSOR"
                 : selectedPage == limiterPage ? "LIMITER"
+                : selectedPage == deEssPage ? "DE-ESSER"
                 : selectedPage == delayPage ? "DELAY" : "REVERB",
                 graphTitleArea, juce::Justification::centredLeft);
 }
@@ -1365,7 +1402,7 @@ void DooblrVocalsAudioProcessorEditor::resized()
         correctionTitleArea = nav.removeFromTop (titleHeight);
 
         // Signal order: the limiter has its own OUTPUT group at the end, after the time FX.
-        constexpr Page navOrder[] { pitchPage, harmonyPage, gatePage, eqPage, dynamicsPage, delayPage, reverbPage, limiterPage };
+        constexpr Page navOrder[] { pitchPage, harmonyPage, gatePage, eqPage, dynamicsPage, deEssPage, delayPage, reverbPage, limiterPage };
         static_assert (std::size (navOrder) == (size_t) numPages);
 
         for (const auto p : navOrder)
@@ -1406,6 +1443,8 @@ void DooblrVocalsAudioProcessorEditor::resized()
                 delayPower->setBounds (button.getPowerArea());
             if (p == reverbPage)
                 reverbPower->setBounds (button.getPowerArea());
+            if (p == deEssPage)
+                deEssPower->setBounds (button.getPowerArea());
         }
 
         layoutChainButtons();
@@ -1491,6 +1530,7 @@ void DooblrVocalsAudioProcessorEditor::resized()
         limiterDisplay.setBounds (display);
         delayDisplay.setBounds (display);
         reverbDisplay.setBounds (display);
+        deEsserDisplay.setBounds (display);
     }
 }
 

@@ -56,6 +56,8 @@ namespace dooblrvocals::dsp
         float getGainReductionDb() const noexcept { return lastGrDb; }
         /** Audio thread: the dynamic gain (dB) each EQ band is applying now (0 = static). */
         float getEqDynamicGainDb (int band) const noexcept { return chains[(size_t) activeChain].getEq().getDynamicGainDb (band); }
+        /** De-esser cut now (dB, <= 0; 0 when off). */
+        float getDeEssReductionDb() const noexcept { return deEsser.getCurrentReductionDb(); }
         float getReverbDuckDb() const noexcept { return fx.getReverbDuckDb(); }
         float getDelayDuckDb() const noexcept { return fx.getDelayDuckDb(); }
         PitchEstimate getLastPitch() const noexcept { return pitch.getLastEstimate(); }
@@ -76,6 +78,7 @@ namespace dooblrvocals::dsp
         NoiseReducer noiseReducer;
         PitchEngine pitch;
         std::array<ProcessingChain, 2> chains;
+        DeEsser deEsser;
         OutputGain outputGain;
         FxBlock fx;
         OutputStage limiter;

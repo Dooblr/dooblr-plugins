@@ -23,6 +23,7 @@ namespace dooblrvocals::dsp
         pitch.prepare (sampleRate, maxBlock);
         chains[0].prepare (sampleRate, maxBlock);
         chains[1].prepare (sampleRate, maxBlock);
+        deEsser.prepare (sampleRate);
         outputGain.prepare (sampleRate);
         fx.prepare (sampleRate, maxBlock);
         limiter.prepare (sampleRate);
@@ -35,6 +36,7 @@ namespace dooblrvocals::dsp
         pitch.reset();
         chains[0].reset();
         chains[1].reset();
+        deEsser.reset();
         outputGain.reset();
         fx.reset();
         limiter.reset();
@@ -94,6 +96,11 @@ namespace dooblrvocals::dsp
         auto& nr = current.noiseReducer;
         nr.amountDb = lerp (from.noiseReducer.amountDb, to.noiseReducer.amountDb, a);
         nr.sensitivity = lerp (from.noiseReducer.sensitivity, to.noiseReducer.sensitivity, a);
+
+        auto& de = current.deEsser;
+        de.frequency = lerp (from.deEsser.frequency, to.deEsser.frequency, a);
+        de.thresholdDb = lerp (from.deEsser.thresholdDb, to.deEsser.thresholdDb, a);
+        de.rangeDb = lerp (from.deEsser.rangeDb, to.deEsser.rangeDb, a);
 
         auto& l = current.limiter;
         const auto& m = to.limiter;
@@ -202,6 +209,17 @@ namespace dooblrvocals::dsp
             {
                 chains[(size_t) activeChain].process (slice, chunk, settings, chainOrderFromIndex (activeOrder),
                                                       meterBlock, meterTap);
+            }
+
+            // De-esser: a fixed slot after the Gate / EQ / Comp chain (where EQ boosts and makeup gain
+            // have already raised the esses) and before the delay / reverb, so esses are not sent into
+            // the FX. Outside the crossfaded chains, so a chain-order change does not touch its state.
+            deEsser.process (slice, 0, chunk, settings.deEsser);
+
+            if (meterTap != nullptr)
+            {
+                meter.deEssBand = deEsser.getLastBandPeak();
+                meter.deEssGrDb = deEsser.getLastMinReductionDb();
             }
 
             // Time-based FX (delay + reverb) after the chain: adds no latency.

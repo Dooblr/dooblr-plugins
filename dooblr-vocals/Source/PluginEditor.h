@@ -30,7 +30,7 @@ public:
     int getStage() const noexcept { return stage; }
 
     static constexpr int size = 20;
-    static constexpr int pitchStage = -1, harmonyStage = -2, delayStage = -3, reverbStage = -4;
+    static constexpr int pitchStage = -1, harmonyStage = -2, delayStage = -3, reverbStage = -4, deEssStage = -5;
 
 private:
     int stage;
@@ -73,7 +73,7 @@ public:
     void resized() override;
     bool keyPressed (const juce::KeyPress& key) override;
 
-    enum Page { pitchPage = 0, harmonyPage, gatePage, eqPage, dynamicsPage, limiterPage, delayPage, reverbPage, numPages };
+    enum Page { pitchPage = 0, harmonyPage, gatePage, eqPage, dynamicsPage, limiterPage, delayPage, reverbPage, deEssPage, numPages };
     static int pageForStage (int stage) noexcept { return gatePage + stage; }
     void selectPage (int page);
     int getSelectedPage() const noexcept { return selectedPage; }
@@ -92,6 +92,8 @@ public:
     dooblrvocals::ui::HarmonyDisplay& getHarmonyDisplay() noexcept { return harmonyDisplay; }
     dooblrvocals::ui::ReverbDisplay& getReverbDisplay() noexcept { return reverbDisplay; }
     dooblrvocals::ui::DelayDisplay& getDelayDisplay() noexcept { return delayDisplay; }
+    dooblrvocals::ui::DeEsserDisplay& getDeEsserDisplay() noexcept { return deEsserDisplay; }
+    ProcessorPowerButton& getDeEssPowerButton() noexcept { return *deEssPower; }
     dooblrvocals::ui::FxRoutingView& getRoutingView (int page) noexcept { return page == delayPage ? delayRouting : reverbRouting; }
     juce::ComboBox& getSectionPresetBox (int page) noexcept { return page == delayPage ? delayPresetBox : reverbPresetBox; }
     dooblrvocals::ui::SegmentedToggle& getModeToggle() noexcept { return *modeToggle; }
@@ -184,7 +186,7 @@ private:
     dooblrvocals::dsp::ChainOrder shownOrder { 0, 1, 2, 3 };
     int draggingStage = -1, dragGrabOffset = 0, dragY = 0;
     std::array<std::unique_ptr<ProcessorPowerButton>, dooblrvocals::dsp::numChainStages> powerButtons;
-    std::unique_ptr<ProcessorPowerButton> pitchPower, harmonyPower, delayPower, reverbPower;
+    std::unique_ptr<ProcessorPowerButton> pitchPower, harmonyPower, delayPower, reverbPower, deEssPower;
 
     dooblrvocals::ui::PitchDisplay pitchDisplay;
     dooblrvocals::ui::HarmonyDisplay harmonyDisplay;
@@ -194,6 +196,7 @@ private:
     dooblrvocals::ui::LimiterDisplay limiterDisplay;
     dooblrvocals::ui::DelayDisplay delayDisplay;
     dooblrvocals::ui::ReverbDisplay reverbDisplay;
+    dooblrvocals::ui::DeEsserDisplay deEsserDisplay;
     dooblrvocals::ui::FxRoutingView delayRouting, reverbRouting;
     juce::ComboBox delayPresetBox, reverbPresetBox;
     std::unique_ptr<dooblrvocals::ui::SegmentedToggle> modeToggle; // corr_mode: KEYED | CHROMATIC (pitch page bar)
@@ -228,7 +231,7 @@ private:
     using SliderAttachment = juce::AudioProcessorValueTreeState::SliderAttachment;
     using ButtonAttachment = juce::AudioProcessorValueTreeState::ButtonAttachment;
     std::unique_ptr<SliderAttachment> outputAttachment;
-    std::unique_ptr<ButtonAttachment> pitchPowerAttachment, harmonyPowerAttachment, delayPowerAttachment, reverbPowerAttachment;
+    std::unique_ptr<ButtonAttachment> pitchPowerAttachment, harmonyPowerAttachment, delayPowerAttachment, reverbPowerAttachment, deEssPowerAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrVocalsAudioProcessorEditor)
 };

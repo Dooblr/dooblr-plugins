@@ -309,4 +309,84 @@ namespace dooblrvocals::ui
         int framesReceived = 0;
         juce::String ceilingText;
     };
+
+    //==============================================================================
+    /**
+        The de-esser page's right column: the side-chain band level (instant attack, 20 dB/s
+        release) with the threshold across it, and the gain-reduction bar growing down from the top
+        (0-24 dB, instant attack, 12 dB/s release) with the Range drawn as its floor. The value of
+        each is printed above its bar. Mouse-transparent; repaints only when the picture changes.
+    */
+    class DeEssMeter final : public juce::Component
+    {
+    public:
+        static constexpr float minDb = -60.0f, maxDb = 0.0f, grRangeDb = 24.0f;
+
+        DeEssMeter();
+
+        /** One VBlank batch: loudest side-chain band level and deepest cut (dB, <= 0) since the last. */
+        void push (float bandDb, float grDb, double elapsedSeconds);
+        void setMarks (float thresholdDb, float rangeDb, bool deEsserOn);
+        void reset();
+
+        float getBandDb() const noexcept { return band; }
+        float getGainReductionDb() const noexcept { return gr; }
+        juce::Rectangle<float> getBandBar() const;
+        juce::Rectangle<float> getGrBar() const;
+        float dbToY (float db) const;
+
+        void paint (juce::Graphics& g) override;
+
+    private:
+        int pictureHash() const;
+
+        float band = minDb, gr = 0.0f, threshold = -30.0f, range = 8.0f;
+        bool on = false;
+        int lastHash = 0;
+    };
+
+    /**
+        De-esser view: a scrolling history of the side-chain band (fill), the band after the cut
+        (line) and the cut (from the top), with the threshold; the DeEssMeter on the right.
+        - drag the threshold line vertically: threshold
+        Editing never switches the de-esser on: that is the De-Ess tab's power toggle.
+    */
+    class DeEsserDisplay final : public juce::Component
+    {
+    public:
+        explicit DeEsserDisplay (juce::AudioProcessorValueTreeState& state);
+
+        void update (const dsp::MeterFrame* frames, int numFrames, double elapsedSeconds);
+        void reset();
+
+        void paint (juce::Graphics& g) override;
+        void resized() override;
+        void mouseMove (const juce::MouseEvent& e) override;
+        void mouseDown (const juce::MouseEvent& e) override;
+        void mouseDrag (const juce::MouseEvent& e) override;
+        void mouseUp (const juce::MouseEvent& e) override;
+        void mouseExit (const juce::MouseEvent& e) override;
+
+        // For tests.
+        juce::Rectangle<int> getHistoryArea() const noexcept { return history.getBounds(); }
+        float getThresholdY() const;
+        float getShownGainReductionDb() const noexcept { return shownGrDb; }
+        float getShownBandDb() const noexcept { return shownBandDb; }
+        int getFramesReceived() const noexcept { return framesReceived; }
+        DeEssMeter& getMeter() noexcept { return meter; }
+
+    private:
+        juce::uint64 paramHash() const;
+        void rebuildBackground();
+        void updateMarks();
+
+        ParameterGesture gesture;
+        HistoryStrip history;
+        DeEssMeter meter;
+        juce::Image background;
+        juce::uint64 lastHash = 0;
+        bool hover = false, dragging = false;
+        float shownGrDb = 0.0f, shownBandDb = -120.0f, grab = 0.0f;
+        int framesReceived = 0;
+    };
 }

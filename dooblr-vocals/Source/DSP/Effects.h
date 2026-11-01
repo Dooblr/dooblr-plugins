@@ -227,6 +227,72 @@ namespace dooblrvocals::dsp
         bool open = false;
     };
 
+    //==============================================================================
+    struct DeEsserSettings
+    {
+        enum Mode { split = 0, wideband };
+
+        bool enabled = false;       // off by default: presets and existing sessions are unchanged
+        float frequency = 6500.0f;  // 3..12 kHz: centre of the detector band and corner of the split band
+        float thresholdDb = -30.0f; // -60..0 dBFS: the detector band is held down to this level
+        float rangeDb = 8.0f;       // 0..24 dB: the most it will cut
+        int mode = split;           // split: only the band above the frequency is cut; wideband: the whole signal
+        bool listen = false;        // monitor the side-chain (detector) band instead of the output
+    };
+
+    /**
+        De-esser. A fourth-order band-pass side chain (two TPT state-variable band-passes, Q 0.8,
+        centred on the frequency) feeds a stereo-linked peak follower (0.5 ms attack, 40 ms release).
+        The cut is the follower's level above the threshold (4 dB soft knee), capped at Range, so the
+        sibilant band is held near the threshold. Split: a second-order (Butterworth) high shelf half an
+        octave below the frequency whose top gain is the cut g, from one TPT state-variable filter:
+        x - (1 - g) hp - (1 - sqrt g) k bp = lp + sqrt(g) k bp + g hp. Its gain is never above 1 at any
+        frequency (|N|^2 - |D|^2 = -(1 - g^2) w^4), so nothing below the band is boosted, and with no
+        cut the output is the input sample for sample. Wideband: the whole signal is turned down. Listen outputs the side-chain band.
+        No latency. Switching on / off ramps over 10 ms; fully off, the buffer is never touched.
+    */
+    class DeEsser
+    {
+    public:
+        static constexpr float attackMs = 0.5f, releaseMs = 40.0f, kneeDb = 4.0f, detectorQ = 0.8f;
+        static constexpr double splitK = 1.4142135623730951; // Butterworth splitter damping (1 / Q)
+        /** The split shelf's corner sits half an octave below Frequency, so the band the side chain is
+            centred on gets most of the cut (a shelf at Frequency itself cuts its centre by only ~half). */
+        static constexpr double splitCornerRatio = 0.70710678118654752;
+        static constexpr float minFrequency = 3000.0f, maxFrequency = 12000.0f, maxRangeDb = 24.0f;
+
+        void prepare (double sampleRate);
+        void reset() noexcept;
+        void process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const DeEsserSettings&) noexcept;
+
+        /** Static gain computer: dB of cut (>= 0) for a detector level, threshold and range. */
+        static float staticReductionDb (float levelDb, float thresholdDb, float rangeDb) noexcept;
+        /** Side-chain filter magnitude at a frequency (for the display and tests). */
+        static double detectorMagnitudeAt (double frequency, double centre, double sampleRate) noexcept;
+        /** Split-mode gain at a frequency for a steady cut (dB, >= 0) with the Frequency control at `corner`
+            (the shelf itself sits at corner * splitCornerRatio). */
+        static double splitGainAt (double frequency, double corner, double sampleRate, double cutDb) noexcept;
+
+        /** Deepest cut in the last block (dB, <= 0) and the current cut. */
+        float getLastMinReductionDb() const noexcept { return lastMinReductionDb; }
+        float getCurrentReductionDb() const noexcept { return currentReductionDb; }
+        /** Peak of the side-chain band in the last block (linear). */
+        float getLastBandPeak() const noexcept { return lastBandPeak; }
+        bool isActive() const noexcept { return wet > 0.0f; }
+
+    private:
+        void updateCoefficients (float frequency) noexcept;
+
+        double sampleRate = 48000.0;
+        eqdynamics::SvfCoefficients detector, splitter;
+        std::array<std::array<eqdynamics::SvfState, 2>, 2> detectorState {};
+        std::array<eqdynamics::SvfState, 2> splitState {};
+        float coefficientFrequency = -1.0f;
+        float envelope = 0.0f, attackCoeff = 0.0f, releaseCoeff = 0.0f;
+        float wet = 0.0f, wetStep = 0.0f;
+        float lastMinReductionDb = 0.0f, currentReductionDb = 0.0f, lastBandPeak = 0.0f;
+    };
+
     /** The final output gain, with the per-sample 5 ms ramp OutputStage used in kick. */
     class OutputGain
     {

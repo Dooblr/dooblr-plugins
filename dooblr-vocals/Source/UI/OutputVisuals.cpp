@@ -1616,4 +1616,367 @@ namespace dooblrvocals::ui
             setMouseCursor (juce::MouseCursor::NormalCursor);
         repaint();
     }
+
+    //==============================================================================
+    DeEssMeter::DeEssMeter()
+    {
+        setComponentID ("deEssMeter");
+        setOpaque (false);
+        setInterceptsMouseClicks (false, false);
+    }
+
+    void DeEssMeter::reset()
+    {
+        band = minDb;
+        gr = 0.0f;
+        repaint();
+    }
+
+    void DeEssMeter::setMarks (float thresholdDb, float rangeDb, bool deEsserOn)
+    {
+        threshold = thresholdDb;
+        range = rangeDb;
+        on = deEsserOn;
+        const auto h = pictureHash();
+        if (h != lastHash)
+        {
+            lastHash = h;
+            repaint();
+        }
+    }
+
+    void DeEssMeter::push (float bandDb, float grDb, double elapsedSeconds)
+    {
+        const auto dt = juce::jlimit (0.0, 0.25, elapsedSeconds);
+        bandDb = juce::jlimit (minDb, maxDb, bandDb);
+        band = std::max (bandDb, std::max (minDb, band - (float) (20.0 * dt)));
+        gr = std::min (std::min (0.0f, grDb), std::min (0.0f, gr + (float) (12.0 * dt)));
+        if (gr > -0.05f)
+            gr = 0.0f;
+
+        const auto h = pictureHash();
+        if (h != lastHash)
+        {
+            lastHash = h;
+            repaint();
+        }
+    }
+
+    int DeEssMeter::pictureHash() const
+    {
+        const auto bar = getBandBar();
+        const auto px = [&bar] (float db) { return juce::roundToInt ((db - minDb) / (maxDb - minDb) * bar.getHeight() * 2.0f); };
+        return (((px (band) * 4099 + juce::roundToInt (gr * 8.0f)) * 4099 + px (threshold)) * 4099
+                + juce::roundToInt (range * 4.0f)) * 2 + (on ? 1 : 0);
+    }
+
+    juce::Rectangle<float> DeEssMeter::getBandBar() const
+    {
+        auto r = getLocalBounds().toFloat().reduced (8.0f, 0.0f).withTrimmedTop (24.0f).withTrimmedBottom (20.0f);
+        return { r.getX() + 24.0f, r.getY(), 16.0f, r.getHeight() };
+    }
+
+    juce::Rectangle<float> DeEssMeter::getGrBar() const
+    {
+        const auto b = getBandBar();
+        return { b.getRight() + 12.0f, b.getY(), 16.0f, b.getHeight() };
+    }
+
+    float DeEssMeter::dbToY (float db) const
+    {
+        const auto bar = getBandBar();
+        return juce::jmap (juce::jlimit (minDb, maxDb, db), minDb, maxDb, bar.getBottom(), bar.getY());
+    }
+
+    void DeEssMeter::paint (juce::Graphics& g)
+    {
+        g.setColour (Palette::panel);
+        g.fillRoundedRectangle (getLocalBounds().toFloat(), 4.0f);
+
+        const auto bar = getBandBar();
+        const auto grBar = getGrBar();
+
+        for (auto db : { 0.0f, -12.0f, -24.0f, -36.0f, -48.0f, -60.0f })
+        {
+            const auto y = dbToY (db);
+            g.setColour (Palette::grid);
+            g.fillRect (bar.getX() - 4.0f, y - 0.5f, 3.0f, 1.0f);
+            drawLabel (g, juce::String ((int) db), { bar.getX() - 32.0f, y - 6.0f, 27.0f, 12.0f },
+                       juce::Justification::centredRight, Palette::textMuted, 9.5f);
+        }
+        for (auto grDb : { 0.0f, 6.0f, 12.0f, 18.0f, 24.0f })
+        {
+            const auto y = grBar.getY() + grBar.getHeight() * grDb / grRangeDb;
+            g.setColour (Palette::grid);
+            g.fillRect (grBar.getRight() + 1.0f, y - 0.5f, 3.0f, 1.0f);
+            drawLabel (g, juce::String ((int) grDb), { grBar.getRight() + 5.0f, y - 6.0f, 20.0f, 12.0f },
+                       juce::Justification::centredLeft, Palette::textMuted, 9.0f);
+        }
+
+        g.setColour (Palette::background);
+        g.fillRoundedRectangle (bar, 2.0f);
+        g.fillRoundedRectangle (grBar, 2.0f);
+        drawLabel (g, "SC", { bar.getX() - 8.0f, bar.getBottom() + 4.0f, bar.getWidth() + 16.0f, 12.0f },
+                   juce::Justification::centred, Palette::textMuted, 9.0f);
+        drawLabel (g, "GR", { grBar.getX() - 8.0f, bar.getBottom() + 4.0f, grBar.getWidth() + 16.0f, 12.0f },
+                   juce::Justification::centred, Palette::textMuted, 9.0f);
+
+        // Side-chain band level.
+        if (band > minDb + 0.01f)
+        {
+            const auto top = dbToY (band);
+            g.setColour ((band > threshold && on ? Palette::dynamic : Palette::spectrum).withAlpha (0.85f));
+            g.fillRect (juce::Rectangle<float>::leftTopRightBottom (bar.getX() + 1.0f, top, bar.getRight() - 1.0f, bar.getBottom()));
+        }
+
+        // Threshold across the band bar (dashed when off).
+        const auto ty = dbToY (threshold);
+        if (on)
+        {
+            g.setColour (Palette::frozen);
+            g.fillRect (bar.getX() - 3.0f, ty - 0.75f, bar.getWidth() + 6.0f, 1.5f);
+        }
+        else
+        {
+            g.setColour (Palette::textMuted.withAlpha (0.7f));
+            for (auto x = bar.getX() - 3.0f; x < bar.getRight() + 3.0f; x += 6.0f)
+                g.fillRect (x, ty - 0.5f, 3.0f, 1.0f);
+        }
+
+        // Range: the deepest the cut can go, as a tick across the GR bar.
+        const auto ry = grBar.getY() + grBar.getHeight() * juce::jlimit (0.0f, 1.0f, range / grRangeDb);
+        g.setColour ((on ? Palette::dynamic : Palette::textMuted).withAlpha (0.6f));
+        g.fillRect (grBar.getX() - 3.0f, ry - 0.5f, grBar.getWidth() + 6.0f, 1.0f);
+
+        if (on && gr < 0.0f)
+        {
+            const auto depth = grBar.getHeight() * juce::jmin (1.0f, -gr / grRangeDb);
+            g.setColour (Palette::dynamic);
+            g.fillRoundedRectangle (grBar.withHeight (std::max (1.5f, depth)).reduced (1.0f, 0.0f), 1.5f);
+        }
+
+        drawLabel (g, band > minDb + 0.5f ? formatDb (band) : juce::String ("-inf"), { bar.getX() - 14.0f, 4.0f, bar.getWidth() + 28.0f, 14.0f },
+                   juce::Justification::centred, Palette::spectrum, 10.0f);
+        drawLabel (g, on ? juce::String (gr, 1) : juce::String ("-"), { grBar.getX() - 8.0f, 4.0f, grBar.getWidth() + 22.0f, 14.0f },
+                   juce::Justification::centred, on ? Palette::dynamic : Palette::textMuted, 10.0f);
+    }
+
+    //==============================================================================
+    namespace
+    {
+        constexpr float deEssLowDb = -60.0f, deEssHighDb = 0.0f;
+    }
+
+    DeEsserDisplay::DeEsserDisplay (juce::AudioProcessorValueTreeState& s) : gesture (s)
+    {
+        setOpaque (true);
+        setComponentID ("deEsserDisplay");
+        history.setRange (deEssLowDb, deEssHighDb, { -6.0f, -12.0f, -18.0f, -24.0f, -30.0f, -36.0f, -42.0f, -48.0f, -54.0f });
+        history.setColours ({ Palette::spectrum.withAlpha (0.30f), Palette::accent, Palette::textMuted, Palette::dynamic });
+        addAndMakeVisible (meter);
+        updateMarks();
+    }
+
+    void DeEsserDisplay::reset()
+    {
+        history.clear();
+        meter.reset();
+        shownGrDb = 0.0f;
+        shownBandDb = -120.0f;
+        updateMarks();
+        repaint();
+    }
+
+    juce::uint64 DeEsserDisplay::paramHash() const
+    {
+        auto h = mixHash (11, gesture.get ("deess_on"));
+        for (const auto* id : { "deess_thresh", "deess_range", "deess_freq", "deess_mode", "deess_listen" })
+            h = mixHash (h, gesture.get (id));
+        return h;
+    }
+
+    float DeEsserDisplay::getThresholdY() const
+    {
+        return history.dbToY (gesture.get ("deess_thresh"));
+    }
+
+    void DeEsserDisplay::resized()
+    {
+        auto area = getLocalBounds();
+        meter.setBounds (area.removeFromRight (112).withTrimmedLeft (12));
+        history.setBounds (area.withTrimmedLeft (30).withTrimmedTop (4).withTrimmedBottom (14), pixelScaleFor (*this));
+        rebuildBackground();
+    }
+
+    void DeEsserDisplay::rebuildBackground()
+    {
+        if (getWidth() <= 0 || getHeight() <= 0)
+            return;
+
+        const auto scale = pixelScaleFor (*this);
+        background = makeImage (getLocalBounds(), scale);
+        juce::Graphics g (background);
+        g.addTransform (juce::AffineTransform::scale (scale));
+        g.fillAll (Palette::background);
+        const auto h = history.getBounds().toFloat();
+
+        for (auto db : { -6.0f, -12.0f, -18.0f, -24.0f, -30.0f, -36.0f, -42.0f, -48.0f, -54.0f })
+            drawLabel (g, juce::String ((int) db), { 0.0f, history.dbToY (db) - 7.0f, h.getX() - 5.0f, 14.0f },
+                       juce::Justification::centredRight, Palette::textMuted);
+
+        drawLabel (g, "dBFS", { 0.0f, h.getBottom() - 12.0f, h.getX() - 5.0f, 14.0f }, juce::Justification::centredRight, Palette::textMuted, 9.0f);
+    }
+
+    void DeEsserDisplay::updateMarks()
+    {
+        meter.setMarks (gesture.get ("deess_thresh"), gesture.get ("deess_range"), gesture.get ("deess_on") > 0.5f);
+    }
+
+    void DeEsserDisplay::update (const dsp::MeterFrame* frames, int numFrames, double elapsedSeconds)
+    {
+        auto batchGr = 0.0f, batchBand = -120.0f;
+
+        for (int i = 0; i < numFrames; ++i)
+        {
+            const auto& f = frames[i];
+            // Line: the band after the cut (the split band's level drops by the cut).
+            const auto after = f.deEssGrDb < -0.05f ? f.deEssBandDb + f.deEssGrDb : -120.0f;
+            history.push ({ f.deEssBandDb, after, -120.0f, f.deEssGrDb });
+            batchGr = std::min (batchGr, f.deEssGrDb);
+            batchBand = std::max (batchBand, f.deEssBandDb);
+        }
+
+        framesReceived += numFrames;
+
+        if (history.flush())
+            repaint (history.getBounds());
+
+        shownGrDb = std::min (batchGr, std::min (0.0f, shownGrDb + (float) (12.0 * elapsedSeconds)));
+        shownBandDb = std::max (batchBand, shownBandDb - (float) (20.0 * elapsedSeconds));
+
+        if (paramHash() != lastHash)
+        {
+            lastHash = paramHash();
+            repaint();
+        }
+
+        updateMarks();
+        meter.push (batchBand, batchGr, elapsedSeconds);
+    }
+
+    void DeEsserDisplay::paint (juce::Graphics& g)
+    {
+        if (background.isValid())
+            g.drawImage (background, getLocalBounds().toFloat());
+        else
+            g.fillAll (Palette::background);
+
+        history.draw (g);
+
+        const auto on = gesture.get ("deess_on") > 0.5f;
+        const auto h = history.getBounds().toFloat();
+        const auto y = getThresholdY();
+        const auto active = hover || dragging;
+        const auto colour = on ? Palette::frozen : Palette::textMuted;
+
+        if (on)
+        {
+            g.setColour (colour.withAlpha (active ? 1.0f : 0.85f));
+            g.fillRect (h.getX(), y - (active ? 1.0f : 0.75f), h.getWidth(), active ? 2.0f : 1.5f);
+        }
+        else
+        {
+            g.setColour (colour.withAlpha (0.7f));
+            for (auto x = h.getX(); x < h.getRight(); x += 8.0f)
+                g.fillRect (x, y - 0.5f, 4.0f, 1.0f);
+        }
+
+        drawLabel (g, (on ? "threshold " : "threshold (de-esser off) ") + formatDb (gesture.get ("deess_thresh")),
+                   { h.getRight() - 260.0f, y - 15.0f, 256.0f, 14.0f }, juce::Justification::centredRight, colour);
+
+        // What the side chain is listening to: band centre, mode, and the Listen state.
+        const auto freq = gesture.get ("deess_freq");
+        const auto wide = juce::roundToInt (gesture.get ("deess_mode")) == 1;
+        auto info = juce::String ("band ") + params::formatHz (freq) + (wide ? "  |  wideband" : "  |  split shelf from " + params::formatHz (freq * (float) dsp::DeEsser::splitCornerRatio));
+        drawLabel (g, info, { h.getX() + 6.0f, h.getY() + 4.0f, 300.0f, 14.0f }, juce::Justification::centredLeft, Palette::textMuted, 9.5f);
+        if (gesture.get ("deess_listen") > 0.5f)
+        {
+            const auto badge = juce::Rectangle<float> (h.getRight() - 70.0f, h.getY() + 4.0f, 64.0f, 16.0f);
+            g.setColour (Palette::dynamic.withAlpha (on ? 0.9f : 0.4f));
+            g.fillRoundedRectangle (badge, 3.0f);
+            drawLabel (g, "LISTEN", badge, juce::Justification::centred, Palette::background, 9.5f);
+        }
+
+        auto legend = juce::Rectangle<float> (h.getX() + 6.0f, h.getBottom() - 16.0f, 80.0f, 14.0f);
+        for (const auto& [name, c] : { std::pair { "side chain", Palette::spectrum }, std::pair { "after cut", Palette::accent },
+                                       std::pair { "GR", Palette::dynamic } })
+        {
+            g.setColour (c);
+            g.fillRect (legend.getX(), legend.getCentreY() - 1.0f, 8.0f, 2.0f);
+            drawLabel (g, name, legend.withTrimmedLeft (11.0f), juce::Justification::centredLeft, Palette::textMuted, 9.5f);
+            legend.translate (juce::String (name).length() > 2 ? 72.0f : 44.0f, 0.0f);
+        }
+    }
+
+    void DeEsserDisplay::mouseMove (const juce::MouseEvent& e)
+    {
+        const auto over = history.getBounds().toFloat().expanded (0.0f, 6.0f).contains (e.position) && std::abs (e.position.y - getThresholdY()) < 7.0f;
+
+        if (over != hover)
+        {
+            hover = over;
+            setMouseCursor (over ? juce::MouseCursor::UpDownResizeCursor : juce::MouseCursor::NormalCursor);
+            repaint (history.getBounds().expanded (2));
+        }
+    }
+
+    void DeEsserDisplay::mouseExit (const juce::MouseEvent&)
+    {
+        if (dragging)
+            return;
+
+        setMouseCursor (juce::MouseCursor::NormalCursor);
+
+        if (hover)
+        {
+            hover = false;
+            repaint (history.getBounds().expanded (2));
+        }
+    }
+
+    void DeEsserDisplay::mouseDown (const juce::MouseEvent& e)
+    {
+        mouseMove (e);
+
+        if (! hover)
+            return;
+
+        dragging = true;
+        grab = getThresholdY() - e.position.y;
+        gesture.begin ({ "deess_thresh" });
+        updateMarks();
+        repaint();
+    }
+
+    void DeEsserDisplay::mouseDrag (const juce::MouseEvent& e)
+    {
+        if (! dragging)
+            return;
+
+        gesture.set ("deess_thresh", juce::jlimit (-60.0f, 0.0f, history.yToDb (e.position.y + grab)));
+        updateMarks();
+        repaint (history.getBounds().expanded (2, 16));
+    }
+
+    void DeEsserDisplay::mouseUp (const juce::MouseEvent& e)
+    {
+        gesture.end();
+        dragging = false;
+        hover = false;
+        if (getLocalBounds().toFloat().contains (e.position))
+            mouseMove (e);
+        else
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+        repaint();
+    }
 }

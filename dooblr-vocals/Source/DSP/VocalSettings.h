@@ -254,5 +254,6 @@ namespace dooblrvocals::dsp
         FxRouting fxRouting = FxRouting::parallel;
         double bpm = 120.0;           // host tempo (for synced delay / pre-delay)
         NoiseReducerSettings noiseReducer; // first stage, before pitch detection (off by default)
+        DeEsserSettings deEsser;           // fixed slot after the Gate / EQ / Comp chain, before the FX (off by default)
     };
 }

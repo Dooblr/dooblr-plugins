@@ -208,6 +208,7 @@ void DooblrVocalsAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     gainReductionDb.store (engine.getGainReductionDb());
     for (int band = 0; band < 3; ++band)
         eqDynamicGainDb[(size_t) band].store (engine.getEqDynamicGainDb (band), std::memory_order_relaxed);
+    deEssReductionDb.store (engine.getDeEssReductionDb(), std::memory_order_relaxed);
 
     if (settings.pitch.learnRange)
     {

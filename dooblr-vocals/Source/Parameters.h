@@ -59,6 +59,7 @@ namespace dooblrvocals::params
         struct EqDynIds { Value on = nullptr, range = nullptr, threshold = nullptr, attack = nullptr, release = nullptr; };
         std::array<EqDynIds, 3> eqDyn {};
         Value nrOn = nullptr, nrMode = nullptr, nrAmount = nullptr, nrSensitivity = nullptr;
+        Value deEssOn = nullptr, deEssFreq = nullptr, deEssThresh = nullptr, deEssRange = nullptr, deEssMode = nullptr, deEssListen = nullptr;
         Value compOn = nullptr, compThreshold = nullptr, compRatio = nullptr, compAttack = nullptr, compRelease = nullptr, compMakeup = nullptr, compKnee = nullptr;
         Value limMode = nullptr, limCeiling = nullptr, limRelease = nullptr, outputGain = nullptr, chainOrder = nullptr;
         Value latencyMode = nullptr, harmOn = nullptr, harmLevel = nullptr, harmFormant = nullptr, harmLofi = nullptr;

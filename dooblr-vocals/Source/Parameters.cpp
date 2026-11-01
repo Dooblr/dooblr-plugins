@@ -340,6 +340,19 @@ namespace dooblrvocals::params
 
             // Harmony Lo-Fi (appended after Key Follow; 0 = off and bit-identical to earlier versions).
             addFloat (layout, "harm_lofi", "Harmony Lo-Fi", range (0.0f, 1.0f), 0.0f, percentString());
+
+            // De-esser (appended last: existing indices unchanged; off by default, so presets and
+            // existing sessions render bit-identically).
+            const dsp::DeEsserSettings de;
+            addBool (layout, "deess_on", "De-Esser On", false);
+            addFloat (layout, "deess_freq", "De-Esser Freq", logRange (dsp::DeEsser::minFrequency, dsp::DeEsser::maxFrequency),
+                      de.frequency, hzString(), "Hz");
+            addFloat (layout, "deess_thresh", "De-Esser Threshold", range (-60.0f, 0.0f), de.thresholdDb,
+                      [] (float v, int) { return juce::String (v, 1) + " dB"; }, "dB");
+            addFloat (layout, "deess_range", "De-Esser Range", range (0.0f, dsp::DeEsser::maxRangeDb), de.rangeDb,
+                      [] (float v, int) { return juce::String (v, 1) + " dB"; }, "dB");
+            addChoice (layout, "deess_mode", "De-Esser Mode", { "Split", "Wide" }, de.mode);
+            addBool (layout, "deess_listen", "De-Esser Listen", false);
         }
 
         return layout;
@@ -366,6 +379,8 @@ namespace dooblrvocals::params
                             getId (prefix + "attack"), getId (prefix + "release") };
         }
         nrOn = getId ("nr_on"); nrMode = getId ("nr_mode"); nrAmount = getId ("nr_amount"); nrSensitivity = getId ("nr_sensitivity");
+        deEssOn = getId ("deess_on"); deEssFreq = getId ("deess_freq"); deEssThresh = getId ("deess_thresh");
+        deEssRange = getId ("deess_range"); deEssMode = getId ("deess_mode"); deEssListen = getId ("deess_listen");
         compOn = getId ("comp_on"); compThreshold = getId ("comp_threshold"); compRatio = getId ("comp_ratio");
         compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup"); compKnee = getId ("comp_knee");
         limMode = getId ("lim_mode"); limCeiling = getId ("lim_ceiling"); limRelease = getId ("lim_release");
@@ -430,6 +445,12 @@ namespace dooblrvocals::params
         s.noiseReducer.mode = juce::jlimit (0, 1, i (nrMode));
         s.noiseReducer.amountDb = f (nrAmount);
         s.noiseReducer.sensitivity = f (nrSensitivity);
+        s.deEsser.enabled = b (deEssOn);
+        s.deEsser.frequency = f (deEssFreq);
+        s.deEsser.thresholdDb = f (deEssThresh);
+        s.deEsser.rangeDb = f (deEssRange);
+        s.deEsser.mode = juce::jlimit (0, 1, i (deEssMode));
+        s.deEsser.listen = b (deEssListen);
         s.eq.hpfOn = b (eqHpfOn);
         s.eq.hpfFreq = f (eqHpfFreq);
         s.eq.hpfSlope = juce::jlimit (0, 2, i (eqHpfSlope));

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <complex>
 
 namespace dooblrvocals::dsp
 {
@@ -585,6 +586,176 @@ namespace dooblrvocals::dsp
 
         lastMinReductionDb = minReduction;
         lastGain = endGain;
+    }
+
+    //==============================================================================
+    void DeEsser::prepare (double newSampleRate)
+    {
+        sampleRate = newSampleRate;
+        const auto sr = (float) sampleRate;
+        attackCoeff = std::exp (-1.0f / (attackMs * 0.001f * sr));
+        releaseCoeff = std::exp (-1.0f / (releaseMs * 0.001f * sr));
+        wetStep = 1.0f / (0.010f * sr);
+        coefficientFrequency = -1.0f;
+        wet = 0.0f;
+        reset();
+    }
+
+    void DeEsser::reset() noexcept
+    {
+        for (auto& stage : detectorState)
+            for (auto& st : stage)
+                st.reset();
+        for (auto& st : splitState)
+            st.reset();
+        envelope = 0.0f;
+        lastMinReductionDb = 0.0f;
+        currentReductionDb = 0.0f;
+        lastBandPeak = 0.0f;
+    }
+
+    void DeEsser::updateCoefficients (float frequency) noexcept
+    {
+        const auto f = std::clamp (frequency, minFrequency, std::min (maxFrequency, (float) (0.45 * sampleRate)));
+        if (std::abs (f - coefficientFrequency) < 1.0e-3f)
+            return;
+        coefficientFrequency = f;
+        detector = eqdynamics::makeDetectorCoefficients (eqdynamics::DetectorShape::bell, f, detectorQ, sampleRate);
+        splitter = eqdynamics::makeDetectorCoefficients (eqdynamics::DetectorShape::highShelf, f * splitCornerRatio, 1.0 / splitK, sampleRate);
+    }
+
+    float DeEsser::staticReductionDb (float levelDb, float thresholdDb, float rangeDb) noexcept
+    {
+        const auto range = std::clamp (rangeDb, 0.0f, maxRangeDb);
+        const auto over = levelDb - thresholdDb;
+        const auto halfKnee = 0.5f * kneeDb;
+        float cut = 0.0f;
+
+        if (over >= halfKnee)
+            cut = over;
+        else if (over > -halfKnee)
+            cut = (over + halfKnee) * (over + halfKnee) / (2.0f * kneeDb);
+
+        return std::min (range, cut);
+    }
+
+    namespace
+    {
+        double warpedRatio (double frequency, double centre, double sampleRate) noexcept
+        {
+            const auto pi = juce::MathConstants<double>::pi;
+            const auto f = std::clamp (frequency, 1.0, 0.4999 * sampleRate);
+            const auto c = std::clamp (centre, 10.0, 0.49 * sampleRate);
+            return std::tan (pi * f / sampleRate) / std::tan (pi * c / sampleRate);
+        }
+    }
+
+    double DeEsser::detectorMagnitudeAt (double frequency, double centre, double sampleRate) noexcept
+    {
+        const auto w = warpedRatio (frequency, std::clamp (centre, (double) minFrequency, std::min ((double) maxFrequency, 0.45 * sampleRate)), sampleRate);
+        const auto k = 1.0 / (double) detectorQ;
+        const auto one = (k * w) / std::sqrt ((1.0 - w * w) * (1.0 - w * w) + (k * w) * (k * w));
+        return one * one;
+    }
+
+    double DeEsser::splitGainAt (double frequency, double corner, double sampleRate, double cutDb) noexcept
+    {
+        const auto w = warpedRatio (frequency, std::clamp (corner, (double) minFrequency, std::min ((double) maxFrequency, 0.45 * sampleRate)) * splitCornerRatio, sampleRate);
+        const auto g = std::pow (10.0, -std::max (0.0, cutDb) / 20.0);
+        const auto k = std::sqrt (2.0);
+        const std::complex<double> s (0.0, w);
+        const auto n = 1.0 + std::sqrt (g) * k * s + g * s * s;
+        const auto d = 1.0 + k * s + s * s;
+        return std::abs (n / d);
+    }
+
+    void DeEsser::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const DeEsserSettings& s) noexcept
+    {
+        if (! s.enabled && wet <= 0.0f)
+        {
+            // Fully off: the buffer is not touched, so the output is bit-identical to bypass.
+            lastMinReductionDb = 0.0f;
+            currentReductionDb = 0.0f;
+            lastBandPeak = 0.0f;
+            return;
+        }
+
+        if (wet <= 0.0f)
+            reset(); // switching on from fully off: start the filters and follower from rest
+
+        updateCoefficients (s.frequency);
+
+        const auto channels = std::min (2, buffer.getNumChannels());
+        const auto split = s.mode != DeEsserSettings::wideband;
+        const auto thresholdDb = std::clamp (s.thresholdDb, -60.0f, 0.0f);
+        const auto rangeDb = std::clamp (s.rangeDb, 0.0f, maxRangeDb);
+        // Below this follower level the cut is exactly 0 (the bottom of the soft knee): skip the log.
+        const auto kneeStart = dbToGain (thresholdDb - 0.5f * kneeDb);
+        const auto target = s.enabled ? 1.0f : 0.0f;
+
+        auto minReduction = 0.0f, bandPeak = 0.0f, reduction = 0.0f;
+        std::array<float*, 2> data {};
+        for (int ch = 0; ch < channels; ++ch)
+            data[(size_t) ch] = buffer.getWritePointer (ch, startSample);
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (std::abs (wet - target) > 0.0f)
+                wet = target > wet ? std::min (target, wet + wetStep) : std::max (target, wet - wetStep);
+
+            std::array<float, 2> x {}, band {};
+            auto peak = 0.0f;
+
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                x[(size_t) ch] = data[(size_t) ch][i];
+                const auto b1 = eqdynamics::processSvf (x[(size_t) ch], detectorState[0][(size_t) ch], detector);
+                band[(size_t) ch] = eqdynamics::processSvf (b1, detectorState[1][(size_t) ch], detector);
+                peak = std::max (peak, std::abs (band[(size_t) ch]));
+            }
+
+            bandPeak = std::max (bandPeak, peak);
+            envelope = peak + (peak > envelope ? attackCoeff : releaseCoeff) * (envelope - peak);
+            if (envelope < 1.0e-12f)
+                envelope = 0.0f; // no denormals in silence
+
+            reduction = envelope > kneeStart ? staticReductionDb (gainToDb (envelope), thresholdDb, rangeDb) : 0.0f;
+            const auto gain = reduction > 0.0f ? dbToGain (-reduction) : 1.0f;
+            const auto rootGain = reduction > 0.0f ? dbToGain (-0.5f * reduction) : 1.0f;
+            minReduction = std::min (minReduction, -reduction);
+
+            for (int ch = 0; ch < channels; ++ch)
+            {
+                const auto in = x[(size_t) ch];
+                // The splitter's TPT state-variable filter: band-pass v1, low-pass v2, high-pass v0 - k v1 - v2.
+                auto& st = splitState[(size_t) ch];
+                const auto v0 = (double) in;
+                const auto v3 = v0 - st.ic2;
+                const auto v1 = splitter.a1 * st.ic1 + splitter.a2 * v3;
+                const auto v2 = st.ic2 + splitter.a2 * st.ic1 + splitter.a3 * v3;
+                st.ic1 = 2.0 * v1 - st.ic1;
+                st.ic2 = 2.0 * v2 - st.ic2;
+                const auto hp = (float) (v0 - splitK * v1 - v2);
+                const auto bp = (float) (splitK * v1);
+                float processed;
+
+                if (s.listen)
+                    processed = band[(size_t) ch];
+                else if (split)
+                    processed = in - (1.0f - gain) * hp - (1.0f - rootGain) * bp; // high shelf, top gain = gain
+                else
+                    processed = in * gain;
+
+                data[(size_t) ch][i] = wet >= 1.0f ? processed : in + wet * (processed - in);
+            }
+        }
+
+        lastMinReductionDb = minReduction;
+        currentReductionDb = -reduction;
+        lastBandPeak = bandPeak;
+
+        if (wet <= 0.0f)
+            reset();
     }
 
     //==============================================================================

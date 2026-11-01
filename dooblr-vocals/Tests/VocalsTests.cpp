@@ -3446,7 +3446,8 @@ namespace
         {
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
-            check (ids.size() > 5 && ids[ids.size() - 6] == "vibrato" && ids[ids.size() - 5] == "key_follow",
+            const auto lofi = ids.indexOf ("harm_lofi");
+            check (lofi > 5 && ids[lofi - 5] == "vibrato" && ids[lofi - 4] == "key_follow",
                    "Vibrato Respect is the last parameter before the Key Follow group");
             check (std::abs (getPlain (*p, "vibrato")) < 1.0e-6f, "Vibrato Respect defaults to 0");
             if (auto* param = getParam (*p, "vibrato"))
@@ -3840,9 +3841,10 @@ namespace
         {
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
-            check (ids.size() >= 5 && ids[ids.size() - 5] == "key_follow" && ids[ids.size() - 4] == "key_sens"
-                       && ids[ids.size() - 3] == "key_lock" && ids[ids.size() - 2] == "key_source",
-                   "key_follow, key_sens, key_lock, key_source are appended after Vibrato Respect (only Harmony Lo-Fi follows)");
+            const auto lofi = ids.indexOf ("harm_lofi");
+            check (lofi >= 4 && ids[lofi - 4] == "key_follow" && ids[lofi - 3] == "key_sens"
+                       && ids[lofi - 2] == "key_lock" && ids[lofi - 1] == "key_source",
+                   "key_follow, key_sens, key_lock, key_source are appended after Vibrato Respect (then Harmony Lo-Fi)");
             check (getPlain (*p, "key_follow") < 0.5f && std::abs (getPlain (*p, "key_sens") - 0.5f) < 1.0e-4f
                        && getPlain (*p, "key_lock") < 0.5f && juce::roundToInt (getPlain (*p, "key_source")) == 0,
                    "defaults: Off, 50 %, unlocked, Auto");
@@ -4086,7 +4088,12 @@ namespace
         {
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
-            check (! ids.isEmpty() && ids[ids.size() - 1] == "harm_lofi", "harm_lofi is the last parameter");
+            const juce::StringArray deEss { "deess_on", "deess_freq", "deess_thresh", "deess_range", "deess_mode", "deess_listen" };
+            bool deEssTail = ids.size() > deEss.size();
+            for (int k = 0; deEssTail && k < deEss.size(); ++k)
+                deEssTail = ids[ids.size() - deEss.size() + k] == deEss[k];
+            check (deEssTail && ids[ids.size() - deEss.size() - 1] == "harm_lofi",
+                   "harm_lofi is the last parameter before the De-Esser group (appended after it)");
             check (std::abs (getPlain (*p, "harm_lofi")) < 1.0e-6f, "Harmony Lo-Fi defaults to 0");
             check (! dooblrvocals::presets::isSessionOnlyParameter ("harm_lofi"), "Harmony Lo-Fi is stored in presets");
             if (auto* param = getParam (*p, "harm_lofi"))
@@ -5287,6 +5294,390 @@ namespace
         }
     }
 
+    void testDeEsser()
+    {
+        using DE = dsp::DeEsser;
+        using DS = dsp::DeEsserSettings;
+        constexpr auto twoPi = 2.0 * juce::MathConstants<double>::pi;
+
+        // Synthetic sibilance: 41 tones 6-8 kHz (50 Hz apart, fixed random phases), scaled to a peak amplitude.
+        struct Noise { std::vector<double> hz, phase; double scale = 1.0; };
+        const auto sibNoise = []
+        {
+            Noise n;
+            juce::Random r (2026);
+            for (int k = 0; k <= 40; ++k) { n.hz.push_back (6000.0 + 50.0 * k); n.phase.push_back (twoPi * r.nextDouble()); }
+            double peak = 0.0;
+            for (int i = 0; i < 48000; ++i)
+            {
+                double v = 0.0;
+                for (size_t k = 0; k < n.hz.size(); ++k) v += std::sin (twoPi * n.hz[k] * i / sampleRate + n.phase[k]);
+                peak = std::max (peak, std::abs (v));
+            }
+            n.scale = 1.0 / peak;
+            return n;
+        }();
+        auto sib = [&sibNoise] (int i, float amplitude)
+        {
+            double v = 0.0;
+            for (size_t k = 0; k < sibNoise.hz.size(); ++k) v += std::sin (twoPi * sibNoise.hz[k] * i / sampleRate + sibNoise.phase[k]);
+            return (float) (amplitude * sibNoise.scale * v);
+        };
+        // Bursts: 60 ms on (2 ms raised-cosine edges) every 150 ms.
+        constexpr int period = 7200, burstLength = 2880, edge = 96;
+        auto burstEnvelope = [] (int i)
+        {
+            const auto t = i % period;
+            if (t >= burstLength) return 0.0f;
+            const auto e = std::min (t, burstLength - 1 - t);
+            return e >= edge ? 1.0f : (float) (0.5 - 0.5 * std::cos (juce::MathConstants<double>::pi * e / edge));
+        };
+        // A vowel: harmonics of 140 Hz to 2 kHz, two formants (700, 1200 Hz).
+        auto vowel = [] (int i, float amplitude)
+        {
+            double v = 0.0;
+            for (int h = 1; h * 140.0 <= 2000.0; ++h)
+            {
+                const auto f = h * 140.0;
+                const auto w = 1.0 / h + 0.8 * std::exp (-std::pow ((f - 700.0) / 150.0, 2.0)) + 0.5 * std::exp (-std::pow ((f - 1200.0) / 200.0, 2.0));
+                v += w * std::sin (twoPi * f * i / sampleRate + 0.3 * h);
+            }
+            return (float) (amplitude * 0.25 * v);
+        };
+        auto makeBuffer = [] (int samples, const std::function<float (int)>& fn)
+        {
+            juce::AudioBuffer<float> b (2, samples);
+            for (int i = 0; i < samples; ++i) { const auto x = fn (i); b.setSample (0, i, x); b.setSample (1, i, x); }
+            return b;
+        };
+        auto run = [] (const juce::AudioBuffer<float>& in, const DS& s, float* deepest = nullptr)
+        {
+            DE de; de.prepare (sampleRate);
+            auto b = in;
+            auto minGr = 0.0f;
+            for (int pos = 0; pos < b.getNumSamples(); pos += 64)
+            {
+                de.process (b, pos, std::min (64, b.getNumSamples() - pos), s);
+                minGr = std::min (minGr, de.getLastMinReductionDb());
+            }
+            if (deepest != nullptr) *deepest = minGr;
+            return b;
+        };
+        auto identical = [] (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b)
+        {
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < a.getNumSamples(); ++i)
+                    if (! juce::exactlyEqual (a.getSample (ch, i), b.getSample (ch, i))) return false;
+            return true;
+        };
+        // RMS ratio (dB) of out over in, over the sustained part of every burst after the first.
+        auto burstGainDb = [&] (const juce::AudioBuffer<float>& in, const juce::AudioBuffer<float>& out)
+        {
+            double ei = 0.0, eo = 0.0;
+            for (int start = period; start + period <= in.getNumSamples(); start += period)
+                for (int i = start + 480; i < start + burstLength - edge; ++i)
+                {
+                    ei += (double) in.getSample (0, i) * in.getSample (0, i);
+                    eo += (double) out.getSample (0, i) * out.getSample (0, i);
+                }
+            return (float) (10.0 * std::log10 (eo / ei));
+        };
+        auto settings = [] (float thr, float range, int mode)
+        {
+            DS s; s.enabled = true; s.thresholdDb = thr; s.rangeDb = range; s.mode = mode; s.frequency = 6500.0f;
+            return s;
+        };
+
+        // 1. Gain law: unity slope above the threshold, 4 dB quadratic knee, capped at the range.
+        check (DE::staticReductionDb (-40.0f, -30.0f, 8.0f) == 0.0f && DE::staticReductionDb (-32.01f, -30.0f, 8.0f) == 0.0f, "no cut below the knee");
+        check (std::abs (DE::staticReductionDb (-30.0f, -30.0f, 8.0f) - 0.5f) < 1.0e-5f, "knee: 0.5 dB at the threshold");
+        check (std::abs (DE::staticReductionDb (-24.0f, -30.0f, 24.0f) - 6.0f) < 1.0e-5f, "6 dB over: 6 dB cut (held at the threshold)");
+        check (std::abs (DE::staticReductionDb (-10.0f, -30.0f, 8.0f) - 8.0f) < 1.0e-5f && DE::staticReductionDb (-10.0f, -30.0f, 0.0f) == 0.0f, "capped at the range");
+
+        const auto samples = (int) sampleRate; // 1 s: 6 bursts
+        constexpr float burstPeak = 0.1f;      // -20 dBFS peak
+        const auto bursts = makeBuffer (samples, [&] (int i) { return burstEnvelope (i) * sib (i, burstPeak); });
+
+        // 2. Off: bit-identical, whatever the other controls say; on with a band below the threshold: also bit-identical.
+        {
+            auto off = settings (-60.0f, 24.0f, DS::wideband); off.enabled = false; off.listen = true; off.frequency = 9000.0f;
+            check (identical (run (bursts, off), bursts), "off: the buffer is untouched (moved controls, Listen on)");
+            const auto vowelOnly = makeBuffer (samples, [&] (int i) { return vowel (i, 0.5f); });
+            // Worst-case side-chain level of the vowel: every harmonic's band-pass amplitude added in phase.
+            double vowelPeak = 0.0, bandBound = 0.0;
+            for (int i = 0; i < samples; ++i) vowelPeak = std::max (vowelPeak, (double) std::abs (vowelOnly.getSample (0, i)));
+            for (int h = 1; h * 140.0 <= 2000.0; ++h)
+            {
+                const auto f = h * 140.0;
+                const auto w = 1.0 / h + 0.8 * std::exp (-std::pow ((f - 700.0) / 150.0, 2.0)) + 0.5 * std::exp (-std::pow ((f - 1200.0) / 200.0, 2.0));
+                bandBound += 0.5 * 0.25 * w * DE::detectorMagnitudeAt (f, 6500.0, sampleRate);
+            }
+            const auto bandBoundDb = (float) juce::Decibels::gainToDecibels (bandBound);
+            const auto vowelThr = std::ceil (bandBoundDb + 3.0f + 0.5f * DE::kneeDb);
+            float gr = 0.0f;
+            const auto splitOut = run (vowelOnly, settings (vowelThr, 8.0f, DS::split), &gr);
+            const auto wideOut = run (vowelOnly, settings (vowelThr, 8.0f, DS::wideband));
+            note ("vowel at " + format ((float) juce::Decibels::gainToDecibels (vowelPeak), 1) + " dBFS peak: side-chain bound "
+                  + format (bandBoundDb, 1) + " dB, threshold " + format (vowelThr, 0) + " dB");
+            check (identical (splitOut, vowelOnly) && identical (wideOut, vowelOnly) && gr == 0.0f,
+                   "on, vowel only, side chain under the threshold: output bit-identical, no cut");
+            check (identical (run (bursts, settings (-6.0f, 24.0f, DS::wideband)), bursts), "on, bursts under the threshold: bit-identical");
+        }
+
+        // 3. Reduction on the bursts follows the threshold and stops at the range (wideband: the cut is the gain).
+        std::map<int, float> wideCut;
+        for (float thr : { -24.0f, -30.0f, -36.0f })
+        {
+            float reported = 0.0f;
+            const auto out = run (bursts, settings (thr, 24.0f, DS::wideband), &reported);
+            wideCut[(int) thr] = -burstGainDb (bursts, out);
+            note ("wideband, 6-8 kHz bursts at -20 dBFS peak, threshold " + format (thr, 0) + " dB, range 24: burst level "
+                  + format (-wideCut[(int) thr], 2) + " dB (deepest reported " + format (reported, 2) + " dB)");
+            check (reported <= -wideCut[(int) thr] + 0.05f && reported > -wideCut[(int) thr] - 3.0f, "reported GR covers the measured cut (threshold " + format (thr, 0) + ")");
+        }
+        check (wideCut[-24] > 1.0f, "bursts above the threshold are cut");
+        check (std::abs (wideCut[-30] - wideCut[-24] - 6.0f) < 0.3f && std::abs (wideCut[-36] - wideCut[-30] - 6.0f) < 0.3f,
+               "6 dB lower threshold, 6 dB more cut (" + format (wideCut[-30] - wideCut[-24], 2) + ", " + format (wideCut[-36] - wideCut[-30], 2) + " dB)");
+        for (float range : { 3.0f, 8.0f, 16.0f })
+        {
+            float reported = 0.0f;
+            const auto cut = -burstGainDb (bursts, run (bursts, settings (-60.0f, range, DS::wideband), &reported));
+            note ("wideband, threshold -60, range " + format (range, 0) + ": burst cut " + format (cut, 2) + " dB (reported " + format (reported, 2) + ")");
+            check (std::abs (cut - range) < 0.1f && std::abs (reported + range) < 0.01f, "the cut stops at the range (" + format (range, 0) + " dB)");
+        }
+
+        // 4. Split: the same side chain (so the same gain), applied only to the band above the frequency.
+        //    Prediction for a steady cut per tone: the bilinear-warped Butterworth high shelf whose top gain is the cut.
+        {
+            const auto thr = -30.0f;
+            double predicted = 0.0;
+            for (const auto f : sibNoise.hz)
+                predicted += std::pow (DE::splitGainAt (f, 6500.0, sampleRate, wideCut[-30]), 2.0);
+            // Shelf never boosts: worst case over 20 Hz..20 kHz for a 24 dB cut.
+            double maxShelf = 0.0;
+            for (double f = 20.0; f < 20000.0; f *= 1.02) maxShelf = std::max (maxShelf, DE::splitGainAt (f, 6500.0, sampleRate, 24.0));
+            check (maxShelf <= 1.0 + 1e-12, "split shelf gain never above 0 dB");
+            const auto predictedDb = (float) (10.0 * std::log10 (predicted / (double) sibNoise.hz.size()));
+            float reported = 0.0f;
+            const auto splitDb = burstGainDb (bursts, run (bursts, settings (thr, 24.0f, DS::split), &reported));
+            note ("split at 6.5 kHz, threshold -30: 6-8 kHz burst level " + format (splitDb, 2) + " dB (predicted from the wideband gain "
+                  + format (predictedDb, 2) + " dB; side-chain cut " + format (-wideCut[-30], 2) + " dB, reported " + format (reported, 2) + ")");
+            check (std::abs (splitDb - predictedDb) < 0.6f, "split cut matches the split-band prediction");
+            check (splitDb < -4.0f, "split mode cuts the 6-8 kHz bursts");
+            const auto capped = burstGainDb (bursts, run (bursts, settings (-60.0f, 8.0f, DS::split)));
+            note ("split, threshold -60, range 8: 6-8 kHz burst level " + format (capped, 2) + " dB");
+            check (capped > -8.05f && capped < -3.0f, "split cut never exceeds the range");
+        }
+
+        // 5. Vowel / LF content in split mode: tone unchanged while the bursts are cut (wideband ducks it).
+        {
+            const auto mix = makeBuffer (samples, [&] (int i) { return vowel (i, 0.4f) + burstEnvelope (i) * sib (i, burstPeak); });
+            const auto vowelOnly = makeBuffer (samples, [&] (int i) { return vowel (i, 0.4f); });
+            auto lowPass = [] (const juce::AudioBuffer<float>& in, double cutoff)
+            {
+                std::array<juce::IIRFilter, 4> f;
+                for (auto& x : f) x.setCoefficients (juce::IIRCoefficients::makeLowPass (sampleRate, cutoff, 0.7071));
+                std::vector<float> v (in.getReadPointer (0), in.getReadPointer (0) + in.getNumSamples());
+                for (auto& x : f) x.processSamples (v.data(), (int) v.size());
+                return v;
+            };
+            auto change = [&] (const juce::AudioBuffer<float>& out, double cutoff, double& errorDb)
+            {
+                const auto a = lowPass (mix, cutoff), b = lowPass (out, cutoff);
+                double ea = 0.0, eb = 0.0, ed = 0.0;
+                for (size_t i = 4800; i < a.size(); ++i) { ea += (double) a[i] * a[i]; eb += (double) b[i] * b[i]; ed += (double) (b[i] - a[i]) * (b[i] - a[i]); }
+                errorDb = 10.0 * std::log10 (ed / ea + 1.0e-30);
+                return 10.0 * std::log10 (eb / ea);
+            };
+            const auto split = run (mix, settings (-30.0f, 8.0f, DS::split));
+            const auto wide = run (mix, settings (-30.0f, 8.0f, DS::wideband));
+            double errSplitLf = 0.0, errSplitVowel = 0.0, errWide = 0.0;
+            const auto splitLf = change (split, 1000.0, errSplitLf), splitVowel = change (split, 2500.0, errSplitVowel);
+            const auto wideVowel = change (wide, 2500.0, errWide);
+            const auto sibSplit = burstGainDb (mix, split) - burstGainDb (mix, mix);
+            // The bursts' own cut, measured on the band above 5 kHz.
+            auto highBand = [] (const juce::AudioBuffer<float>& in)
+            {
+                std::array<juce::IIRFilter, 4> f;
+                for (auto& x : f) x.setCoefficients (juce::IIRCoefficients::makeHighPass (sampleRate, 5000.0, 0.7071));
+                juce::AudioBuffer<float> b (in);
+                for (int ch = 0; ch < 2; ++ch) { for (auto& x : f) x.reset(); for (auto& x : f) x.processSamples (b.getWritePointer (ch), b.getNumSamples()); }
+                return b;
+            };
+            const auto hiIn = highBand (mix), hiSplit = highBand (split);
+            const auto sibCut = burstGainDb (hiIn, hiSplit);
+            juce::ignoreUnused (sibSplit, vowelOnly);
+            note ("vowel + bursts, split: vowel (< 2.5 kHz) " + format (splitVowel, 3) + " dB (difference " + format (errSplitVowel, 1)
+                  + " dB re the vowel), LF (< 1 kHz) " + format (splitLf, 4) + " dB (difference " + format (errSplitLf, 1) + " dB); bursts above 5 kHz "
+                  + format (sibCut, 2) + " dB");
+            note ("vowel + bursts, wideband: vowel " + format (wideVowel, 2) + " dB (difference " + format (errWide, 1) + " dB)");
+            check (std::abs (splitVowel) < 0.1 && std::abs (splitLf) < 0.02, "split: vowel and LF level unchanged (< 0.1 dB)");
+            // The level is unchanged; what is left of the difference is the minimum-phase shelf's small phase lag
+            // below its corner while an ess is being cut (zero latency rules out a linear-phase split).
+            check (errSplitLf < -28.0 && errSplitVowel < -22.0 && errSplitVowel < errWide - 15.0,
+                   "split: vowel waveform change only the shelf's phase lag during esses (> 15 dB under wideband)");
+            check (sibCut < -3.0f, "split: the bursts are still cut with the vowel present");
+            check (wideVowel < -1.0, "wideband ducks the vowel with the bursts (the split mode's reason)");
+        }
+
+        // 6. Listen outputs the side chain: the band-pass response (unity at the frequency) on steady tones, any mode.
+        {
+            for (const auto mode : { (int) DS::split, (int) DS::wideband })
+                for (const double hz : { 300.0, 1000.0, 3000.0, 6500.0, 9000.0, 12000.0 })
+                {
+                    auto s = settings (0.0f, 8.0f, mode); s.listen = true;
+                    const auto in = makeBuffer (24000, [hz] (int i) { return (float) (0.25 * std::sin (twoPi * hz * i / sampleRate)); });
+                    const auto out = run (in, s);
+                    const auto measured = juce::Decibels::gainToDecibels (out.getRMSLevel (0, 12000, 12000) / in.getRMSLevel (0, 12000, 12000), -200.0f);
+                    const auto expected = (float) juce::Decibels::gainToDecibels (DE::detectorMagnitudeAt (hz, 6500.0, sampleRate), -200.0);
+                    if (mode == DS::split)
+                        note ("listen at " + format (hz, 0) + " Hz: " + format (measured, 2) + " dB (side-chain response " + format (expected, 2) + " dB)");
+                    check (std::abs (measured - expected) < 0.1f, "listen = side-chain band at " + format (hz, 0) + " Hz (" + (mode == DS::split ? "split" : "wide") + ")");
+                }
+            auto s = settings (0.0f, 8.0f, DS::split); s.listen = true;
+            const auto lf = makeBuffer (24000, [] (int i) { return (float) (0.25 * std::sin (twoPi * 150.0 * i / sampleRate)); });
+            const auto lfDb = juce::Decibels::gainToDecibels (run (lf, s).getRMSLevel (0, 12000, 12000) / lf.getRMSLevel (0, 12000, 12000), -200.0f);
+            note ("listen at 150 Hz: " + format (lfDb, 1) + " dB");
+            check (lfDb < -60.0f, "listen: LF content is out of the side chain");
+            check (std::abs (DE::detectorMagnitudeAt (6500.0, 6500.0, sampleRate) - 1.0) < 1.0e-9, "side chain is unity at the frequency");
+        }
+
+        // 7. Through the plug-in: defaults, off bit-identical, presets and old sessions unchanged, no latency.
+        {
+            auto input = [&] (int i) { return vowel (i, 0.3f) + burstEnvelope (i) * sib (i, 0.2f); };
+            auto a = makeProcessor(), b = makeProcessor();
+            check (getPlain (*a, "deess_on") < 0.5f && std::abs (getPlain (*a, "deess_freq") - 6500.0f) < 1.0f
+                       && std::abs (getPlain (*a, "deess_thresh") + 30.0f) < 0.01f && std::abs (getPlain (*a, "deess_range") - 8.0f) < 0.01f
+                       && getPlain (*a, "deess_mode") < 0.5f && getPlain (*a, "deess_listen") < 0.5f,
+                   "de-esser defaults: off, 6.5 kHz, -30 dB, 8 dB, Split, Listen off");
+            auto* freq = getParam (*a, "deess_freq");
+            check (freq != nullptr && std::abs (freq->convertFrom0to1 (0.0f) - 3000.0f) < 1.0f && std::abs (freq->convertFrom0to1 (1.0f) - 12000.0f) < 1.0f,
+                   "frequency range 3-12 kHz");
+            const auto latencyOff = a->getLatencySamples();
+            setParam (*b, "deess_freq", 9000.0f); setParam (*b, "deess_thresh", -55.0f); setParam (*b, "deess_range", 20.0f);
+            setParam (*b, "deess_mode", 1.0f); setParam (*b, "deess_listen", 1.0f);
+            const auto outA = render (*a, input, (int) sampleRate), outB = render (*b, input, (int) sampleRate);
+            check (identical (outA, outB), "plug-in: de-esser off, moved controls render bit-identical");
+
+            setParam (*b, "deess_listen", 0.0f); setParam (*b, "deess_mode", 0.0f); setParam (*b, "deess_freq", 6500.0f);
+            setParam (*b, "deess_on", 1.0f);
+            check (b->getLatencySamples() == latencyOff, "de-esser adds no latency (" + std::to_string (latencyOff) + " samples either way)");
+            const auto outC = render (*b, input, (int) sampleRate);
+            note ("plug-in, de-esser on (split, threshold -55, range 20): last reported GR " + format (b->getDeEssReductionDb(), 2) + " dB");
+            check (allFinite (outC) && ! identical (outA, outC), "plug-in: switching the de-esser on changes the output");
+
+            // Factory presets: none sets a de-esser parameter, each loads with it off, and renders bit-identical
+            // with the de-esser's (off) controls moved.
+            const auto& factory = dooblrvocals::presets::getFactoryPresets();
+            auto untouched = true, allOff = true, presetsIdentical = true;
+            for (int i = 0; i < (int) factory.size(); ++i)
+            {
+                for (const auto& [id, value] : factory[(size_t) i].values)
+                    untouched = untouched && ! juce::String (id).startsWith ("deess_");
+                auto p = makeProcessor(), q = makeProcessor();
+                p->loadFactoryPreset (i, false);
+                q->loadFactoryPreset (i, false);
+                allOff = allOff && getPlain (*p, "deess_on") < 0.5f;
+                setParam (*q, "deess_thresh", -60.0f); setParam (*q, "deess_range", 24.0f); setParam (*q, "deess_listen", 1.0f);
+                presetsIdentical = presetsIdentical && identical (render (*p, input, 12000), render (*q, input, 12000));
+            }
+            check (untouched, "no factory preset sets a de-esser parameter");
+            check (allOff, "every factory preset loads with the de-esser off");
+            check (presetsIdentical, "every factory preset renders bit-identical with the de-esser's off controls moved");
+
+            // An old session (no deess_* in the state) loads with the de-esser off.
+            juce::MemoryBlock blob;
+            a->getStateInformation (blob);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+            check (xml != nullptr, "session state is XML");
+            if (xml != nullptr)
+            {
+                for (int i = xml->getNumChildElements(); --i >= 0;)
+                    if (auto* e = xml->getChildElement (i); e->hasTagName ("PARAM") && e->getStringAttribute ("id").startsWith ("deess_"))
+                        xml->removeChildElement (e, true);
+                juce::MemoryBlock old;
+                juce::AudioProcessor::copyXmlToBinary (*xml, old);
+                auto r = makeProcessor();
+                setParam (*r, "deess_on", 1.0f);
+                r->setStateInformation (old.getData(), (int) old.getSize());
+                check (getPlain (*r, "deess_on") < 0.5f, "old session (no de-esser state) loads with the de-esser off");
+                auto fresh = makeProcessor();
+                fresh->setStateInformation (old.getData(), (int) old.getSize());
+                check (identical (render (*fresh, input, 24000), render (*makeProcessor(), input, 24000)), "old session renders as before");
+            }
+        }
+
+        // 8. Editor: De-Ess page in PROCESSING (after Comp, before the time FX), power toggle, panel, display, GR meter.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 0.0f);
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditorAndMakeActive());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            check (editor != nullptr, "editor");
+            if (editor == nullptr) return;
+            editor->setSize (940, 600);
+            auto& button = editor->getPageButton (Editor::deEssPage);
+            check (findById (*editor, "page_De-Ess") == &button && button.isVisible(), "De-Ess page button in the nav");
+            const auto compY = editor->getPageButton (Editor::dynamicsPage).getY(), delayY = editor->getPageButton (Editor::delayPage).getY();
+            check (button.getY() > compY && button.getY() < delayY && button.getBottom() <= editor->getHeight(),
+                   "De-Ess sits between Comp and the time FX, inside the 940x600 window");
+            auto& power = editor->getDeEssPowerButton();
+            check (findById (*editor, "power_deess") == &power && ! power.getToggleState(), "De-Ess power toggle, off by default");
+            power.setToggleState (true, juce::sendNotificationSync);
+            check (getPlain (*p, "deess_on") > 0.5f, "power toggle switches deess_on");
+            editor->selectPage (Editor::deEssPage);
+            const auto& panels = editor->getPanels (Editor::deEssPage);
+            auto shownAll = panels.size() == 1;
+            for (const auto* id : { "deess_freq", "deess_thresh", "deess_range", "deess_mode", "deess_listen" })
+                shownAll = shownAll && panels.front()->isShown (id);
+            check (shownAll, "De-esser panel: Frequency, Threshold, Range, Mode, Listen");
+            auto& display = editor->getDeEsserDisplay();
+            check (display.isVisible() && ! editor->getLimiterDisplay().isVisible() && findById (*editor, "deEssMeter") == &display.getMeter(),
+                   "De-Ess page shows its display and GR meter");
+            check (panels.front()->getBottom() <= editor->getHeight() && display.getHeight() >= 150,
+                   "De-Ess page fits 940x600 (display " + std::to_string (display.getHeight()) + " px high)");
+
+            // Live meter frames from the plug-in: bursts through the de-esser.
+            setParam (*p, "deess_thresh", -40.0f);
+            auto input = [&] (int i) { return vowel (i, 0.3f) + burstEnvelope (i) * sib (i, 0.2f); };
+            for (int pos = 0; pos < (int) sampleRate; pos += 4800)
+            {
+                render (*p, [&] (int i) { return input (pos + i); }, 4800);
+                editor->pollMetersNow();
+            }
+            const auto deepest = display.getMeter().getGainReductionDb();
+            note ("De-Ess page after 1 s of bursts: " + std::to_string (display.getFramesReceived()) + " meter frames, meter GR "
+                  + format (deepest, 2) + " dB, band " + format (display.getMeter().getBandDb(), 1) + " dB");
+            check (display.getFramesReceived() > 0 && deepest < -1.0f && display.getMeter().getBandDb() > -40.0f, "display and meter follow the de-esser");
+            const auto ty = display.getThresholdY();
+            const auto expectedY = juce::jmap (-40.0f, -60.0f, 0.0f, (float) display.getHistoryArea().getBottom(), (float) display.getHistoryArea().getY());
+            check (std::abs (ty - expectedY) < 1.0f, "threshold line sits at deess_thresh");
+
+            // Drag the threshold line: one gesture moves deess_thresh.
+            auto& undo = p->getUndoHistory();
+            undo.clear();
+            const auto x = (float) display.getHistoryArea().getCentreX();
+            simulateDrag (display, { x, ty }, { x, ty - 30.0f });
+            const auto moved = getPlain (*p, "deess_thresh");
+            check (moved > -38.0f && undo.getNumUndoableSteps() == 1, "dragging the threshold line moves deess_thresh (" + format (moved, 1) + " dB), one undo step");
+            check (getPlain (*p, "deess_on") > 0.5f, "dragging never switches the de-esser");
+            setParam (*p, "deess_thresh", -40.0f);
+            for (int pos = 0; pos < (int) (0.6 * sampleRate); pos += 4800)
+            {
+                render (*p, [&] (int i) { return input (pos + i); }, 4800);
+                editor->pollMetersNow();
+            }
+
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+            saveSnapshot (image, "-de-esser");
+            check (image.getWidth() == 940 && image.getHeight() == 600, "De-Ess page renders at 940x600");
+
+            // Other pages: still their own colours / titles (the time FX are the only FX-coloured pages).
+            editor->selectPage (Editor::reverbPage);
+            check (! display.isVisible() && editor->getReverbDisplay().isVisible(), "leaving the page hides the de-esser display");
+        }
+    }
+
     void testCompressorKnee()
     {
         using C = dsp::Compressor;
@@ -5856,6 +6247,7 @@ int main()
         { "eq: high-pass filter", testEqHighPass },
         { "noise reducer: spectral denoise", testNoiseReducer },
         { "eq: dynamic EQ", testEqDynamics },
+        { "de-esser", testDeEsser },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

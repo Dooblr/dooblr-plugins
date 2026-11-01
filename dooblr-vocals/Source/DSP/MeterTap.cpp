@@ -55,6 +55,8 @@ namespace dooblrvocals::dsp
         a.gateOut = std::max (a.gateOut, b.gateOut);
         a.gateGrDb = std::min (a.gateGrDb, b.gateGrDb);
         a.output = std::max (a.output, b.output);
+        a.deEssBand = std::max (a.deEssBand, b.deEssBand);
+        a.deEssGrDb = std::min (a.deEssGrDb, b.deEssGrDb);
         accumulatedSamples += numSamples;
 
         if (accumulatedSamples < samplesPerFrame.load (std::memory_order_relaxed))
@@ -72,6 +74,8 @@ namespace dooblrvocals::dsp
         frame.gateOutDb = toDb (a.gateOut);
         frame.gateGrDb = a.gateGrDb;
         frame.outputDb = toDb (a.output);
+        frame.deEssBandDb = toDb (a.deEssBand);
+        frame.deEssGrDb = a.deEssGrDb;
         accumulated = {};
         accumulatedSamples = 0;
 

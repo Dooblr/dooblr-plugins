@@ -64,6 +64,9 @@ public:
         return band >= 0 && band < 3 ? eqDynamicGainDb[(size_t) band].load (std::memory_order_relaxed) : 0.0f;
     }
 
+    /** Any thread: the de-esser's cut now (dB, <= 0; 0 when off). */
+    float getDeEssReductionDb() const noexcept { return deEssReductionDb.load (std::memory_order_relaxed); }
+
     dooblrvocals::dsp::MeterTap& getMeterTap() noexcept { return meterTap; }
     dooblrvocals::dsp::PitchTap& getPitchTap() noexcept { return pitchTap; }
     dooblrvocals::dsp::OutputPeakTap& getOutputPeakTap() noexcept { return outputPeakTap; }
@@ -154,6 +157,7 @@ private:
 
     std::atomic<float> gainReductionDb { 0.0f };
     std::array<std::atomic<float>, 3> eqDynamicGainDb {};
+    std::atomic<float> deEssReductionDb { 0.0f };
     int currentProgram = 0;
     juce::String presetName { "Init" };
     int reportedLatency = -1;
