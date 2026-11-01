@@ -9,7 +9,9 @@ namespace dooblrfeedback::params
     inline constexpr int stateVersion = 2;
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
-        IDs up to bypass were added in 0.1.0; the safety IDs in 0.1.1. */
+        IDs up to bypass were added in 0.1.0; the safety IDs in 0.1.1; recoverSpeed in 0.1.2.
+        (0.1.2 shows liveNotches as "Auto-recover" On / Off and release as "Recover after": same
+        IDs, same values, so sessions and automation are unchanged.) */
     namespace id
     {
         // Detection
@@ -24,8 +26,8 @@ namespace dooblrfeedback::params
         // Notches
         inline constexpr const char* maxCut      = "maxCut";
         inline constexpr const char* notchQ      = "notchQ";
-        inline constexpr const char* liveNotches = "liveNotches"; // Float | Hold
-        inline constexpr const char* release     = "release";
+        inline constexpr const char* liveNotches = "liveNotches"; // Auto-recover: On (0, was Float) | Off (1, was Hold)
+        inline constexpr const char* release     = "release";     // Recover after (s of quiet)
 
         // Output
         inline constexpr const char* output      = "output";
@@ -37,6 +39,9 @@ namespace dooblrfeedback::params
         inline constexpr const char* safetyThreshold = "safetyThreshold"; // peak dBFS after the notches
         inline constexpr const char* safetyDepth     = "safetyDepth";     // dB of reduction; top = mute
         inline constexpr const char* safetyRelease   = "safetyRelease";   // s
+
+        // Auto-recover (0.1.2)
+        inline constexpr const char* recoverSpeed    = "recoverSpeed";    // Slow | Normal | Fast
     }
 
     /** Max cut: 3 - 30 dB, and the top of the knob (maxCutInfinite) is a full-depth notch. */
@@ -58,7 +63,8 @@ namespace dooblrfeedback::params
     juce::StringArray safetyTriggerNames(); // Feedback, Always
 
     juce::StringArray modeNames();        // Safe, Aggressive
-    juce::StringArray liveNotchNames();   // Float, Hold
+    juce::StringArray liveNotchNames();   // On, Off (Auto-recover)
+    juce::StringArray recoverSpeedNames(); // Slow, Normal, Fast
 
     /** The parameter layout, in the order hosts list it. */
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();

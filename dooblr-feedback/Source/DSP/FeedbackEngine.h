@@ -37,6 +37,19 @@ namespace dooblrfeedback::dsp
         float offPeakHz = 0.0f;           // a steady tonal peak inside the notch's span, off its centre
         float offPeakSec = 0.0f;
         float catchDb = -200.0f;   // detector level when the notch was created (bookkeeping, not saved)
+
+        // Auto-recover (0.1.2, bookkeeping, not saved): a quiet floating notch steps back toward
+        // 0 dB in small stages, probing after each one; see FeedbackEngine::recover().
+        bool recovering = false;
+        float stageStartDb = 0.0f;        // cut when the current stage began (restored + margin on a re-onset)
+        float stageTargetDb = 0.0f;       // cut this stage glides to
+        float stageDwellSec = 0.0f;       // time spent probing at the stage target
+        float stageBaseDb = -200.0f;      // smoothed detector level at the notch when the stage began
+        float probeDb = -200.0f;          // smoothed (about 0.45 s) detector level at the notch while recovering
+        int probeHops = 0;                // consecutive hops the probe has read a re-onset
+        float ringSec = 0.0f;             // how long the ringing test has fired without a break
+        float recoverScale = 1.0f;        // 1, doubled after every re-onset (cap 8): slower next time
+        int reonsets = 0;                 // re-onsets caught while recovering
     };
 
     using NotchArray = std::array<Notch, maxNotches>;
@@ -104,11 +117,12 @@ namespace dooblrfeedback::dsp
             bool detect = true;          // Auto
             bool aggressive = false;     // Aggressive mode (Ring-out implies it)
             bool ringOut = false;        // new / re-ringing notches become fixed
-            bool hold = false;           // floating notches never release
+            bool hold = false;           // Auto-recover off: floating notches never recover
             float sensitivity = 0.5f;    // 0..1
             float maxCutDb = 18.0f;
             float baseQ = 20.0f;
-            float releaseSec = 20.0f;
+            float releaseSec = 20.0f;    // Recover after: quiet time before the first stage
+            int recoverSpeed = 1;        // 0 Slow, 1 Normal, 2 Fast
             float lowHz = 80.0f, highHz = 20000.0f;
 
             // Safety duck (last resort): see processSafety().
@@ -152,8 +166,30 @@ namespace dooblrfeedback::dsp
         static constexpr int controlInterval = 16;
         static constexpr float minQ = 4.0f;
         static constexpr float mergeFadeDbPerSec = 60.0f;
-        /** How fast a released (floating, quiet for the release time) notch fades out. */
-        static constexpr float releaseDbPerSec = 6.0f;
+        /** Auto-recover stages: each one lowers the cut by 25 % of it (3 - 6 dB; a cut of 3.5 dB or
+            less goes to 0), glides there at recoverGlideDbPerSec[speed] and then probes for
+            recoverDwellSec[speed]. Cuts deeper than bellCapDb (a true notch) first glide to bellCapDb
+            at recoverDeepDbPerSec (that part is inaudible). Both are slowed by the notch's recoverScale.
+            A re-onset restores the cut the stage started from plus recoverMarginDb. */
+        static constexpr float recoverGlideDbPerSec[3] { 0.5f, 1.0f, 2.0f };
+        static constexpr float recoverDwellSec[3] { 8.0f, 4.0f, 2.0f };
+        static constexpr float recoverDeepDbPerSec = 30.0f, recoverMarginDb = 3.0f, recoverMaxScale = 8.0f;
+        /** A level rise at the notch this much beyond what the removed cut explains is a re-onset. */
+        static constexpr float reonsetRiseDb = 5.0f;
+        static constexpr float probeSmoothing = 0.012f;  // per hop (about 5 ms): a 0.45 s average
+        static constexpr int probeConfirmHops = 4;
+        static constexpr float ringConfirmSec = 0.15f;   // a ring while recovering must last this long
+        /** The cut a stage starting at cutDb glides to. */
+        static float recoverStageTarget (float cutDb) noexcept;
+        /** Seconds a quiet floating notch at cutDb takes to recover fully (Recover after included),
+            with recoverScale 1 and no re-onset. */
+        static float expectedRecoverySec (float cutDb, float recoverAfterSec, int speed) noexcept;
+        /** Safety duck release: the gain comes back in safetyStages equal dB steps (each at
+            Depth / Recover dB per second), probing safetyDwellFraction * Recover between steps.
+            A re-trigger during the release multiplies the next release time by 1.5 (cap 4); it
+            returns to 1 after safetyCalmSec without a duck. */
+        static constexpr int safetyStages = 3;
+        static constexpr float safetyDwellFraction = 0.3f, safetyMaxScale = 4.0f, safetyCalmSec = 10.0f;
         /** The seed (runaway) confirmation: rise since the window filled, over at least fastSec. */
         static constexpr float fastSec = 0.08f, fastRiseDb = 9.0f, fastDbPerSec = 60.0f;
         static constexpr float strongDipDb = 1.5f; // a dip this deep restarts the strong-run growth window
@@ -254,6 +290,9 @@ namespace dooblrfeedback::dsp
         void engage (float freq, float level, const Thresholds& t, float extraCutDb = 0.0f) noexcept;
         void retrigger (Notch& n, const Thresholds& t, float freq = 0.0f) noexcept;
         void consolidate() noexcept;
+        void recover (Notch& n, float hopSec, float peak, float prominence, const Thresholds& t) noexcept;
+        void reonset (Notch& n) noexcept;
+        static void startStage (Notch& n) noexcept;
         float refineBin (int k, float quadraticBin) const noexcept;
         /** Half-width (Hz) within which a detection is folded into notch n instead of adding one. */
         static float mergeHz (const Notch& n, float binHz) noexcept;
@@ -302,6 +341,8 @@ namespace dooblrfeedback::dsp
         float safetyGain = 1.0f, safetyEnv = 0.0f, safetyEnvRelease = 0.0f, safetyAttack = 0.0f;
         int safetyHold = 0, safetyHint = 0, safetyLate = 0;
         bool safetyDucking = false;
+        int safetyStage = 0, safetyDwell = 0, safetyCalm = 0;   // staged release (0: not releasing)
+        float safetyStageGain = 1.0f, safetyStartDb = 0.0f, safetyScale = 1.0f;
         std::atomic<bool> safetyActive { false };
         std::atomic<float> safetyReductionDb { 0.0f };
         std::atomic<int> safetyEvents { 0 };

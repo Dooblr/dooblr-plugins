@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio> // DBGTMP
 
 namespace dooblrfeedback::dsp
 {
@@ -167,6 +168,10 @@ namespace dooblrfeedback::dsp
         safetyEnv = 0.0f;
         safetyHold = safetyHint = safetyLate = 0;
         safetyDucking = false;
+        safetyStage = safetyDwell = safetyCalm = 0;
+        safetyStageGain = 1.0f;
+        safetyStartDb = 0.0f;
+        safetyScale = 1.0f;
         safetyActive.store (false);
         safetyReductionDb.store (0.0f);
         for (auto& s : slots)
@@ -346,8 +351,12 @@ namespace dooblrfeedback::dsp
         feeding back never arms it, so it is not ducked.
 
         Action: the main gain falls with a 5 ms time constant by up to Depth (or mutes), is held
-        while the trigger persists (plus 80 ms), then recovers at Depth / Release dB per second
-        (linear in dB). No lookahead, no latency; every gain change is a smooth ramp. */
+        while the trigger persists (plus 80 ms), then recovers cautiously (0.1.2): in three equal dB
+        steps, each at Depth / Recover dB per second (linear in dB), with a probe of 0.3 x Recover
+        after each of the first two. The duck stays armed through the whole release, so a howl
+        that comes back is ducked again at once; one that comes back after the gain had already
+        stepped up makes the next release 1.5 x slower (up to 4 x, back to 1 x after 10 s without
+        a duck). No lookahead, no latency; every gain change is a smooth ramp. */
     void FeedbackEngine::processSafety (float* const* io, int channels, int start, int len, bool analyse) noexcept
     {
         const auto enabled = settings.safety && analyse;
@@ -361,9 +370,12 @@ namespace dooblrfeedback::dsp
         const auto muting = settings.safetyDepthDb >= fullDuckDb;
         const auto depthLin = muting ? 0.0f : juce::Decibels::decibelsToGain (-std::max (0.0f, settings.safetyDepthDb));
         const auto rangeDb = muting ? 60.0f : std::max (1.0f, settings.safetyDepthDb);
-        const auto recover = std::pow (10.0f, rangeDb / (20.0f * std::max (0.05f, settings.safetyReleaseSec) * (float) sampleRate));
+        const auto releaseSec = std::max (0.05f, settings.safetyReleaseSec) * safetyScale;
+        const auto recover = std::pow (10.0f, rangeDb / (20.0f * releaseSec * (float) sampleRate));
         const auto holdSamples = (int) (safetyHoldSec * (float) sampleRate);
-        const auto lateLimit = (int) ((std::max (0.05f, settings.safetyReleaseSec) + 0.5f) * (float) sampleRate);
+        const auto dwellSamples = (int) (safetyDwellFraction * releaseSec * (float) sampleRate);
+        const auto lateLimit = (int) ((releaseSec * (1.0f + safetyDwellFraction * (float) (safetyStages - 1)) + 0.5f) * (float) sampleRate);
+        const auto calmSamples = (int) (safetyCalmSec * (float) sampleRate);
 
         for (int i = 0; i < len; ++i)
         {
@@ -385,7 +397,12 @@ namespace dooblrfeedback::dsp
                     safetyEvents.fetch_add (1, std::memory_order_relaxed);
                     safetyLastMs.store (wallMsNow(), std::memory_order_relaxed);
                 }
+                else if (safetyHold <= 0 && safetyStage >= 2)
+                    safetyScale = std::min (safetyMaxScale, 1.5f * safetyScale);   // came back after a step up
                 safetyHold = holdSamples;
+                safetyStage = 0;
+                safetyDwell = 0;
+                safetyCalm = 0;
             }
             if (safetyHint > 0) --safetyHint;
 
@@ -396,11 +413,34 @@ namespace dooblrfeedback::dsp
             }
             else if (safetyGain < 1.0f)
             {
-                safetyGain = std::min (1.0f, std::max (safetyGain, 1.0e-5f) * recover);
-                if (safetyGain >= 1.0f) safetyDucking = false;
+                if (safetyStage == 0)
+                {
+                    // Release starts: plan the steps from where the gain is now.
+                    safetyStartDb = juce::Decibels::gainToDecibels (std::max (safetyGain, 1.0e-5f), -200.0f);
+                    safetyStage = 1;
+                    safetyStageGain = juce::Decibels::decibelsToGain (safetyStartDb * (float) (safetyStages - 1) / (float) safetyStages);
+                }
+                if (safetyDwell > 0)
+                    --safetyDwell;   // probing at this step
+                else
+                {
+                    safetyGain = std::min (safetyStageGain, std::max (safetyGain, 1.0e-5f) * recover);
+                    if (safetyGain >= safetyStageGain && safetyStage < safetyStages)
+                    {
+                        ++safetyStage;
+                        safetyStageGain = safetyStage >= safetyStages ? 1.0f
+                                        : juce::Decibels::decibelsToGain (safetyStartDb * (float) (safetyStages - safetyStage) / (float) safetyStages);
+                        safetyDwell = dwellSamples;
+                    }
+                }
+                if (safetyGain >= 1.0f) { safetyGain = 1.0f; safetyDucking = false; safetyStage = 0; }
             }
             else
+            {
                 safetyDucking = false;
+                safetyStage = 0;
+                if (safetyScale > 1.0f && ++safetyCalm >= calmSamples) { safetyScale = 1.0f; safetyCalm = 0; }
+            }
 
             for (int ch = 0; ch < channels; ++ch) io[ch][start + i] *= safetyGain;
         }
@@ -893,6 +933,7 @@ namespace dooblrfeedback::dsp
             // The lean is bounded around the latest confirmed howl.
             n.anchorHz = freq;
         }
+        if (n.recovering) reonset (n);
         if (! n.ringing)
         {
             if (n.quietSec > 0.25f) ++n.hits;
@@ -1000,6 +1041,8 @@ namespace dooblrfeedback::dsp
             const auto prominence = peak - neighbourDb (centre, radius + 3.0f, radius + 12.0f);
             const auto peakFreq = (float) peakBin * binHz;
             n.levelDb = peak;
+            // Smoothed level for the recovery probe (always running, so it is settled when recovery starts).
+            n.probeDb = n.probeDb < -150.0f ? peak : n.probeDb + probeSmoothing * (peak - n.probeDb);
 
             if (n.historyCount < 4)
                 n.history[n.historyCount++] = peak;
@@ -1043,8 +1086,16 @@ namespace dooblrfeedback::dsp
             const auto ringThreshold = t.prominenceDb - 4.0f;
             const auto ringing = peak >= t.floorDb && prominence >= ringThreshold
                               && ! isMusical (peakFreq, peak, t.harmonicDb, false);
-            if (ringing)
+            n.ringSec = ringing ? n.ringSec + hopSec : 0.0f;
+            if (ringing && n.recovering && n.ringSec < ringConfirmSec)
             {
+                // Recovering and it reads as ringing: hold the cut where it is and listen for
+                // ringConfirmSec (about two analysis windows). Noise or programme can look like a
+                // ring for one window; a real re-onset keeps ringing and is put straight back below.
+            }
+            else if (ringing)
+            {
+                if (n.recovering) { std::fprintf (stderr, "DBG ring-reonset f=%.0f cut=%.2f peak=%.1f prom=%.1f\n", n.freq, n.cutDb, peak, prominence); reonset (n); }
                 if (! n.ringing)
                 {
                     if (n.quietSec > 0.25f) ++n.hits;
@@ -1081,15 +1132,102 @@ namespace dooblrfeedback::dsp
             {
                 n.ringing = false;
                 n.quietSec += hopSec;
-                if (! n.fixed && ! settings.hold && n.quietSec > settings.releaseSec)
-                {
-                    n.cutDb -= releaseDbPerSec * hopSec;
-                    if (n.cutDb < 0.25f) n = Notch {};
-                }
+                if (n.fixed || settings.hold)
+                    n.recovering = false;   // locked / ring-out / Auto-recover off: never recovers
+                else if (n.quietSec > settings.releaseSec * n.recoverScale)
+                    recover (n, hopSec, peak, prominence, t);
             }
             if (n.active) n.cutDb = std::min (n.cutDb, settings.maxCutDb);
         }
         consolidate();
+    }
+
+    //==============================================================================
+    /*  Auto-recover (0.1.2): once a floating notch has been quiet for Recover after seconds, it
+        steps back toward 0 dB slowly and cautiously. Each stage lowers the cut a little (25 % of
+        it, 3 - 6 dB), glides there (a ramp in dB, smoothed again by the filter: no clicks), then
+        waits and listens. If the ring comes back - the usual ringing test, or the level at the
+        notch rising more than the removed cut explains - reonset() puts the cut straight back to
+        where the stage started plus a margin and doubles this notch's recovery time for next
+        time. After the last stage (at 0 dB) has been probed too, the notch is freed and its label
+        fades out. Fixed (locked or ring-out) notches and Auto-recover off never get here. */
+    float FeedbackEngine::recoverStageTarget (float cutDb) noexcept
+    {
+        if (cutDb > bellCapDb) return bellCapDb;
+        if (cutDb <= 3.5f) return 0.0f;
+        return cutDb - juce::jlimit (3.0f, 6.0f, 0.25f * cutDb);
+    }
+
+    float FeedbackEngine::expectedRecoverySec (float cutDb, float recoverAfterSec, int speed) noexcept
+    {
+        speed = juce::jlimit (0, 2, speed);
+        auto sec = recoverAfterSec;
+        for (auto cut = cutDb; cut > 0.0f;)
+        {
+            const auto target = recoverStageTarget (cut);
+            sec += (cut - target) / (cut > bellCapDb ? recoverDeepDbPerSec : recoverGlideDbPerSec[speed]) + recoverDwellSec[speed];
+            cut = target;
+        }
+        return sec;
+    }
+
+    void FeedbackEngine::startStage (Notch& n) noexcept
+    {
+        n.stageStartDb = n.cutDb;
+        n.stageTargetDb = recoverStageTarget (n.cutDb);
+        n.stageDwellSec = 0.0f;
+        n.stageBaseDb = n.probeDb;
+        n.probeHops = 0;
+    }
+
+    void FeedbackEngine::recover (Notch& n, float hopSec, float peak, float prominence, const Thresholds& t) noexcept
+    {
+        const auto speed = juce::jlimit (0, 2, settings.recoverSpeed);
+        if (! n.recovering)
+        {
+            n.recovering = true;
+            startStage (n);
+        }
+        else
+        {
+            // A probe: the smoothed (about 0.45 s) level at the notch rising further than the cut removed so
+            // far in this stage explains (the programme there comes back up by at most that much),
+            // for several hops in a row. Single FFT frames of noise or programme jump around by
+            // more than that, so neither the raw peak nor one frame is trusted.
+            const auto removed = std::min (n.stageStartDb, bellCapDb) - std::min (n.cutDb, bellCapDb);
+            const auto rising = peak >= t.floorDb && n.probeDb - n.stageBaseDb > removed + reonsetRiseDb
+                             && prominence >= t.prominenceDb - 10.0f && ! isMusical (n.freq, peak, t.harmonicDb, false);
+            n.probeHops = rising ? n.probeHops + 1 : 0;
+            if (n.probeHops >= probeConfirmHops)
+            {
+                std::fprintf (stderr, "DBG probe-reonset f=%.0f cut=%.2f probe=%.1f base=%.1f\n", n.freq, n.cutDb, n.probeDb, n.stageBaseDb);
+                reonset (n);
+                return;
+            }
+        }
+
+        if (n.cutDb > n.stageTargetDb)
+        {
+            const auto rate = (n.cutDb > bellCapDb ? recoverDeepDbPerSec : recoverGlideDbPerSec[speed]) / n.recoverScale;
+            n.cutDb = std::max (n.stageTargetDb, n.cutDb - rate * hopSec);
+            return;
+        }
+        n.stageDwellSec += hopSec;
+        if (n.stageDwellSec < recoverDwellSec[speed] * n.recoverScale) return;
+        if (n.stageTargetDb <= 0.0f) { n = Notch {}; return; }   // fully recovered: free it
+        startStage (n);
+    }
+
+    void FeedbackEngine::reonset (Notch& n) noexcept
+    {
+        n.cutDb = std::min (settings.maxCutDb, std::max (n.cutDb, n.stageStartDb + recoverMarginDb));
+        n.neededDb = std::max (n.neededDb, n.cutDb);
+        n.recoverScale = std::min (recoverMaxScale, 2.0f * n.recoverScale);
+        n.recovering = false;
+        n.quietSec = 0.0f;
+        n.graceSec = 0.04f;
+        n.probeHops = 0;
+        ++n.reonsets;
     }
 
     void FeedbackEngine::consolidate() noexcept
@@ -1114,6 +1252,7 @@ namespace dooblrfeedback::dsp
                 keep.q = std::min (keep.q, drop.q);
                 keep.hits += drop.hits;
                 keep.ringing = keep.ringing || drop.ringing;
+                keep.recovering = false;   // starts over from the cut it took over
                 if (drop.detectedMs > 0 && (keep.detectedMs <= 0 || drop.detectedMs < keep.detectedMs)) keep.detectedMs = drop.detectedMs;
                 drop.merging = true;
                 drop.fixed = false;

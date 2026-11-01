@@ -196,7 +196,8 @@ namespace dooblrfeedback
         addChildComponent (notesEditor);
 
         advancedPanel = std::make_unique<ui::ControlPanel> (state, "ADVANCED", Palette::dynamic, std::vector<Spec> {
-            { id::notchQ, "Notch Q" }, { id::liveNotches, "Live notches", Kind::combo, 112 }, { id::release, "Release" },
+            { id::notchQ, "Notch Q" }, { id::liveNotches, "Auto-recover", Kind::combo, 112 }, { id::release, "Recover after" },
+            { id::recoverSpeed, "Recover speed", Kind::combo, 112 },
             { id::rangeLow, "Range low" }, { id::rangeHigh, "Range high" }, { id::output, "Output" },
             { id::safety, "Safety duck", Kind::toggle }, { id::safetyTrigger, "Duck when", Kind::combo, 112 },
             { id::safetyThreshold, "Threshold" }, { id::safetyDepth, "Depth" }, { id::safetyRelease, "Recover" } });

@@ -85,7 +85,8 @@ namespace dooblrfeedback::params
     juce::StringArray safetyTriggerNames() { return { "Feedback", "Always" }; }
 
     juce::StringArray modeNames()      { return { "Safe", "Aggressive" }; }
-    juce::StringArray liveNotchNames() { return { "Float", "Hold" }; }
+    juce::StringArray liveNotchNames() { return { "On", "Off" }; }
+    juce::StringArray recoverSpeedNames() { return { "Slow", "Normal", "Fast" }; }
 
     namespace
     {
@@ -173,11 +174,11 @@ namespace dooblrfeedback::params
             q.setSkewForCentre (16.0f);
             layout.add (floatParam (id::notchQ, "Notch Q", q, 20.0f, {}, 1));
         }
-        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::liveNotches, 1 }, "Live notches", liveNotchNames(), 0));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::liveNotches, 1 }, "Auto-recover", liveNotchNames(), 0));
         {
             juce::NormalisableRange<float> r (2.0f, 120.0f, 0.1f);
             r.setSkewForCentre (20.0f);
-            layout.add (floatParam (id::release, "Release", r, 20.0f, "s", 1));
+            layout.add (floatParam (id::release, "Recover after", r, 20.0f, "s", 1));
         }
 
         layout.add (floatParam (id::output, "Output", { -24.0f, 12.0f, 0.1f }, 0.0f, "dB", 1));
@@ -201,6 +202,8 @@ namespace dooblrfeedback::params
             r.setSkewForCentre (1.0f);
             layout.add (floatParam (id::safetyRelease, "Safety release", r, 1.5f, "s", 2));
         }
+        // Auto-recover (0.1.2)
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::recoverSpeed, 1 }, "Recover speed", recoverSpeedNames(), 0));
         return layout;
     }
 }

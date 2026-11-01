@@ -94,15 +94,12 @@ namespace dooblrfeedback::ui
         if (hasFrame && (fresh || settling || ! shownValid))
             dirty = advanceDisplay (dt) || fresh;
 
-        const auto now = processor.getNotches();
-        if (! sameCurve (now, notches))
+        notches = processor.getNotches(); // ringing / hits / levels: labels pick these up calmly below
+        if (easeDrawnNotches (dt))
         {
-            notches = now;
             rebuildCurve();
             dirty = true;
         }
-        else
-            notches = now; // ringing / hits / levels: labels pick these up calmly below
 
         if (updateLabels (nowMs)) layoutMarkers (nowMs, false);
         if (animateLabels (nowMs)) dirty = true;
@@ -151,6 +148,7 @@ namespace dooblrfeedback::ui
     {
         const auto nowMs = clockMs();
         notches = processor.getNotches();
+        snapDrawnNotches();
         if (updateLabels (nowMs)) layoutMarkers (nowMs, false);
         animateLabels (nowMs);
         buildMarkers();
@@ -191,6 +189,55 @@ namespace dooblrfeedback::ui
         for (const auto& n : notches)
             if (n.active && n.id == notchId) return &n;
         return nullptr;
+    }
+
+    const dsp::Notch* FeedbackGraph::drawnById (int notchId) const noexcept
+    {
+        for (const auto& n : drawnNotches)
+            if (n.active && n.id == notchId) return &n;
+        return nullptr;
+    }
+
+    // The drawn bank eases toward the real one (time-based, so the same at any frame rate): a
+    // new notch grows in from 0 dB, a cleared or freed one shrinks back to 0 dB, and depth,
+    // frequency and Q changes glide (one-pole, notchEaseSec). Cuts ease on the drawn scale
+    // (a full notch's 120 dB is drawn as the line under 30 dB), then land exactly.
+    bool FeedbackGraph::easeDrawnNotches (double dtSeconds)
+    {
+        if (sameCurve (drawnNotches, notches))
+        {
+            drawnNotches = notches; // flags, hits, levels: no redraw needed for the curve
+            return false;
+        }
+        const auto k = (float) (1.0 - std::exp (-std::max (0.0, dtSeconds) / notchEaseSec));
+        constexpr auto drawCap = cutRangeDb + 1.0f;
+        for (size_t i = 0; i < notches.size(); ++i)
+        {
+            const auto& t = notches[i];
+            auto& d = drawnNotches[i];
+            if (t.active)
+            {
+                if (! d.active || d.id != t.id)
+                {
+                    d = t;
+                    d.cutDb = 0.0f;
+                }
+                const auto cut = std::min (d.cutDb, drawCap), freq = d.freq, q = d.q;
+                const auto target = std::min (t.cutDb, drawCap);
+                d = t;
+                d.cutDb = cut + (target - cut) * k;
+                d.freq = freq * std::pow (t.freq / std::max (1.0f, freq), k);
+                d.q = q * std::pow (t.q / std::max (0.01f, q), k);
+                if (std::abs (d.cutDb - target) < 0.02f && std::abs (d.freq - t.freq) < 0.01f && std::abs (d.q - t.q) < 0.01f)
+                    d = t;
+            }
+            else if (d.active)
+            {
+                d.cutDb = std::min (d.cutDb, drawCap) * (1.0f - k);
+                if (d.cutDb < 0.02f) d = dsp::Notch {};
+            }
+        }
+        return true;
     }
 
     //==============================================================================
@@ -267,6 +314,7 @@ namespace dooblrfeedback::ui
                 fresh.bornMs = fresh.lastActiveMs = nowMs;
                 fresh.lastCut = n.cutDb;
                 fresh.shown = n;
+                setLabelText (fresh);
                 fresh.valueMs = nowMs;
                 labels.push_back (fresh);
                 l = &labels.back();
@@ -285,6 +333,7 @@ namespace dooblrfeedback::ui
                 if (n.cutDb != l->shown.cutDb || n.q != l->shown.q || n.freq != l->shown.freq || n.hits != l->shown.hits || n.fixed != l->shown.fixed)
                     ++valueRefreshes;
                 l->shown = n;
+                setLabelText (*l);
                 l->valueMs = nowMs;
             }
 
@@ -434,6 +483,15 @@ namespace dooblrfeedback::ui
             for (auto* l : live) l->moveStartMs = nowMs - moveMs;
     }
 
+    void FeedbackGraph::setLabelText (Label& l)
+    {
+        const auto& v = l.shown;
+        l.line1 = params::formatFrequency (v.freq) + "  " + params::noteName (v.freq);
+        l.line2 = cutText (v.cutDb) + "  Q " + params::formatValue (v.q, 0);
+        l.line3 = juce::String (juce::CharPointer_UTF8 ("\xc3\x97")) + juce::String (v.hits) + "  " + timeText (v.detectedMs)
+                + (v.fixed ? "  FIX" : "  FLT");
+    }
+
     bool FeedbackGraph::animateLabels (double nowMs)
     {
         auto moving = false;
@@ -467,7 +525,9 @@ namespace dooblrfeedback::ui
             m.lane = l.open ? l.lane : -1;
             m.chip = l.open ? l.drawn : l.dotDrawn;
             m.target = l.open ? l.to : l.dotTo;
-            m.handle = { xForFrequency (n->freq), yForCut (n->cutDb) };
+            const auto* drawn = drawnById (l.id);
+            const auto& h = drawn != nullptr ? *drawn : *n;
+            m.handle = { xForFrequency (h.freq), yForCut (h.cutDb) };
             if (l.open)
             {
                 auto buttons = m.chip.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);
@@ -554,6 +614,7 @@ namespace dooblrfeedback::ui
 
     void FeedbackGraph::rebuildCurve()
     {
+        // Both paths are cleared and refilled in place (no reallocation once grown).
         curveFill.clear();
         curveEdge.clear();
         if (plot.isEmpty()) return;
@@ -561,10 +622,10 @@ namespace dooblrfeedback::ui
         for (int i = 0; i <= steps; ++i)
         {
             const auto x = plot.getX() + plot.getWidth() * (float) i / (float) steps;
-            const auto y = yForCut (-dsp::FeedbackEngine::bankResponseDb (notches, frequencyForX (x)));
-            if (i == 0) curveEdge.startNewSubPath (x, y); else curveEdge.lineTo (x, y);
+            const auto y = yForCut (-dsp::FeedbackEngine::bankResponseDb (drawnNotches, frequencyForX (x)));
+            if (i == 0) { curveEdge.startNewSubPath (x, y); curveFill.startNewSubPath (x, y); }
+            else        { curveEdge.lineTo (x, y); curveFill.lineTo (x, y); }
         }
-        curveFill = curveEdge;
         curveFill.lineTo (plot.getRight(), baselineY);
         curveFill.lineTo (plot.getX(), baselineY);
         curveFill.closeSubPath();
@@ -650,27 +711,31 @@ namespace dooblrfeedback::ui
             const auto& n = live != nullptr ? *live : l.shown;   // a cleared notch fades out as it was
             const auto colour = n.fixed ? Palette::accent : Palette::dynamic;
             const auto selected = l.id == selectedNotch, hovered = l.id == hoverNotch || l.id == tableHoverNotch;
-            const juce::Point<float> handle { xForFrequency (n.freq), yForCut (n.cutDb) };
+            const auto* drawn = drawnById (l.id);
+            const auto& hn = drawn != nullptr ? *drawn : n;
+            const juce::Point<float> handle { xForFrequency (hn.freq), yForCut (hn.cutDb) };
             const auto alpha = l.markerAlpha;
 
             // Leader line from the label (or dot) down to the handle at the notch's depth.
             const auto drawLeader = [&] (juce::Rectangle<float> from, float a)
             {
                 if (a <= 0.001f) return;
-                juce::Path line;
+                auto& line = scratchLine;
+                line.clear();
                 const auto startX = juce::jlimit (from.getX() + 4.0f, from.getRight() - 4.0f, handle.x);
                 line.startNewSubPath (startX, from.getBottom());
                 if (std::abs (startX - handle.x) > 0.5f) line.lineTo (handle.x, std::min (handle.y, from.getBottom() + 6.0f));
                 line.lineTo (handle);
-                juce::Path dashed;
-                juce::PathStrokeType (1.0f).createDashedStroke (dashed, line, dash.data(), (int) dash.size());
+                scratchDashed.clear();
+                juce::PathStrokeType (1.0f).createDashedStroke (scratchDashed, line, dash.data(), (int) dash.size());
                 g.setColour (colour.withAlpha ((selected || hovered ? 0.9f : 0.5f) * a));
-                g.fillPath (dashed);
+                g.fillPath (scratchDashed);
             };
             drawLeader (l.drawn, l.labelAlpha * alpha);
             drawLeader (l.dotDrawn, l.dotAlpha);
 
-            juce::Path diamond;
+            auto& diamond = scratchDiamond;
+            diamond.clear();
             const auto r = selected || hovered ? 5.5f : 4.5f;
             diamond.addQuadrilateral (handle.x, handle.y - r, handle.x + r, handle.y, handle.x, handle.y + r, handle.x - r, handle.y);
             g.setColour (colour.withAlpha (alpha));
@@ -699,16 +764,13 @@ namespace dooblrfeedback::ui
             const auto lineHeight = text.getHeight() / 3.0f;
             g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
             g.setColour (Palette::textPrimary.withAlpha (la));
-            g.drawText (params::formatFrequency (v.freq) + "  " + params::noteName (v.freq),
-                        text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
+            juce::ignoreUnused (v);
+            g.drawText (l.line1, text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
             g.setFont (juce::FontOptions (10.5f));
             g.setColour (colour.brighter (0.2f).withAlpha (la));
-            g.drawText (cutText (v.cutDb) + "  Q " + params::formatValue (v.q, 0),
-                        text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
+            g.drawText (l.line2, text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
             g.setColour (Palette::textMuted.withAlpha (la));
-            g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")) + juce::String (v.hits) + "  " + timeText (v.detectedMs)
-                            + (v.fixed ? "  FIX" : "  FLT"),
-                        text.toNearestInt(), juce::Justification::centredLeft, false);
+            g.drawText (l.line3, text.toNearestInt(), juce::Justification::centredLeft, false);
 
             // Lock (fixed / floating) and clear buttons.
             auto buttons = chip.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);

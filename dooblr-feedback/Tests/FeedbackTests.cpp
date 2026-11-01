@@ -698,16 +698,17 @@ namespace
         auto r = makeProcessor();
         set (*r, id::release, 2.0f);
         set (*r, id::liveNotches, 0.0f);
+        set (*r, id::recoverSpeed, 2.0f);   // Fast: 12 dB is back to 0 in about 16 s (0.1.2 staged auto-recover)
         const auto fl = r->getEngine().addNotch (900.0f, 12.0f, 20.0f, false);
         const auto fx = r->getEngine().addNotch (2200.0f, 12.0f, 20.0f, true);
-        render (*r, mono (pink ((size_t) (defaultRate * 8.0), -40.0, 41)));
+        render (*r, mono (pink ((size_t) (defaultRate * 20.0), -40.0, 41)));
         bool floatingGone = true, fixedKept = false;
         for (const auto& n : r->getNotches())
         {
             if (n.active && n.id == fl) floatingGone = false;
             if (n.active && n.id == fx && n.cutDb > 11.9f) fixedKept = true;
         }
-        check (floatingGone, "Float: a floating notch releases after quiet (release 2 s, 8 s of noise); left: " + notchList (r->getNotches()));
+        check (floatingGone, "Auto-recover: a floating notch recovers after quiet (Recover after 2 s, Fast, 20 s of noise); left: " + notchList (r->getNotches()));
         check (fixedKept, "a fixed notch keeps its full depth");
 
         auto h = makeProcessor();
@@ -715,7 +716,7 @@ namespace
         set (*h, id::liveNotches, 1.0f);
         h->getEngine().addNotch (900.0f, 12.0f, 20.0f, false);
         render (*h, mono (pink ((size_t) (defaultRate * 8.0), -40.0, 42)));
-        check (activeCount (h->getNotches()) == 1, "Hold: floating notches are kept");
+        check (activeCount (h->getNotches()) == 1, "Auto-recover Off: floating notches are kept");
 
         auto ring = makeProcessor();
         set (*ring, id::ringOut, 1.0f);
@@ -1509,7 +1510,7 @@ namespace
                 }
             }
             check (controls > 15 && ok == controls, label + ": every control is hit-testable and works (" + std::to_string (ok) + " / " + std::to_string (controls) + ")");
-            for (auto pid : { id::detect, id::ringOut, id::mode, id::sensitivity, id::sidechain, id::rangeLow, id::rangeHigh, id::maxCut, id::notchQ, id::liveNotches, id::release, id::output, id::bypass })
+            for (auto pid : { id::detect, id::ringOut, id::mode, id::sensitivity, id::sidechain, id::rangeLow, id::rangeHigh, id::maxCut, id::notchQ, id::liveNotches, id::release, id::recoverSpeed, id::output, id::bypass })
                 check (seen.count (juce::String (pid)) == 1, label + ": the " + std::string (pid) + " control was reached with the mouse");
 
             // Graph marker buttons.
@@ -1634,13 +1635,108 @@ namespace
         }
     }
 
+    //==============================================================================
+    // Motion (0.1.2): the drawn notch curve and handles glide to the bank instead of snapping,
+    // labels move and fade slowly, and a frame of the graph paints well inside a 60 Hz frame.
+    void testMotionAndPaint()
+    {
+        using G = ui::FeedbackGraph;
+        check (G::moveMs >= 400.0 && G::fadeMs >= 450.0 && G::valueRefreshMs >= 300.0, "slower label motion (move "
+               + fmt (G::moveMs, 0) + " ms, fade " + fmt (G::fadeMs, 0) + " ms, numbers every " + fmt (G::valueRefreshMs, 0) + " ms)");
+
+        // A new 18 dB notch grows in on the display; a cleared one shrinks back out.
+        {
+            EditorFixture f (false);
+            if (f.editor == nullptr) return;
+            auto& g = f.editor->getGraph();
+            auto& e = f.processor->getEngine();
+            const auto nid = e.addNotch (4000.0f, 18.0f, 20.0f, false);
+            const auto drawnCut = [&] { for (const auto& n : g.getDrawnNotches()) if (n.active && n.id == nid) return n.cutDb; return -1.0f; };
+            const auto frameK = 1.0 - std::exp (-(1.0 / 60.0) / G::notchEaseSec);
+            float prev = 0.0f, worstStep = 0.0f;
+            bool monotonic = true, handleFollows = true;
+            float at100 = 0.0f, at500 = 0.0f;
+            for (int i = 1; i <= 150; ++i)
+            {
+                f.tick();
+                const auto c = drawnCut();
+                monotonic = monotonic && c >= prev - 1.0e-4f && c <= 18.0f + 1.0e-4f;
+                worstStep = std::max (worstStep, c - prev);
+                if (const auto* m = g.markerFor (nid))
+                    handleFollows = handleFollows && std::abs (m->handle.y - g.yForCut (c)) < 0.01f;
+                prev = c;
+                if (i == 6) at100 = c;
+                if (i == 30) at500 = c;
+            }
+            note ("drawn depth of a new 18 dB notch: " + db (at100) + " at 0.1 s, " + db (at500) + " at 0.5 s, " + db (prev)
+                  + " at 2.5 s; largest per-frame step " + db (worstStep));
+            check (at100 > 3.0f && at100 < 9.0f && at500 > 12.0f && std::abs (prev - 18.0f) < 1.0e-3f, "a new notch's depth glides in on the display (no snap)");
+            check (monotonic && worstStep <= (float) (18.0 * frameK) + 0.01f, "the glide is smooth and never overshoots");
+            check (handleFollows, "the handle follows the drawn depth");
+            e.clearNotch (nid);
+            f.tick (6);
+            const auto shrinking = drawnCut();
+            f.tick (150);
+            check (shrinking > 1.0f && shrinking < 17.0f && drawnCut() < 0.0f, "a cleared notch's curve shrinks away (" + db (shrinking) + " after 0.1 s)");
+        }
+
+        // Paint time: 24 notches, spectrum on, labels open, at the default and the largest size,
+        // 1x and 2x (Retina) pixels. One frame = poll (animation) + a full repaint of the graph.
+        {
+            EditorFixture f;
+            if (f.editor == nullptr) return;
+            auto& e = f.processor->getEngine();
+            e.clearAll();
+            for (int i = 0; i < dsp::maxNotches; ++i)
+                e.addNotch (60.0f * std::pow (2.0f, (float) i * 0.35f), 3.0f + (float) (i % 8) * 3.0f, 12.0f + (float) (i % 3) * 8.0f, i % 5 == 0, 1 + i % 4);
+            render (*f.processor, mono (pink ((size_t) defaultRate, -30.0, 63)));
+            f.settle();
+            auto& g = f.editor->getGraph();
+            std::string report;
+            double worstAvg = 0.0;
+            for (auto size : { juce::Point<int> { 1080, 660 }, juce::Point<int> { 2400, 1400 } })
+            {
+                f.editor->setSize (size.x, size.y);
+                f.settle();
+                for (float scale : { 1.0f, 2.0f })
+                {
+                    juce::Image image (juce::Image::ARGB, juce::roundToInt ((float) g.getWidth() * scale), juce::roundToInt ((float) g.getHeight() * scale), true);
+                    juce::Graphics gr (image);
+                    gr.addTransform (juce::AffineTransform::scale (scale));
+                    g.paintEntireComponent (gr, true);   // warm up (the cached background layer)
+                    constexpr int frames = 120;
+                    double total = 0.0, worst = 0.0;
+                    auto& eng = f.processor->getEngine();
+                    for (int i = 0; i < frames; ++i)
+                    {
+                        if (i % 20 == 0) { eng.clearNotch (eng.getNotches()[(size_t) (i / 20)].id); eng.addNotch (900.0f + (float) i * 40.0f, 15.0f, 20.0f, false); }
+                        const auto t0 = juce::Time::getMillisecondCounterHiRes();
+                        f.tick();
+                        g.paintEntireComponent (gr, true);
+                        const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
+                        total += ms;
+                        worst = std::max (worst, ms);
+                    }
+                    const auto avg = total / frames;
+                    if (scale == 1.0f) worstAvg = std::max (worstAvg, avg);
+                    report += "  " + std::to_string (size.x) + "x" + std::to_string (size.y) + " @" + fmt (scale, 0) + "x: " + fmt (avg, 2) + " ms avg, " + fmt (worst, 2) + " ms worst;";
+                }
+            }
+            note ("graph frame (poll + full repaint, 24 notches, labels open, spectrum, software renderer):" + report);
+            check (worstAvg < 4.0, "a graph frame paints in under 4 ms on average at 1x (" + fmt (worstAvg, 2) + " ms)");
+        }
+    }
+
     void testAnalyzerSpeed()
     {
         EditorFixture f (false);
         if (f.editor == nullptr) return;
         auto& box = f.editor->getAnalyzerSpeedBox();
         check (box.getNumItems() == ui::numAnalyzerSpeeds, "Analyzer Speed lists " + std::to_string (ui::numAnalyzerSpeeds) + " speeds");
-        check (f.processor->getAnalyzerSpeed() == (int) ui::defaultAnalyzerSpeed, "default Analyzer Speed is Medium");
+        check (f.processor->getAnalyzerSpeed() == (int) ui::defaultAnalyzerSpeed && ui::defaultAnalyzerSpeed == ui::AnalyzerSpeed::slow,
+               "default Analyzer Speed is Slow (0.1.2)");
+        box.setSelectedItemIndex (1, juce::sendNotificationSync);
+        check (f.processor->getAnalyzerSpeed() == 1, "choosing Medium sets the processor's speed");
         box.setSelectedItemIndex (0, juce::sendNotificationSync);
         check (f.processor->getAnalyzerSpeed() == 0, "choosing Slow sets the processor's speed");
     }
@@ -2133,7 +2229,7 @@ namespace
 
         // 1. A runaway the notches cannot hold (Max Cut 3 dB, loop gain 1.6 = +4.1 dB): without the duck the
         //    output sits near full scale; with it the level is held near the threshold.
-        RoomSpec s; s.freq = 2000.0; s.gain = 1.6; s.seconds = 4.0; s.loopOffSec = 2.5;
+        RoomSpec s; s.freq = 2000.0; s.gain = 1.6; s.seconds = 6.0; s.loopOffSec = 2.5;
         RoomRun loose, held;
         dsp::FeedbackEngine::SafetyState heldSafety;
         {
@@ -2178,7 +2274,8 @@ namespace
                 if (! first) worstStep = std::max (worstStep, std::abs (g - prev));
                 prev = g; first = false;
             }
-            const auto at = (size_t) (3.6 * defaultRate), len = (size_t) (0.4 * defaultRate);
+            // 0.1.2: the release comes back in three probed steps (1.5 s + 2 x 0.45 s at Recover 1.5 s).
+            const auto at = (size_t) (5.6 * defaultRate), len = (size_t) (0.4 * defaultRate);
             const auto endGain = rmsDb (held.out, at, len) - rmsDb (held.mic, at, len);
             note ("recovery after the loop is broken at 2.5 s: worst gain step " + fmt (worstStep, 2) + " dB per 5 ms; gain at 3.6 - 4.0 s " + fmt (endGain, 2) + " dB");
             check (worstStep < 1.5, "the duck recovers smoothly (" + fmt (worstStep, 2) + " dB / 5 ms)");
@@ -2498,6 +2595,326 @@ namespace
         return v;
     }
 
+    //==============================================================================
+    /** A closed loop like runLoop, with a loop gain that changes over time and a hook after
+        every block (to watch the notches). */
+    std::vector<float> runScheduledLoop (Processor& p, double seconds, double freq, const std::function<double (double)>& gainAt,
+                                         const std::function<void (double)>& afterBlock, double noiseDb = -40.0, double bandQ = 8.0)
+    {
+        const auto rate = defaultRate;
+        const auto block = defaultBlock;
+        const auto n = (size_t) (seconds * rate);
+        const auto src = pink (n, noiseDb, 91);
+        BandPass band (rate, freq, bandQ);
+        std::vector<float> speaker ((size_t) 8192, 0.0f), mic (n, 0.0f);
+        const size_t delay = 480;
+        juce::AudioBuffer<float> buffer (2, block);
+        juce::MidiBuffer midi;
+        for (size_t pos = 0; pos < n; pos += (size_t) block)
+        {
+            const auto len = (int) std::min ((size_t) block, n - pos);
+            buffer.setSize (2, len, false, false, true);
+            const auto g = gainAt ((double) pos / rate);
+            for (int i = 0; i < len; ++i)
+            {
+                const auto t = pos + (size_t) i;
+                const auto delayed = t >= delay ? (double) speaker[(t - delay) & 8191] : 0.0;
+                const auto x = (float) std::tanh ((double) src[t] + g * band.process (delayed));
+                mic[t] = x;
+                buffer.setSample (0, i, x);
+                buffer.setSample (1, i, x);
+            }
+            p.processBlock (buffer, midi);
+            for (int i = 0; i < len; ++i)
+                speaker[(pos + (size_t) i) & 8191] = buffer.getSample (0, i);
+            afterBlock ((double) (pos + (size_t) len) / rate);
+        }
+        return mic;
+    }
+
+    dsp::Notch notchById (Processor& p, int nid)
+    {
+        for (const auto& n : p.getNotches()) if (n.active && n.id == nid) return n;
+        return {};
+    }
+
+    void testAutoRecover()
+    {
+        using Engine = dsp::FeedbackEngine;
+
+        // Parameters: Auto-recover (the old Live notches, same ID and values), Recover after, Recover speed.
+        {
+            auto p = makeProcessor();
+            auto* ar = param (*p, id::liveNotches);
+            auto* sp = param (*p, id::recoverSpeed);
+            check (ar != nullptr && ar->getName (64) == "Auto-recover" && ar->getCurrentValueAsText() == "On", "Auto-recover is on by default");
+            check (sp != nullptr && sp->getName (64) == "Recover speed" && sp->getCurrentValueAsText() == "Slow", "Recover speed defaults to Slow (cautious)");
+            check (param (*p, id::release) != nullptr && param (*p, id::release)->getName (64) == "Recover after", "Release is shown as Recover after");
+            set (*p, id::liveNotches, 1.0f);
+            render (*p, Stereo ((size_t) defaultBlock));   // parameters reach the engine in processBlock
+            check (p->getEngine().getSettings().hold, "Auto-recover Off holds the floating notches (was Hold)");
+        }
+
+        // 1. Recovery time: a quiet floating notch steps back to 0 dB and is freed at the expected
+        //    time, slowly (in stages, never faster than planned); a fixed notch is untouched.
+        for (const auto speed : { 2, 1 })
+        {
+            auto p = makeProcessor();
+            set (*p, id::release, 2.0f);
+            set (*p, id::recoverSpeed, (float) speed);
+            const auto fl = p->getEngine().addNotch (900.0f, 12.0f, 20.0f, false);
+            const auto fx = p->getEngine().addNotch (2200.0f, 12.0f, 20.0f, true);
+            const auto expected = Engine::expectedRecoverySec (12.0f, 2.0f, speed);
+            const auto total = expected + 4.0;
+            const auto noiseIn = mono (pink ((size_t) (defaultRate * total), -40.0, 43));
+            double goneAt = -1.0, firstDrop = -1.0;
+            float prevCut = 12.0f, fixedMin = 1000.0f, fixedMax = 0.0f, maxStepPerHalfSec = 0.0f;
+            int plateaus = 0, reonsets = 0;
+            float lastCut = 12.0f;
+            double lastChange = 0.0;
+            bool monotone = true;
+            const auto chunk = (size_t) (0.05 * defaultRate);
+            std::vector<std::pair<double, float>> trace;
+            for (size_t pos = 0; pos < noiseIn.size(); pos += chunk)
+            {
+                Stereo part (std::min (chunk, noiseIn.size() - pos));
+                std::copy (noiseIn.l.begin() + (long) pos, noiseIn.l.begin() + (long) (pos + part.size()), part.l.begin());
+                part.r = part.l;
+                render (*p, part);
+                const auto now = (double) (pos + part.size()) / defaultRate;
+                const auto f = notchById (*p, fl);
+                const auto x = notchById (*p, fx);
+                fixedMin = std::min (fixedMin, x.cutDb); fixedMax = std::max (fixedMax, x.cutDb);
+                if (f.active)
+                {
+                    reonsets = f.reonsets;
+                    if (f.cutDb > prevCut + 0.01f) monotone = false;
+                    if (firstDrop < 0.0 && f.cutDb < 11.9f) firstDrop = now;
+                    if (std::abs (f.cutDb - lastCut) > 0.01f)
+                    {
+                        if (now - lastChange > 1.0) ++plateaus;   // held still for over a second between steps
+                        lastChange = now;
+                        lastCut = f.cutDb;
+                    }
+                    prevCut = f.cutDb;
+                    trace.push_back ({ now, f.cutDb });
+                }
+                else if (goneAt < 0.0)
+                    goneAt = now;
+            }
+            for (size_t i = 0; i < trace.size(); ++i)
+                for (size_t j = i + 1; j < trace.size() && trace[j].first - trace[i].first <= 0.5 + 1.0e-6; ++j)
+                    maxStepPerHalfSec = std::max (maxStepPerHalfSec, trace[i].second - trace[j].second);
+            const auto name = juce::String (recoverSpeedNames()[speed]).toStdString();
+            note (name + ": 12 dB floating notch, Recover after 2 s: first step at " + fmt (firstDrop, 2) + " s, freed at " + fmt (goneAt, 2)
+                  + " s (expected " + fmt (expected, 2) + " s), " + std::to_string (plateaus) + " probe plateaus, largest drop in 0.5 s "
+                  + db (maxStepPerHalfSec) + ", fixed notch " + fmt (fixedMin, 2) + " - " + fmt (fixedMax, 2) + " dB");
+            check (firstDrop >= 2.0 && firstDrop < 2.6, name + ": nothing moves before Recover after (" + fmt (firstDrop, 2) + " s)");
+            check (goneAt > 0.0 && std::abs (goneAt - expected) < 0.5, name + ": the notch is back to 0 dB and freed at the expected time (" + fmt (goneAt, 2) + " vs " + fmt (expected, 2) + " s)");
+            check (monotone && reonsets == 0, name + ": steady noise never looks like a re-onset (the cut only goes down)");
+            check (plateaus >= 3, name + ": it recovers in probed stages (" + std::to_string (plateaus) + " plateaus)");
+            check (maxStepPerHalfSec <= 0.5f * Engine::recoverGlideDbPerSec[speed] + 0.1f, name + ": slowly (" + db (maxStepPerHalfSec) + " per 0.5 s)");
+            check (fixedMin > 11.99f && fixedMax < 12.01f, name + ": the fixed notch keeps exactly its cut");
+        }
+
+        // Ring-out notches are fixed and Auto-recover Off holds floating ones: neither recovers.
+        {
+            auto p = makeProcessor();
+            set (*p, id::ringOut, 1.0f);
+            set (*p, id::release, 2.0f);
+            set (*p, id::recoverSpeed, 2.0f);
+            LoopSpec spec; spec.seconds = 3.0;
+            runLoop (p.get(), spec);
+            const auto before = p->getNotches();
+            render (*p, mono (pink ((size_t) (defaultRate * 30.0), -40.0, 44)));
+            const auto after = p->getNotches();
+            bool same = activeCount (before) > 0 && activeCount (before) == activeCount (after);
+            for (size_t i = 0; i < before.size(); ++i)
+                if (before[i].active) same = same && after[i].active && std::abs (after[i].cutDb - before[i].cutDb) < 0.01f;
+            check (same, "ring-out notches never auto-recover (" + notchList (before) + " -> " + notchList (after) + ")");
+
+            auto h = makeProcessor();
+            set (*h, id::liveNotches, 1.0f);
+            set (*h, id::release, 2.0f);
+            set (*h, id::recoverSpeed, 2.0f);
+            h->getEngine().addNotch (900.0f, 12.0f, 20.0f, false);
+            render (*h, mono (pink ((size_t) (defaultRate * 30.0), -40.0, 45)));
+            const auto kept = h->getNotches();
+            float cut = 0.0f;
+            for (const auto& n : kept) if (n.active) cut = n.cutDb;
+            check (activeCount (kept) == 1 && cut > 11.99f, "Auto-recover Off: the floating notch keeps its cut (" + notchList (kept) + ")");
+        }
+
+        // 2. No clicks: a tone right at the notch (detection on a quiet reference mic) comes back up
+        //    through every stage as a smooth ramp.
+        {
+            auto p = makeProcessor (defaultRate, defaultBlock, true);
+            set (*p, id::sidechain, 1.0f);
+            set (*p, id::release, 1.0f);
+            set (*p, id::recoverSpeed, 2.0f);
+            const auto nid = p->getEngine().addNotch (1000.0f, 12.0f, 20.0f, false);
+            const auto seconds = (double) Engine::expectedRecoverySec (12.0f, 1.0f, 2) + 4.0;
+            Stereo tone ((size_t) (defaultRate * seconds));
+            addSine (tone.l, defaultRate, 1000.0, 0.25f); tone.r = tone.l;
+            const auto ref = mono (pink (tone.size(), -50.0, 46));
+            const auto out = render (*p, tone, &ref);
+            double jump = 0.0, worstEnvStep = 0.0;
+            for (size_t i = 1; i < out.size(); ++i) jump = std::max (jump, (double) std::abs (std::abs (out.l[i]) - std::abs (out.l[i - 1])));
+            const auto win = (size_t) (0.005 * defaultRate);
+            const auto settle = (size_t) (0.5 * defaultRate);   // after addNotch's own glide in
+            double prev = rmsDb (out.l, settle, win), worstAt = 0.0;
+            for (size_t i = settle + win; i + win <= out.size(); i += win)
+            {
+                const auto e = rmsDb (out.l, i, win);
+                if (std::abs (e - prev) > worstEnvStep) { worstEnvStep = std::abs (e - prev); worstAt = (double) i / defaultRate; }
+                prev = e;
+            }
+            if (std::getenv ("DOOBLRFEEDBACK_RECOVER_TRACE") != nullptr)
+            {
+                std::string tr;
+                for (size_t i = 0; i + win <= out.size(); i += win * 20)
+                    tr += fmt ((double) i / defaultRate, 2) + ":" + fmt (rmsDb (out.l, i, win) - rmsDb (tone.l, i, win), 2) + " ";
+                note ("tone trace " + tr);
+                auto q = makeProcessor (defaultRate, defaultBlock, true);
+                set (*q, id::sidechain, 1.0f);
+                set (*q, id::release, 1.0f);
+                set (*q, id::recoverSpeed, 2.0f);
+                q->getEngine().addNotch (1000.0f, 12.0f, 20.0f, false);
+                const auto chunk = (size_t) (0.05 * defaultRate);
+                std::string nt;
+                for (size_t i = 0; i + chunk <= (size_t) (2.5 * defaultRate); i += chunk)
+                {
+                    Stereo a (std::vector<float> (tone.l.begin() + (long) i, tone.l.begin() + (long) (i + chunk)), std::vector<float> (tone.l.begin() + (long) i, tone.l.begin() + (long) (i + chunk)));
+                    Stereo b (std::vector<float> (ref.l.begin() + (long) i, ref.l.begin() + (long) (i + chunk)), std::vector<float> (ref.r.begin() + (long) i, ref.r.begin() + (long) (i + chunk)));
+                    render (*q, a, &b);
+                    for (const auto& x : q->getNotches())
+                        if (x.active) nt += fmt ((double) (i + chunk) / defaultRate, 2) + ":" + fmt (x.freq, 2) + "/" + fmt (x.cutDb, 2) + "/" + fmt (x.q, 2) + (x.recovering ? "R" : "") + (x.ringing ? "!" : "") + " ";
+                }
+                note ("tone notch trace " + nt);
+            }
+            const auto startDb = rmsDb (out.l, (size_t) (0.5 * defaultRate), 4800) - rmsDb (tone.l, (size_t) (0.5 * defaultRate), 4800);
+            const auto endDb = rmsDb (out.l, out.size() - 9600, 9600) - rmsDb (tone.l, tone.size() - 9600, 9600);
+            const auto maxStep = 0.25 * twoPi * 1000.0 / defaultRate + 0.002;
+            note ("a 1 kHz tone under a recovering 1 kHz notch (Fast): " + db (startDb) + " -> " + db (endDb) + ", largest sample step "
+                  + fmt (jump, 4) + " (a clean sine: " + fmt (0.25 * twoPi * 1000.0 / defaultRate, 4) + "), largest 5 ms level step " + fmt (worstEnvStep, 3) + " dB at " + fmt (worstAt, 2) + " s");
+            const auto left = notchById (*p, nid);
+            check (startDb < -9.0 && endDb > -0.5 && ! left.active, "the tone goes from under the notch back to full level as the notch is freed ("
+                   + db (startDb) + " -> " + db (endDb) + (left.active ? ", still there at -" + fmt (left.cutDb, 2) + " dB, re-onsets " + std::to_string (left.reonsets) : std::string (", freed")) + ")");
+            check (jump < maxStep, "no clicks while recovering (largest step " + fmt (jump, 4) + ")");
+            check (worstEnvStep < 0.1, "every recovery step is a smooth ramp (" + fmt (worstEnvStep, 3) + " dB per 5 ms)");
+            check (finiteAndNormal (out.l), "no NaN / denormal while recovering");
+        }
+
+        // 3. Re-onset: a howl is caught (loop gain 1.3 at 2 kHz), the loop is broken so the notch
+        //    starts recovering, then a hotter loop (2.5 = +8 dB) comes back mid-recovery. The cut
+        //    goes straight back (stage start + margin), there is no runaway, and the notch's next
+        //    recovery is slower.
+        {
+            auto p = makeProcessor();
+            set (*p, id::release, 2.0f);
+            set (*p, id::recoverSpeed, 2.0f);
+            double backAt = -1.0, caughtAt = -1.0;
+            int nid = 0;
+            float cutBefore = 0.0f, cutCaught = 0.0f, scale = 1.0f, stageStart = 0.0f;
+            int reonsets = 0;
+            double quietSince = -1.0;
+            auto gainAt = [&] (double t) { return t < 3.0 ? 1.3 : (backAt < 0.0 ? 0.0 : 2.5); };
+            const auto mic = runScheduledLoop (*p, 16.0, 2000.0, gainAt, [&] (double t)
+            {
+                if (nid == 0)
+                    for (const auto& n : p->getNotches()) if (n.active) { nid = n.id; break; }
+                if (nid == 0) return;
+                const auto n = notchById (*p, nid);
+                if (! n.active) return;
+                if (t > 3.0 && backAt < 0.0)
+                {
+                    if (quietSince < 0.0) quietSince = t;
+                    // Bring the hot loop back once the notch is probing at least 3 dB shallower.
+                    if (n.recovering && n.cutDb <= n.stageTargetDb + 0.01f && n.stageStartDb - n.cutDb >= 2.9f && n.cutDb < 8.0f)
+                    { backAt = t; cutBefore = n.cutDb; stageStart = n.stageStartDb; }
+                }
+                if (backAt > 0.0 && caughtAt < 0.0 && n.reonsets > 0) { caughtAt = t; cutCaught = n.cutDb; }
+                reonsets = n.reonsets;
+                scale = n.recoverScale;
+            }, -40.0, 40.0);   // one loop mode (Q 40): at Q 8 a 2.5 loop gain also runs away at 1.9 and 2.1 kHz
+            const auto env = envelopeDb (mic, defaultRate);
+            const auto backPeak = backAt > 0.0 ? maxOf (env, (size_t) (backAt * 100.0)) : 0.0;
+            const auto tail = rmsDb (mic, mic.size() - 96000, 96000);
+            const auto fin = notchById (*p, nid);
+            note ("re-onset: hot loop back at " + fmt (backAt, 2) + " s with the notch at -" + fmt (cutBefore, 1) + " dB (stage from -" + fmt (stageStart, 1)
+                  + "); caught " + fmt ((caughtAt - backAt) * 1000.0, 0) + " ms later at -" + fmt (cutCaught, 1) + " dB; peak 10 ms RMS after "
+                  + db (backPeak) + ", last 2 s " + db (tail) + "; re-onsets " + std::to_string (reonsets) + ", recovery scale " + fmt (scale, 0)
+                  + "; notches " + notchList (p->getNotches()));
+            check (backAt > 0.0, "the notch started recovering after the loop was broken");
+            check (caughtAt > 0.0 && caughtAt - backAt < 0.5, "the re-onset is caught within 0.5 s");
+            check (cutCaught >= stageStart + Engine::recoverMarginDb - 0.01f || cutCaught >= get (*p, id::maxCut) - 0.01f,
+                   "the cut goes straight back to the stage start plus the margin (" + db (cutCaught) + ")");
+            check (backPeak < -40.0 + 20.0, "no runaway: the howl never gets 20 dB over the noise (" + db (backPeak + 40.0) + ")");
+            // Reference: the same hot loop (2.5) on a fresh plug-in, no recovery involved.
+            double freshTail = 0.0;
+            {
+                auto f = makeProcessor();
+                const auto m = runScheduledLoop (*f, 8.0, 2000.0, [] (double) { return 2.5; }, [] (double) {}, -40.0, 40.0);
+                freshTail = rmsDb (m, m.size() - 96000, 96000);
+            }
+            note ("  the same hot loop on a fresh plug-in: last 2 s " + db (freshTail + 40.0) + " over the noise");
+            check (tail < std::max (-40.0 + 3.0, freshTail + 1.5), "held afterwards as well as a fresh catch holds it (" + db (tail + 40.0) + " vs " + db (freshTail + 40.0) + " over the noise)");
+            check (fin.active && fin.recoverScale >= 2.0f && ! fin.recovering, "the notch stays, and its next recovery is slower (scale " + fmt (fin.recoverScale, 0) + ")");
+            check (activeCount (p->getNotches()) <= 2, "no pile of new notches (" + notchList (p->getNotches()) + ")");
+            check (finiteAndNormal (mic), "no NaN / denormal");
+        }
+
+        // 4. Safety duck releases in probed steps: a runaway the notches cannot hold (Max cut 3 dB,
+        //    loop gain 1.6 at 2 kHz), loop broken at 2.5 s; the duck's own gain reduction comes
+        //    back in three steps with pauses, smoothly, and lets go.
+        {
+            auto p = makeProcessor();
+            set (*p, id::maxCut, 3.0f);
+            std::vector<std::pair<double, float>> red;   // (time, reduction dB) after every block
+            runScheduledLoop (*p, 7.0, 2000.0, [] (double t) { return t < 2.5 ? 1.6 : 0.0; },
+                              [&] (double t) { red.push_back ({ t, p->getEngine().getSafety().reductionDb }); });
+            // The release that matters is the last one: before 2.5 s the duck and the howl take
+            // turns (ducking breaks the loop, the howl regrows as the gain comes back).
+            size_t last = 0;
+            for (size_t i = 1; i < red.size(); ++i)
+                if (red[i].second > red[i - 1].second + 0.001f) last = i;
+            const auto startRed = red.empty() ? 0.0f : red[last].second;
+            const auto releaseStart = red.empty() ? -1.0 : red[last].first;
+            const auto blockSec = (double) defaultBlock / defaultRate;
+            float worst = 0.0f;
+            int pauses = 0;
+            double flatFor = 0.0, freeAt = -1.0;
+            for (size_t i = last + 1; i < red.size(); ++i)
+            {
+                const auto step = red[i - 1].second - red[i].second;   // reduction going down = gain coming back
+                worst = std::max (worst, std::abs (step) * (float) (0.005 / blockSec));
+                if (std::abs (step) <= 0.001f && red[i].second > 0.3f && red[i].second < startRed - 0.5f)
+                {
+                    flatFor += blockSec;
+                    if (flatFor >= 0.2 && flatFor - blockSec < 0.2) ++pauses;
+                }
+                else flatFor = 0.0;
+                if (red[i].second <= 0.0f && freeAt < 0.0) freeAt = red[i].first;
+            }
+            float deepest = 0.0f;
+            for (const auto& r : red) deepest = std::max (deepest, r.second);
+            note ("safety release after the loop is broken (2.5 s): deepest " + db (deepest) + "; last release from " + fmt (releaseStart, 2)
+                  + " s at " + db (startRed) + ", back to 0 dB at " + fmt (freeAt, 2) + " s (Recover 1.5 s), " + std::to_string (pauses)
+                  + " probe pause(s), worst step " + fmt (worst, 3) + " dB per 5 ms");
+            if (std::getenv ("DOOBLRFEEDBACK_RECOVER_TRACE") != nullptr)
+            {
+                std::string tr;
+                for (size_t i = 0; i < red.size(); i += 4) tr += fmt (red[i].first, 2) + ":" + fmt (red[i].second, 2) + " ";
+                note ("safety trace " + tr);
+            }
+            check (deepest > 6.0f && startRed > 3.0f, "the duck engaged on the runaway (" + db (deepest) + ", last " + db (startRed) + ")");
+            check (freeAt - releaseStart > 1.5, "the release takes at least Recover plus the probes");
+            check (worst < 0.5f, "the staged duck release is smooth (" + fmt (worst, 3) + " dB per 5 ms)");
+            check (pauses == Engine::safetyStages - 1, "the duck pauses to probe before each step back up (" + std::to_string (pauses) + ")");
+            check (freeAt > 0.0, "and it does come back all the way");
+        }
+    }
+
     void testBrightProgrammeIsLeftAlone()
     {
         const auto n = (size_t) (defaultRate * 8.0);
@@ -2557,6 +2974,8 @@ int main()
         { "one howl, one notch (merge, retune, consolidate)",    testOneNotchPerHowl },
         { "safety duck: last resort, music untouched, recovery", testSafetyDuck },
         { "calm labels: steady lanes, no overlaps, idle labels close", testCalmLabels },
+        { "auto-recover: staged return, re-onset, fixed untouched, no clicks", testAutoRecover },
+        { "motion: gliding notch display, slow labels, paint time", testMotionAndPaint },
     };
     const auto filter = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_TEST_FILTER", {});
 

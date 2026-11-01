@@ -73,6 +73,8 @@ namespace dooblrfeedback::ui
         void setClockForTesting (double ms) noexcept { testClockMs = ms; }
         const Marker* markerFor (int notchId) const noexcept;
         const dsp::NotchArray& getShownNotches() const noexcept { return notches; }
+        /** The notches as drawn now (the curve and the handles): eased toward getShownNotches(). */
+        const dsp::NotchArray& getDrawnNotches() const noexcept { return drawnNotches; }
         bool hasSpectrum() const noexcept { return hasFrame; }
         juce::Rectangle<float> getPlotArea() const noexcept { return plot; }
         float getBaselineY() const noexcept { return baselineY; }
@@ -89,7 +91,10 @@ namespace dooblrfeedback::ui
 
         static constexpr float minHz = 20.0f, maxHz = 20000.0f, cutRangeDb = 30.0f, spectrumFloorDb = -100.0f;
         static constexpr float chipWidth = 124.0f, chipHeight = 44.0f, pinRadius = 8.0f;
-        static constexpr double moveMs = 250.0, fadeMs = 300.0, activeHoldMs = 4000.0, hoverLingerMs = 700.0, valueRefreshMs = 200.0;
+        static constexpr double moveMs = 450.0, fadeMs = 500.0, activeHoldMs = 4000.0, hoverLingerMs = 700.0, valueRefreshMs = 350.0;
+        /** The drawn notch curve and handles follow the bank with this time constant (s): a cut
+            that jumps (a catch, a re-onset, a clear) glides there instead of snapping (0.1.2). */
+        static constexpr double notchEaseSec = 0.3;
 
         void paint (juce::Graphics&) override;
         void resized() override;
@@ -106,6 +111,7 @@ namespace dooblrfeedback::ui
             float lastCut = 0.0f;
             juce::Rectangle<float> from, to, dotFrom, dotTo, drawn, dotDrawn;
             dsp::Notch shown {};           // the numbers on the label (refreshed calmly)
+            juce::String line1, line2, line3; // the label text for shown (built when it refreshes, not per frame)
             float labelAlpha = 0.0f, dotAlpha = 0.0f, markerAlpha = 0.0f;
         };
 
@@ -117,6 +123,10 @@ namespace dooblrfeedback::ui
         Label* labelFor (int notchId) noexcept;
         void rebuildSpectrumPaths();
         void rebuildCurve();
+        bool easeDrawnNotches (double dtSeconds);
+        void snapDrawnNotches() noexcept { drawnNotches = notches; }
+        const dsp::Notch* drawnById (int notchId) const noexcept;
+        static void setLabelText (Label&);
         void drawBackground();
         int notchAt (juce::Point<float> position) const;
         const dsp::Notch* notchById (int notchId) const noexcept;
@@ -131,7 +141,7 @@ namespace dooblrfeedback::ui
         bool hasFrame = false, shownValid = false, settling = false;
         double lastTickMs = 0.0;
 
-        dsp::NotchArray notches {};
+        dsp::NotchArray notches {}, drawnNotches {};
         std::vector<Marker> markers;
         std::vector<Label> labels;
         int layoutCount = 0, valueRefreshes = 0;
@@ -148,6 +158,7 @@ namespace dooblrfeedback::ui
 
         std::array<float, dsp::DisplayFrame::numPoints> drawnInput {}, drawnOutput {}, pointX {}, inputY {}, outputY {};
         juce::Path inputPath, outputPath, curveFill, curveEdge;
+        juce::Path scratchLine, scratchDashed, scratchDiamond; // reused by paint (no per-frame allocation once grown)
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FeedbackGraph)
     };

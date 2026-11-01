@@ -19,7 +19,7 @@ namespace dooblrfeedback::ui
     enum class AnalyzerSpeed { slow = 0, medium, fast, veryFast };
 
     constexpr int numAnalyzerSpeeds = 4;
-    constexpr AnalyzerSpeed defaultAnalyzerSpeed = AnalyzerSpeed::medium;
+    constexpr AnalyzerSpeed defaultAnalyzerSpeed = AnalyzerSpeed::slow; // 0.1.2: calmer by default
 
     struct AnalyzerTimes
     {
