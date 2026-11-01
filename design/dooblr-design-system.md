@@ -6,7 +6,7 @@ Use this guide when you build a new dooblr plugin. Every hex code and number bel
 - `K:Source/UI/Theme.h:9` means line 9 of that file in dooblr-kick.
 - Snapshot taken 2026-10-27. If the code changes, the code wins over this document.
 - The machine-readable tokens are in `dooblr-design-tokens.json`, in the same folder.
-- **Addendum 2026-10-28:** components and tokens read from **dooblr-vocals v0.2.0** (`~/Documents/programming/audio/dooblr-vocals` (moved 2026-10-28 to `~/Dropbox/dooblr_plugins/dooblr-vocals`), short form **V**) were added. Nothing from the K/Q snapshot was changed; where vocals departs from a rule below, the rule stands and the deviation is listed in §11.4. See §13 for the changelog. **Addendum 2026-10-31:** §12 adds generic, reusable patterns first built in dooblr-soothe 0.1.1–0.1.2 (short form **S**).
+- **Addendum 2026-10-28:** components and tokens read from **dooblr-vocals v0.2.0** (`~/Documents/programming/audio/dooblr-vocals` (moved 2026-10-28 to `~/Dropbox/dooblr_plugins/dooblr-vocals`), short form **V**) were added. Nothing from the K/Q snapshot was changed; where vocals departs from a rule below, the rule stands and the deviation is listed in §11.4. See §14 for the changelog. **Addendum 2026-10-31:** §12 adds generic, reusable patterns first built in dooblr-soothe 0.1.1–0.1.2 (short form **S**). **Addendum 2026-11-01:** §13 documents dooblr-feedback 0.1.1 (short form **F**).
 
 ## Table of contents
 1. [Suite identity](#1-suite-identity)
@@ -22,7 +22,9 @@ Use this guide when you build a new dooblr plugin. Every hex code and number bel
 10. [Open questions / not determinable from code](#10-open-questions--not-determinable-from-code)
 11. [dooblr-vocals (V)](#11-dooblr-vocals-v)
 12. [Reusable patterns (S)](#12-reusable-patterns-s)
-13. [Changelog](#13-changelog)
+13. [dooblr-feedback (F)](#13-dooblr-feedback-f)
+   - 13.1 Layout · 13.2 Notch markers · 13.3 Calm labels · 13.4 Notch table · 13.5 IIR notch bank · 13.6 Room notes and presets · 13.7 Safety Duck badge · 13.8 Tokens
+14. [Changelog](#14-changelog)
 
 ---
 
@@ -993,8 +995,75 @@ FFT bins are linear in frequency, display points are logarithmic, so at the low 
 
 ---
 
-## 13. Changelog
+## 13. dooblr-feedback (F)
 
+Read from **dooblr-feedback 0.1.1** (`~/Dropbox/dooblr_plugins/dooblr-feedback`, short form **F**). F is an automatic live feedback suppressor: an FFT watches the signal and drives a bank of zero-latency IIR notches. It uses the K/Q palette and §12 patterns. Where it adds a component, the component is generic and reusable, and its tokens are listed at the end of this section. Values are F's; code wins.
+
+### 13.1 Layout
+
+- Default 1080 × 660; resizable 940 × 600 to 2400 × 1400. Toolbar 30 px, margin 12, `panelGap` 8, output meter 16 px at the right of the graph (`F:PluginEditor.cpp`).
+- Toolbar (as §12.3): mode, presets, A / B, undo. At the right: the **SAFETY** badge (§13.7).
+- Graph on top. Under it, a bottom panel with three view tabs, **Notches / Notes / Advanced** (92 × 26, 4 px apart). Panel height is `max(Advanced preferred height, clamp(150, 330, 30 % of the editor height))`, so Advanced never clips.
+
+### 13.2 Notch markers on the spectrum (event markers)
+
+A notch is something the plug-in did by itself at one frequency. Mark it on the spectrum where it acts, and let the user keep or remove it there.
+
+- **Colour:** fixed notches (locked, or set by ring-out) in `accent`; floating notches (they release when the feedback is gone) in `dynamic`. The colour is the notch's type, never its level.
+- **Pin:** a 1 px dashed (3/3) leader line @ 0.5 from the chip down to a diamond handle (radius 4.5) on the notch's cut curve. Selected or hovered: line @ 0.9, diamond radius 5.5.
+- **Chip:** 124 × 44, `panelRaised` @ 0.94, radius 4, a 2.5 px stripe in the marker colour at the left. Outline in the marker colour: 1 px @ 0.55, @ 0.9 while ringing, 1.8 px full when selected. Three lines:
+  - frequency + note (bold);
+  - cut + Q (marker colour);
+  - hits, time since detection, FIX / FLT (`textMuted`).
+- **Lock / clear:** a 22 px column at the chip's right with a padlock (lock = make fixed; unlock = floating) and × (clear, the notch fades out). The same actions are in the notch table. Each one is one undo step.
+- The cut curve is drawn over the spectrum on a 30 dB cut scale, plus a separate line labelled **−∞** for full notches (§13.5).
+
+### 13.3 Calm labels: lanes, motion, numbered dots
+
+Labels must not bounce while levels change.
+
+- **Lanes:** chips sit in at most 4 lanes (4 px apart), with the same lane order as frequency. A chip keeps its lane and x slot until a new notch, a cleared notch or a resize forces a relayout. A cut or level change never moves a label. A lane opens again only with a 6 px margin (hysteresis), and a chip may shift sideways at most 0.6 chip width from its pin.
+- **Motion:** forced moves ease over 250 ms; labels fade in and out over 300 ms. The numbers on a chip refresh at most every 200 ms.
+- **When labels show:** a chip is expanded while its notch is active (ringing, or changed in the last 4 s), hovered (in the graph or in the table, with a 700 ms linger) or selected. Otherwise it fades out.
+- **Numbered dots:** a notch without an expanded chip (inactive, or no room) is a numbered dot: a 16 px circle (`pinRadius` 8) in the marker colour, in one row above the 0 dB line, 2 px apart, with the table number in 9.5 px bold. Overlapping dots collapse into a single numbered dot. Hovering or clicking a dot expands its chip.
+- Tested (F tests "calm labels"): 5 s of fluctuating levels moves labels < 1 px (0.00 px measured); 24 notches at 940 / 1080 / 2400 px editor widths show no overlaps; labels go away after inactivity; the lock / clear hit-tests still work.
+
+### 13.4 Notch table
+
+- Notches view: one row per notch, 22 px rows, 20 px header, 12 px font (scales to 0.7 before truncating). Rows alternate `panel` / `panel.brighter(0.03)`; selected rows use `accent` @ 0.22; a 3 px stripe in the marker colour.
+- Columns: # (30), Frequency (84), Note (74), Cut (64), Needed (64), Q (44), Level (66), Detected (74), Hits (44), Type (62), Lock (64), Clear (60).
+- Selection is shared with the graph: selecting a row selects the marker, and hovering a row expands its chip.
+- Cut and Needed show **−∞ dB** for a full notch (§13.5).
+
+### 13.5 Zero-latency IIR notch bank, driven by an FFT
+
+- **Detection:** a 4096-point FFT (8192 at 88.2 / 96 kHz, 16384 at 176.4 / 192 kHz), 256-sample hop (scaled the same way), on a side path. It never delays the audio. Latency reported to the host: 0.
+- **Audio path:** up to 24 notches, each a TPT state-variable filter. Only live slots are processed. Measured CPU (F tests "real-time safety"): about 1.0 % with 1 notch and 1.6 % with 24. Coefficients glide (20 ms), and cut changes ramp per control tick, with no zipper noise.
+- **Shape:** a bell up to 30 dB, then the zeros move towards the unit circle. At **Max Cut ∞** the notch is a true notch (a zero on the unit circle, more than 80 dB down at the centre). The ramp into it is smooth and click-free.
+- **One notch per howl:** a detection near an existing notch retunes, widens or deepens that notch instead of adding a second one. Notches that drift together are consolidated with a crossfade.
+- **Value text:** the top of Max Cut reads **∞** and the cuts read **−∞ dB**, through the shared formatter. "inf", "∞", "full" and "mute" parse back. This is the one exception to §12.6 "never show inf": the value is a real infinite cut, not a failed computation. NaN is still never shown.
+
+### 13.6 Room notes and presets
+
+- **Notes view:** free text for the room (venue, mic positions, problem frequencies). Saved with the session and with user presets.
+- **Presets:** original factory presets (Default, Speech / Lectern, Vocal in a Band, Monitor Wedge, Theatre Lav, Ring-out Start). Saving a user preset stores the settings, the current notches and the notes, in `~/Music/dooblr-feedback/Presets`. They use the §12.3 toolbar.
+
+### 13.7 Safety Duck badge and meter threshold
+
+- **Safety Duck** is the last resort: if the output goes over the Safety threshold while feedback is still running away (or always, in Always mode), F ducks the output gain. It has no latency and does not click.
+- While it is ducking, a **SAFETY −x dB** badge (104 × 22) shows at the right of the toolbar: `meterRed` fill (§9), white 12 px bold text, with the duck count and time in its tooltip and the status line. When it is not ducking, the badge is hidden.
+- Its controls are in the Advanced view (on / off, Trigger Feedback | Always, Threshold, Depth up to Mute, Release), as standard §2.9 controls.
+- The output meter shows the Safety threshold (when Safety is on) as a 1 px dashed tick, two short dashes each 35 % of the bar width, in `meterRed` @ 0.9 (`F:UI/OutputMeter.cpp:170-177`).
+
+### 13.8 Tokens (JSON)
+
+`components.eventMarker` (with `motion` and `dots`), `components.notchTable`, `components.safetyBadge`, `components.meterThresholdTick`, and `changelog` entries. All values reuse existing colours; no new colour or font.
+
+---
+
+## 14. Changelog
+
+- **2026-11-01**: Added §13 dooblr-feedback (F, 0.1.1): layout, notch markers with lock / clear, calm labels (stable lanes, eased motion, numbered dots, fade when unused), notch table, zero-latency IIR notch bank driven by an FFT (one notch per howl, Max Cut ∞ = true notch), room notes and presets, Safety Duck badge and meter threshold tick. Changelog renumbered to §14. The F 0.1.0 commit (`47f3907`) said "design §13" but did not include this section; this adds it. The F full-cut value text (−∞ dB / ∞) is documented as the one exception to §12.6 "never show inf"; §12.6 itself is unchanged. Additive only; no existing rule, token name or value changed; §11 untouched. JSON: `components.eventMarker.motion`, `.dots`, `.fullCutLine`, `components.safetyBadge`, `components.meterThresholdTick`, a `changelog` entry.
 - **2026-11-01**: Added §11.11 dooblr-vocals De-esser (page, panel, display, meter, placement). Additive only; no existing rule, token name or value changed.
 - **2026-11-01**: Added §11.10 dooblr-vocals Dynamic EQ panel (EQ page: band picker, per-band Dynamic / Range / Threshold / Attack / Release, live dynamic curve), ported from dooblr-q (no RangeRing). Additive only; existing tokens only.
 - **2026-11-01**: Added §11.9 dooblr-vocals Noise reducer panel (Pitch page: Denoise, Noise floor Learned/Auto, Amount, Sensitivity, Learn Noise, status readout). Additive only; existing tokens only.
