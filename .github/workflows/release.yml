@@ -5,11 +5,15 @@
 # installers never change, so .../releases/latest/download/<name> always points at the newest.
 #
 # Run it by hand (Actions > release > Run workflow) to build without publishing.
+# Windows uses CMake's default generator (the newest Visual Studio on the runner image).
 name: release
 
 on:
   push:
     tags: ['v*']
+    # Changes to the installer or this workflow on main get a build-only run (nothing is published).
+    branches: [main]
+    paths: ['dooblr-installer/**', '.github/workflows/release.yml']
   workflow_dispatch:
 
 permissions:
@@ -28,7 +32,7 @@ env:
 
 jobs:
   mac:
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -74,7 +78,7 @@ jobs:
           set -euo pipefail
           for p in $PLUGINS; do
             IFS=: read -r name prefix target <<< "$p"
-            cmake -S "$name" -B "build/$name" -G "Visual Studio 17 2022" -A x64 \
+            cmake -S "$name" -B "build/$name" -A x64 \
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
               -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce" \
               -D${prefix}_PLUGIN_FORMATS=VST3 -D${prefix}_BUILD_TESTS=OFF -D${prefix}_BUILD_LOADCHECK=OFF
@@ -83,7 +87,7 @@ jobs:
       - name: Installer and its tests
         run: |
           set -euo pipefail
-          cmake -S dooblr-installer -B build/dooblr-installer -G "Visual Studio 17 2022" -A x64 \
+          cmake -S dooblr-installer -B build/dooblr-installer -A x64 \
             -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce"
           cmake --build build/dooblr-installer --config Release -- -m
           "$(find build/dooblr-installer -type f -name DooblrInstallerTests.exe | head -1)"
