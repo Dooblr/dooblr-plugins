@@ -230,6 +230,15 @@ namespace dooblrvocals::dsp
         return rotateMask (maskForScale (s.scale), s.key);
     }
 
+    struct NoiseReducerSettings
+    {
+        bool enabled = false;
+        int mode = 1;              // 0 = Learned profile, 1 = Auto (adaptive noise floor)
+        float amountDb = 12.0f;    // maximum attenuation of a noise-only bin (0..40 dB)
+        float sensitivity = 50.0f; // 0..100 %: how far above the noise floor a bin must rise to pass
+        bool learn = false;        // while on, the noise profile is measured (play only noise)
+    };
+
     struct VocalSettings
     {
         PitchSettings pitch;
@@ -244,5 +253,6 @@ namespace dooblrvocals::dsp
         DelaySettings delay;
         FxRouting fxRouting = FxRouting::parallel;
         double bpm = 120.0;           // host tempo (for synced delay / pre-delay)
+        NoiseReducerSettings noiseReducer; // first stage, before pitch detection (off by default)
     };
 }

@@ -264,10 +264,10 @@ namespace dooblrvocals::ui
             if (x > 0 && x + w > width)
             {
                 x = 0;
-                y += knobHeight + gap;
+                y += rowHeight + gap;
             }
 
-            unit.bounds = { x, y, w, knobHeight };
+            unit.bounds = { x, y, w, rowHeight };
             x += w + gap;
 
             if (slots != nullptr && unit.slot >= 0)
@@ -292,6 +292,17 @@ namespace dooblrvocals::ui
         }
 
         return cells;
+    }
+
+    void ControlPanel::setCompact (bool shouldBeCompact)
+    {
+        const auto height = shouldBeCompact ? (int) compactKnobHeight : (int) knobHeight;
+        if (height != rowHeight)
+        {
+            rowHeight = height;
+            resized();
+            repaint();
+        }
     }
 
     juce::Rectangle<int> ControlPanel::getSlotBounds (int slot) const

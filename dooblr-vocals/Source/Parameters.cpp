@@ -201,6 +201,17 @@ namespace dooblrvocals::params
         addFloat (layout, "eq_hpf_freq", "EQ High-Pass Freq", logRange (20.0f, 500.0f), 80.0f, hzString(), "Hz");
         addChoice (layout, "eq_hpf_slope", "EQ High-Pass Slope", { "12 dB/oct", "24 dB/oct", "48 dB/oct" }, 1);
 
+        // Spectral noise reducer (first in the chain). Off by default: presets are unchanged.
+        {
+            const dsp::NoiseReducerSettings nr;
+            addBool (layout, "nr_on", "Noise Reducer On", false);
+            addChoice (layout, "nr_mode", "Noise Reducer Mode", { "Learned", "Auto" }, nr.mode);
+            addFloat (layout, "nr_amount", "Noise Reduction", range (0.0f, 40.0f), nr.amountDb,
+                      [] (float v, int) { return juce::String (v, 1) + " dB"; }, "dB");
+            addFloat (layout, "nr_sensitivity", "Noise Sensitivity", range (0.0f, 100.0f), nr.sensitivity,
+                      [] (float v, int) { return juce::String (juce::roundToInt (v)) + " %"; }, "%");
+        }
+
         //== Compressor ==================================================================
         addBool (layout, "comp_on", "Comp On", false);
         addFloat (layout, "comp_threshold", "Comp Threshold", range (-48.0f, 0.0f), -18.0f, dbString(), "dB");
@@ -336,6 +347,7 @@ namespace dooblrvocals::params
         eqMidFreq = getId ("eq_mid_freq"); eqMidGain = getId ("eq_mid_gain"); eqMidQ = getId ("eq_mid_q");
         eqHighFreq = getId ("eq_high_freq"); eqHighGain = getId ("eq_high_gain");
         eqHpfOn = getId ("eq_hpf_on"); eqHpfFreq = getId ("eq_hpf_freq"); eqHpfSlope = getId ("eq_hpf_slope");
+        nrOn = getId ("nr_on"); nrMode = getId ("nr_mode"); nrAmount = getId ("nr_amount"); nrSensitivity = getId ("nr_sensitivity");
         compOn = getId ("comp_on"); compThreshold = getId ("comp_threshold"); compRatio = getId ("comp_ratio");
         compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup"); compKnee = getId ("comp_knee");
         limMode = getId ("lim_mode"); limCeiling = getId ("lim_ceiling"); limRelease = getId ("lim_release");
@@ -396,6 +408,10 @@ namespace dooblrvocals::params
         s.pitch.quality = (dsp::QualityMode) i (quality);
         s.gate = { b (gateOn), f (gateThreshold), f (gateAttack), f (gateHold), f (gateRelease), f (gateRange) };
         s.eq = { b (eqOn), f (eqLowFreq), f (eqLowGain), f (eqMidFreq), f (eqMidGain), f (eqMidQ), f (eqHighFreq), f (eqHighGain) };
+        s.noiseReducer.enabled = b (nrOn);
+        s.noiseReducer.mode = juce::jlimit (0, 1, i (nrMode));
+        s.noiseReducer.amountDb = f (nrAmount);
+        s.noiseReducer.sensitivity = f (nrSensitivity);
         s.eq.hpfOn = b (eqHpfOn);
         s.eq.hpfFreq = f (eqHpfFreq);
         s.eq.hpfSlope = juce::jlimit (0, 2, i (eqHpfSlope));

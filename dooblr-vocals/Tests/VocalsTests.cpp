@@ -4716,6 +4716,249 @@ namespace
     // default reproducing the original fixed-knee curve bit for bit, and the knee reaching the audio.
     // EQ high-pass: Butterworth response (-3 dB at the corner, flat passband) and the 12 / 24 / 48 dB/oct
     // slopes; switched off it leaves the EQ bit-identical; it is drawn on the EQ curve.
+    // Synthetic vocal for the noise reducer: a 220 Hz voice with harmonics and 5 Hz vibrato,
+    // sung in 0.6 s phrases with 0.4 s gaps, plus optional white noise.
+    struct NoisyVocal
+    {
+        double rate = sampleRate;
+        float noiseRms = 0.0f;
+        bool voice = true;
+        juce::Random random { 1234 };
+        double phase = 0.0;
+
+        static bool voicedAt (int i, double rate) { return std::fmod (i / rate, 1.0) < 0.6; }
+
+        float next (int i)
+        {
+            float v = 0.0f;
+            if (voice && voicedAt (i, rate))
+            {
+                const auto t = std::fmod (i / rate, 1.0);
+                const auto env = (float) std::min ({ 1.0, t / 0.03, (0.6 - t) / 0.03 });
+                phase += 2.0 * juce::MathConstants<double>::pi * 220.0 * (1.0 + 0.01 * std::sin (2.0 * juce::MathConstants<double>::pi * 5.0 * i / rate)) / rate;
+                for (int h = 1; h <= 8; ++h)
+                    v += (float) (0.12 / h * std::sin (h * phase));
+                v *= env;
+            }
+            return v + noiseRms * 1.7320508f * (2.0f * random.nextFloat() - 1.0f);
+        }
+    };
+
+    void testNoiseReducer()
+    {
+        // Gap RMS (dB) over the noise-only parts of one channel, from `from` seconds on, offset by `lat`.
+        auto gapDb = [] (const juce::AudioBuffer<float>& b, double rate, int lat, double from)
+        {
+            double sum = 0.0; int n = 0;
+            for (int i = (int) (from * rate); i < b.getNumSamples(); ++i)
+            {
+                const auto src = i - lat;
+                const auto t = std::fmod (src / rate, 1.0);
+                if (src >= 0 && t > 0.65 && t < 0.95) { sum += (double) b.getSample (0, i) * b.getSample (0, i); ++n; }
+            }
+            return 10.0 * std::log10 (std::max (1.0e-30, sum / std::max (1, n)));
+        };
+        auto voicedDb = [] (const juce::AudioBuffer<float>& b, double rate, int lat, double from)
+        {
+            double sum = 0.0; int n = 0;
+            for (int i = (int) (from * rate); i < b.getNumSamples(); ++i)
+            {
+                const auto src = i - lat;
+                const auto t = std::fmod (src / rate, 1.0);
+                if (src >= 0 && t > 0.05 && t < 0.55) { sum += (double) b.getSample (0, i) * b.getSample (0, i); ++n; }
+            }
+            return 10.0 * std::log10 (std::max (1.0e-30, sum / std::max (1, n)));
+        };
+
+        // Runs a NoiseReducer directly (stereo, 480-sample blocks); learnSeconds of noise first when > 0.
+        auto runReducer = [] (dsp::NoiseReducer& nr, juce::AudioBuffer<float>& b, dsp::NoiseReducerSettings s, dsp::ProcessMode mode, int block = 480)
+        {
+            for (int pos = 0; pos < b.getNumSamples(); pos += block)
+            {
+                const auto n = std::min (block, b.getNumSamples() - pos);
+                juce::AudioBuffer<float> slice (b.getArrayOfWritePointers(), 2, pos, n);
+                nr.process (slice, n, s, mode);
+            }
+        };
+        auto makeSignal = [] (NoisyVocal v, int samples)
+        {
+            juce::AudioBuffer<float> b (2, samples);
+            for (int i = 0; i < samples; ++i) { const auto x = v.next (i); b.setSample (0, i, x); b.setSample (1, i, x); }
+            return b;
+        };
+
+        // 1. Latency = the FFT size in every mode, with perfect reconstruction (Amount 0 dB = all gains 1).
+        for (double rate : { 44100.0, 48000.0, 96000.0 })
+            for (auto mode : { dsp::ProcessMode::tracking, dsp::ProcessMode::mix, dsp::ProcessMode::hq })
+            {
+                dsp::NoiseReducer nr;
+                nr.prepare (rate, 512);
+                dsp::NoiseReducerSettings s;
+                s.enabled = true;
+                s.amountDb = 0.0f;
+                const auto expected = dsp::NoiseReducer::fftSizeFor (mode, rate);
+                juce::AudioBuffer<float> b (2, expected * 4 + 4096);
+                b.clear();
+                const auto at = expected + 1000;
+                b.setSample (0, at, 1.0f); b.setSample (1, at, 1.0f);
+                runReducer (nr, b, s, mode, 333);
+                int peak = 0;
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                    if (std::abs (b.getSample (0, i)) > std::abs (b.getSample (0, peak))) peak = i;
+                float residual = 0.0f;
+                for (int i = 0; i < b.getNumSamples(); ++i)
+                    if (i != peak) residual = std::max (residual, std::abs (b.getSample (0, i)));
+                const auto k = std::string (dsp::processModeName (mode)) + " @ " + format (rate / 1000.0, 1) + " kHz";
+                check (nr.latencySamples (s, mode) == expected, "reported latency = FFT size (" + k + ", " + std::to_string (expected) + ")");
+                check (peak - at == expected, "impulse comes out exactly the reported latency later (" + k + ": " + std::to_string (peak - at) + ")");
+                check (std::abs (b.getSample (0, peak) - 1.0f) < 1.0e-4f && residual < 1.0e-4f,
+                       "unity-gain reconstruction (" + k + ": peak " + format (b.getSample (0, peak), 6) + ", residual " + format (residual, 7) + ")");
+                s.enabled = false;
+                check (nr.latencySamples (s, mode) == 0, "no latency when off (" + k + ")");
+            }
+        check (dsp::NoiseReducer::fftSizeFor (dsp::ProcessMode::tracking, 48000.0) == 256
+               && dsp::NoiseReducer::fftSizeFor (dsp::ProcessMode::mix, 48000.0) == 1024
+               && dsp::NoiseReducer::fftSizeFor (dsp::ProcessMode::hq, 48000.0) == 2048, "FFT sizes: Tracking 256, Mix 1024, HQ 2048 at 48 kHz");
+
+        // 2. Through the plug-in: off is bit-identical whatever the other NR controls say; latency adds up.
+        {
+            auto input = [] (int i) { return (float) (0.2 * std::sin (2.0 * juce::MathConstants<double>::pi * 330.0 * i / sampleRate)); };
+            auto a = makeProcessor(), b = makeProcessor();
+            setParam (*b, "nr_mode", 0.0f);
+            setParam (*b, "nr_amount", 30.0f);
+            setParam (*b, "nr_sensitivity", 90.0f);
+            b->setNoiseLearn (true);
+            const auto outA = render (*a, input, (int) sampleRate), outB = render (*b, input, (int) sampleRate);
+            auto same = true;
+            for (int ch = 0; ch < 2; ++ch)
+                for (int i = 0; i < outA.getNumSamples(); ++i)
+                    same = same && juce::exactlyEqual (outA.getSample (ch, i), outB.getSample (ch, i));
+            check (same, "noise reducer off: output bit-identical (controls moved, Learn armed)");
+            check (getPlain (*a, "nr_on") < 0.5f && juce::roundToInt (getPlain (*a, "nr_mode")) == 1
+                   && std::abs (getPlain (*a, "nr_amount") - 12.0f) < 0.01f && std::abs (getPlain (*a, "nr_sensitivity") - 50.0f) < 0.01f,
+                   "defaults: off, Auto, 12 dB, 50 %");
+
+            for (int latencyMode = 0; latencyMode < 2; ++latencyMode)
+                for (int quality = 0; quality < 2; ++quality)
+                {
+                    auto p = makeProcessor();
+                    setParam (*p, "latency_mode", (float) latencyMode);
+                    setParam (*p, "quality", (float) quality);
+                    render (*p, input, blockSize);
+                    const auto without = p->getLatencySamples();
+                    setParam (*p, "nr_on", 1.0f);
+                    render (*p, input, blockSize);
+                    dsp::PitchSettings ps;
+                    ps.latency = (dsp::LatencyMode) latencyMode;
+                    ps.quality = (dsp::QualityMode) quality;
+                    const auto mode = dsp::processModeFor (ps, false);
+                    const auto added = p->getLatencySamples() - without;
+                    check (added == dsp::NoiseReducer::fftSizeFor (mode, sampleRate),
+                           std::string ("plug-in latency grows by the NR FFT size in ") + dsp::processModeName (mode) + " (" + std::to_string (added) + ")");
+                }
+        }
+
+        // 3. The noise floor drops on a noisy vocal (Auto, and Learned from a noise-only take);
+        //    a clean vocal keeps its level.
+        for (auto mode : { dsp::ProcessMode::tracking, dsp::ProcessMode::mix, dsp::ProcessMode::hq })
+        {
+            const auto name = std::string (dsp::processModeName (mode));
+            const auto lat = dsp::NoiseReducer::fftSizeFor (mode, sampleRate);
+            NoisyVocal noisy; noisy.noiseRms = 0.003f; // about -50 dBFS of hiss
+            const auto dry = makeSignal (noisy, (int) (6 * sampleRate));
+            const auto dryGap = gapDb (dry, sampleRate, 0, 3.0), dryVoice = voicedDb (dry, sampleRate, 0, 3.0);
+
+            dsp::NoiseReducerSettings s;
+            s.enabled = true;
+            s.amountDb = 20.0f;
+            dsp::NoiseReducer autoNr;
+            autoNr.prepare (sampleRate, 512);
+            auto wet = dry;
+            runReducer (autoNr, wet, s, mode);
+            const auto autoDrop = dryGap - gapDb (wet, sampleRate, lat, 3.0);
+            const auto autoVoice = voicedDb (wet, sampleRate, lat, 3.0) - dryVoice;
+
+            // Learned: 1.5 s of noise alone with Learn on, then the vocal.
+            dsp::NoiseReducer learnNr;
+            learnNr.prepare (sampleRate, 512);
+            NoisyVocal noiseOnly; noiseOnly.noiseRms = 0.003f; noiseOnly.voice = false; noiseOnly.random.setSeed (99);
+            auto noiseTake = makeSignal (noiseOnly, (int) (1.5 * sampleRate));
+            auto learnSettings = s; learnSettings.mode = 0; learnSettings.learn = true;
+            runReducer (learnNr, noiseTake, learnSettings, mode);
+            learnSettings.learn = false;
+            auto wetLearned = dry;
+            runReducer (learnNr, wetLearned, learnSettings, mode);
+            const auto learnedDrop = dryGap - gapDb (wetLearned, sampleRate, lat, 3.0);
+            const auto learnedVoice = voicedDb (wetLearned, sampleRate, lat, 3.0) - dryVoice;
+
+            // Clean vocal (no noise) through Auto.
+            NoisyVocal clean;
+            const auto cleanDry = makeSignal (clean, (int) (6 * sampleRate));
+            dsp::NoiseReducer cleanNr;
+            cleanNr.prepare (sampleRate, 512);
+            auto cleanWet = cleanDry;
+            runReducer (cleanNr, cleanWet, s, mode);
+            const auto cleanChange = voicedDb (cleanWet, sampleRate, lat, 3.0) - voicedDb (cleanDry, sampleRate, 0, 3.0);
+
+            note (name + ": gap noise -" + format (autoDrop) + " dB (Auto), -" + format (learnedDrop) + " dB (Learned, "
+                  + format (learnNr.getLearnedSeconds(), 2) + " s learned); voice " + format (autoVoice, 2) + " / " + format (learnedVoice, 2)
+                  + " dB; clean vocal " + format (cleanChange, 3) + " dB");
+            check (learnNr.hasProfile() && std::abs (learnNr.getLearnedSeconds() - 1.5f) < 0.05f, "Learn Noise stores a profile (" + name + ")");
+            check (autoDrop > 10.0, "Auto lowers the noise floor by > 10 dB (" + name + ")");
+            check (learnedDrop > 10.0, "Learned lowers the noise floor by > 10 dB (" + name + ")");
+            check (autoDrop < 20.5 && learnedDrop < 20.5, "never more than Amount (20 dB) (" + name + ")");
+            check (std::abs (autoVoice) < 1.0 && std::abs (learnedVoice) < 1.0, "the noisy vocal itself keeps its level within 1 dB (" + name + ")");
+            check (std::abs (cleanChange) < 0.25, "a clean vocal keeps its level within 0.25 dB (" + name + ")");
+        }
+
+        // 4. The learned profile is saved with the session and restored.
+        {
+            auto p = makeProcessor();
+            setParam (*p, "nr_on", 1.0f);
+            setParam (*p, "nr_mode", 0.0f);
+            NoisyVocal noiseOnly; noiseOnly.noiseRms = 0.01f; noiseOnly.voice = false;
+            p->setNoiseLearn (true);
+            render (*p, [&] (int i) { return noiseOnly.next (i); }, (int) sampleRate);
+            p->setNoiseLearn (false);
+            render (*p, [&] (int i) { return noiseOnly.next (i); }, blockSize * 4);
+            check (p->getNoiseReducer().hasProfile(), "plug-in Learn Noise stores a profile");
+            juce::MemoryBlock saved;
+            p->getStateInformation (saved);
+            std::vector<float> original;
+            p->getNoiseReducer().copyProfile (original);
+
+            auto q = makeProcessor();
+            q->setStateInformation (saved.getData(), (int) saved.getSize());
+            render (*q, [] (int) { return 0.0f; }, blockSize);
+            std::vector<float> restored;
+            q->getNoiseReducer().copyProfile (restored);
+            check (q->getNoiseReducer().hasProfile() && restored == original, "profile restored from the session");
+            check (juce::roundToInt (getPlain (*q, "nr_mode")) == 0 && getPlain (*q, "nr_on") > 0.5f, "NR settings restored");
+
+            auto fresh = makeProcessor();
+            juce::MemoryBlock freshState;
+            fresh->getStateInformation (freshState);
+            q->setStateInformation (freshState.getData(), (int) freshState.getSize());
+            check (! q->getNoiseReducer().hasProfile(), "loading a session without a profile clears it");
+        }
+
+        // 5. Panel.
+        auto probe = makeProcessor();
+        setParam (*probe, "nr_on", 1.0f);
+        std::unique_ptr<juce::AudioProcessorEditor> base (probe->createEditorAndMakeActive());
+        if (auto* editor = dynamic_cast<Editor*> (base.get()))
+        {
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::pitchPage);
+            editor->updateNoiseUi();
+            check (editor->getNoiseLabel().getText().startsWith ("Auto"), "status reads Auto (got " + editor->getNoiseLabel().getText().toStdString() + ")");
+            check (editor->getNoiseLearnButton().isShowing() || editor->getNoiseLearnButton().isVisible(), "Learn Noise button shown on the Pitch page");
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+            saveSnapshot (image, "-noise-reducer");
+            check (image.isValid(), "Pitch page renders with the noise reducer panel");
+        }
+    }
+
     void testEqHighPass()
     {
         for (double rate : { 44100.0, 48000.0 })
@@ -5354,6 +5597,7 @@ int main()
         { "presets: audio bit-identical to recorded output", testPresetsBitIdentical },
         { "compressor: knee control", testCompressorKnee },
         { "eq: high-pass filter", testEqHighPass },
+        { "noise reducer: spectral denoise", testNoiseReducer },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

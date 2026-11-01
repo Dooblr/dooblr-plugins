@@ -5,6 +5,7 @@
 #include <juce_audio_basics/juce_audio_basics.h>
 
 #include "MeterTap.h"
+#include "NoiseReducer.h"
 #include "PitchEngine.h"
 #include "PitchTap.h"
 #include "ProcessingChain.h"
@@ -13,7 +14,9 @@
 namespace dooblrvocals::dsp
 {
     /**
-        Pitch correction and the harmonizer (always first; the harmonies are summed with the
+        The optional spectral noise reducer comes first (off by default), so the pitch detector,
+        the gate threshold, the compressor and the harmonizer grains all see the denoised vocal.
+        Then pitch correction and the harmonizer (first of the main stages; the harmonies are summed with the
         corrected lead so Gate / EQ / Comp process the whole stack), then Gate / EQ / Comp in
         the chosen order, then the delay / reverb, the output trim and finally the limiter, so
         the limiter protects the true final output (wet included) and its meter shows it.
@@ -39,6 +42,15 @@ namespace dooblrvocals::dsp
 
         int getLatencySamples() const noexcept { return pitch.currentLatency(); }
         int latencyFor (const PitchSettings& s, bool nonRealtime) const noexcept { return pitch.latencySamples (s, nonRealtime); }
+        /** Total latency: the noise reducer's STFT (0 when off) plus the pitch engine's look-ahead. */
+        int latencyFor (const VocalSettings& s) const noexcept
+        {
+            return pitch.latencySamples (s.pitch, s.nonRealtime)
+                 + noiseReducer.latencySamples (s.noiseReducer, processModeFor (s.pitch, s.nonRealtime));
+        }
+
+        NoiseReducer& getNoiseReducer() noexcept { return noiseReducer; }
+        const NoiseReducer& getNoiseReducer() const noexcept { return noiseReducer; }
 
         ProcessMode getProcessMode() const noexcept { return pitch.currentMode(); }
         float getGainReductionDb() const noexcept { return lastGrDb; }
@@ -59,6 +71,7 @@ namespace dooblrvocals::dsp
         VocalSettings settings, target;
         bool haveSettings = false;
 
+        NoiseReducer noiseReducer;
         PitchEngine pitch;
         std::array<ProcessingChain, 2> chains;
         OutputGain outputGain;

@@ -418,6 +418,9 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Detector", pageColour (pitchPage), Specs {
         { "input_type", "Range", K::combo, 110 }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle, 88 },
         { "quality", "Quality", K::combo, 104 }, { "latency_mode", "Latency", K::combo, 112 } }));
+    pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Noise reducer", pageColour (pitchPage), Specs {
+        { "nr_on", "Denoise", K::toggle, 96 }, { "nr_mode", "Noise floor", K::combo, 104 },
+        { "nr_amount", "Amount", K::knob }, { "nr_sensitivity", "Sensitivity", K::knob } }));
     pagePanels[harmonyPage].push_back (std::make_unique<ControlPanel> (state, "Harmony bus", pageColour (harmonyPage), Specs {
         { "harm_level", "Level", K::knob }, { "harm_formant", "Formant", K::toggle }, { "harm_lofi", "Lo-Fi", K::knob } }));
     pagePanels[gatePage].push_back (std::make_unique<ControlPanel> (state, "Gate", pageColour (gatePage), Specs {
@@ -511,6 +514,22 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
                              "HQ (Quality) overrides both and is always used for offline renders.");
     pagePanels[pitchPage][1]->addExtra (latencyLabel, 118);
     pagePanels[pitchPage][1]->addExtra (learnButton, 100);
+
+    // Noise reducer: Learn Noise (plain state, like Learn Range) and a status readout.
+    noiseLearnButton.setComponentID ("learnNoise");
+    noiseLearnButton.setClickingTogglesState (true);
+    noiseLearnButton.setTooltip ("Learn Noise: with Denoise on, click, let only the room / mic noise play for a second or two, "
+                                 "click again. Used by the Learned noise floor (and as Auto's starting point). Saved with the session.");
+    noiseLearnButton.onClick = [this]
+    {
+        audioProcessor.setNoiseLearn (noiseLearnButton.getToggleState());
+        updateNoiseUi();
+    };
+    styleLabel (noiseLabel, {}, 12.0f, Palette::textPrimary, juce::Justification::centredLeft);
+    noiseLabel.setComponentID ("noiseStatus");
+    pagePanels[pitchPage][2]->addExtra (noiseLearnButton, 100);
+    pagePanels[pitchPage][2]->addExtra (noiseLabel, 170);
+    updateNoiseUi();
     updateLatencyLabel();
 
     if (auto* latencyBox = dynamic_cast<juce::ComboBox*> (pagePanels[pitchPage][1]->findControl ("latency_mode")))
@@ -545,6 +564,7 @@ DooblrVocalsAudioProcessorEditor::~DooblrVocalsAudioProcessorEditor()
     meterVBlank.reset();
     if (audioProcessor.isLearningRange())
         audioProcessor.cancelRangeLearn();
+    audioProcessor.setNoiseLearn (false);
     audioProcessor.getUndoHistory().getUndoManager().removeChangeListener (this);
     for (auto& panels : pagePanels)
         panels.clear();
@@ -600,12 +620,38 @@ void DooblrVocalsAudioProcessorEditor::updateLatencyLabel()
     s.latency = (dsp::LatencyMode) juce::roundToInt (state.getRawParameterValue ("latency_mode")->load());
     const auto mode = dsp::processModeFor (s, false);
     const auto rate = audioProcessor.getSampleRate() > 0.0 ? audioProcessor.getSampleRate() : 48000.0;
-    const auto ms = 1000.0 * dsp::latencyForMode (mode, rate) / rate;
+    const auto nrOn = state.getRawParameterValue ("nr_on")->load() > 0.5f;
+    const auto ms = 1000.0 * (dsp::latencyForMode (mode, rate) + (nrOn ? dsp::NoiseReducer::fftSizeFor (mode, rate) : 0)) / rate;
     const auto text = juce::String (dsp::processModeName (mode)) + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
                       + (ms < 10.0 ? juce::String (ms, 1) : juce::String (juce::roundToInt (ms))) + " ms";
 
     if (latencyLabel.getText() != text)
         latencyLabel.setText (text, juce::dontSendNotification);
+}
+
+void DooblrVocalsAudioProcessorEditor::updateNoiseUi()
+{
+    const auto& reducer = audioProcessor.getNoiseReducer();
+    const auto on = state.getRawParameterValue ("nr_on")->load() > 0.5f;
+    const auto learned = juce::roundToInt (state.getRawParameterValue ("nr_mode")->load()) == 0;
+    const auto learning = audioProcessor.isLearningNoise();
+    juce::String text;
+
+    if (learning)
+        text = on ? "Learning noise... " + juce::String (reducer.getLearnedSeconds(), 1) + " s"
+                  : "Turn Denoise on to learn";
+    else if (! on)
+        text = reducer.hasProfile() ? "Off - profile stored" : "Off";
+    else if (learned && ! reducer.hasProfile())
+        text = "No profile - click Learn Noise";
+    else
+        text = (learned ? "Learned" : "Auto") + juce::String (juce::CharPointer_UTF8 (" \xc2\xb7 "))
+               + juce::String (reducer.getReductionDb(), 1) + " dB";
+
+    if (noiseLabel.getText() != text)
+        noiseLabel.setText (text, juce::dontSendNotification);
+    noiseLearnButton.setToggleState (learning, juce::dontSendNotification);
+    noiseLearnButton.setButtonText (learning ? "Stop" : "Learn Noise");
 }
 
 void DooblrVocalsAudioProcessorEditor::setStatus (const juce::String& text)
@@ -1112,6 +1158,8 @@ void DooblrVocalsAudioProcessorEditor::timerCallback()
         reverbDisplay.refresh (audioProcessor.getReverbDuckDb(), audioProcessor.getHostBpm());
 
     updateLearnProgress (juce::Time::getMillisecondCounterHiRes());
+    if (selectedPage == pitchPage)
+        updateNoiseUi();
 
     if (presetBox.getText() != audioProcessor.getPresetName() && ! presetBox.isPopupActive())
         refreshPresetBox();
@@ -1290,8 +1338,22 @@ void DooblrVocalsAudioProcessorEditor::resized()
     const auto controlsWidth = content.getWidth() - 40;
     auto panelsHeight = 0;
 
+    // Short windows: compact rows when the page's panels would squeeze the display (the Pitch page
+    // also keeps room for its key-follow strip).
+    const auto panelLimit = content.getHeight() - 200 - (selectedPage == pitchPage ? 34 : 0);
+    for (auto& panel : pagePanels[(size_t) selectedPage])
+        panel->setCompact (false);
     for (auto& panel : pagePanels[(size_t) selectedPage])
         panelsHeight += panel->getPreferredHeight (controlsWidth) + 10;
+    if (panelsHeight + 14 > panelLimit)
+    {
+        panelsHeight = 0;
+        for (auto& panel : pagePanels[(size_t) selectedPage])
+        {
+            panel->setCompact (true);
+            panelsHeight += panel->getPreferredHeight (controlsWidth) + 10;
+        }
+    }
 
     controlsArea = content.removeFromBottom (juce::jmin (panelsHeight + 14, content.getHeight() - 200));
     {

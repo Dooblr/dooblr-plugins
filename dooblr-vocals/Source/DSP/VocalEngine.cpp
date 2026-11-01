@@ -19,6 +19,7 @@ namespace dooblrvocals::dsp
         maxBlock = std::max (1, maxBlockSize);
         fadeLength = std::max (1, (int) std::lround (0.015 * sampleRate));
         fadeBuffer.setSize (2, maxBlock);
+        noiseReducer.prepare (sampleRate, maxBlock);
         pitch.prepare (sampleRate, maxBlock);
         chains[0].prepare (sampleRate, maxBlock);
         chains[1].prepare (sampleRate, maxBlock);
@@ -30,6 +31,7 @@ namespace dooblrvocals::dsp
 
     void VocalEngine::reset()
     {
+        noiseReducer.reset();
         pitch.reset();
         chains[0].reset();
         chains[1].reset();
@@ -84,6 +86,10 @@ namespace dooblrvocals::dsp
         c.makeupDb = lerp (from.compressor.makeupDb, d.makeupDb, a);
         c.kneeDb = lerp (from.compressor.kneeDb, d.kneeDb, a);
 
+        auto& nr = current.noiseReducer;
+        nr.amountDb = lerp (from.noiseReducer.amountDb, to.noiseReducer.amountDb, a);
+        nr.sensitivity = lerp (from.noiseReducer.sensitivity, to.noiseReducer.sensitivity, a);
+
         auto& l = current.limiter;
         const auto& m = to.limiter;
         l.ceilingDb = lerp (from.limiter.ceilingDb, m.ceilingDb, a);
@@ -128,6 +134,9 @@ namespace dooblrvocals::dsp
 
             juce::AudioBuffer<float> slice (buffer.getArrayOfWritePointers(),
                                             buffer.getNumChannels(), offset, chunk);
+
+            // Noise reducer first: the detector, gate and compressor then work on the clean vocal.
+            noiseReducer.process (slice, chunk, settings.noiseReducer, processModeFor (settings.pitch, settings.nonRealtime));
 
             pitch.process (slice, chunk, settings.pitch, settings.harmony, settings.nonRealtime, pitchTap);
 

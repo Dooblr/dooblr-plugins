@@ -69,10 +69,14 @@ namespace dooblrvocals::ui
         /** Height needed for the controls at the given width. */
         int getPreferredHeight (int width) const;
 
+        /** Compact rows (shorter knobs) for pages whose panels would not otherwise fit the window. */
+        void setCompact (bool shouldBeCompact);
+        bool isCompact() const noexcept { return rowHeight != knobHeight; }
+
         /** The bounds reserved for a slot (empty if there is none); for the editor and tests. */
         juce::Rectangle<int> getSlotBounds (int slot) const;
 
-        static constexpr int titleHeight = 20, knobWidth = 70, knobHeight = 84, comboWidth = 128, toggleWidth = 104;
+        static constexpr int titleHeight = 20, knobWidth = 70, knobHeight = 84, compactKnobHeight = 68, comboWidth = 128, toggleWidth = 104;
 
     private:
         struct Item
@@ -97,6 +101,7 @@ namespace dooblrvocals::ui
         juce::String title;
         juce::Colour colour;
         std::vector<Item> items;
+        int rowHeight = knobHeight;
     };
 
     /**

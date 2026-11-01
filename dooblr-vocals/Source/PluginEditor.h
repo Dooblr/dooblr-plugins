@@ -98,6 +98,10 @@ public:
     dooblrvocals::ui::KeyFollowStrip& getKeyFollowStrip() noexcept { return *keyFollowStrip; }
     juce::TextButton& getLearnButton() noexcept { return learnButton; }
     juce::Label& getLearnLabel() noexcept { return learnLabel; }
+    juce::TextButton& getNoiseLearnButton() noexcept { return noiseLearnButton; }
+    juce::Label& getNoiseLabel() noexcept { return noiseLabel; }
+    /** Noise reducer status line (also called by the timer). */
+    void updateNoiseUi();
     juce::TextButton& getLearnResetButton() noexcept { return learnResetButton; }
     /** The Learn Range button: start, or stop and apply. */
     void toggleRangeLearn();
@@ -193,6 +197,8 @@ private:
     void updateKeyFollowUi();
     juce::TextButton learnButton { "Learn Range" }, learnResetButton { "Reset" };
     juce::Label learnLabel;
+    juce::TextButton noiseLearnButton { "Learn Noise" };
+    juce::Label noiseLabel;
     juce::String learnMessage;
     /** Learn Range take state: idle, listening, done (shows the learned notes), failed / timed out. */
     enum class LearnState { idle, listening, done, failed };

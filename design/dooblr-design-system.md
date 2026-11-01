@@ -897,6 +897,15 @@ EQ page: a second panel, **High-pass**, after the EQ panel: HPF pill toggle (76 
 - Off is bit-identical to earlier versions (the HPF is not in the signal path at all).
 - No new colour, font size, radius or alpha token.
 
+### 11.9 Noise reducer (added 2026-11-01)
+Pitch page: a third panel, **Noise reducer**, after Detector: Denoise pill toggle (96 px), Noise floor combo (Learned / Auto, 104 px), Amount knob (0–40 dB, default 12), Sensitivity knob (0–100 %, default 50), then a **Learn Noise** text button (100 px, same style as Learn Range; reads "Stop" while learning) and a status label (12 px, textPrimary). Parameters `nr_on` (default off), `nr_mode` (default Auto), `nr_amount`, `nr_sensitivity`. Learn Noise is plain state, not a parameter. `V:DSP/NoiseReducer.cpp`; `V:PluginEditor.cpp` `updateNoiseUi`.
+- **Placement:** first in the engine, before pitch detection. The detector tracks a cleaner signal. The gate threshold works on the denoised floor. The compressor no longer lifts and pumps the hiss. The harmonizer grains no longer smear it.
+- **DSP:** STFT with sqrt-Hann windows, 75 % overlap. Per-bin gain max(−Amount, 1 − T/P), where T = noise floor × sensitivity offset (+12 dB at 0 %, −6 dB at 100 %). The gains are smoothed over 3 bins and in time (opening in ~5 ms, closing in ~60 ms) against musical noise. **Learned:** the average PSD of a noise-only take. **Auto:** minimum statistics over ~1.5 s; uses the learned profile as its seed if there is one. The profile is saved with the session, not with presets.
+- **Latency:** the FFT size. Tracking 256 (5.3 ms), Mix 1024, HQ 2048 at 48 kHz, doubled per doubling of the rate. It is added to the reported plug-in latency and to the Detector latency readout. Off: no latency, buffer untouched (bit-identical). Switching it on or off fades over 5 ms.
+- **Status label:** "Off", "Off - profile stored", "No profile - click Learn Noise", "Learning noise... N s", or "Auto · −x dB" / "Learned · −x dB" (average reduction).
+- **Short windows:** with three panels the Pitch page could squeeze the display at the 940 × 600 minimum. When a page's panels would leave the display less than 200 px (Pitch page: plus the 34 px key-follow strip), every panel on that page uses compact rows (`ControlPanel::compactKnobHeight` 68 px instead of 84). Otherwise the layout is unchanged.
+- No new colour, font size, radius or alpha token.
+
 ---
 
 ## 12. Reusable patterns (S)
@@ -960,6 +969,7 @@ FFT bins are linear in frequency, display points are logarithmic, so at the low 
 
 ## 13. Changelog
 
+- **2026-11-01**: Added §11.9 dooblr-vocals Noise reducer panel (Pitch page: Denoise, Noise floor Learned/Auto, Amount, Sensitivity, Learn Noise, status readout). Additive only; existing tokens only.
 - **2026-10-31**: Added §11.8 dooblr-vocals EQ high-pass (low-cut 20–500 Hz, 12 / 24 / 48 dB/oct, off by default, drawn on the EQ curve). Additive only; existing tokens only.
 - **2026-10-31**: Added §11.7 dooblr-vocals Compressor Knee (0–24 dB soft knee, default 6 dB, knee region drawn on the transfer curve). Additive only; existing tokens only, no rule, token name or value changed.
 - **2026-10-31**: Added §11.6 dooblr-vocals Learn Range progress (bar driven by voiced time, status line, done / failed states). Additive only; existing tokens only, no rule, token name or value changed.

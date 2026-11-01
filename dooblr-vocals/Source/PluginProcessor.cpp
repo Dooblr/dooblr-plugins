@@ -11,6 +11,7 @@ namespace
     const juce::Identifier stateType ("DooblrVocals");
     const juce::Identifier stateVersionProperty ("stateVersion");
     const juce::Identifier presetNameProperty ("presetName");
+    const juce::Identifier noiseProfileProperty ("noiseProfile"); // learned NR profile, base64 floats
 }
 
 //==============================================================================
@@ -160,7 +161,7 @@ void DooblrVocalsAudioProcessor::applyKeyFollow (juce::AudioBuffer<float>& buffe
 
 void DooblrVocalsAudioProcessor::updateLatency (const dsp::VocalSettings& s)
 {
-    const auto samples = engine.latencyFor (s.pitch, s.nonRealtime);
+    const auto samples = engine.latencyFor (s); // pitch look-ahead + noise reducer STFT (0 when off)
 
     if (samples != reportedLatency)
     {
@@ -192,6 +193,7 @@ void DooblrVocalsAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     settings.nonRealtime = isNonRealtime();
     settings.pitch.learnRange = learnArmed.load (std::memory_order_relaxed);
+    settings.noiseReducer.learn = noiseLearnArmed.load (std::memory_order_relaxed);
 
     // Host tempo for synced delay / pre-delay (120 BPM when the host gives none).
     if (auto* playHead = getPlayHead())
@@ -396,6 +398,19 @@ juce::ValueTree DooblrVocalsAudioProcessor::createStateTree()
     auto state = parameters.copyState();
     state.setProperty (stateVersionProperty, params::stateVersion, nullptr);
     state.setProperty (presetNameProperty, presetName, nullptr);
+
+    // The learned noise profile travels with the session (not with presets).
+    if (engine.getNoiseReducer().hasProfile())
+    {
+        std::vector<float> profile;
+        engine.getNoiseReducer().copyProfile (profile);
+        juce::MemoryBlock block (profile.data(), profile.size() * sizeof (float));
+        state.setProperty (noiseProfileProperty, block.toBase64Encoding(), nullptr);
+    }
+    else
+    {
+        state.removeProperty (noiseProfileProperty, nullptr);
+    }
     return state;
 }
 
@@ -440,6 +455,24 @@ void DooblrVocalsAudioProcessor::setStateInformation (const void* data, int size
     }
 
     presetName = state.getProperty (presetNameProperty, "Init").toString();
+
+    {
+        juce::MemoryBlock block;
+        const auto expected = (size_t) dsp::NoiseReducer::profileSize * sizeof (float);
+        if (state.hasProperty (noiseProfileProperty)
+            && block.fromBase64Encoding (state.getProperty (noiseProfileProperty).toString()) && block.getSize() == expected)
+        {
+            std::vector<float> profile ((size_t) dsp::NoiseReducer::profileSize);
+            std::memcpy (profile.data(), block.getData(), expected);
+            engine.getNoiseReducer().setProfile (profile);
+        }
+        else
+        {
+            engine.getNoiseReducer().clearProfile();
+        }
+        state.removeProperty (noiseProfileProperty, nullptr);
+    }
+
     parameters.replaceState (state);
     undoHistory.clear();
 }

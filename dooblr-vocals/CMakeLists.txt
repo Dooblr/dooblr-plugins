@@ -57,6 +57,7 @@ target_sources(DooblrVocals
         Source/DSP/Effects.cpp
         Source/DSP/KeyDetector.cpp
         Source/DSP/MeterTap.cpp
+        Source/DSP/NoiseReducer.cpp
         Source/DSP/PitchEngine.cpp
         Source/DSP/ProcessingChain.cpp
         Source/DSP/SpectrumAnalyzer.cpp

@@ -99,6 +99,13 @@ public:
     };
     LearnProgress getLearnProgress() const noexcept;
 
+    //== Noise reducer (Learn Noise is plain state, like Learn Range) ==========================
+    /** While on, the reducer measures the noise profile (the reducer must be on); off stores it. */
+    void setNoiseLearn (bool shouldLearn) noexcept { noiseLearnArmed.store (shouldLearn); }
+    bool isLearningNoise() const noexcept { return noiseLearnArmed.load(); }
+    const dooblrvocals::dsp::NoiseReducer& getNoiseReducer() const noexcept { return engine.getNoiseReducer(); }
+    void clearNoiseProfile() noexcept { engine.getNoiseReducer().clearProfile(); }
+
     //== Key Follow ============================================================================
     /** What the editor shows (any thread). appliedKey is -1 unless Key Follow is overriding. */
     struct KeyFollowStatus
@@ -129,6 +136,7 @@ private:
     dooblrvocals::RangeLearner rangeLearner;
     std::vector<dooblrvocals::dsp::PitchFrame> learnScratch = std::vector<dooblrvocals::dsp::PitchFrame> (512);
     std::atomic<bool> learnArmed { false };
+    std::atomic<bool> noiseLearnArmed { false };
     std::atomic<juce::int64> learnVoicedSamples { 0 }, learnSamplesSinceVoice { 1 << 30 };
     std::atomic<double> learnSampleRate { 48000.0 };
     std::atomic<float> reverbDuckDb { 0.0f }, delayDuckDb { 0.0f };

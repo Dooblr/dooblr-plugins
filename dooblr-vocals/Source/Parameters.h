@@ -56,6 +56,7 @@ namespace dooblrvocals::params
         Value eqOn = nullptr, eqLowFreq = nullptr, eqLowGain = nullptr, eqMidFreq = nullptr, eqMidGain = nullptr, eqMidQ = nullptr;
         Value eqHighFreq = nullptr, eqHighGain = nullptr;
         Value eqHpfOn = nullptr, eqHpfFreq = nullptr, eqHpfSlope = nullptr;
+        Value nrOn = nullptr, nrMode = nullptr, nrAmount = nullptr, nrSensitivity = nullptr;
         Value compOn = nullptr, compThreshold = nullptr, compRatio = nullptr, compAttack = nullptr, compRelease = nullptr, compMakeup = nullptr, compKnee = nullptr;
         Value limMode = nullptr, limCeiling = nullptr, limRelease = nullptr, outputGain = nullptr, chainOrder = nullptr;
         Value latencyMode = nullptr, harmOn = nullptr, harmLevel = nullptr, harmFormant = nullptr, harmLofi = nullptr;
