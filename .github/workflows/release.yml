@@ -1,0 +1,124 @@
+# Builds every dooblr plug-in plus the dooblr installer on macOS (universal) and Windows (x64),
+# and, on a version tag (v*), publishes them as a GitHub Release: the zipped bundles, the
+# manifest the installer reads (dooblr-manifest.json) and the installers themselves
+# (dooblr-installer-mac.dmg, dooblr-installer-windows.exe). Asset names for the manifest and the
+# installers never change, so .../releases/latest/download/<name> always points at the newest.
+#
+# Run it by hand (Actions > release > Run workflow) to build without publishing.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  JUCE_TAG: '8.0.15'
+  # name:CMake-option-prefix:target (the folder is the name)
+  PLUGINS: >-
+    dooblr-q:DOOBLRQ:DooblrQ
+    dooblr-kick:DOOBLRKICK:DooblrKick
+    dooblr-vocals:DOOBLRVOCALS:DooblrVocals
+    dooblr-prophet:DOOBLRPROPHET:DooblrProphet
+    dooblr-soothe:DOOBLRSOOTHE:DooblrSoothe
+    dooblr-feedback:DOOBLRFEEDBACK:DooblrFeedback
+
+jobs:
+  mac:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: '20' }
+      - name: JUCE
+        run: git clone --depth 1 --branch "$JUCE_TAG" https://github.com/juce-framework/JUCE.git "$RUNNER_TEMP/juce"
+      - name: Plug-ins (VST3, arm64 + x86_64)
+        run: |
+          set -euo pipefail
+          for p in $PLUGINS; do
+            IFS=: read -r name prefix target <<< "$p"
+            cmake -S "$name" -B "build/$name" -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" \
+              -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce" \
+              -D${prefix}_PLUGIN_FORMATS=VST3 -D${prefix}_BUILD_TESTS=OFF -D${prefix}_BUILD_LOADCHECK=OFF
+            cmake --build "build/$name" --config Release --target "${target}_VST3" -j 4
+          done
+      - name: Installer (universal) and its tests
+        run: |
+          set -euo pipefail
+          cmake -S dooblr-installer -B build/dooblr-installer -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES="arm64;x86_64" -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce"
+          cmake --build build/dooblr-installer --config Release -j 4
+          "$(find build/dooblr-installer -type f -name DooblrInstallerTests -perm -u+x | head -1)"
+      - name: Package
+        run: |
+          set -euo pipefail
+          python3 dooblr-installer/scripts/make-release.py package --platform mac --out dist --build-root build --m4l --require-all
+          dooblr-installer/scripts/package-mac.sh "$(find build/dooblr-installer -type d -name 'dooblr installer.app' | head -1)" dist
+      - uses: actions/upload-artifact@v4
+        with: { name: mac, path: dist/* }
+
+  windows:
+    runs-on: windows-latest
+    defaults:
+      run: { shell: bash }
+    steps:
+      - uses: actions/checkout@v4
+      - name: JUCE
+        run: git clone --depth 1 --branch "$JUCE_TAG" https://github.com/juce-framework/JUCE.git "$RUNNER_TEMP/juce"
+      - name: Plug-ins (VST3, x64, MSVC)
+        run: |
+          set -euo pipefail
+          for p in $PLUGINS; do
+            IFS=: read -r name prefix target <<< "$p"
+            cmake -S "$name" -B "build/$name" -G "Visual Studio 17 2022" -A x64 \
+              -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
+              -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce" \
+              -D${prefix}_PLUGIN_FORMATS=VST3 -D${prefix}_BUILD_TESTS=OFF -D${prefix}_BUILD_LOADCHECK=OFF
+            cmake --build "build/$name" --config Release --target "${target}_VST3" -- -m
+          done
+      - name: Installer and its tests
+        run: |
+          set -euo pipefail
+          cmake -S dooblr-installer -B build/dooblr-installer -G "Visual Studio 17 2022" -A x64 \
+            -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce"
+          cmake --build build/dooblr-installer --config Release -- -m
+          "$(find build/dooblr-installer -type f -name DooblrInstallerTests.exe | head -1)"
+      - name: Package
+        run: |
+          set -euo pipefail
+          python dooblr-installer/scripts/make-release.py package --platform windows --out dist --build-root build --require-all
+          cp "$(find build/dooblr-installer -type f -name 'dooblr installer.exe' | head -1)" dist/dooblr-installer-windows.exe
+      - uses: actions/upload-artifact@v4
+        with: { name: windows, path: dist/* }
+
+  publish:
+    needs: [mac, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Manifest
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          cp artifacts/mac/*.zip artifacts/windows/*.zip release/
+          cp artifacts/mac/dooblr-installer-mac.dmg artifacts/windows/dooblr-installer-windows.exe release/
+          python3 dooblr-installer/scripts/make-release.py manifest --out release \
+            --installer-mac release/dooblr-installer-mac.dmg --installer-windows release/dooblr-installer-windows.exe \
+            artifacts/mac/partial-mac.json artifacts/windows/partial-windows.json
+          ls -la release
+      - uses: actions/upload-artifact@v4
+        with: { name: release, path: release/* }
+      - name: GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" release/* --repo "$GITHUB_REPOSITORY" \
+            --title "dooblr $GITHUB_REF_NAME" \
+            --notes "Download **dooblr-installer-mac.dmg** (macOS 11+) or **dooblr-installer-windows.exe** (Windows 10/11, x64), run it, and pick the plug-ins to install or update. See dooblr-installer/README.md."
