@@ -362,7 +362,8 @@ namespace dooblrvocals::ui
     {
         juce::uint64 hash = 17;
 
-        for (const auto* id : { "eq_on", "eq_low_freq", "eq_low_gain", "eq_mid_freq", "eq_mid_gain", "eq_mid_q", "eq_high_freq", "eq_high_gain" })
+        for (const auto* id : { "eq_on", "eq_low_freq", "eq_low_gain", "eq_mid_freq", "eq_mid_gain", "eq_mid_q", "eq_high_freq", "eq_high_gain",
+                                "eq_hpf_on", "eq_hpf_freq", "eq_hpf_slope" })
             hash = mixHash (hash, gesture.get (id));
 
         return hash;
@@ -432,6 +433,9 @@ namespace dooblrvocals::ui
         lowFilter.setParameters (dsp::Biquad::Type::lowShelf, gesture.get ("eq_low_freq"), 0.707, gesture.get ("eq_low_gain"), rate);
         midFilter.setParameters (dsp::Biquad::Type::peak, gesture.get ("eq_mid_freq"), gesture.get ("eq_mid_q"), gesture.get ("eq_mid_gain"), rate);
         highFilter.setParameters (dsp::Biquad::Type::highShelf, gesture.get ("eq_high_freq"), 0.707, gesture.get ("eq_high_gain"), rate);
+        const auto hpfOn = gesture.get ("eq_hpf_on") > 0.5f;
+        dsp::HighPass highPass;
+        highPass.setParameters (gesture.get ("eq_hpf_freq"), juce::roundToInt (gesture.get ("eq_hpf_slope")), rate);
 
         curveLine.clear();
         curveFill.clear();
@@ -440,7 +444,8 @@ namespace dooblrvocals::ui
         for (size_t i = 0; i < columnFreqs.size(); ++i)
         {
             const auto f = (double) columnFreqs[i];
-            const auto magnitude = lowFilter.magnitudeAt (f, rate) * midFilter.magnitudeAt (f, rate) * highFilter.magnitudeAt (f, rate);
+            const auto magnitude = lowFilter.magnitudeAt (f, rate) * midFilter.magnitudeAt (f, rate) * highFilter.magnitudeAt (f, rate)
+                                 * (hpfOn ? highPass.magnitudeAt (f, rate) : 1.0);
             const auto db = (float) (20.0 * std::log10 (std::max (1.0e-9, magnitude)));
             const auto point = juce::Point<float> (plot.getX() + (float) i, gainToY (juce::jlimit (-30.0f, 30.0f, db)));
 

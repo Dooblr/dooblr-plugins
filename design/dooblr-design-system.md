@@ -890,6 +890,13 @@ Comp page: a **Knee** knob after Ratio (`comp_knee`, 0–24 dB, default 6 dB —
 - **Transfer curve:** the curve follows the Knee setting; the knee region (threshold ± Knee/2) is over-stroked 3 px in `textPrimary` at alpha 0.6 so the width is visible; the threshold handle sits on the knee-bent curve. The readout reads "<ratio>:1  knee <N> dB".
 - No new colour, font size, radius or alpha token.
 
+### 11.8 EQ high-pass (added 2026-10-31)
+EQ page: a second panel, **High-pass**, after the EQ panel: HPF pill toggle (76 px), Freq knob, Slope combo (104 px). Parameters `eq_hpf_on` (default off), `eq_hpf_freq` (20–500 Hz, log, default 80 Hz), `eq_hpf_slope` (12 / 24 / 48 dB/oct, default 24). `V:DSP/Effects.cpp` `HighPass`, `ThreeBandEq`; `V:UI/OutputVisuals.cpp` `EqDisplay`.
+- **This is a low-cut**, separate from the Low band, which stays a low shelf. Butterworth cascade (1 / 2 / 4 biquad sections), −3 dB at Freq. It runs first inside the EQ section, so EQ power off bypasses it too.
+- **Curve:** when on, the high-pass is multiplied into the drawn EQ response, so the low-cut roll-off shows on the same curve in the EQ colour. No extra handle.
+- Off is bit-identical to earlier versions (the HPF is not in the signal path at all).
+- No new colour, font size, radius or alpha token.
+
 ---
 
 ## 12. Reusable patterns (S)
@@ -953,6 +960,7 @@ FFT bins are linear in frequency, display points are logarithmic, so at the low 
 
 ## 13. Changelog
 
+- **2026-10-31**: Added §11.8 dooblr-vocals EQ high-pass (low-cut 20–500 Hz, 12 / 24 / 48 dB/oct, off by default, drawn on the EQ curve). Additive only; existing tokens only.
 - **2026-10-31**: Added §11.7 dooblr-vocals Compressor Knee (0–24 dB soft knee, default 6 dB, knee region drawn on the transfer curve). Additive only; existing tokens only, no rule, token name or value changed.
 - **2026-10-31**: Added §11.6 dooblr-vocals Learn Range progress (bar driven by voiced time, status line, done / failed states). Additive only; existing tokens only, no rule, token name or value changed.
 - **2026-10-31**: Added §12 Reusable patterns (S = dooblr-soothe 0.1.1–0.1.2): left-column hero knob, vertical dot-slider strip, toolbar with preset / A-B / undo, weighting curve overlaid on the spectrum with pill / dot handles, smooth log-frequency spectrum drawing, value-text formatting. Changelog renumbered to §13. Additive only; no existing rule, token name or value changed. JSON: `components.heroKnobColumn`, `components.dotSliderStrip`, `components.presetAbUndoToolbar`, `components.weightingCurveOverlay`, `components.valueText`, `graphs.smoothLogSpectrum`, a `changelog` entry.

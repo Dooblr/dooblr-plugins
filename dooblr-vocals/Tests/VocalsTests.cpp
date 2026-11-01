@@ -4714,6 +4714,79 @@ namespace
 
     // Compressor Knee (0-24 dB): the gain computer's static curve at several knee widths, the 6 dB
     // default reproducing the original fixed-knee curve bit for bit, and the knee reaching the audio.
+    // EQ high-pass: Butterworth response (-3 dB at the corner, flat passband) and the 12 / 24 / 48 dB/oct
+    // slopes; switched off it leaves the EQ bit-identical; it is drawn on the EQ curve.
+    void testEqHighPass()
+    {
+        for (double rate : { 44100.0, 48000.0 })
+            for (int slope = 0; slope < 3; ++slope)
+            {
+                const auto k = " (" + format (dsp::HighPass::slopeDbPerOctave (slope), 0) + " dB/oct, " + format (rate / 1000.0, 1) + " kHz)";
+                dsp::HighPass hp;
+                const auto fc = 100.0;
+                hp.setParameters (fc, slope, rate);
+                auto db = [&] (double f) { return 20.0 * std::log10 (hp.magnitudeAt (f, rate)); };
+                const auto order = 2.0 * dsp::HighPass::sectionsForSlope (slope);
+                check (std::abs (db (fc) + 3.0103) < 0.05, "-3 dB at the corner" + k + ": " + format (db (fc), 3));
+                check (std::abs (db (fc * 0.5) + 10.0 * std::log10 (1.0 + std::pow (2.0, 2.0 * order))) < 0.3,
+                       "Butterworth level one octave below" + k + ": " + format (db (fc * 0.5)));
+                const auto perOctave = db (fc / 8.0) - db (fc / 16.0);
+                check (std::abs (perOctave - dsp::HighPass::slopeDbPerOctave (slope)) < 0.5, "stop-band slope" + k + ": " + format (perOctave));
+                check (db (fc * 10.0) > -0.05 && db (fc * 10.0) < 0.01 && db (5000.0) > -0.01, "flat passband" + k);
+            }
+
+        // Through the plug-in: 200 Hz / 24 dB/oct removes a 50 Hz tone (~48 dB two octaves down) and leaves 2 kHz alone.
+        auto levelDb = [] (bool hpfOn, double toneHz, int slope, bool touchHpf)
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 0.0f);
+            setParam (*p, "eq_on", 1.0f);
+            setParam (*p, "eq_low_gain", -2.0f);
+            setParam (*p, "eq_mid_gain", 3.0f);
+            if (touchHpf)
+            {
+                setParam (*p, "eq_hpf_on", hpfOn ? 1.0f : 0.0f);
+                setParam (*p, "eq_hpf_freq", 200.0f);
+                setParam (*p, "eq_hpf_slope", (float) slope);
+            }
+            const auto out = render (*p, [toneHz] (int i) { return (float) (0.1 * std::sin (2.0 * juce::MathConstants<double>::pi * toneHz * i / sampleRate)); },
+                                     (int) sampleRate);
+            return std::pair<float, juce::AudioBuffer<float>> { juce::Decibels::gainToDecibels (out.getRMSLevel (0, out.getNumSamples() / 2, out.getNumSamples() / 2), -200.0f), out };
+        };
+        const auto low50Off = levelDb (false, 50.0, 1, true).first, low50On = levelDb (true, 50.0, 1, true).first;
+        const auto hi2kOff = levelDb (false, 2000.0, 1, true).first, hi2kOn = levelDb (true, 2000.0, 1, true).first;
+        const auto low50On48 = levelDb (true, 50.0, 2, true).first, low50On12 = levelDb (true, 50.0, 0, true).first;
+        note ("50 Hz through 200 Hz HPF: 12 dB/oct " + format (low50On12 - low50Off) + " dB, 24 " + format (low50On - low50Off)
+              + " dB, 48 " + format (low50On48 - low50Off) + " dB; 2 kHz " + format (hi2kOn - hi2kOff, 3) + " dB");
+        check (std::abs ((low50On - low50Off) + 48.2f) < 1.5f, "24 dB/oct removes ~48 dB two octaves below the corner");
+        check (std::abs ((low50On12 - low50Off) + 24.1f) < 1.0f, "12 dB/oct removes ~24 dB two octaves below the corner");
+        check (low50On48 - low50Off < -80.0f, "48 dB/oct removes > 80 dB two octaves below the corner");
+        check (std::abs (hi2kOn - hi2kOff) < 0.05f, "2 kHz passes unchanged");
+
+        const auto untouched = levelDb (false, 50.0, 1, false).second, offTouched = levelDb (false, 50.0, 2, true).second;
+        auto same = true;
+        for (int i = 0; i < untouched.getNumSamples(); ++i)
+            same = same && juce::exactlyEqual (untouched.getSample (0, i), offTouched.getSample (0, i));
+        check (same, "HPF off (any freq / slope) renders bit-identical to the plain EQ");
+        auto probe = makeProcessor();
+        check (getPlain (*probe, "eq_hpf_on") < 0.5f && std::abs (getPlain (*probe, "eq_hpf_freq") - 80.0f) < 0.01f, "HPF defaults: off, 80 Hz");
+
+        // Drawn on the EQ curve.
+        setParam (*probe, "eq_on", 1.0f);
+        setParam (*probe, "eq_hpf_on", 1.0f);
+        setParam (*probe, "eq_hpf_freq", 150.0f);
+        setParam (*probe, "eq_hpf_slope", 2.0f);
+        std::unique_ptr<juce::AudioProcessorEditor> base (probe->createEditorAndMakeActive());
+        if (auto* editor = dynamic_cast<Editor*> (base.get()))
+        {
+            editor->setSize (1080, 660);
+            editor->selectPage (Editor::eqPage);
+            const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+            saveSnapshot (image, "-eq-hpf");
+            check (image.isValid(), "EQ page renders with the high-pass");
+        }
+    }
+
     void testCompressorKnee()
     {
         using C = dsp::Compressor;
@@ -5280,6 +5353,7 @@ int main()
         { "learn range: progress feedback", testLearnProgress },
         { "presets: audio bit-identical to recorded output", testPresetsBitIdentical },
         { "compressor: knee control", testCompressorKnee },
+        { "eq: high-pass filter", testEqHighPass },
         { "fx pages",                       testFxPages },
         { "vibrato golden",                 testVibratoGolden },
         { "vibrato respect",                testVibratoRespect },

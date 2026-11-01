@@ -26,7 +26,12 @@ namespace dooblrvocals::dsp
         const auto alpha = sinw / (2.0 * std::max (0.05, q));
         double nb0 = 1, nb1 = 0, nb2 = 0, na0 = 1, na1 = 0, na2 = 0;
 
-        if (type == Type::peak)
+        if (type == Type::highPass)
+        {
+            nb0 = 0.5 * (1 + cosw); nb1 = -(1 + cosw); nb2 = 0.5 * (1 + cosw);
+            na0 = 1 + alpha; na1 = -2 * cosw; na2 = 1 - alpha;
+        }
+        else if (type == Type::peak)
         {
             nb0 = 1 + alpha * A; nb1 = -2 * cosw; nb2 = 1 - alpha * A;
             na0 = 1 + alpha / A; na1 = -2 * cosw; na2 = 1 - alpha / A;
@@ -82,6 +87,39 @@ namespace dooblrvocals::dsp
     }
 
     //==============================================================================
+    void HighPass::setParameters (double frequency, int slopeIndex, double sampleRate) noexcept
+    {
+        const auto n = sectionsForSlope (slopeIndex);
+
+        if (n != numSections)
+        {
+            numSections = n;
+            reset();
+        }
+
+        // Butterworth of order 2n: section k has Q = 1 / (2 cos ((2k + 1) pi / (4n))).
+        for (int k = 0; k < numSections; ++k)
+        {
+            const auto q = 1.0 / (2.0 * std::cos ((2.0 * k + 1.0) * 3.14159265358979323846 / (4.0 * numSections)));
+            sections[(size_t) k].setParameters (Biquad::Type::highPass, frequency, q, 0.0, sampleRate);
+        }
+    }
+
+    void HighPass::reset() noexcept
+    {
+        for (auto& s : sections)
+            s.reset();
+    }
+
+    double HighPass::magnitudeAt (double frequency, double sampleRate) const noexcept
+    {
+        auto m = 1.0;
+        for (int k = 0; k < numSections; ++k)
+            m *= sections[(size_t) k].magnitudeAt (frequency, sampleRate);
+        return m;
+    }
+
+    //==============================================================================
     void ThreeBandEq::prepare (double newSampleRate)
     {
         sampleRate = newSampleRate;
@@ -94,6 +132,7 @@ namespace dooblrvocals::dsp
         low.reset();
         mid.reset();
         high.reset();
+        hpf.reset();
     }
 
     void ThreeBandEq::process (juce::AudioBuffer<float>& buffer, int startSample, int numSamples, const EqSettings& s) noexcept
@@ -106,6 +145,18 @@ namespace dooblrvocals::dsp
                           || std::abs (s.midFreq - last.midFreq) > 1.0e-4f || std::abs (s.midGainDb - last.midGainDb) > 1.0e-4f
                           || std::abs (s.midQ - last.midQ) > 1.0e-4f
                           || std::abs (s.highFreq - last.highFreq) > 1.0e-4f || std::abs (s.highGainDb - last.highGainDb) > 1.0e-4f;
+        const auto hpfChanged = s.hpfOn && (! hpfActive || std::abs (s.hpfFreq - lastHpfFreq) > 1.0e-4f || s.hpfSlope != lastHpfSlope);
+
+        if (hpfChanged)
+        {
+            if (! hpfActive)
+                hpf.reset(); // switched on: start from silence, not from stale state
+            hpf.setParameters (s.hpfFreq, s.hpfSlope, sampleRate);
+            lastHpfFreq = s.hpfFreq;
+            lastHpfSlope = s.hpfSlope;
+        }
+
+        hpfActive = s.hpfOn;
 
         if (changed)
         {
@@ -120,8 +171,12 @@ namespace dooblrvocals::dsp
         {
             auto* data = buffer.getWritePointer (ch, startSample);
 
-            for (int i = 0; i < numSamples; ++i)
-                data[i] = high.process (ch, mid.process (ch, low.process (ch, data[i])));
+            if (s.hpfOn) // the high-pass runs first, ahead of the low shelf
+                for (int i = 0; i < numSamples; ++i)
+                    data[i] = high.process (ch, mid.process (ch, low.process (ch, hpf.process (ch, data[i]))));
+            else
+                for (int i = 0; i < numSamples; ++i)
+                    data[i] = high.process (ch, mid.process (ch, low.process (ch, data[i])));
         }
     }
 

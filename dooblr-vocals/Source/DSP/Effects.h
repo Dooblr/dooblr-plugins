@@ -11,7 +11,7 @@ namespace dooblrvocals::dsp
     class Biquad
     {
     public:
-        enum class Type { lowShelf, peak, highShelf };
+        enum class Type { lowShelf, peak, highShelf, highPass }; // highPass ignores gainDb
 
         void setParameters (Type type, double frequency, double q, double gainDb, double sampleRate) noexcept;
         void reset() noexcept;
@@ -30,6 +30,32 @@ namespace dooblrvocals::dsp
         float lowFreq = 80.0f, lowGainDb = 0.0f;
         float midFreq = 1000.0f, midGainDb = 0.0f, midQ = 1.0f;
         float highFreq = 8000.0f, highGainDb = 0.0f;
+        bool hpfOn = false;      // high-pass (low cut), off by default so existing sessions are unchanged
+        float hpfFreq = 80.0f;
+        int hpfSlope = 1;        // 0 = 12, 1 = 24, 2 = 48 dB/oct
+    };
+
+    /** Butterworth high-pass, 12 / 24 / 48 dB/oct as 1 / 2 / 4 cascaded second-order sections. */
+    class HighPass
+    {
+    public:
+        static constexpr int maxSections = 4;
+        static int sectionsForSlope (int slopeIndex) noexcept { return slopeIndex <= 0 ? 1 : (slopeIndex == 1 ? 2 : 4); }
+        static float slopeDbPerOctave (int slopeIndex) noexcept { return 12.0f * (float) sectionsForSlope (slopeIndex); }
+
+        void setParameters (double frequency, int slopeIndex, double sampleRate) noexcept;
+        void reset() noexcept;
+        float process (int channel, float x) noexcept
+        {
+            for (int i = 0; i < numSections; ++i)
+                x = sections[(size_t) i].process (channel, x);
+            return x;
+        }
+        double magnitudeAt (double frequency, double sampleRate) const noexcept;
+
+    private:
+        std::array<Biquad, maxSections> sections;
+        int numSections = 1;
     };
 
     class ThreeBandEq
@@ -42,8 +68,11 @@ namespace dooblrvocals::dsp
     private:
         double sampleRate = 48000.0;
         Biquad low, mid, high;
+        HighPass hpf;
         EqSettings last;
-        bool hasCoefficients = false;
+        bool hasCoefficients = false, hpfActive = false;
+        float lastHpfFreq = 0.0f;
+        int lastHpfSlope = -1;
     };
 
     //==============================================================================

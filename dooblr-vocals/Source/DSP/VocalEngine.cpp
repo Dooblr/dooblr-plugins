@@ -73,6 +73,7 @@ namespace dooblrvocals::dsp
         e.midQ = lerp (from.eq.midQ, f.midQ, a);
         e.highFreq = lerp (from.eq.highFreq, f.highFreq, a);
         e.highGainDb = lerp (from.eq.highGainDb, f.highGainDb, a);
+        e.hpfFreq = lerp (from.eq.hpfFreq, f.hpfFreq, a);
 
         auto& c = current.compressor;
         const auto& d = to.compressor;

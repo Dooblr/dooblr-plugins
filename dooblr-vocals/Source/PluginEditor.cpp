@@ -427,6 +427,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
         { "eq_low_freq", "Low freq", K::knob }, { "eq_low_gain", "Low gain", K::knob },
         { "eq_mid_freq", "Mid freq", K::knob }, { "eq_mid_gain", "Mid gain", K::knob }, { "eq_mid_q", "Mid Q", K::knob },
         { "eq_high_freq", "High freq", K::knob }, { "eq_high_gain", "High gain", K::knob } }));
+    pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "High-pass", pageColour (eqPage), Specs {
+        { "eq_hpf_on", "HPF", K::toggle, 76 }, { "eq_hpf_freq", "Freq", K::knob }, { "eq_hpf_slope", "Slope", K::combo, 104 } }));
     pagePanels[dynamicsPage].push_back (std::make_unique<ControlPanel> (state, "Compressor", pageColour (dynamicsPage), Specs {
         { "comp_threshold", "Threshold", K::knob }, { "comp_ratio", "Ratio", K::knob }, { "comp_knee", "Knee", K::knob },
         { "comp_attack", "Attack", K::knob }, { "comp_release", "Release", K::knob }, { "comp_makeup", "Makeup", K::knob } }));

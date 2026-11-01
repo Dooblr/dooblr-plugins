@@ -197,6 +197,9 @@ namespace dooblrvocals::params
         addFloat (layout, "eq_mid_q", "EQ Mid Q", logRange (0.2f, 10.0f), 1.0f, suffixed ({}, 2));
         addFloat (layout, "eq_high_freq", "EQ High Freq", logRange (2000.0f, 20000.0f), 8000.0f, hzString(), "Hz");
         addFloat (layout, "eq_high_gain", "EQ High Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
+        addBool (layout, "eq_hpf_on", "EQ High-Pass On", false);
+        addFloat (layout, "eq_hpf_freq", "EQ High-Pass Freq", logRange (20.0f, 500.0f), 80.0f, hzString(), "Hz");
+        addChoice (layout, "eq_hpf_slope", "EQ High-Pass Slope", { "12 dB/oct", "24 dB/oct", "48 dB/oct" }, 1);
 
         //== Compressor ==================================================================
         addBool (layout, "comp_on", "Comp On", false);
@@ -332,6 +335,7 @@ namespace dooblrvocals::params
         eqOn = getId ("eq_on"); eqLowFreq = getId ("eq_low_freq"); eqLowGain = getId ("eq_low_gain");
         eqMidFreq = getId ("eq_mid_freq"); eqMidGain = getId ("eq_mid_gain"); eqMidQ = getId ("eq_mid_q");
         eqHighFreq = getId ("eq_high_freq"); eqHighGain = getId ("eq_high_gain");
+        eqHpfOn = getId ("eq_hpf_on"); eqHpfFreq = getId ("eq_hpf_freq"); eqHpfSlope = getId ("eq_hpf_slope");
         compOn = getId ("comp_on"); compThreshold = getId ("comp_threshold"); compRatio = getId ("comp_ratio");
         compAttack = getId ("comp_attack"); compRelease = getId ("comp_release"); compMakeup = getId ("comp_makeup"); compKnee = getId ("comp_knee");
         limMode = getId ("lim_mode"); limCeiling = getId ("lim_ceiling"); limRelease = getId ("lim_release");
@@ -392,6 +396,9 @@ namespace dooblrvocals::params
         s.pitch.quality = (dsp::QualityMode) i (quality);
         s.gate = { b (gateOn), f (gateThreshold), f (gateAttack), f (gateHold), f (gateRelease), f (gateRange) };
         s.eq = { b (eqOn), f (eqLowFreq), f (eqLowGain), f (eqMidFreq), f (eqMidGain), f (eqMidQ), f (eqHighFreq), f (eqHighGain) };
+        s.eq.hpfOn = b (eqHpfOn);
+        s.eq.hpfFreq = f (eqHpfFreq);
+        s.eq.hpfSlope = juce::jlimit (0, 2, i (eqHpfSlope));
         s.compressor = { b (compOn), f (compThreshold), f (compRatio), f (compAttack), f (compRelease), f (compMakeup), f (compKnee) };
         s.limiter = { i (limMode), f (limCeiling), f (limRelease), f (outputGain) };
         s.chainOrder = i (chainOrder);
