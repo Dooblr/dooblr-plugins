@@ -11,8 +11,9 @@ in its own folder and has its own README.
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.2.0 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
 | [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
 | [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.3 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display, Analyzer speed setting | Early; its tests and LoadCheck pass, not yet tested in a DAW |
+| [`dooblr-feedback/`](dooblr-feedback/) | dooblr-feedback | 0.1.0 | Automatic live feedback suppressor (VST3 effect, optional reference-mic sidechain): zero-latency notches, markers on the spectrum with lock / clear, notch table, room notes and room presets | Early; its tests and LoadCheck pass, not yet tested live or in a DAW |
 | [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.2.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
-| [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12) | Updated 2026-10-31 |
+| [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12) and dooblr-feedback (§13) | Updated 2026-11-01 |
 
 Versions come from each plug-in's `project(... VERSION ...)` in its `CMakeLists.txt` (dooblr-chords:
 its README / device). Status is as of the last commit; see each folder's README and ROADMAP.
@@ -20,7 +21,7 @@ its README / device). Status is as of the last commit; see each folder's README 
 ## Building
 
 VST3 plug-ins (each with `scripts/build.sh`): dooblr-q, dooblr-kick, dooblr-vocals,
-dooblr-prophet, dooblr-soothe. Max for Live devices: dooblr-chords (see its README) and the
+dooblr-prophet, dooblr-soothe, dooblr-feedback. Max for Live devices: dooblr-chords (see its README) and the
 dooblr-prophet panel 0.3.2 (`dooblr-prophet/m4l/`).
 
 Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
@@ -33,6 +34,7 @@ dooblr-kick/scripts/build.sh     # builds in ~/dooblr-build/dooblr-kick
 dooblr-vocals/scripts/build.sh   # builds in ~/dooblr-build/dooblr-vocals
 dooblr-prophet/scripts/build.sh  # builds in ~/dooblr-build/dooblr-prophet
 dooblr-soothe/scripts/build.sh   # builds in ~/dooblr-build/dooblr-soothe
+dooblr-feedback/scripts/build.sh # builds in ~/dooblr-build/dooblr-feedback
 ```
 
 Useful environment variables (see the top of each `build.sh`):
@@ -40,7 +42,8 @@ Useful environment variables (see the top of each `build.sh`):
 - `BUILD_DIR`: build directory (default `~/dooblr-build/<plugin>`)
 - `CONFIG`: CMake configuration (default `Release`)
 - `RUN_TESTS=0`: skip the tests; `INSTALL_VST3=0`: don't install; `LOAD_CHECK=0`: skip LoadCheck
-- `JUCE_SOURCE_DIR` (dooblr-vocals, dooblr-prophet, dooblr-soothe): JUCE 8.0.15 source; defaults to
+- `JUCE_SOURCE_DIR` (dooblr-vocals, dooblr-prophet, dooblr-soothe,
+  dooblr-feedback): JUCE 8.0.15 source; defaults to
   `~/dooblr-build/_deps/juce-src` when it exists
 
 Without the script, the build is plain CMake. JUCE 8.0.15 is fetched into the build directory:

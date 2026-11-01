@@ -914,6 +914,24 @@ EQ page: a third panel, **Dynamic EQ**, after High-pass. It starts with a band p
 - **Deviation from dooblr-q:** the RangeRing (the ring around the gain knob showing the dynamic range) is not ported; the live curve and the dimmed controls carry that information here.
 - Short windows: the page's three panels use the compact rows of §11.9 when needed. No new colour, font size, radius or alpha token.
 
+### 11.11 De-esser (added 2026-11-01)
+A new PROCESSING page, **De-Ess**, after Comp in the nav. It has a power button on the tab (`deess_on`, default off), no badge and no drag handle, because the slot is fixed. Page colour `dynamic`; title "DE-ESSER". Panel **De-esser**: **Frequency** knob (3–12 kHz, log, default 6.5 kHz), **Threshold** (−60…0 dB, default −30), **Range** (0–24 dB of maximum cut, default 8), **Mode** combo (Split / Wide, 96 px, default Split), **Listen** pill toggle (88 px). Parameters `deess_on`, `deess_freq`, `deess_thresh`, `deess_range`, `deess_mode`, `deess_listen` are appended last, so preset and session indices don't move. Off by default: presets and old sessions render bit-identical. Like Comp, the controls are not dimmed while the stage is off. `V:DSP/Effects.cpp` `DeEsser`; `V:UI/OutputVisuals.cpp` `DeEsserDisplay`, `DeEssMeter`.
+- **Placement:** fixed, after the Gate / EQ / Comp chain (so after the noise reducer and pitch correction), before Delay / Reverb, output gain and Limiter. Reasons:
+  - EQ presence boosts and compressor makeup raise sibilance, so the de-esser catches them.
+  - Esses are removed before they reach the reverb and delay tails.
+  - The re-orderable chain's 24 stored orders stay as they are.
+- **Side chain:** two cascaded unity-peak SVF band-passes (Q 0.8) at Frequency, stereo-linked (max of the channels). Peak follower: 0.5 ms attack, 40 ms release. Gain law: 1:∞ above Threshold with a 4 dB soft knee, cut capped at Range.
+- **Split:** a second-order Butterworth high shelf, half an octave below Frequency, whose top gain is the cut: x − (1 − g)·hp − (1 − √g)·k·bp from one TPT SVF. Its gain is never above 0 dB at any frequency. Content below about 2 kHz keeps its level; only the shelf's small phase lag remains while an ess is being cut. **Wide:** the whole signal is turned down by the cut.
+- **Listen:** outputs the side-chain band (the signal the detector hears) instead of the program.
+- **Latency:** none (no look-ahead; reported latency unchanged). Off: the buffer is untouched. Switching on or off fades over 10 ms.
+- **Display:** a HistoryStrip (−60…0 dBFS) with the side-chain band level (fill), the band after the cut (`accent` line) and the GR (`dynamic`, from the top). The threshold line can be dragged as one undo step; dragging does not turn the stage on. Labels: "threshold X dB" ("(de-esser off)" while off), band and mode info, a LISTEN badge, and a legend. The right column (112 px) holds a **DeEssMeter**:
+  - an SC bar in `spectrum`, turning `dynamic` over the threshold, with a threshold tick in `frozen` (dashed while off);
+  - a GR bar in `dynamic` over 0–24 dB, with a Range tick;
+  - numeric readouts on top.
+  
+  The meter repaints only when its picture changes. It fits the 940 × 600 minimum.
+- No new colour, font size, radius or alpha token.
+
 ---
 
 ## 12. Reusable patterns (S)
@@ -977,6 +995,7 @@ FFT bins are linear in frequency, display points are logarithmic, so at the low 
 
 ## 13. Changelog
 
+- **2026-11-01**: Added §11.11 dooblr-vocals De-esser (page, panel, display, meter, placement). Additive only; no existing rule, token name or value changed.
 - **2026-11-01**: Added §11.10 dooblr-vocals Dynamic EQ panel (EQ page: band picker, per-band Dynamic / Range / Threshold / Attack / Release, live dynamic curve), ported from dooblr-q (no RangeRing). Additive only; existing tokens only.
 - **2026-11-01**: Added §11.9 dooblr-vocals Noise reducer panel (Pitch page: Denoise, Noise floor Learned/Auto, Amount, Sensitivity, Learn Noise, status readout). Additive only; existing tokens only.
 - **2026-10-31**: Added §11.8 dooblr-vocals EQ high-pass (low-cut 20–500 Hz, 12 / 24 / 48 dB/oct, off by default, drawn on the EQ curve). Additive only; existing tokens only.
