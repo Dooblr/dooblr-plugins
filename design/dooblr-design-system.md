@@ -1038,7 +1038,7 @@ Labels must not bounce while levels change.
 ### 13.5 Zero-latency IIR notch bank, driven by an FFT
 
 - **Detection:** a 4096-point FFT (8192 at 88.2 / 96 kHz, 16384 at 176.4 / 192 kHz), 256-sample hop (scaled the same way), on a side path. It never delays the audio. Latency reported to the host: 0.
-- **Audio path:** up to 24 notches, each a TPT state-variable filter. Only live slots are processed. Measured CPU (F tests "real-time safety"): about 1.0 % with 1 notch and 1.6 % with 24. Coefficients glide (20 ms), and cut changes ramp per control tick, with no zipper noise.
+- **Audio path:** up to 24 notches, each a TPT state-variable filter. Only live slots are processed. Measured CPU (F tests "real-time safety", one core, 48 kHz stereo, 64-sample blocks): about 0.6–0.7 % with 1 notch and 1.2–1.4 % with 24; it varies by about ±0.2 % between runs. Coefficients glide (20 ms), and cut changes ramp per control tick, with no zipper noise.
 - **Shape:** a bell up to 30 dB, then the zeros move towards the unit circle. At **Max Cut ∞** the notch is a true notch (a zero on the unit circle, more than 80 dB down at the centre). The ramp into it is smooth and click-free.
 - **One notch per howl:** a detection near an existing notch retunes, widens or deepens that notch instead of adding a second one. Notches that drift together are consolidated with a crossfade.
 - **Value text:** the top of Max Cut reads **∞** and the cuts read **−∞ dB**, through the shared formatter. "inf", "∞", "full" and "mute" parse back. This is the one exception to §12.6 "never show inf": the value is a real infinite cut, not a failed computation. NaN is still never shown.
