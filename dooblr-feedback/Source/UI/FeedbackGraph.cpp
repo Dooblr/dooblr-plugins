@@ -18,10 +18,11 @@ namespace dooblrfeedback::ui
 
         juce::String cutText (float cut)
         {
-            return juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + params::formatValue (cut, 1) + " dB";
+            return params::formatCut (cut, true);
         }
 
-        bool sameNotches (const dsp::NotchArray& a, const dsp::NotchArray& b)
+        /** Same filters (for the curve): frequency, cut, Q. Labels do not follow this. */
+        bool sameCurve (const dsp::NotchArray& a, const dsp::NotchArray& b)
         {
             for (size_t i = 0; i < a.size(); ++i)
             {
@@ -29,11 +30,23 @@ namespace dooblrfeedback::ui
                 const auto& y = b[i];
                 if (x.active != y.active) return false;
                 if (! x.active) continue;
-                if (x.id != y.id || x.fixed != y.fixed || x.ringing != y.ringing || x.hits != y.hits
-                    || std::abs (x.freq - y.freq) > 0.01f || std::abs (x.cutDb - y.cutDb) > 0.01f || std::abs (x.q - y.q) > 0.01f)
+                if (x.id != y.id || x.fixed != y.fixed || std::abs (x.freq - y.freq) > 0.01f
+                    || std::abs (x.cutDb - y.cutDb) > 0.01f || std::abs (x.q - y.q) > 0.01f)
                     return false;
             }
             return true;
+        }
+
+        float easeOut (double elapsed, double span)
+        {
+            const auto u = (float) juce::jlimit (0.0, 1.0, elapsed / span);
+            return 1.0f - (1.0f - u) * (1.0f - u) * (1.0f - u);
+        }
+
+        juce::Rectangle<float> lerp (juce::Rectangle<float> a, juce::Rectangle<float> b, float t)
+        {
+            return { a.getX() + (b.getX() - a.getX()) * t, a.getY() + (b.getY() - a.getY()) * t,
+                     a.getWidth() + (b.getWidth() - a.getWidth()) * t, a.getHeight() + (b.getHeight() - a.getHeight()) * t };
         }
 
         juce::Path padlock (juce::Rectangle<float> box, bool closed)
@@ -57,6 +70,7 @@ namespace dooblrfeedback::ui
         setOpaque (true);
         setComponentID ("graph");
         markers.reserve (dsp::maxNotches);
+        labels.reserve (2 * dsp::maxNotches);
         vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { poll(); });
         refreshNotches();
     }
@@ -74,23 +88,33 @@ namespace dooblrfeedback::ui
             fresh = true;
         }
 
-        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+        const auto nowMs = clockMs();
         const auto dt = lastTickMs > 0.0 ? std::clamp ((nowMs - lastTickMs) * 0.001, 0.0, 0.25) : 0.0;
         lastTickMs = nowMs;
         if (hasFrame && (fresh || settling || ! shownValid))
             dirty = advanceDisplay (dt) || fresh;
 
         const auto now = processor.getNotches();
-        if (! sameNotches (now, notches))
+        if (! sameCurve (now, notches))
         {
             notches = now;
-            layoutMarkers();
             rebuildCurve();
             dirty = true;
         }
+        else
+            notches = now; // ringing / hits / levels: labels pick these up calmly below
+
+        if (updateLabels (nowMs)) layoutMarkers (nowMs, false);
+        if (animateLabels (nowMs)) dirty = true;
+        buildMarkers();
 
         if (dirty) repaint();
         return dirty;
+    }
+
+    double FeedbackGraph::clockMs() const noexcept
+    {
+        return testClockMs >= 0.0 ? testClockMs : juce::Time::getMillisecondCounterHiRes();
     }
 
     bool FeedbackGraph::advanceDisplay (double dtSeconds)
@@ -125,10 +149,27 @@ namespace dooblrfeedback::ui
 
     void FeedbackGraph::refreshNotches()
     {
+        const auto nowMs = clockMs();
         notches = processor.getNotches();
-        layoutMarkers();
+        if (updateLabels (nowMs)) layoutMarkers (nowMs, false);
+        animateLabels (nowMs);
+        buildMarkers();
         rebuildCurve();
         repaint();
+    }
+
+    void FeedbackGraph::setHoveredNotch (int notchId)
+    {
+        if (notchId == tableHoverNotch) return;
+        tableHoverNotch = notchId;
+        repaint();
+    }
+
+    FeedbackGraph::Label* FeedbackGraph::labelFor (int notchId) noexcept
+    {
+        for (auto& l : labels)
+            if (l.id == notchId && ! l.gone) return &l;
+        return nullptr;
     }
 
     void FeedbackGraph::setSelectedNotch (int notchId)
@@ -172,7 +213,9 @@ namespace dooblrfeedback::ui
 
     float FeedbackGraph::yForCut (float cutDb) const noexcept
     {
-        return juce::jmap (juce::jlimit (0.0f, cutRangeDb, cutDb), 0.0f, cutRangeDb, baselineY, plot.getBottom() - 6.0f);
+        // 0 .. cutRangeDb over the scale, and a full notch (infinite cut) on its own line below.
+        if (cutDb > cutRangeDb + 0.5f) return plot.getBottom() - 6.0f;
+        return juce::jmap (juce::jlimit (0.0f, cutRangeDb, cutDb), 0.0f, cutRangeDb, baselineY, plot.getBottom() - 20.0f);
     }
 
     void FeedbackGraph::resized()
@@ -185,65 +228,255 @@ namespace dooblrfeedback::ui
         plot = area;
         baselineY = plot.getY() + juce::jlimit (70.0f, 210.0f, plot.getHeight() * 0.45f);
         background = {};
-        layoutMarkers();
+        const auto nowMs = clockMs();
+        updateLabels (nowMs);
+        layoutMarkers (nowMs, true);
+        animateLabels (nowMs);
+        buildMarkers();
         rebuildCurve();
         rebuildSpectrumPaths();
     }
 
-    void FeedbackGraph::layoutMarkers()
+    // Labels -----------------------------------------------------------------------------------
+    // Returns true when the layout must change: a notch was added or removed, a label wants to
+    // open or close, or a notch moved out from under its label / dot. Cut, level, ringing and hit
+    // changes never relayout (the handle follows the cut; the numbers refresh calmly).
+    bool FeedbackGraph::updateLabels (double nowMs)
     {
-        markers.clear();
-        if (plot.isEmpty()) return;
+        auto relayout = false;
+        for (auto& l : labels)
+            if (! l.gone && notchById (l.id) == nullptr)
+            {
+                l.gone = true;
+                l.goneMs = nowMs;
+                l.want = false;
+                relayout = true;
+            }
+        labels.erase (std::remove_if (labels.begin(), labels.end(),
+                                      [nowMs] (const Label& l) { return l.gone && nowMs - l.goneMs > fadeMs; }),
+                      labels.end());
 
-        std::array<int, dsp::maxNotches> order {};
+        for (const auto& n : notches)
+        {
+            if (! n.active) continue;
+            auto* l = labelFor (n.id);
+            if (l == nullptr)
+            {
+                Label fresh;
+                fresh.id = n.id;
+                fresh.bornMs = fresh.lastActiveMs = nowMs;
+                fresh.lastCut = n.cutDb;
+                fresh.shown = n;
+                fresh.valueMs = nowMs;
+                labels.push_back (fresh);
+                l = &labels.back();
+                relayout = true;
+            }
+            // Active: ringing, or being deepened (a re-trigger or the closed loop).
+            if (n.ringing || n.cutDb > l->lastCut + 0.25f) l->lastActiveMs = nowMs;
+            l->lastCut = n.cutDb;
+            const auto hovered = n.id == hoverNotch || n.id == tableHoverNotch;
+            if (hovered) l->hoverUntilMs = nowMs + hoverLingerMs;
+            const auto want = n.id == selectedNotch || hovered || nowMs < l->hoverUntilMs || nowMs - l->lastActiveMs < activeHoldMs;
+            if (want != l->want) { l->want = want; relayout = true; }
+
+            if (nowMs - l->valueMs >= valueRefreshMs || n.fixed != l->shown.fixed || n.hits != l->shown.hits)
+            {
+                if (n.cutDb != l->shown.cutDb || n.q != l->shown.q || n.freq != l->shown.freq || n.hits != l->shown.hits || n.fixed != l->shown.fixed)
+                    ++valueRefreshes;
+                l->shown = n;
+                l->valueMs = nowMs;
+            }
+
+            // A notch that moved out from under its label (or far from its dot) is a real collision.
+            if (l->placed)
+            {
+                const auto cx = xForFrequency (n.freq);
+                if (l->open ? (cx < l->to.getX() + 6.0f || cx > l->to.getRight() - 6.0f)
+                            : std::abs (cx - l->dotTo.getCentreX()) > 2.5f * pinRadius)
+                    relayout = true;
+            }
+            else
+                relayout = true;
+        }
+
+        // Numbers: 1.. in frequency order, as in the table.
+        std::array<std::pair<float, int>, dsp::maxNotches> order {};
         int count = 0;
-        for (int i = 0; i < dsp::maxNotches; ++i)
-            if (notches[(size_t) i].active) order[(size_t) count++] = i;
-        std::sort (order.begin(), order.begin() + count, [this] (int a, int b) { return notches[(size_t) a].freq < notches[(size_t) b].freq; });
+        for (const auto& n : notches)
+            if (n.active) order[(size_t) count++] = { n.freq, n.id };
+        std::sort (order.begin(), order.begin() + count);
+        for (int k = 0; k < count; ++k)
+            if (auto* l = labelFor (order[(size_t) k].second)) l->number = k + 1;
+        return relayout;
+    }
+
+    void FeedbackGraph::layoutMarkers (double nowMs, bool snap)
+    {
+        if (plot.isEmpty()) return;
+        ++layoutCount;
 
         const auto laneTop = plot.getY() + 4.0f;
         const auto laneBottom = baselineY - 2.0f * pinRadius - 8.0f;
         const auto rows = juce::jlimit (0, 4, (int) std::floor ((laneBottom - laneTop + 4.0f) / (chipHeight + 4.0f)));
-        std::array<float, 4> rowRight;
-        rowRight.fill (-1.0e9f);
+        const auto left = plot.getX() + 2.0f, right = plot.getRight() - 2.0f;
+        constexpr float gap = 4.0f, openingMargin = 6.0f; // opening needs a little more room (hysteresis)
+        const auto laneY = [&] (int r) { return laneTop + (float) r * (chipHeight + 4.0f); };
 
-        for (int k = 0; k < count; ++k)
+        std::vector<Label*> live;
+        for (auto& l : labels)
+            if (! l.gone && notchById (l.id) != nullptr) live.push_back (&l);
+        std::sort (live.begin(), live.end(), [this] (const Label* a, const Label* b) { return notchById (a->id)->freq < notchById (b->id)->freq; });
+
+        std::vector<juce::Rectangle<float>> taken;
+        const auto fits = [&] (juce::Rectangle<float> r, float margin)
         {
-            const auto& n = notches[(size_t) order[(size_t) k]];
-            Marker m;
-            m.id = n.id;
-            m.number = k + 1;
-            const auto cx = xForFrequency (n.freq);
-            m.handle = { cx, yForCut (n.cutDb) };
-
-            const auto left = plot.getX() + 2.0f, right = plot.getRight() - 2.0f;
-            const auto wanted = juce::jlimit (left, std::max (left, right - chipWidth), cx - 0.5f * chipWidth);
-            auto placed = false;
-            for (int r = 0; r < rows && ! placed; ++r)
+            if (r.getX() < left || r.getRight() > right) return false;
+            const auto grown = r.expanded (gap + margin, 0.0f);
+            for (const auto& t : taken)
+                if (t.intersects (grown)) return false;
+            return true;
+        };
+        const auto place = [&] (Label& l, juce::Rectangle<float> target, int lane)
+        {
+            taken.push_back (target);
+            if (! l.open || snap || ! l.placed)
             {
-                auto x = std::max (wanted, rowRight[(size_t) r] + 4.0f);
-                // Allow a chip to slide right of its marker, but not so far it points elsewhere.
-                if (x + chipWidth <= right && x - wanted <= 0.6f * chipWidth)
+                l.from = target;                       // appears in place (fades in)
+                if (! l.open) l.openChangedMs = snap ? nowMs - fadeMs : nowMs;
+            }
+            else if (target != l.to)
+            {
+                l.from = l.drawn;                      // glides from where it is
+                l.moveStartMs = nowMs;
+            }
+            l.to = target;
+            l.lane = lane;
+            l.open = true;
+        };
+
+        std::vector<Label*> pending;
+        // 1. Open labels that still want to be open stay exactly where they are when they can.
+        for (auto* l : live)
+        {
+            if (! l->want) continue;
+            const auto cx = xForFrequency (notchById (l->id)->freq);
+            if (! snap && l->open && l->placed && l->lane >= 0 && l->lane < rows
+                && cx >= l->to.getX() + 6.0f && cx <= l->to.getRight() - 6.0f && fits (l->to, 0.0f))
+                place (*l, l->to, l->lane);
+            else
+                pending.push_back (l);
+        }
+        // 2. The rest in frequency order: their old lane first, then top down; sliding right of the
+        //    marker a little (never so far the label points elsewhere).
+        for (auto* l : pending)
+        {
+            const auto cx = xForFrequency (notchById (l->id)->freq);
+            const auto wanted = juce::jlimit (left, std::max (left, right - chipWidth), cx - 0.5f * chipWidth);
+            const auto margin = l->open && ! snap ? 0.0f : openingMargin;
+            auto done = false;
+            for (int attempt = -1; attempt < rows && ! done; ++attempt)
+            {
+                const auto r = attempt < 0 ? l->lane : attempt;
+                if (r < 0 || r >= rows || (attempt >= 0 && r == l->lane)) continue;
+                for (auto x = wanted; x - wanted <= 0.6f * chipWidth && x + chipWidth <= right; )
                 {
-                    m.chip = { x, laneTop + (float) r * (chipHeight + 4.0f), chipWidth, chipHeight };
-                    rowRight[(size_t) r] = x + chipWidth;
-                    placed = true;
+                    const juce::Rectangle<float> rect (x, laneY (r), chipWidth, chipHeight);
+                    if (fits (rect, margin) && cx >= x + 6.0f && cx <= x + chipWidth - 6.0f) { place (*l, rect, r); done = true; break; }
+                    auto next = x + 1.0f;
+                    for (const auto& t : taken)
+                        if (t.getY() == rect.getY() && t.getRight() + gap + margin > x && t.getX() < x + chipWidth + gap + margin)
+                            next = std::max (next, t.getRight() + gap + margin);
+                    x = next;
                 }
             }
+            if (! done && l->open)
+            {
+                l->open = false;                       // no room: closes to a dot (fades out in place)
+                l->openChangedMs = snap ? nowMs - fadeMs : nowMs;
+            }
+        }
+        for (auto* l : live)
+            if (! l->want && l->open)
+            {
+                l->open = false;
+                l->openChangedMs = snap ? nowMs - fadeMs : nowMs;
+            }
 
-            if (placed)
+        // 3. Dots for closed labels: one row just above the baseline, in frequency order, nudged
+        //    apart so none overlap (a 1-D sweep right, then back left from the edge).
+        std::vector<Label*> dots;
+        for (auto* l : live) if (! l->open) dots.push_back (l);
+        const auto d = 2.0f * pinRadius, dotGap = 2.0f;
+        std::vector<float> xs (dots.size());
+        for (size_t i = 0; i < dots.size(); ++i)
+        {
+            const auto ideal = juce::jlimit (left, right - d, xForFrequency (notchById (dots[i]->id)->freq) - pinRadius);
+            xs[i] = i == 0 ? ideal : std::max (ideal, xs[i - 1] + d + dotGap);
+        }
+        for (size_t i = dots.size(); i-- > 0;)
+            xs[i] = std::min (xs[i], i + 1 < dots.size() ? xs[i + 1] - d - dotGap : right - d);
+        for (size_t i = 0; i < dots.size(); ++i)
+        {
+            auto& l = *dots[i];
+            const juce::Rectangle<float> rect (xs[i], baselineY - d - 4.0f, d, d);
+            if (snap || ! l.placed || l.dotDrawn.isEmpty()) l.dotFrom = rect;
+            else if (rect != l.dotTo) { l.dotFrom = l.dotDrawn; l.moveStartMs = nowMs; }
+            l.dotTo = rect;
+        }
+        for (auto* l : live)
+        {
+            if (l->open && l->dotTo.isEmpty())
+                l->dotTo = l->dotFrom = juce::Rectangle<float> (d, d).withCentre ({ xForFrequency (notchById (l->id)->freq), baselineY - pinRadius - 4.0f });
+            l->placed = true;
+        }
+        if (snap)
+            for (auto* l : live) l->moveStartMs = nowMs - moveMs;
+    }
+
+    bool FeedbackGraph::animateLabels (double nowMs)
+    {
+        auto moving = false;
+        for (auto& l : labels)
+        {
+            const auto move = easeOut (nowMs - l.moveStartMs, moveMs);
+            l.drawn = lerp (l.from, l.to, move);
+            l.dotDrawn = lerp (l.dotFrom, l.dotTo, move);
+            const auto fade = easeOut (nowMs - l.openChangedMs, fadeMs);
+            l.labelAlpha = l.open ? fade : (l.labelAlpha > 0.0f ? std::min (l.labelAlpha, 1.0f - fade) : 0.0f);
+            const auto born = easeOut (nowMs - l.bornMs, fadeMs);
+            l.markerAlpha = l.gone ? 1.0f - easeOut (nowMs - l.goneMs, fadeMs) : born;
+            l.dotAlpha = (1.0f - l.labelAlpha) * l.markerAlpha;
+            if (move < 1.0f || fade < 1.0f || born < 1.0f || l.gone) moving = true;
+        }
+        animating = moving;
+        return moving;
+    }
+
+    void FeedbackGraph::buildMarkers()
+    {
+        markers.clear();
+        for (const auto& l : labels)
+        {
+            const auto* n = notchById (l.id);
+            if (l.gone || n == nullptr) continue;
+            Marker m;
+            m.id = l.id;
+            m.number = l.number;
+            m.compact = ! l.open;
+            m.lane = l.open ? l.lane : -1;
+            m.chip = l.open ? l.drawn : l.dotDrawn;
+            m.target = l.open ? l.to : l.dotTo;
+            m.handle = { xForFrequency (n->freq), yForCut (n->cutDb) };
+            if (l.open)
             {
                 auto buttons = m.chip.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);
                 m.lockButton = buttons.removeFromTop (buttons.getHeight() * 0.5f).reduced (0.0f, 1.0f);
                 m.clearButton = buttons.reduced (0.0f, 1.0f);
             }
-            else
-            {
-                m.compact = true;
-                m.chip = juce::Rectangle<float> (2.0f * pinRadius, 2.0f * pinRadius).withCentre ({ cx, baselineY - pinRadius - 4.0f });
-            }
             markers.push_back (m);
         }
+        std::sort (markers.begin(), markers.end(), [] (const Marker& a, const Marker& b) { return a.number < b.number; });
     }
 
     //==============================================================================
@@ -371,6 +604,16 @@ namespace dooblrfeedback::ui
             const auto text = db == 0.0f ? juce::String ("0") : juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")) + juce::String ((int) db);
             g.drawText (text, juce::Rectangle<float> (plot.getRight() + 4.0f, y - 7.0f, 28.0f, 14.0f).toNearestInt(), juce::Justification::centredLeft);
         }
+        {
+            // Full notches (Max cut at infinity) sit on their own line at the bottom.
+            const auto y = yForCut (dsp::FeedbackEngine::fullCutDb);
+            const auto dashLengths = std::array<float, 2> { 2.0f, 4.0f };
+            g.setColour (Palette::grid);
+            g.drawDashedLine (juce::Line<float> (plot.getX(), y, plot.getRight(), y), dashLengths.data(), (int) dashLengths.size(), 1.0f);
+            g.setColour (Palette::textMuted);
+            g.drawText (params::formatCut (dsp::FeedbackEngine::fullCutDb, true).upToFirstOccurrenceOf (" ", false, false),
+                        juce::Rectangle<float> (plot.getRight() + 4.0f, y - 7.0f, 28.0f, 14.0f).toNearestInt(), juce::Justification::centredLeft);
+        }
     }
 
     //==============================================================================
@@ -400,76 +643,94 @@ namespace dooblrfeedback::ui
         }
 
         const auto dash = std::array<float, 2> { 3.0f, 3.0f };
-        for (const auto& m : markers)
+        for (const auto& l : labels)
         {
-            const auto* n = notchById (m.id);
-            if (n == nullptr) continue;
-            const auto colour = n->fixed ? Palette::accent : Palette::dynamic;
-            const auto selected = m.id == selectedNotch, hovered = m.id == hoverNotch;
+            if (l.markerAlpha <= 0.001f) continue;
+            const auto* live = notchById (l.id);
+            const auto& n = live != nullptr ? *live : l.shown;   // a cleared notch fades out as it was
+            const auto colour = n.fixed ? Palette::accent : Palette::dynamic;
+            const auto selected = l.id == selectedNotch, hovered = l.id == hoverNotch || l.id == tableHoverNotch;
+            const juce::Point<float> handle { xForFrequency (n.freq), yForCut (n.cutDb) };
+            const auto alpha = l.markerAlpha;
 
-            // Line from the chip / pin down to the handle at the notch's depth.
-            juce::Path line;
-            line.startNewSubPath (m.handle.x, m.chip.getBottom());
-            line.lineTo (m.handle);
-            juce::Path dashed;
-            juce::PathStrokeType (1.0f).createDashedStroke (dashed, line, dash.data(), (int) dash.size());
-            g.setColour (colour.withAlpha (selected || hovered ? 0.9f : 0.5f));
-            g.fillPath (dashed);
+            // Leader line from the label (or dot) down to the handle at the notch's depth.
+            const auto drawLeader = [&] (juce::Rectangle<float> from, float a)
+            {
+                if (a <= 0.001f) return;
+                juce::Path line;
+                const auto startX = juce::jlimit (from.getX() + 4.0f, from.getRight() - 4.0f, handle.x);
+                line.startNewSubPath (startX, from.getBottom());
+                if (std::abs (startX - handle.x) > 0.5f) line.lineTo (handle.x, std::min (handle.y, from.getBottom() + 6.0f));
+                line.lineTo (handle);
+                juce::Path dashed;
+                juce::PathStrokeType (1.0f).createDashedStroke (dashed, line, dash.data(), (int) dash.size());
+                g.setColour (colour.withAlpha ((selected || hovered ? 0.9f : 0.5f) * a));
+                g.fillPath (dashed);
+            };
+            drawLeader (l.drawn, l.labelAlpha * alpha);
+            drawLeader (l.dotDrawn, l.dotAlpha);
 
             juce::Path diamond;
             const auto r = selected || hovered ? 5.5f : 4.5f;
-            diamond.addQuadrilateral (m.handle.x, m.handle.y - r, m.handle.x + r, m.handle.y, m.handle.x, m.handle.y + r, m.handle.x - r, m.handle.y);
-            g.setColour (colour);
+            diamond.addQuadrilateral (handle.x, handle.y - r, handle.x + r, handle.y, handle.x, handle.y + r, handle.x - r, handle.y);
+            g.setColour (colour.withAlpha (alpha));
             g.fillPath (diamond);
 
-            if (m.compact)
+            if (l.dotAlpha > 0.001f && ! l.dotDrawn.isEmpty())
             {
-                g.setColour (colour.withAlpha (selected ? 0.95f : 0.7f));
-                g.fillEllipse (m.chip);
-                g.setColour (Palette::background);
+                g.setColour (colour.withAlpha ((selected || hovered ? 0.95f : 0.7f) * l.dotAlpha));
+                g.fillEllipse (l.dotDrawn);
+                g.setColour (Palette::background.withAlpha (l.dotAlpha));
                 g.setFont (juce::FontOptions (9.5f, juce::Font::bold));
-                g.drawText (juce::String (m.number), m.chip.toNearestInt(), juce::Justification::centred);
-                continue;
+                g.drawText (juce::String (l.number), l.dotDrawn.toNearestInt(), juce::Justification::centred);
             }
 
-            g.setColour (Palette::panelRaised.withAlpha (0.94f));
-            g.fillRoundedRectangle (m.chip, 4.0f);
-            g.setColour (colour.withAlpha (selected ? 1.0f : (n->ringing ? 0.9f : 0.55f)));
-            g.drawRoundedRectangle (m.chip.reduced (0.5f), 4.0f, selected ? 1.8f : 1.0f);
-            g.fillRect (m.chip.getX() + 1.0f, m.chip.getY() + 5.0f, 2.5f, m.chip.getHeight() - 10.0f);
+            const auto la = l.labelAlpha * alpha;
+            if (la <= 0.001f) continue;
+            const auto chip = l.drawn;
+            const auto& v = l.shown; // calm numbers
+            g.setColour (Palette::panelRaised.withAlpha (0.94f * la));
+            g.fillRoundedRectangle (chip, 4.0f);
+            g.setColour (colour.withAlpha ((selected ? 1.0f : (n.ringing ? 0.9f : 0.55f)) * la));
+            g.drawRoundedRectangle (chip.reduced (0.5f), 4.0f, selected ? 1.8f : 1.0f);
+            g.fillRect (chip.getX() + 1.0f, chip.getY() + 5.0f, 2.5f, chip.getHeight() - 10.0f);
 
-            auto text = m.chip.withTrimmedRight (22.0f).reduced (7.0f, 3.0f).withTrimmedLeft (1.0f);
+            auto text = chip.withTrimmedRight (22.0f).reduced (7.0f, 3.0f).withTrimmedLeft (1.0f);
             const auto lineHeight = text.getHeight() / 3.0f;
             g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-            g.setColour (Palette::textPrimary);
-            g.drawText (params::formatFrequency (n->freq) + "  " + params::noteName (n->freq),
+            g.setColour (Palette::textPrimary.withAlpha (la));
+            g.drawText (params::formatFrequency (v.freq) + "  " + params::noteName (v.freq),
                         text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
             g.setFont (juce::FontOptions (10.5f));
-            g.setColour (colour.brighter (0.2f));
-            g.drawText (cutText (n->cutDb) + "  Q " + params::formatValue (n->q, 0),
+            g.setColour (colour.brighter (0.2f).withAlpha (la));
+            g.drawText (cutText (v.cutDb) + "  Q " + params::formatValue (v.q, 0),
                         text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
-            g.setColour (Palette::textMuted);
-            g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")) + juce::String (n->hits) + "  " + timeText (n->detectedMs)
-                            + (n->fixed ? "  FIX" : "  FLT"),
+            g.setColour (Palette::textMuted.withAlpha (la));
+            g.drawText (juce::String (juce::CharPointer_UTF8 ("\xc3\x97")) + juce::String (v.hits) + "  " + timeText (v.detectedMs)
+                            + (v.fixed ? "  FIX" : "  FLT"),
                         text.toNearestInt(), juce::Justification::centredLeft, false);
 
             // Lock (fixed / floating) and clear buttons.
-            const auto overLock = hovering && m.lockButton.contains (hoverPoint);
-            const auto overClear = hovering && m.clearButton.contains (hoverPoint);
+            auto buttons = chip.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);
+            const auto lockButton = buttons.removeFromTop (buttons.getHeight() * 0.5f).reduced (0.0f, 1.0f);
+            const auto clearButton = buttons.reduced (0.0f, 1.0f);
+            const auto overLock = hovering && lockButton.contains (hoverPoint);
+            const auto overClear = hovering && clearButton.contains (hoverPoint);
             if (overLock || overClear)
             {
-                g.setColour (Palette::divider.brighter (0.2f));
-                g.fillRoundedRectangle (overLock ? m.lockButton : m.clearButton, 3.0f);
+                g.setColour (Palette::divider.brighter (0.2f).withAlpha (la));
+                g.fillRoundedRectangle (overLock ? lockButton : clearButton, 3.0f);
             }
-            g.setColour (n->fixed ? Palette::accent : Palette::textMuted);
-            const auto lockBox = m.lockButton.withSizeKeepingCentre (11.0f, 12.0f);
-            if (n->fixed) g.fillPath (padlock (lockBox, true));
-            else          g.strokePath (padlock (lockBox, false), juce::PathStrokeType (1.2f));
-            g.setColour (overClear ? Palette::textPrimary : Palette::textMuted);
-            const auto x = m.clearButton.withSizeKeepingCentre (8.0f, 8.0f);
+            g.setColour ((n.fixed ? Palette::accent : Palette::textMuted).withAlpha (la));
+            const auto lockBox = lockButton.withSizeKeepingCentre (11.0f, 12.0f);
+            if (n.fixed) g.fillPath (padlock (lockBox, true));
+            else         g.strokePath (padlock (lockBox, false), juce::PathStrokeType (1.2f));
+            g.setColour ((overClear ? Palette::textPrimary : Palette::textMuted).withAlpha (la));
+            const auto x = clearButton.withSizeKeepingCentre (8.0f, 8.0f);
             g.drawLine (x.getX(), x.getY(), x.getRight(), x.getBottom(), 1.4f);
             g.drawLine (x.getRight(), x.getY(), x.getX(), x.getBottom(), 1.4f);
         }
+
 
         if (hovering)
         {
@@ -494,8 +755,8 @@ namespace dooblrfeedback::ui
         {
             const auto* m = markerFor (hoverNotch);
             return "#" + juce::String (m != nullptr ? m->number : 0) + "  " + params::formatValue (n->freq, 1) + " Hz  "
-                 + params::noteWithCents (n->freq) + "  cut " + params::formatValue (n->cutDb, 1) + " dB (most "
-                 + params::formatValue (n->neededDb, 1) + ")  Q " + params::formatValue (n->q, 1) + "  "
+                 + params::noteWithCents (n->freq) + "  cut " + params::formatCut (n->cutDb, false) + " (most "
+                 + params::formatCut (n->neededDb, false) + ")  Q " + params::formatValue (n->q, 1) + "  "
                  + juce::String (n->hits) + (n->hits == 1 ? " hit  " : " hits  ") + timeText (n->detectedMs)
                  + (n->fixed ? "  fixed" : "  floating") + (n->ringing ? "  ringing" : "");
         }
@@ -515,7 +776,7 @@ namespace dooblrfeedback::ui
     int FeedbackGraph::notchAt (juce::Point<float> position) const
     {
         for (auto it = markers.rbegin(); it != markers.rend(); ++it)
-            if (it->chip.expanded (it->compact ? 2.0f : 0.0f).contains (position))
+            if (it->chip.expanded (it->compact ? 3.0f : 0.0f).contains (position))
                 return it->id;
         for (const auto& m : markers)
             if (m.handle.getDistanceFrom (position) <= 7.0f)

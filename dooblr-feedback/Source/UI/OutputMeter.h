@@ -1,6 +1,8 @@
 #pragma once
 
 #include <array>
+#include <cmath>
+#include <limits>
 #include <memory>
 
 #include <juce_gui_basics/juce_gui_basics.h>
@@ -40,6 +42,11 @@ namespace dooblrfeedback::ui
         bool isClipLatched() const noexcept { return isClipLatched (0) || isClipLatched (1); }
         void resetClip();
 
+        /** The Safety duck threshold as it lands on this meter (dBFS at the output), drawn as a red
+            dashed tick; NaN hides it (Safety off). */
+        void setThresholdDb (float db);
+        float getThresholdDb() const noexcept { return thresholdDb; }
+
         void paint (juce::Graphics& g) override;
         void mouseDown (const juce::MouseEvent& e) override;
 
@@ -57,6 +64,7 @@ namespace dooblrfeedback::ui
         dsp::OutputPeakTap* tap;
         std::array<Channel, 2> channels;
         double lastPushMs = -1.0;
+        float thresholdDb = std::numeric_limits<float>::quiet_NaN();
         int lastPictureHash = 0;
         std::unique_ptr<juce::VBlankAttachment> vblank;
     };

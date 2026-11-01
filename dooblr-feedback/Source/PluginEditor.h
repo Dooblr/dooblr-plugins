@@ -76,6 +76,8 @@ namespace dooblrfeedback
         juce::TextButton& getViewTab (View v) noexcept { return viewTabs[(size_t) v]; }
         juce::TextButton& getClearAllButton() noexcept { return clearAllButton; }
         juce::Label& getStatusLabel() noexcept { return statusLabel; }
+        juce::Label& getSafetyBadge() noexcept { return safetyBadge; }
+        ui::OutputMeter& getOutputMeter() noexcept { return outputMeter; }
         void stepPreset (int delta);
         void refresh();
 
@@ -100,6 +102,7 @@ namespace dooblrfeedback
         ui::DooblrLookAndFeel lookAndFeel;
 
         juce::Label titleLabel, subtitleLabel, statusLabel, latencyLabel, sensitivityCaption, maxCutCaption, bottomTitle;
+        juce::Label safetyBadge; // "SAFETY -x dB" in the toolbar while the safety duck is pulling the level down
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, presetPrev { "<" }, presetNext { ">" }, presetMenu { "..." };
         juce::TextButton compareA { "A" }, compareB { "B" }, compareCopy { "A>B" }, clearAllButton { "Clear all" };
         juce::TextButton autoButton { "AUTO" }, ringOutButton { "RING-OUT" }, sidechainButton { "SC" };

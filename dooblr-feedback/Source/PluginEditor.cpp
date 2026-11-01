@@ -70,7 +70,17 @@ namespace dooblrfeedback
         setupKnob (maxCutKnob, id::maxCut, Palette::dynamic);
         sensitivityKnob.setTooltip ("Sensitivity: higher catches quieter, shorter rings sooner; lower waits for clearer evidence "
                                     "(double-click resets, Shift-drag for fine moves)");
-        maxCutKnob.setTooltip ("Max cut: the deepest any one notch may go (double-click resets)");
+        maxCutKnob.setTooltip (juce::String (juce::CharPointer_UTF8 ("Max cut: the deepest any one notch may go; turned fully up it is \xe2\x88\x9e, a true notch "
+                                                                     "that removes its frequency completely (double-click resets to 18 dB)")));
+
+        safetyBadge.setComponentID ("safetyBadge");
+        safetyBadge.setFont (juce::FontOptions (12.0f, juce::Font::bold));
+        safetyBadge.setJustificationType (juce::Justification::centred);
+        safetyBadge.setColour (juce::Label::backgroundColourId, juce::Colour (0xffe0574f) /* meterRed (design §9) */);
+        safetyBadge.setColour (juce::Label::textColourId, juce::Colours::white);
+        safetyBadge.setTooltip ("Safety duck: the output is over the Safety threshold while feedback is running away, "
+                                "so the whole level is pulled down until it is under control (Advanced view)");
+        addChildComponent (safetyBadge);
 
         // Left column switches.
         modeToggle.setTooltip ("Safe: waits longer and rejects anything with harmonics (music). "
@@ -167,6 +177,7 @@ namespace dooblrfeedback
         addChildComponent (notchTable);
         notchTable.onNotchSelected = [this] (int notchId) { graph.setSelectedNotch (notchId); };
         notchTable.onBankChanged = [this] { graph.refreshNotches(); };
+        notchTable.onNotchHovered = [this] (int notchId) { graph.setHoveredNotch (notchId); };
         graph.onNotchSelected = [this] (int notchId) { selectNotch (notchId); };
 
         notesEditor.setComponentID ("notes");
@@ -186,7 +197,9 @@ namespace dooblrfeedback
 
         advancedPanel = std::make_unique<ui::ControlPanel> (state, "ADVANCED", Palette::dynamic, std::vector<Spec> {
             { id::notchQ, "Notch Q" }, { id::liveNotches, "Live notches", Kind::combo, 112 }, { id::release, "Release" },
-            { id::rangeLow, "Range low" }, { id::rangeHigh, "Range high" }, { id::output, "Output" } });
+            { id::rangeLow, "Range low" }, { id::rangeHigh, "Range high" }, { id::output, "Output" },
+            { id::safety, "Safety duck", Kind::toggle }, { id::safetyTrigger, "Duck when", Kind::combo, 112 },
+            { id::safetyThreshold, "Threshold" }, { id::safetyDepth, "Depth" }, { id::safetyRelease, "Recover" } });
         analyzerSpeed.caption.setText ("Analyzer", juce::dontSendNotification);
         analyzerSpeed.box.setComponentID ("analyzerSpeed");
         for (int i = 0; i < ui::numAnalyzerSpeeds; ++i)
@@ -320,10 +333,27 @@ namespace dooblrfeedback
             bottomTitle.setText (shownTitle, juce::dontSendNotification);
         clearAllButton.setEnabled (active > 0);
 
+        // Safety duck: the toolbar badge, the meter's threshold tick and the status line.
+        const auto safety = proc.getEngine().getSafety();
+        const auto safetyOn = valueOfBool (id::safety);
+        const auto ducking = safety.active && safety.reductionDb > 0.5f;
+        if (ducking)
+        {
+            const auto text = safety.reductionDb >= dsp::FeedbackEngine::fullDuckDb - 0.5f
+                                ? juce::String ("SAFETY MUTE")
+                                : "SAFETY " + params::formatCut (std::round (safety.reductionDb), true, 0);
+            if (safetyBadge.getText() != text) safetyBadge.setText (text, juce::dontSendNotification);
+        }
+        safetyBadge.setVisible (ducking);
+        outputMeter.setThresholdDb (safetyOn ? state.getRawParameterValue (id::safetyThreshold)->load() + state.getRawParameterValue (id::output)->load()
+                                             : std::numeric_limits<float>::quiet_NaN());
+
         if (juce::Time::getMillisecondCounter() > statusUntilMs)
         {
             juce::String status;
-            if (proc.getEngine().wasBankFull())
+            if (ducking)
+                status = "Safety duck: feedback over the threshold";
+            else if (proc.getEngine().wasBankFull())
                 status = "All " + juce::String (dsp::maxNotches) + " notches in use";
             else if (valueOfBool (id::bypass))
                 status = "Bypassed";
@@ -333,6 +363,8 @@ namespace dooblrfeedback
                 status = "Ring-out: new notches are fixed";
             else
                 status = ringing > 0 ? "Suppressing" : "Listening";
+            if (safety.events > 0)
+                status += dot + "ducked " + juce::String (safety.events) + juce::String (juce::CharPointer_UTF8 ("\xc3\x97 (")) + params::formatValue (safety.totalSec, 1) + " s)";
             if (statusLabel.getText() != status)
                 statusLabel.setText (status, juce::dontSendNotification);
         }
@@ -647,14 +679,17 @@ namespace dooblrfeedback
 
             place (presetPrev, 26);
             bar.removeFromLeft (2);
-            placeRight (presetMenu, 30);
-            bar.removeFromRight (2);
-            placeRight (presetNext, 26);
-            bar.removeFromRight (2);
-            const auto presetWidth = juce::jmin (bar.getWidth(), 320);
+            // The safety badge's room is always kept (it appears without moving anything).
+            const auto badgeSlot = bar.removeFromRight (112);
+            bar.removeFromRight (8);
+            // The box, then > and ... closed up to its right edge, then the badge.
+            const auto presetWidth = juce::jmax (80, juce::jmin (bar.getWidth() - (2 + 26 + 2 + 30), 320));
             presetBox.setBounds (bar.removeFromLeft (presetWidth).withSizeKeepingCentre (presetWidth, 26));
-            presetNext.setBounds (presetNext.getBounds().withX (presetBox.getRight() + 2));
-            presetMenu.setBounds (presetMenu.getBounds().withX (presetNext.getRight() + 2));
+            bar.removeFromLeft (2);
+            place (presetNext, 26);
+            bar.removeFromLeft (2);
+            place (presetMenu, 30);
+            safetyBadge.setBounds (badgeSlot.withX (juce::jmin (badgeSlot.getX(), presetMenu.getRight() + 8)).withSizeKeepingCentre (104, 22));
         }
         content.removeFromTop (panelGap);
 

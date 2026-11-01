@@ -32,6 +32,11 @@ namespace dooblrfeedback::dsp
         float graceSec = 0.0f;            // closed-loop wait after engaging (analysis window catching up)
         float history[4] {};
         int historyCount = 0;
+        bool merging = false;             // folded into a neighbour: fading out (crossfade), then freed
+        float anchorHz = 0.0f;            // where the howl was last confirmed (0: the notch's own centre)
+        float offPeakHz = 0.0f;           // a steady tonal peak inside the notch's span, off its centre
+        float offPeakSec = 0.0f;
+        float catchDb = -200.0f;   // detector level when the notch was created (bookkeeping, not saved)
     };
 
     using NotchArray = std::array<Notch, maxNotches>;
@@ -69,7 +74,7 @@ namespace dooblrfeedback::dsp
     /**
         The live feedback suppressor.
 
-        Audio path (zero latency): up to 24 bell filters (Cytomic / Simper trapezoidal SVF, safe
+        Audio path (zero latency): up to 24 notch filters (Cytomic / Simper trapezoidal SVF, safe
         under modulation) applied in series to every channel. Cut, frequency and Q are smoothed
         (cut deepens with a 4 ms time constant, releases with 40 ms) and coefficients are refreshed
         every 16 samples, so moving notches do not zipper. With no notch active the audio passes
@@ -104,20 +109,54 @@ namespace dooblrfeedback::dsp
             float maxCutDb = 18.0f;
             float baseQ = 20.0f;
             float releaseSec = 20.0f;
-            float lowHz = 80.0f, highHz = 16000.0f;
+            float lowHz = 80.0f, highHz = 20000.0f;
+
+            // Safety duck (last resort): see processSafety().
+            bool safety = true;              // on / off
+            bool safetyAlways = false;       // false: only while the detector reports a runaway
+            float safetyThresholdDb = -6.0f; // peak dBFS, after the notches
+            float safetyDepthDb = 12.0f;     // positive dB; >= fullDuckDb mutes
+            float safetyReleaseSec = 1.5f;
         };
+
+        /** Cut at (or beyond) which a notch is a true notch: a zero on the unit circle, infinite
+            attenuation at its centre. Max cut "-inf" is stored as this value. */
+        static constexpr float fullCutDb = 120.0f;
+        /** Up to this cut a notch is the usual constant-Q bell; deeper cuts keep this bell's pole
+            bandwidth and only move the zeros towards the unit circle (so the notch does not widen). */
+        static constexpr float bellCapDb = 30.0f;
+        static bool isFullCut (float cutDb) noexcept { return cutDb >= fullCutDb - 0.5f; }
+        /** Safety depth at (or beyond) which the duck mutes. */
+        static constexpr float fullDuckDb = 100.0f;
+        static constexpr float safetyAttackSec = 0.005f, safetyHoldSec = 0.08f, safetyHintSec = 0.5f;
+
+        /** Safety duck state for the editor (lock-free). */
+        struct SafetyState
+        {
+            bool active = false;        // reducing gain right now
+            float reductionDb = 0.0f;   // current gain reduction, positive dB (>= fullDuckDb: muted)
+            int events = 0;             // ducks since prepare / reset of the counter
+            juce::int64 lastEventMs = 0;
+            float totalSec = 0.0f;      // time spent ducking
+        };
+        SafetyState getSafety() const noexcept;
+        void resetSafetyCount() noexcept { safetyEvents.store (0); safetyTotalSamples.store (0); safetyLastMs.store (0); }
 
         /** Derived detection thresholds (public for the tests and the docs). */
         struct Thresholds
         {
-            float prominenceDb, floorDb, persistSec, stableSec, growthDb, growthDbPerSec, harmonicDb, initialCutDb, deepenDbPerSec;
+            float prominenceDb, seedProminenceDb, floorDb, persistSec, stableSec, growthSec, growthDb, growthDbPerSec, harmonicDb, initialCutDb, deepenDbPerSec;
         };
         static Thresholds thresholdsFor (const Settings&) noexcept;
 
         static constexpr int controlInterval = 16;
         static constexpr float minQ = 4.0f;
+        static constexpr float mergeFadeDbPerSec = 60.0f;
         /** How fast a released (floating, quiet for the release time) notch fades out. */
         static constexpr float releaseDbPerSec = 6.0f;
+        /** The seed (runaway) confirmation: rise since the window filled, over at least fastSec. */
+        static constexpr float fastSec = 0.08f, fastRiseDb = 9.0f, fastDbPerSec = 60.0f;
+        static constexpr float strongDipDb = 1.5f; // a dip this deep restarts the strong-run growth window
 
         void prepare (double sampleRate, int maxBlockSize);
         /** Clears filter, analysis and tracker state (not the notches). */
@@ -140,6 +179,7 @@ namespace dooblrfeedback::dsp
         /** Adds a notch directly (presets / tests). Returns its id, 0 when the bank is full. */
         int addNotch (float freq, float cutDb, float q, bool fixed, int hits = 1, juce::int64 detectedMs = 0);
         int countActive() const;
+        int getMergeCount() const noexcept { return mergeCount.load(); } // notches folded into a neighbour so far
         bool wasBankFull() const noexcept { return bankFull.load(); }
 
         DisplayExchange& getDisplay() noexcept { return display; }
@@ -159,6 +199,18 @@ namespace dooblrfeedback::dsp
         static float notchResponseDb (float freq, float notchFreq, float cutDb, float q) noexcept;
         static float bankResponseDb (const NotchArray& notches, float freq) noexcept;
 
+        /** Test / diagnostic hook: counts, per analysis hop, what happened to the strongest peak
+            within `toleranceHz` of `freq` (0 = off). Message thread sets it before processing. */
+        struct WatchStats
+        {
+            int hops = 0, noPeak = 0, belowFloor = 0, lowProminence = 0, outOfRange = 0, covered = 0, candidate = 0;
+            int confirmed = 0, musicalOvertone = 0, musicalAround = 0, musicalBase = 0, engaged = 0;
+            float maxProminence = -100.0f, maxLevel = -200.0f;
+            std::array<float, 256> traceLevel {}, traceProminence {}, traceFreq {};
+        };
+        void setWatch (float freq, float toleranceHz) noexcept { watchHz = freq; watchTolHz = toleranceHz; watch = {}; }
+        const WatchStats& getWatch() const noexcept { return watch; }
+
     private:
         struct Slot // the audio side of one notch
         {
@@ -177,6 +229,15 @@ namespace dooblrfeedback::dsp
             float freq = 0.0f, firstFreq = 0.0f, firstLevel = 0.0f, lastLevel = 0.0f;
             float windowLevel = 0.0f; // level once the analysis window had filled (windowFrames > 0)
             int frames = 0, missed = 0, windowFrames = 0;
+            // Frames at full prominence (the stable path counts these; more than 2 weak frames in a
+            // row restart it), and the largest frame-to-frame fall since the window filled.
+            float prominence = 0.0f;
+            int strongFrames = 0, weakRun = 0;
+            float maxDropDb = 0.0f, windowProminence = 0.0f;
+            // The growth window of the current strong run (a seed that turns strong starts it then,
+            // so a slow howl rising out of a weak seed is judged from its strong start).
+            int strongWindowFrames = 0;
+            float strongWindowLevel = 0.0f;
         };
 
         struct Peak { float freq, level, prominence; };
@@ -184,18 +245,28 @@ namespace dooblrfeedback::dsp
 
         void updateControl() noexcept;
         void analyseHop (bool analyse) noexcept;
+        void processSafety (float* const* io, int channels, int start, int len, bool analyse) noexcept;
+        void armSafety() noexcept { safetyHint = (int) (safetyHintSec * (float) sampleRate); }
         void transform (const std::vector<float>& ring, std::vector<float>& db, std::vector<float>* power = nullptr) noexcept;
         void publishDisplay() noexcept;
         void detect (float hopSec) noexcept;
         void closedLoop (float hopSec, const Thresholds& t) noexcept;
-        void engage (float freq, float level, const Thresholds& t) noexcept;
-        void retrigger (Notch& n, const Thresholds& t) noexcept;
+        void engage (float freq, float level, const Thresholds& t, float extraCutDb = 0.0f) noexcept;
+        void retrigger (Notch& n, const Thresholds& t, float freq = 0.0f) noexcept;
+        void consolidate() noexcept;
+        float refineBin (int k, float quadraticBin) const noexcept;
+        /** Half-width (Hz) within which a detection is folded into notch n instead of adding one. */
+        static float mergeHz (const Notch& n, float binHz) noexcept;
         void findPeaks (float floorDb) noexcept;
         float neighbourDb (float centreBin, float inner, float outer) const noexcept;
+        float localFloorDb (int k, float level) const noexcept;
         const Peak* peakNear (float freq, float tolerance) const noexcept;
         /** True when the peak looks musical: its own overtone at 2f / 3f, or it is a partial of a
             series (a lower peak whose other partials are present too). */
-        bool isMusical (float freq, float level, float harmonicDb, bool checkOvertones) const noexcept;
+        bool isMusical (float freq, float level, float harmonicDb, bool checkOvertones) const noexcept { return musicalReason (freq, level, harmonicDb, checkOvertones) != 0; }
+        /** 0: not musical; 1: its own 2f; 2: partials of a lower series around it; 3: a prominent base plus a partial. */
+        int musicalReason (float freq, float level, float harmonicDb, bool checkOvertones) const noexcept;
+        void updateWatch (const Thresholds& t, float lowHz, float highHz) noexcept;
         juce::int64 wallMsNow() const noexcept;
 
         Settings settings;
@@ -203,6 +274,9 @@ namespace dooblrfeedback::dsp
         int fftOrder = 12, fftSize = 4096, hopSize = 256, numBins = 2049;
         std::unique_ptr<juce::dsp::FFT> fft;
         std::vector<float> window, fftData, detRing, inRing, outRing, detDb, detPower, inDb, outDb;
+        std::vector<float> detRe, detIm, prevRe, prevIm; // detector spectrum, this hop and the last (phase-vocoder refinement)
+        bool havePrevSpectrum = false;
+        std::atomic<int> mergeCount { 0 };
         float specNorm = 1.0f;
         int ringPos = 0, sampleInHop = 0, hopCount = 0;
         bool detectorIsOutput = true;
@@ -223,6 +297,18 @@ namespace dooblrfeedback::dsp
         std::atomic<int> skippedHops { 0 };
 
         std::atomic<juce::int64> clock { 0 }, wallBaseMs { 0 }, clockAtBase { 0 };
+
+        // Safety duck (audio thread) and what the editor reads.
+        float safetyGain = 1.0f, safetyEnv = 0.0f, safetyEnvRelease = 0.0f, safetyAttack = 0.0f;
+        int safetyHold = 0, safetyHint = 0, safetyLate = 0;
+        bool safetyDucking = false;
+        std::atomic<bool> safetyActive { false };
+        std::atomic<float> safetyReductionDb { 0.0f };
+        std::atomic<int> safetyEvents { 0 };
+        std::atomic<juce::int64> safetyLastMs { 0 }, safetyTotalSamples { 0 };
+
+        float watchHz = 0.0f, watchTolHz = 0.0f;
+        WatchStats watch;
 
         DisplayFrame frame;
         DisplayExchange display;

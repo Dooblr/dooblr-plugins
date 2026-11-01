@@ -33,14 +33,20 @@ namespace dooblrfeedback::ui
 
         void selectNotch (int notchId);
         std::function<void (int)> onNotchSelected;
+        /** The notch under the mouse (0 when none): the graph opens its label. */
+        std::function<void (int)> onNotchHovered;
+        int getHoveredNotch() const noexcept { return hoveredNotch; }
         /** Called after a row button changed the bank. */
         std::function<void()> onBankChanged;
 
         enum Column { colNumber = 1, colFreq, colNote, colCut, colNeeded, colQ, colLevel, colDetected, colHits, colType, colLock, colClear };
 
         void resized() override;
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
 
     private:
+        void setHovered (int notchId);
         void paintRowBackground (juce::Graphics&, int row, int width, int height, bool selected) override;
         void paintCell (juce::Graphics&, int row, int column, int width, int height, bool selected) override;
         juce::Component* refreshComponentForCell (int row, int column, bool selected, juce::Component* existing) override;
@@ -51,6 +57,7 @@ namespace dooblrfeedback::ui
         juce::TableListBox table;
         std::vector<dsp::Notch> rows;
         bool updating = false;
+        int hoveredNotch = 0;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (NotchTable)
     };

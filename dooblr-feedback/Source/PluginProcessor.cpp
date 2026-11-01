@@ -22,10 +22,12 @@ namespace dooblrfeedback
             sidechain = get (id::sidechain); rangeLow = get (id::rangeLow); rangeHigh = get (id::rangeHigh);
             maxCut = get (id::maxCut); notchQ = get (id::notchQ); liveNotches = get (id::liveNotches); release = get (id::release);
             output = get (id::output); bypass = get (id::bypass);
+            safety = get (id::safety); safetyTrigger = get (id::safetyTrigger); safetyThreshold = get (id::safetyThreshold);
+            safetyDepth = get (id::safetyDepth); safetyRelease = get (id::safetyRelease);
         }
 
         std::atomic<float>* detect, * ringOut, * mode, * sensitivity, * sidechain, * rangeLow, * rangeHigh, * maxCut, * notchQ,
-            * liveNotches, * release, * output, * bypass;
+            * liveNotches, * release, * output, * bypass, * safety, * safetyTrigger, * safetyThreshold, * safetyDepth, * safetyRelease;
     };
 
     DooblrFeedbackProcessor::DooblrFeedbackProcessor()
@@ -73,11 +75,16 @@ namespace dooblrfeedback
         s.aggressive = raw->mode->load() > 0.5f;
         s.hold = raw->liveNotches->load() > 0.5f;
         s.sensitivity = raw->sensitivity->load() / 100.0f;
-        s.maxCutDb = raw->maxCut->load();
+        s.maxCutDb = maxCutToEngineDb (raw->maxCut->load());
         s.baseQ = raw->notchQ->load();
         s.releaseSec = raw->release->load();
         s.lowHz = raw->rangeLow->load();
         s.highHz = raw->rangeHigh->load();
+        s.safety = raw->safety->load() > 0.5f;
+        s.safetyAlways = raw->safetyTrigger->load() > 0.5f;
+        s.safetyThresholdDb = raw->safetyThreshold->load();
+        s.safetyDepthDb = safetyDepthToEngineDb (raw->safetyDepth->load());
+        s.safetyReleaseSec = raw->safetyRelease->load();
         return s;
     }
 
@@ -317,6 +324,7 @@ namespace dooblrfeedback
             return;
 
         auto tree = juce::ValueTree::fromXml (*xml);
+        migrateParameterTree (tree, (int) tree.getProperty ("stateVersion", 1));
         tree.setProperty ("stateVersion", stateVersion, nullptr);
 
         auto speed = (int) ui::defaultAnalyzerSpeed;

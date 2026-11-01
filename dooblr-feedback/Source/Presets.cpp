@@ -131,9 +131,16 @@ namespace dooblrfeedback::presets
         for (auto* p : state.processor.getParameters())
             p->setValueNotifyingHost (p->getDefaultValue());
 
+        const auto version = xml->getIntAttribute ("stateVersion", 1);
         for (auto* child : xml->getChildWithTagNameIterator ("Param"))
             if (auto* p = state.getParameter (child->getStringAttribute ("id")))
-                p->setValueNotifyingHost (p->convertTo0to1 ((float) child->getDoubleAttribute ("value")));
+            {
+                auto value = (float) child->getDoubleAttribute ("value");
+                // Same migration as a session (see params::migrateParameterTree).
+                if (version < 2 && p->paramID == params::id::rangeHigh && std::abs (value - params::legacyRangeHigh) < 0.5f)
+                    value = params::defaultRangeHigh;
+                p->setValueNotifyingHost (p->convertTo0to1 (value));
+            }
 
         notes = {};
         if (auto* n = xml->getChildByName ("Notes"))

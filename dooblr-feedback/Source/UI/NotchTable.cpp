@@ -43,12 +43,34 @@ namespace dooblrfeedback::ui
         header.setColour (juce::TableHeaderComponent::outlineColourId, Palette::divider);
         rows.reserve (dsp::maxNotches);
         addAndMakeVisible (table);
+        table.addMouseListener (this, true);
         refresh();
     }
 
     NotchTable::~NotchTable()
     {
+        table.removeMouseListener (this);
         table.setModel (nullptr);
+    }
+
+    void NotchTable::mouseMove (const juce::MouseEvent& e)
+    {
+        const auto pos = e.getEventRelativeTo (&table).position.roundToInt();
+        const auto row = table.getRowContainingPosition (pos.x, pos.y);
+        setHovered (row >= 0 && row < (int) rows.size() ? rows[(size_t) row].id : 0);
+    }
+
+    void NotchTable::mouseExit (const juce::MouseEvent& e)
+    {
+        const auto pos = e.getEventRelativeTo (this).position;
+        if (! getLocalBounds().toFloat().contains (pos)) setHovered (0);
+    }
+
+    void NotchTable::setHovered (int notchId)
+    {
+        if (notchId == hoveredNotch) return;
+        hoveredNotch = notchId;
+        if (onNotchHovered) onNotchHovered (notchId);
     }
 
     void NotchTable::resized()
@@ -118,8 +140,8 @@ namespace dooblrfeedback::ui
             case colNumber:   return juce::String (row + 1);
             case colFreq:     return params::formatValue (n.freq, n.freq < 1000.0f ? 1 : 0) + " Hz";
             case colNote:     return params::noteWithCents (n.freq);
-            case colCut:      return params::formatValue (-n.cutDb, 1) + " dB";
-            case colNeeded:   return params::formatValue (-n.neededDb, 1) + " dB";
+            case colCut:      return params::formatCut (n.cutDb, true);
+            case colNeeded:   return params::formatCut (n.neededDb, true);
             case colQ:        return params::formatValue (n.q, 1);
             case colLevel:    return n.levelDb > -200.0f ? params::formatValue (n.levelDb, 0) + " dBFS" : juce::String ("-");
             case colDetected: return n.detectedMs > 0 ? juce::Time (n.detectedMs).formatted ("%H:%M:%S") : juce::String ("-");

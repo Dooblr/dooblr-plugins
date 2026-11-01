@@ -6,6 +6,7 @@
     printed as notes. Set DOOBLRFEEDBACK_EDITOR_SNAPSHOT=/path/prefix to write editor PNGs.
 */
 
+#include <typeinfo>
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Parameters.h"
@@ -250,7 +251,8 @@ namespace
     struct BandPass
     {
         double b0 = 0, b2 = 0, a1 = 0, a2 = 0, x1 = 0, x2 = 0, y1 = 0, y2 = 0;
-        BandPass (double rate, double freq, double q)
+        BandPass (double rate, double freq, double q) { retune (rate, freq, q); }
+        void retune (double rate, double freq, double q) noexcept // keeps the state: a gliding resonance
         {
             const auto w = twoPi * freq / rate, alpha = std::sin (w) / (2.0 * q), a0 = 1.0 + alpha;
             b0 = alpha / a0; b2 = -alpha / a0; a1 = -2.0 * std::cos (w) / a0; a2 = (1.0 - alpha) / a0;
@@ -792,6 +794,140 @@ namespace
     }
 
     //==============================================================================
+    void testInfiniteCut()
+    {
+        // Text: the top of Max Cut reads infinity and parses back from several spellings.
+        auto p = makeProcessor();
+        auto* param = p->getState().getParameter (id::maxCut);
+        const auto topText = param->getText (1.0f, 32);
+        note ("Max cut at the top reads \"" + topText.toStdString() + "\"; 0.5 reads \"" + param->getText (0.5f, 32).toStdString() + "\"");
+        check (topText.contains (juce::String::fromUTF8 ("\xe2\x88\x9e")), "Max cut's top reads infinity");
+        for (const auto* spelling : { "inf", "Infinite", "full", "-inf dB", "\xe2\x88\x9e", "\xe2\x88\x92\xe2\x88\x9e dB" })
+        {
+            const auto v = param->getValueForText (juce::String::fromUTF8 (spelling));
+            check (v >= 0.999f, (juce::String ("\"") + juce::String::fromUTF8 (spelling) + "\" parses to the full notch (" + juce::String (v, 4) + ")").toStdString());
+        }
+        check (param->getValueForText (topText) >= 0.999f, "the infinity text round-trips");
+        const auto t18 = param->getValueForText ("18 dB");
+        check (std::abs (param->convertFrom0to1 (t18) - 18.0f) < 0.05f, "\"18 dB\" still parses to 18");
+        check (std::abs (param->convertFrom0to1 (param->getValueForText (param->getText (t18, 32))) - 18.0f) < 0.05f, "18 dB round-trips");
+        check (std::abs (param->convertFrom0to1 (param->getDefaultValue()) - 18.0f) < 0.05f, "the default stays 18 dB");
+
+        // A full notch: a zero on the unit circle. Measured against the analytic response.
+        auto z = makeProcessor();
+        set (*z, id::detect, 0.0f);
+        set (*z, id::maxCut, params::maxCutInfinite);
+        z->getEngine().addNotch (1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f, true);
+        Stereo tone ((size_t) (3 * defaultRate));
+        addSine (tone.l, defaultRate, 1000.0, 0.5f); tone.r = tone.l;
+        const auto out = render (*z, tone);
+        bool finite = true;
+        for (auto v : out.l) finite = finite && std::isfinite (v);
+        const auto centre = rmsDb (out.l, (size_t) (2 * defaultRate), (size_t) defaultRate) - rmsDb (tone.l, (size_t) (2 * defaultRate), (size_t) defaultRate);
+        note ("full notch at 1 kHz: tone down " + db (-centre) + " (analytic "
+              + db (-dsp::FeedbackEngine::notchResponseDb (1000.0f, 1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f)) + ")");
+        check (finite && centre < -80.0, "a full notch takes more than 80 dB off at its centre");
+        for (const auto f : { 900.0, 1050.0, 1300.0, 3000.0 })
+        {
+            auto w = makeProcessor();
+            set (*w, id::detect, 0.0f);
+            set (*w, id::maxCut, params::maxCutInfinite);
+            w->getEngine().addNotch (1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f, true);
+            Stereo s ((size_t) (2 * defaultRate));
+            addSine (s.l, defaultRate, f, 0.5f); s.r = s.l;
+            const auto o = render (*w, s);
+            const auto measured = rmsDb (o.l, (size_t) defaultRate, (size_t) defaultRate) - rmsDb (s.l, (size_t) defaultRate, (size_t) defaultRate);
+            const auto analytic = dsp::FeedbackEngine::notchResponseDb ((float) f, 1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f);
+            check (std::abs (measured - analytic) < 0.3, "full notch at " + fmt (f, 0) + " Hz matches the analytic response (" + db (measured) + " vs " + db (analytic) + ")");
+        }
+
+        // The ramp from nothing to a full notch under its own tone is smooth: the envelope falls,
+        // never jumps, and nothing is NaN.
+        auto r = makeProcessor();
+        set (*r, id::detect, 0.0f);
+        set (*r, id::maxCut, params::maxCutInfinite);
+        Stereo pre ((size_t) defaultRate), post ((size_t) (2 * defaultRate));
+        addSine (pre.l, defaultRate, 1000.0, 0.5f); pre.r = pre.l;
+        addSine (post.l, defaultRate, 1000.0, 0.5f, twoPi * 1000.0 * (double) pre.size() / defaultRate); post.r = post.l;
+        render (*r, pre);
+        r->getEngine().addNotch (1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f, true);
+        const auto ramp = render (*r, post);
+        double jump = 0.0; bool rampFinite = true;
+        for (size_t i = 1; i < ramp.size(); ++i)
+        {
+            rampFinite = rampFinite && std::isfinite (ramp.l[i]);
+            jump = std::max (jump, (double) std::abs (ramp.l[i] - ramp.l[i - 1]));
+        }
+        const auto maxStep = 0.5 * twoPi * 1000.0 / defaultRate + 0.005; // a 0.5 sine's own largest step
+        const auto end = rmsDb (ramp.l, (size_t) defaultRate, (size_t) defaultRate) - rmsDb (post.l, (size_t) defaultRate, (size_t) defaultRate);
+        note ("ramp to a full notch: largest sample step " + fmt (jump, 4) + " (sine's own " + fmt (maxStep - 0.005, 4) + "), level after 1 s " + db (end));
+        check (rampFinite && jump < maxStep, "the ramp to a full notch is click-free and NaN-free");
+        check (end < -80.0, "the ramp reaches the full notch");
+        // ...and back: Max Cut down to 18 dB while the notch is full, no click.
+        set (*r, id::maxCut, 18.0f);
+        Stereo back ((size_t) defaultRate);
+        addSine (back.l, defaultRate, 1000.0, 0.5f, twoPi * 1000.0 * (double) (pre.size() + post.size()) / defaultRate); back.r = back.l;
+        const auto up = render (*r, back);
+        double jumpUp = 0.0;
+        for (size_t i = 1; i < up.size(); ++i) jumpUp = std::max (jumpUp, (double) std::abs (up.l[i] - up.l[i - 1]));
+        const auto settled = rmsDb (up.l, (size_t) (defaultRate / 2), (size_t) (defaultRate / 2)) - rmsDb (back.l, (size_t) (defaultRate / 2), (size_t) (defaultRate / 2));
+        check (jumpUp < maxStep && std::abs (settled + 18.0) < 1.0, "lowering Max Cut from infinity is smooth and settles at 18 dB (" + db (settled) + ")");
+
+        // Sessions from 0.1.0 (Max Cut stored in dB, range 3 - 30) load to the same dB.
+        for (const auto oldDb : { 3.0f, 18.0f, 24.0f, 30.0f })
+        {
+            auto a = makeProcessor();
+            juce::MemoryBlock block;
+            a->getStateInformation (block);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (block.getData(), (int) block.getSize());
+            bool patched = false;
+            if (xml != nullptr)
+                for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+                    if (e->getStringAttribute ("id") == id::maxCut) { e->setAttribute ("value", (double) oldDb); patched = true; }
+            check (patched, "found Max Cut in the saved state");
+            if (! patched) continue;
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            auto b = makeProcessor();
+            b->setStateInformation (old.getData(), (int) old.getSize());
+            const auto loaded = b->getState().getParameter (id::maxCut);
+            const auto loadedDb = loaded->convertFrom0to1 (loaded->getValue());
+            check (std::abs (loadedDb - oldDb) < 0.05f && ! params::isInfiniteCut (loadedDb),
+                   "a 0.1.0 session with Max Cut " + fmt (oldDb, 0) + " dB loads as " + fmt (loadedDb, 2) + " dB (finite)");
+        }
+
+        // Range high: a 0.1.0 session (no stateVersion) still at the old 16 kHz default moves to
+        // 20 kHz; any other value, or a 0.1.1 session at 16 kHz, is kept.
+        struct RangeCase { float saved; bool legacy; float expected; };
+        for (const auto rc : { RangeCase { 16000.0f, true, 20000.0f }, RangeCase { 12000.0f, true, 12000.0f },
+                               RangeCase { 16000.0f, false, 16000.0f } })
+        {
+            auto a = makeProcessor();
+            juce::MemoryBlock block;
+            a->getStateInformation (block);
+            auto xml = juce::AudioProcessor::getXmlFromBinary (block.getData(), (int) block.getSize());
+            bool patched = false;
+            if (xml != nullptr)
+            {
+                if (rc.legacy) xml->removeAttribute ("stateVersion");
+                for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+                    if (e->getStringAttribute ("id") == id::rangeHigh) { e->setAttribute ("value", (double) rc.saved); patched = true; }
+            }
+            check (patched, "found Range high in the saved state");
+            if (! patched) continue;
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            auto b = makeProcessor();
+            b->setStateInformation (old.getData(), (int) old.getSize());
+            const auto loaded = b->getState().getRawParameterValue (id::rangeHigh)->load();
+            const auto what = std::string (rc.legacy ? "a 0.1.0" : "a 0.1.1") + " session with Range high " + fmt (rc.saved, 0)
+                            + " Hz loads as " + fmt (loaded, 0) + " Hz";
+            check (std::abs (loaded - rc.expected) < 1.0f, what);
+            note (what);
+        }
+    }
+
+    //==============================================================================
     void testStateNotesPresets()
     {
         auto p = makeProcessor();
@@ -967,7 +1103,7 @@ namespace
         check (allocationCount == 0, "no allocation in processBlock across parameter changes (" + std::to_string (allocationCount.load()) + ")");
 
         std::string cpu;
-        for (const auto notches : { 0, 24 })
+        for (const auto notches : { 0, 1, 24 })
         {
             auto q = makeProcessor();
             if (notches > 0)
@@ -986,7 +1122,7 @@ namespace
             }
             const auto elapsed = (juce::Time::getMillisecondCounterHiRes() - t0) / 1000.0;
             const auto share = elapsed / seconds * 100.0;
-            cpu += (cpu.empty() ? "" : ", ") + std::string (notches == 0 ? "detection, no notches " : "24 notches ") + fmt (share, 2) + " %";
+            cpu += (cpu.empty() ? "" : ", ") + std::string (notches == 0 ? "detection, no notches " : std::to_string (notches) + (notches == 1 ? " notch " : " notches ")) + fmt (share, 2) + " %";
             check (seconds / elapsed > 10.0, "runs at more than 10x real time (" + fmt (seconds / elapsed, 0) + "x)");
         }
         note ("CPU (one core, 48 kHz stereo, 64-sample blocks, share of real time): " + cpu);
@@ -1140,6 +1276,7 @@ namespace
         std::unique_ptr<Processor> processor;
         std::unique_ptr<juce::AudioProcessorEditor> base;
         Editor* editor = nullptr;
+        double clock = 0.0; // the graph's clock (ms): driven by the test, 60 frames a second
         explicit EditorFixture (bool scene = true)
         {
             processor = makeProcessor();
@@ -1148,12 +1285,23 @@ namespace
             base.reset (processor->createEditor());
             editor = dynamic_cast<Editor*> (base.get());
             check (editor != nullptr, "the editor is a DooblrFeedbackEditor");
+            clock = juce::Time::getMillisecondCounterHiRes() + 1000.0;
             if (editor != nullptr) settle();
+        }
+        void tick (int frames = 1)
+        {
+            auto& g = editor->getGraph();
+            for (int i = 0; i < frames; ++i)
+            {
+                clock += 1000.0 / 60.0;
+                g.setClockForTesting (clock);
+                g.poll();
+            }
         }
         void settle()
         {
             auto& g = editor->getGraph();
-            for (int i = 0; i < 60; ++i) { g.poll(); g.advanceDisplay (1.0 / 60.0); }
+            for (int i = 0; i < 60; ++i) { tick(); g.advanceDisplay (1.0 / 60.0); }
             g.snapDisplay();
             g.refreshNotches();
             editor->getNotchTable().refresh();
@@ -1379,6 +1527,15 @@ namespace
                 for (const auto& n : p.getNotches()) if (n.active && n.id == nid) return n;
                 return {};
             };
+            if (findMarker (false) == nullptr)
+                if (const auto* dot = findMarker (true))
+                {
+                    // Idle labels close to numbered dots: a click on one selects it and opens its label.
+                    const auto nid = dot->id;
+                    mouse.click (toEditor (dot->chip.getCentre()));
+                    f.settle();
+                    check (g.getSelectedNotch() == nid, label + ": clicking a numbered dot selects its notch");
+                }
             if (const auto* m = findMarker (false))
             {
                 const auto nid = m->id;
@@ -1488,6 +1645,886 @@ namespace
         check (f.processor->getAnalyzerSpeed() == 0, "choosing Slow sets the processor's speed");
     }
 
+    //==============================================================================
+    // High-frequency feedback (0.1.1). A more realistic loop than runLoop: programme and room noise
+    // into the mic, the plugin, a PA limiter (no waveshaping, so no aliasing that a real analogue
+    // PA would not make), a resonant path at the feedback frequency plus damped broadband
+    // reflections back into the mic.
+
+    /** One-pole low-pass. */
+    struct OnePole
+    {
+        double a = 0.0, z = 0.0;
+        OnePole (double rate, double hz) : a (std::exp (-twoPi * hz / rate)) {}
+        double process (double x) noexcept { z = x + a * (z - x); return z; }
+    };
+
+    std::vector<float> roomNoise (size_t n, double rate, double rmsDbfs, int seed)
+    {
+        // Pink with an extra roll-off above 6 kHz (HVAC, audience): little HF energy, like a room.
+        auto v = pink (n, 0.0, seed);
+        OnePole lp (rate, 6000.0);
+        for (auto& x : v) x = (float) lp.process (x);
+        const auto now = rmsDb (v, 0, v.size());
+        const auto g = (float) std::pow (10.0, (rmsDbfs - now) / 20.0);
+        for (auto& x : v) x *= g;
+        return v;
+    }
+
+    enum class Programme { roomOnly, speech, music };
+
+    struct RoomSpec
+    {
+        double freq = 8000.0;
+        double gain = 1.1;          // loop gain at the resonance
+        double seconds = 6.0;
+        double q = 8.0;
+        double delayMs = 10.0;
+        double noiseDb = -50.0;     // room noise RMS into the mic
+        Programme programme = Programme::roomOnly;
+        double programmeDb = -30.0; // talker / instrument RMS into the mic
+        double driftPct = 0.0;      // the resonance glides linearly by this much over the run
+        double warblePct = 0.0;     // ... and/or wobbles sinusoidally by +- this much
+        double warbleHz = 0.7;
+        double freq2 = 0.0;         // a second resonance (same gain and Q), 0: none
+        double loopOffSec = -1.0;   // >= 0: the loop is broken from then on (the mic is moved away)
+    };
+
+    struct RoomRun
+    {
+        std::vector<float> mic;
+        double firstNotchSec = -1.0; // first notch within 3 % of the resonance
+        dsp::NotchArray notches {};
+        dsp::FeedbackEngine::WatchStats watch {};
+        int maxConcurrent = 0;      // most notches (not fading out) at the resonances at once
+        std::set<int> ids;          // every notch id that ever sat at a resonance
+        std::vector<float> out;     // the plugin's output (before the PA)
+    };
+
+    std::vector<float> brightChord (size_t n, double rate, float amplitude, int seed);
+
+    RoomRun runRoom (Processor* p, const RoomSpec& s, double rate = defaultRate, int block = defaultBlock, bool watch = false)
+    {
+        const auto n = (size_t) (s.seconds * rate);
+        auto src = roomNoise (n, rate, s.noiseDb, 91);
+        if (s.programme != Programme::roomOnly)
+        {
+            auto prog = s.programme == Programme::speech ? speech (n, rate, 92) : brightChord (n, rate, 0.1f, 93);
+            const auto g = (float) std::pow (10.0, (s.programmeDb - rmsDb (prog, 0, prog.size())) / 20.0);
+            for (size_t i = 0; i < n; ++i) src[i] += g * prog[i];
+        }
+        BandPass resonance (rate, s.freq, s.q), resonance2 (rate, s.freq2 > 0.0 ? s.freq2 : 1000.0, s.q);
+        const auto moving = s.driftPct != 0.0 || s.warblePct != 0.0;
+        OnePole air (rate, 3000.0);
+        const auto delay = std::max ((size_t) (s.delayMs * 0.001 * rate), (size_t) block);
+        const size_t taps[] = { (size_t) (0.0137 * rate), (size_t) (0.0191 * rate), (size_t) (0.0273 * rate) };
+        const double tapGain[] = { 0.06, -0.04, 0.03 };
+        const size_t ringSize = 1 << 15, ringMask = ringSize - 1;
+        std::vector<float> speaker (ringSize, 0.0f);
+        double env = 0.0;
+        const auto limit = std::pow (10.0, -3.0 / 20.0);
+        const auto att = 1.0 - std::exp (-1.0 / (0.0005 * rate)), rel = 1.0 - std::exp (-1.0 / (0.08 * rate));
+        RoomRun run;
+        run.mic.assign (n, 0.0f);
+        run.out.assign (n, 0.0f);
+        if (p != nullptr && watch) p->getEngine().setWatch ((float) s.freq, (float) (0.03 * s.freq));
+        juce::AudioBuffer<float> buffer (2, block);
+        juce::MidiBuffer midi;
+        for (size_t pos = 0; pos < n; pos += (size_t) block)
+        {
+            const auto len = (int) std::min ((size_t) block, n - pos);
+            buffer.setSize (2, len, false, false, true);
+            for (int i = 0; i < len; ++i)
+            {
+                const auto t = pos + (size_t) i;
+                const auto at = [&] (size_t d) { return t >= d ? (double) speaker[(t - d) & ringMask] : 0.0; };
+                auto reflections = 0.0;
+                for (int k = 0; k < 3; ++k) reflections += tapGain[k] * at (taps[k]);
+                if (moving && t % 16 == 0)
+                {
+                    const auto sec = (double) t / rate;
+                    const auto f = s.freq * (1.0 + 0.01 * (s.driftPct * sec / s.seconds + s.warblePct * std::sin (twoPi * s.warbleHz * sec)));
+                    resonance.retune (rate, f, s.q);
+                }
+                const auto loopGain = s.loopOffSec >= 0.0 && (double) t / rate >= s.loopOffSec ? 0.0 : s.gain;
+                auto x = (double) src[t] + loopGain * resonance.process (at (delay)) + air.process (reflections);
+                if (s.freq2 > 0.0) x += loopGain * resonance2.process (at (delay));
+                run.mic[t] = (float) x;
+                buffer.setSample (0, i, (float) x);
+                buffer.setSample (1, i, (float) x);
+            }
+            if (p != nullptr)
+                p->processBlock (buffer, midi);
+            for (int i = 0; i < len; ++i)
+            {
+                // The PA: a fast peak limiter at -3 dBFS (gain riding, no waveshaping).
+                const auto y = (double) buffer.getSample (0, i);
+                run.out[pos + (size_t) i] = (float) y;
+                const auto a = std::abs (y);
+                env += (a - env) * (a > env ? att : rel);
+                const auto g = env > limit ? limit / env : 1.0;
+                speaker[(pos + (size_t) i) & ringMask] = (float) (y * g);
+            }
+            if (p != nullptr && watch)
+            {
+                int at = 0;
+                for (const auto& nn : p->getNotches())
+                {
+                    const auto near = [&] (double f) { return f > 0.0 && std::abs (nn.freq / (float) f - 1.0f) < 0.08f; };
+                    if (nn.active && (near (s.freq) || near (s.freq2)))
+                    {
+                        run.ids.insert (nn.id);
+                        if (! nn.merging) ++at;
+                    }
+                }
+                run.maxConcurrent = std::max (run.maxConcurrent, at);
+            }
+            if (p != nullptr && run.firstNotchSec < 0.0)
+                for (const auto& nn : p->getNotches())
+                    if (nn.active && std::abs (nn.freq / (float) s.freq - 1.0f) < 0.03f)
+                        run.firstNotchSec = (double) (pos + (size_t) len) / rate;
+        }
+        if (p != nullptr)
+        {
+            run.notches = p->getNotches();
+            run.watch = p->getEngine().getWatch();
+        }
+        return run;
+    }
+
+    /** Level (dB) of a narrow band (Q 30) around `freq`, in 10 ms windows. */
+    std::vector<double> bandEnvelopeDb (const std::vector<float>& x, double rate, double freq)
+    {
+        BandPass a (rate, freq, 30.0), b (rate, freq, 30.0);
+        std::vector<float> y (x.size());
+        for (size_t i = 0; i < x.size(); ++i) y[i] = (float) b.process (a.process (x[i]));
+        return envelopeDb (y, rate);
+    }
+
+    /** The strongest frequency of `x` near `around` (+-5 %), from a Hann FFT of [endSec - 0.25 s, endSec]. */
+    double howlFrequency (const std::vector<float>& x, double rate, double around, double endSec)
+    {
+        const int order = 17, size = 1 << order;
+        juce::dsp::FFT fft (order);
+        std::vector<float> data ((size_t) size * 2, 0.0f);
+        const auto end = std::min (x.size(), (size_t) (endSec * rate));
+        const auto len = std::min ((size_t) (0.25 * rate), end);
+        const auto start = end - len;
+        for (size_t i = 0; i < len; ++i)
+            data[i] = x[start + i] * (float) (0.5 - 0.5 * std::cos (twoPi * (double) i / (double) len));
+        fft.performFrequencyOnlyForwardTransform (data.data(), true);
+        const auto binHz = rate / size;
+        size_t best = (size_t) (around * 0.95 / binHz);
+        for (auto k = best; k <= (size_t) (around * 1.05 / binHz); ++k) if (data[k] > data[best]) best = k;
+        const double a = data[best - 1], m = data[best], c = data[best + 1];
+        const auto d = 0.5 * (a - c) / (a - 2.0 * m + c);
+        return ((double) best + (std::isfinite (d) ? d : 0.0)) * binHz;
+    }
+
+    /** The real attenuation of the bank at `freq`: a sine through a copy of the notches, frozen. */
+    double measuredCutDb (const dsp::NotchArray& notches, double rate, double freq)
+    {
+        auto q = makeProcessor (rate);
+        set (*q, id::detect, 0.0f);
+        q->getEngine().setNotches (notches);
+        Stereo sine ((size_t) (rate * 0.6));
+        addSine (sine.l, rate, freq, 0.1f);
+        sine.r = sine.l;
+        const auto out = render (*q, sine);
+        const auto half = (size_t) (rate * 0.3);
+        return rmsDb (out.l, half, half) - rmsDb (sine.l, half, half);
+    }
+
+    struct HfResult { double unprotected6dB = -1.0, firstNotch = -1.0, steadyOverBase = 0.0, peakOverBase = 0.0, howlHz = 0.0, cutAtHowl = 0.0; bool caught = false; std::string notches; dsp::FeedbackEngine::WatchStats watch; };
+
+    HfResult hfCase (const RoomSpec& spec, double rate, int block, bool aggressive = false)
+    {
+        HfResult r;
+        auto quiet = spec; quiet.gain = 0.0;
+        const auto base = runRoom (nullptr, quiet, rate, block);
+        const auto runaway = runRoom (nullptr, spec, rate, block);
+        const auto baseEnv = bandEnvelopeDb (base.mic, rate, spec.freq);
+        auto baseLevel = 0.0;
+        for (size_t i = 50; i < baseEnv.size(); ++i) baseLevel += baseEnv[i];
+        baseLevel /= (double) std::max<size_t> (1, baseEnv.size() - 50);
+        r.unprotected6dB = firstTimeAbove (bandEnvelopeDb (runaway.mic, rate, spec.freq), baseLevel + 6.0);
+
+        auto p = makeProcessor (rate, block);
+        if (aggressive) set (*p, id::mode, 1.0f);
+        const auto run = runRoom (p.get(), spec, rate, block, true);
+        const auto env = bandEnvelopeDb (run.mic, rate, spec.freq);
+        const auto last = env.size() > 100 ? env.size() - 100 : 0;
+        auto steady = 0.0;
+        for (auto i = last; i < env.size(); ++i) steady += env[i];
+        steady /= (double) std::max<size_t> (1, env.size() - last);
+        r.firstNotch = run.firstNotchSec;
+        // Until the first notch the protected loop is bit-identical to the unprotected one, so the
+        // howl the detector saw is the runaway's in the 250 ms before the notch.
+        r.howlHz = howlFrequency (runaway.mic, rate, spec.freq, run.firstNotchSec > 0.0 ? run.firstNotchSec : spec.seconds);
+        r.steadyOverBase = steady - baseLevel;
+        r.peakOverBase = maxOf (env, 10) - baseLevel;
+        r.caught = run.firstNotchSec > 0.0 && r.steadyOverBase < 3.0;
+        r.notches = notchList (run.notches);
+        r.cutAtHowl = activeCount (run.notches) > 0 ? measuredCutDb (run.notches, rate, r.howlHz) : 0.0;
+        r.watch = run.watch;
+        return r;
+    }
+
+    std::string watchText (const dsp::FeedbackEngine::WatchStats& w)
+    {
+        return "hops " + std::to_string (w.hops) + ": covered " + std::to_string (w.covered) + ", out of range " + std::to_string (w.outOfRange)
+             + ", below floor " + std::to_string (w.belowFloor) + ", low prominence " + std::to_string (w.lowProminence) + ", candidate " + std::to_string (w.candidate)
+             + "; confirmed " + std::to_string (w.confirmed) + " (2f " + std::to_string (w.musicalOvertone) + ", series " + std::to_string (w.musicalAround)
+             + ", base " + std::to_string (w.musicalBase) + ", engaged " + std::to_string (w.engaged) + "); max prominence " + fmt (w.maxProminence, 1) + " dB, max level " + fmt (w.maxLevel, 1) + " dBFS";
+    }
+
+    std::string hfLine (const std::string& label, const HfResult& r)
+    {
+        return label + ": unprotected +6 dB at " + (r.unprotected6dB < 0 ? std::string ("never") : fmt (r.unprotected6dB * 1000.0, 0) + " ms")
+             + (r.caught ? ", CAUGHT, notch at " + fmt (r.firstNotch * 1000.0, 0) + " ms" : std::string (", NOT caught") + (r.firstNotch > 0 ? " (notch at " + fmt (r.firstNotch * 1000.0, 0) + " ms)" : ""))
+             + ", peak +" + fmt (r.peakOverBase, 1) + " dB, steady " + fmt (r.steadyOverBase, 1) + " dB re no-loop; howl " + fmt (r.howlHz, 0) + " Hz, the bank cuts it " + fmt (r.cutAtHowl, 1) + " dB; " + r.notches;
+    }
+
+    void testHighFrequencyFeedback()
+    {
+        if (juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_HF_TRACE", {}).isNotEmpty())
+        {
+            const auto f = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_HF_TRACE", {}).getDoubleValue();
+            const auto g = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_HF_GAIN", "1.3").getDoubleValue();
+            const auto blk = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_HF_BLOCK", "64").getIntValue();
+            RoomSpec spec; spec.freq = f; spec.gain = g; spec.seconds = 1.5;
+            auto p = makeProcessor (defaultRate, blk);
+            const auto run = runRoom (p.get(), spec, defaultRate, blk, true);
+            for (int h = 0; h < 256; h += 2)
+                note ("hop " + std::to_string (h) + " t " + fmt ((h + 1) * 256.0 / defaultRate * 1000.0, 0) + " ms: " + fmt (run.watch.traceFreq[(size_t) h], 0) + " Hz level " + fmt (run.watch.traceLevel[(size_t) h], 1) + " prom " + fmt (run.watch.traceProminence[(size_t) h], 1));
+            note ("first notch " + fmt (run.firstNotchSec * 1000.0, 0) + " ms; " + watchText (run.watch));
+            return;
+        }
+        const bool verbose = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_HF_VERBOSE", {}).isNotEmpty();
+        const double freqs[] = { 3000.0, 5000.0, 8000.0, 10000.0, 12000.0, 16000.0, 18000.0 };
+        int caught = 0, total = 0;
+        for (const auto prog : { Programme::roomOnly, Programme::speech })
+            for (const auto gain : { 1.02, 1.1, 1.3 })
+                for (const auto f : freqs)
+                {
+                    RoomSpec spec;
+                    spec.freq = f; spec.gain = gain; spec.programme = prog;
+                    const auto r = hfCase (spec, defaultRate, defaultBlock);
+                    ++total; if (r.caught) ++caught;
+                    const auto label = std::string (prog == Programme::speech ? "speech + room" : "room noise") + ", 48 kHz / 64, gain " + fmt (gain, 2) + ", " + fmt (f / 1000.0, 0) + " kHz";
+                    note (hfLine (label, r));
+                    if (verbose || ! r.caught) note ("  watch: " + watchText (r.watch));
+                    check (r.caught, label + ": the feedback is caught and held within 3 dB of the loop-free level");
+                    if (r.caught) check (r.cutAtHowl <= -3.0, label + ": the notch lands on the howl (" + fmt (r.cutAtHowl, 1) + " dB at " + fmt (r.howlHz, 0) + " Hz)");
+                }
+        for (const auto rate : { 44100.0, 96000.0 })
+            for (const auto f : { 5000.0, 10000.0, 16000.0, 18000.0 })
+            {
+                RoomSpec spec; spec.freq = f; spec.gain = 1.1;
+                const auto r = hfCase (spec, rate, defaultBlock);
+                ++total; if (r.caught) ++caught;
+                const auto label = "room noise, " + fmt (rate / 1000.0, 1) + " kHz / 64, gain 1.10, " + fmt (f / 1000.0, 0) + " kHz";
+                note (hfLine (label, r));
+                if (verbose || ! r.caught) note ("  watch: " + watchText (r.watch));
+                check (r.caught, label + ": caught");
+            }
+        for (const auto block : { 256, 512, 2048 })
+            for (const auto f : { 5000.0, 10000.0, 16000.0 })
+            {
+                RoomSpec spec; spec.freq = f; spec.gain = 1.1;
+                const auto r = hfCase (spec, defaultRate, block);
+                ++total; if (r.caught) ++caught;
+                const auto label = "room noise, 48 kHz / " + std::to_string (block) + ", gain 1.10, " + fmt (f / 1000.0, 0) + " kHz";
+                note (hfLine (label, r));
+                if (verbose || ! r.caught) note ("  watch: " + watchText (r.watch));
+                check (r.caught, label + ": caught");
+            }
+        note ("high-frequency feedback: caught " + std::to_string (caught) + " of " + std::to_string (total) + " cases");
+
+        // Snapshot (only when snapshots are asked for): one editor after three high howls in a row
+        // (10, 16 and 18 kHz, speech + room, loop gain 1.10), so the HF notches show on the graph.
+        if (const auto* snap = std::getenv ("DOOBLRFEEDBACK_EDITOR_SNAPSHOT"); snap != nullptr && *snap != 0)
+        {
+            EditorFixture f (false);
+            if (f.editor == nullptr) return;
+            for (const auto hz : { 10000.0, 16000.0, 18000.0 })
+            {
+                RoomSpec spec; spec.freq = hz; spec.gain = 1.1; spec.programme = Programme::speech;
+                runRoom (f.processor.get(), spec);
+            }
+            f.editor->setSize (1080, 660);
+            f.settle();
+            const auto notches = f.processor->getNotches();
+            note ("HF snapshot notches: " + notchList (notches));
+            check (activeCount (notches) >= 3, "the three high howls each left a notch for the snapshot (" + std::to_string (activeCount (notches)) + ")");
+            saveSnapshot (*f.editor, "-hf-1080x660");
+        }
+    }
+
+
+    //==============================================================================
+    // Calm labels: no bouncing, tidy lanes, idle labels close.
+
+    bool overlapsAny (const std::vector<ui::FeedbackGraph::Marker>& m, std::string& which)
+    {
+        for (size_t i = 0; i < m.size(); ++i)
+            for (size_t j = i + 1; j < m.size(); ++j)
+                if (m[i].chip.intersects (m[j].chip))
+                {
+                    which = std::to_string (m[i].number) + (m[i].compact ? " (dot)" : " (label)") + " and " + std::to_string (m[j].number) + (m[j].compact ? " (dot)" : " (label)");
+                    return true;
+                }
+        return false;
+    }
+
+    void testCalmLabels()
+    {
+        // 1. Five seconds of howls coming and going at the four notches (levels +-12 dB at 0.4-3 Hz,
+        //    the detector deepening / ringing / quiet): no label moves, values refresh calmly.
+        {
+            EditorFixture f;
+            auto* editor = f.editor;
+            if (editor == nullptr) return;
+            auto& p = *f.processor;
+            auto& g = editor->getGraph();
+            set (p, id::liveNotches, 1.0f); // Hold: none released during the run
+            editor->setSize (1080, 660);
+            f.settle();
+            const double freqs[] = { 315.0, 1250.0, 2510.0, 6300.0 }, rates[] = { 0.4, 1.3, 2.1, 3.0 };
+            const auto layouts0 = g.getLayoutCount();
+            const auto refreshes0 = g.getValueRefreshCount();
+            std::map<int, juce::Rectangle<float>> lastRect;
+            std::map<int, bool> lastCompact;
+            double lastEventMs = -1.0e9, worst = 0.0;
+            int events = 0, ringingFrames = 0;
+            double t = 0.0;
+            const auto noise = pink ((size_t) (defaultRate * 5.5), -45.0, 77);
+            size_t pos = 0;
+            for (int frame = 0; frame < 300; ++frame)
+            {
+                Stereo x (800);
+                for (size_t i = 0; i < 800; ++i, t += 1.0 / defaultRate)
+                {
+                    auto v = (double) noise[pos++];
+                    for (int k = 0; k < 4; ++k)
+                        v += 0.03 * std::pow (10.0, 0.6 * std::sin (twoPi * rates[k] * t + k)) * std::sin (twoPi * freqs[k] * t);
+                    x.l[i] = x.r[i] = (float) v;
+                }
+                render (p, x);
+                f.tick();
+                for (const auto& n : p.getNotches()) if (n.active && n.ringing) { ++ringingFrames; break; }
+                std::set<int> ids;
+                for (const auto& m : g.getMarkers()) ids.insert (m.id);
+                for (const auto& m : g.getMarkers())
+                {
+                    const auto known = lastRect.count (m.id) > 0;
+                    if (! known || lastCompact[m.id] != m.compact) { lastEventMs = f.clock; ++events; }
+                    else if (f.clock - lastEventMs > 300.0)
+                    {
+                        const auto& r = lastRect[m.id];
+                        worst = std::max ({ worst, (double) std::abs (r.getX() - m.chip.getX()), (double) std::abs (r.getY() - m.chip.getY()) });
+                    }
+                    lastRect[m.id] = m.chip;
+                    lastCompact[m.id] = m.compact;
+                }
+                if (ids.size() != lastRect.size()) { lastEventMs = f.clock; ++events; }
+                for (auto it = lastRect.begin(); it != lastRect.end();)
+                    it = ids.count (it->first) ? std::next (it) : lastRect.erase (it);
+            }
+            const auto layouts = g.getLayoutCount() - layouts0;
+            const auto refreshRate = (double) (g.getValueRefreshCount() - refreshes0) / (5.0 * (double) std::max<size_t> (1, g.getMarkers().size()));
+            note ("5 s of fluctuating howls: labels moved at most " + fmt (worst, 2) + " px outside add / remove / open / close (" + std::to_string (events)
+                  + " such events), " + std::to_string (layouts) + " re-layouts in 300 frames, value refreshes " + fmt (refreshRate, 1) + " per label per second, ringing in "
+                  + std::to_string (ringingFrames) + " of 300 frames");
+            check (ringingFrames > 30, "the run really exercises the detector (ringing frames " + std::to_string (ringingFrames) + ")");
+            check (worst < 1.0, "labels hold still while levels fluctuate (" + fmt (worst, 2) + " px)");
+            check (layouts <= 2 * events + 2, "layout only on events, not every frame (" + std::to_string (layouts) + ")");
+            check (refreshRate <= 5.5, "values refresh at a calm rate (" + fmt (refreshRate, 1) + " / s)");
+            saveSnapshot (*editor, "-calm-1080x660");
+        }
+
+        // 2. A full bank (24 notches, a cluster at 2-3.5 kHz) at three sizes: no overlaps.
+        for (auto size : editorSizes)
+        {
+            EditorFixture f (false);
+            auto* editor = f.editor;
+            if (editor == nullptr) return;
+            auto& p = *f.processor;
+            set (p, id::detect, 0.0f);
+            for (int k = 0; k < 16; ++k) p.getEngine().addNotch (60.0f * std::pow (300.0f, (float) k / 15.0f) * (k == 15 ? 0.9f : 1.0f), 6.0f + (float) (k % 5) * 3.0f, 20.0f, k % 3 == 0, 1);
+            for (int k = 0; k < 8; ++k) p.getEngine().addNotch (2050.0f * std::pow (1.06f, (float) k), 9.0f + (float) k, 30.0f, false, 1);
+            render (p, mono (pink ((size_t) (defaultRate * 0.3), -30.0, 63)));
+            editor->setSize (size.x, size.y);
+            f.settle();
+            auto& g = editor->getGraph();
+            const auto label = std::to_string (size.x) + "x" + std::to_string (size.y) + ", 24 notches";
+            std::string which;
+            const auto& m = g.getMarkers();
+            int open = 0;
+            for (const auto& mk : m) if (! mk.compact) ++open;
+            check (m.size() == 24, label + ": 24 markers (" + std::to_string (m.size()) + ")");
+            check (! overlapsAny (m, which), label + ": no labels or dots overlap (" + which + ")");
+            for (const auto& mk : m)
+                check (g.getPlotArea().expanded (1.0f).contains (mk.chip), label + ": marker " + std::to_string (mk.number) + " inside the plot");
+            note (label + ": " + std::to_string (open) + " full labels, " + std::to_string (24 - open) + " numbered dots");
+            saveSnapshot (*editor, "-24notches-" + juce::String (size.x) + "x" + juce::String (size.y));
+        }
+
+        // 3. Idle labels close; hover (graph or table), selection and activity open them; a
+        //    removed notch's marker fades out.
+        {
+            EditorFixture f;
+            auto* editor = f.editor;
+            if (editor == nullptr) return;
+            auto& p = *f.processor;
+            auto& g = editor->getGraph();
+            set (p, id::detect, 0.0f);
+            const auto openCount = [&] { int c = 0; for (const auto& m : g.getMarkers()) if (! m.compact) ++c; return c; };
+            check (openCount() == 4, "fresh notches show full labels (" + std::to_string (openCount()) + ")");
+            f.tick (60 * 4 + 30);
+            check (openCount() == 0 && g.getMarkers().size() == 4, "after 4 s idle every label closes to a numbered dot (" + std::to_string (openCount()) + " open, " + std::to_string (g.getMarkers().size()) + " markers)");
+            f.tick (30);
+            check (! g.isAnimating(), "closed labels settle (no animation running)");
+            const auto id = g.getMarkers().back().id;
+            editor->getNotchTable().onNotchHovered (id);
+            f.tick (20);
+            const auto* hm = g.markerFor (id);
+            check (hm != nullptr && ! hm->compact, "hovering its table row opens a label");
+            editor->getNotchTable().onNotchHovered (0);
+            f.tick (60);
+            hm = g.markerFor (id);
+            check (hm != nullptr && hm->compact, "it closes again after the hover ends");
+            g.setSelectedNotch (id);
+            f.tick (20);
+            hm = g.markerFor (id);
+            check (hm != nullptr && ! hm->compact && ! hm->lockButton.isEmpty() && ! hm->clearButton.isEmpty(), "the selected notch shows its label with lock / clear");
+            g.setSelectedNotch (0);
+            p.clearNotch (id);
+            f.tick (3);
+            check (g.getLabelCount() == 4, "a cleared notch's marker fades out (still drawn just after)");
+            f.tick (20);
+            check (g.getLabelCount() == 3 && g.getMarkers().size() == 3, "... and is gone after the fade (" + std::to_string (g.getLabelCount()) + " labels)");
+            saveSnapshot (*editor, "-idle-1080x660");
+        }
+    }
+
+    //==============================================================================
+    // One howl, one notch: detections near a notch re-tune / deepen / widen it, never stack.
+
+    /** Peak dBFS of x over [from, to) seconds. */
+    double peakDbBetween (const std::vector<float>& x, double rate, double from, double to)
+    {
+        float peak = 0.0f;
+        for (auto i = (size_t) std::max (0.0, from * rate); i < std::min (x.size(), (size_t) std::max (0.0, to * rate)); ++i)
+            peak = std::max (peak, std::abs (x[i]));
+        return 20.0 * std::log10 ((double) peak + 1.0e-12);
+    }
+
+    void testSafetyDuck()
+    {
+        const auto threshold = -6.0;
+        const auto thresholdLin = (float) std::pow (10.0, threshold / 20.0);
+        const auto firstOver = [&] (const std::vector<float>& x)
+        {
+            for (size_t i = 0; i < x.size(); ++i)
+                if (std::abs (x[i]) > thresholdLin) return (double) i / defaultRate;
+            return -1.0;
+        };
+
+        // 1. A runaway the notches cannot hold (Max Cut 3 dB, loop gain 1.6 = +4.1 dB): without the duck the
+        //    output sits near full scale; with it the level is held near the threshold.
+        RoomSpec s; s.freq = 2000.0; s.gain = 1.6; s.seconds = 4.0; s.loopOffSec = 2.5;
+        RoomRun loose, held;
+        dsp::FeedbackEngine::SafetyState heldSafety;
+        {
+            auto p = makeProcessor();
+            set (*p, id::maxCut, 3.0f);
+            set (*p, id::safety, 0.0f);
+            loose = runRoom (p.get(), s);
+        }
+        {
+            auto p = makeProcessor();
+            set (*p, id::maxCut, 3.0f);
+            held = runRoom (p.get(), s);
+            heldSafety = p->getEngine().getSafety();
+        }
+        const auto unprotected = peakDbBetween (loose.out, defaultRate, 1.0, 2.5);
+        const auto over = firstOver (held.out);
+        // If the duck (armed by the detector's report) keeps the output from ever crossing, the
+        // whole loop-on stretch is the held level.
+        const auto wholePeak = peakDbBetween (held.out, defaultRate, 0.0, 2.5);
+        const auto heldPeak = over >= 0.0 ? peakDbBetween (held.out, defaultRate, over + 0.03, 2.5) : wholePeak;
+        const auto firstPeak = over >= 0.0 ? peakDbBetween (held.out, defaultRate, over, over + 0.03) : wholePeak;
+        note ("  first crossing of the threshold " + (over >= 0.0 ? fmt (over, 3) + " s" : std::string ("never")) + ", loop-on peak " + fmt (wholePeak, 1) + " dBFS");
+        note ("runaway the notches cannot hold (2 kHz, loop gain 1.6 = +4.1 dB, Max Cut 3 dB): without the duck "
+              + fmt (unprotected, 1) + " dBFS; with it " + fmt (heldPeak, 1) + " dBFS peak after the first 30 ms over (first 30 ms "
+              + fmt (firstPeak, 1) + "), " + std::to_string (heldSafety.events) + " duck(s), " + fmt (heldSafety.totalSec, 2) + " s ducked");
+        check (unprotected > threshold + 3.0, "the unprotected runaway exceeds the threshold (" + fmt (unprotected, 1) + " dBFS)");
+        check (heldPeak <= threshold + 2.0, "with the duck the runaway stays within 2 dB of the threshold (" + fmt (heldPeak, 1) + ")");
+        check (firstPeak <= threshold + 4.0, "the duck's attack overshoots by less than 4 dB (" + fmt (firstPeak, 1) + ")");
+        check (heldSafety.events >= 1, "the duck engaged");
+        check (finiteAndNormal (held.out), "no NaN / denormal while ducking");
+
+        // Recovery: the loop is broken at 2.5 s; the level comes back smoothly (no step) within
+        // the release, and the duck lets go.
+        {
+            const auto win = (size_t) (0.005 * defaultRate);
+            double worstStep = 0.0, prev = 0.0;
+            bool first = true;
+            for (auto i = (size_t) (2.6 * defaultRate); i + win <= held.out.size(); i += win)
+            {
+                // The gain, as the output / input level ratio of the same (room-noise) signal.
+                const auto g = rmsDb (held.out, i, win) - rmsDb (held.mic, i, win);
+                if (! first) worstStep = std::max (worstStep, std::abs (g - prev));
+                prev = g; first = false;
+            }
+            const auto at = (size_t) (3.6 * defaultRate), len = (size_t) (0.4 * defaultRate);
+            const auto endGain = rmsDb (held.out, at, len) - rmsDb (held.mic, at, len);
+            note ("recovery after the loop is broken at 2.5 s: worst gain step " + fmt (worstStep, 2) + " dB per 5 ms; gain at 3.6 - 4.0 s " + fmt (endGain, 2) + " dB");
+            check (worstStep < 1.5, "the duck recovers smoothly (" + fmt (worstStep, 2) + " dB / 5 ms)");
+            check (endGain > -4.0, "the level is back (less the notches' own cut) after the release (" + fmt (endGain, 2) + " dB)");
+        }
+
+        // Depth -inf mutes the runaway; still a 5 ms ramp, still finite.
+        {
+            auto p = makeProcessor();
+            auto* depth = p->getState().getParameter (id::safetyDepth);
+            const auto topText = depth->getText (1.0f, 16);
+            check (topText.contains (juce::String::fromUTF8 ("\xe2\x88\x9e")) || topText.containsIgnoreCase ("mute"), "Safety depth's top reads infinity / Mute (" + topText.toStdString() + ")");
+            set (*p, id::maxCut, 3.0f);
+            depth->setValueNotifyingHost (1.0f);
+            const auto run = runRoom (p.get(), s);
+            const auto engaged = p->getEngine().getSafety().events;
+            // The duck engages on the first sample over the threshold, so the output may never
+            // cross it: time from where the output first reaches within 0.5 dB of it.
+            auto o = -1.0;
+            for (size_t i = 0; i < run.out.size(); ++i)
+                if (std::abs (run.out[i]) > thresholdLin * 0.944f) { o = (double) i / defaultRate; break; }
+            const auto muted = o >= 0.0 ? peakDbBetween (run.out, defaultRate, o + 0.06, o + 0.08) : 0.0;
+            note ("Depth " + topText.toStdString() + ": " + fmt (muted, 1) + " dBFS 60 - 80 ms after the output first reached the threshold (at " + fmt (o, 3) + " s)"
+                  + ", loop-on peak " + fmt (peakDbBetween (run.out, defaultRate, 0.0, 2.5), 1) + " dBFS, " + std::to_string (engaged) + " duck(s)");
+            check (engaged >= 1 && muted < -60.0, "Depth -inf mutes the runaway (" + fmt (muted, 1) + " dBFS)");
+            check (finiteAndNormal (run.out), "muting is finite");
+        }
+
+        // An extreme runaway (loop gain 2 = +6 dB, 600 dB/s): it reaches the threshold within about
+        // one analysis window, before the detector can confirm it, so Feedback mode cannot duck the
+        // first crossing (Always mode can). Once it is confirmed the duck holds it.
+        {
+            auto fast = s; fast.gain = 2.0;
+            auto p = makeProcessor();
+            set (*p, id::maxCut, 3.0f);
+            const auto run = runRoom (p.get(), fast);
+            const auto o = firstOver (run.out);
+            const auto first = o >= 0.0 ? peakDbBetween (run.out, defaultRate, o, o + 0.1) : -120.0;
+            const auto later = o >= 0.0 ? peakDbBetween (run.out, defaultRate, o + 0.3, 2.5) : -120.0;
+            note ("extreme runaway (loop gain 2.0): first 100 ms over the threshold " + fmt (first, 1) + " dBFS (not yet confirmed), from 300 ms on "
+                  + fmt (later, 1) + " dBFS, " + std::to_string (p->getEngine().getSafety().events) + " duck(s)");
+            check (later <= threshold + 2.0, "a confirmed extreme runaway is held by the duck (" + fmt (later, 1) + ")");
+        }
+
+        // 2. Loud music (peaks over the threshold, no feedback) is never ducked in Feedback mode;
+        //    "Always" ducks it (it is then a plain over-threshold duck).
+        for (const auto always : { false, true })
+        {
+            auto p = makeProcessor();
+            set (*p, id::safetyTrigger, always ? 1.0f : 0.0f);
+            auto x = brightChord ((size_t) (4.0 * defaultRate), defaultRate, 0.1f, 95);
+            const auto drums = pink (x.size(), -14.0, 96);
+            for (size_t i = 0; i < x.size(); ++i) x[i] = 3.5f * x[i] + drums[i];
+            const auto in = mono (x);
+            const auto inPeak = peakDbBetween (x, defaultRate, 0.0, 4.0);
+            render (*p, mono (std::vector<float> (2048, 0.0f))); // warm up outside the count
+            countAllocations = true; allocationCount = 0;
+            const auto out = render (*p, in);
+            countAllocations = false;
+            const auto st = p->getEngine().getSafety();
+            note (std::string (always ? "Always" : "Feedback") + " mode, loud music (" + fmt (inPeak, 1) + " dBFS peaks, no feedback): "
+                  + std::to_string (st.events) + " duck(s), " + std::to_string (activeCount (p->getNotches())) + " notch(es)");
+            check (inPeak > threshold + 2.0, "the music peaks over the threshold (" + fmt (inPeak, 1) + ")");
+            if (always) check (st.events >= 1, "Always mode ducks loud programme");
+            else check (st.events == 0, "Feedback mode leaves loud music alone (" + std::to_string (st.events) + " ducks)");
+            check (finiteAndNormal (out.l), "finite output");
+        }
+
+        // 3. The editor: the red badge, the status count and the meter's threshold tick.
+        {
+            EditorFixture f (false);
+            auto* editor = f.editor;
+            if (editor == nullptr) return;
+            auto& p = *f.processor;
+            set (p, id::safetyTrigger, 1.0f); // Always: a plain loud sine ducks
+            std::vector<float> x ((size_t) (0.5 * defaultRate), 0.0f);
+            addSine (x, defaultRate, 1000.0, 0.9f);
+            render (p, mono (x));
+            editor->refresh();
+            auto& badge = editor->getSafetyBadge();
+            note ("badge while ducking: \"" + badge.getText().toStdString() + "\"; status \"" + editor->getStatusLabel().getText().toStdString() + "\"");
+            {
+                // The status reads "ducked 1\xc3\x97 (...)": one U+00D7, no double-encoded UTF-8 (U+00C3).
+                const auto status = editor->getStatusLabel().getText();
+                check (status.containsChar ((juce::juce_wchar) 0x00d7) && ! status.containsChar ((juce::juce_wchar) 0x00c3), "safety status text is clean UTF-8 (\u00d7, no mojibake)");
+                auto* knob = dynamic_cast<juce::SettableTooltipClient*> (editor->findControl (id::maxCut));
+                const auto tip = knob != nullptr ? knob->getTooltip() : juce::String();
+                check (tip.containsChar ((juce::juce_wchar) 0x221e) && ! tip.containsChar ((juce::juce_wchar) 0x00e2), "Max cut tooltip shows the infinity sign");
+            }
+            check (badge.isVisible() && badge.getText().startsWith ("SAFETY") && badge.getText().contains ("12"), "the toolbar shows the red SAFETY badge with the cut");
+            check (editor->getStatusLabel().getText().containsIgnoreCase ("safety"), "the status line says the safety duck is on");
+            check (std::abs (editor->getOutputMeter().getThresholdDb() - (float) threshold) < 0.1f, "the meter shows the threshold");
+            {
+                TestWindow window (*editor);
+                auto* hit = editor->getComponentAt (badge.getBounds().getCentre());
+                check (hit == &badge || badge.isParentOf (hit), "the badge sits clear of the toolbar's controls (hit: " + (hit != nullptr ? (hit->getComponentID() + "/" + hit->getName() + "/" + juce::String (typeid (*hit).name())).toStdString() : std::string ("none")) + ")");
+            }
+            // Its whole box (not just its centre) is clear of every other visible control, at every size.
+            for (auto size : editorSizes)
+            {
+                editor->setSize (size.x, size.y);
+                std::string overlap;
+                if (auto* parent = badge.getParentComponent())
+                    for (auto* sib : parent->getChildren())
+                        if (sib != &badge && sib->isVisible() && sib->getBounds().intersects (badge.getBounds())
+                            && ! sib->getBounds().contains (badge.getBounds()))
+                            overlap += (overlap.empty() ? "" : ", ") + (sib->getComponentID().isNotEmpty() ? sib->getComponentID() : sib->getName()).toStdString()
+                                     + (sib->getComponentID().isEmpty() && sib->getName().isEmpty() ? juce::String (typeid (*sib).name()).toStdString() : std::string());
+                check (overlap.empty(), std::to_string (size.x) + "x" + std::to_string (size.y) + ": the badge overlaps no other control (" + overlap + ")");
+            }
+            editor->setSize (1080, 660);
+            saveSnapshot (*editor, "-safety-1080x660");
+            render (p, mono (pink ((size_t) (3.0 * defaultRate), -40.0, 97)));
+            editor->refresh();
+            check (! badge.isVisible(), "the badge goes once the level has recovered");
+            check (editor->getStatusLabel().getText().contains ("ducked 1"), "the status line counts the duck (" + editor->getStatusLabel().getText().toStdString() + ")");
+            set (p, id::safety, 0.0f);
+            editor->refresh();
+            check (std::isnan (editor->getOutputMeter().getThresholdDb()), "no threshold tick with Safety off");
+        }
+    }
+
+    void testOneNotchPerHowl()
+    {
+        struct Case { const char* name; RoomSpec spec; int expect; };
+        const auto binHz = defaultRate / 4096.0;
+        std::vector<Case> cases;
+        { RoomSpec s; s.freq = 2000.0; s.gain = 1.2; cases.push_back ({ "steady 2 kHz", s, 1 }); }
+        { RoomSpec s; s.freq = 256.5 * binHz; s.gain = 1.2; cases.push_back ({ "between bins (256.5 bins, 3006 Hz)", s, 1 }); }
+        { RoomSpec s; s.freq = 5000.0; s.gain = 1.15; s.driftPct = 1.5; cases.push_back ({ "drifting 5 kHz (+1.5 % over 6 s)", s, 1 }); }
+        { RoomSpec s; s.freq = 1200.0; s.gain = 1.15; s.warblePct = 0.4; cases.push_back ({ "warbling 1.2 kHz (+-0.4 % at 0.7 Hz)", s, 1 }); }
+        { RoomSpec s; s.freq = 12000.0; s.gain = 1.3; cases.push_back ({ "fast 12 kHz (gain 1.3)", s, 1 }); }
+        { RoomSpec s; s.freq = 800.0; s.gain = 1.1; s.programme = Programme::speech; cases.push_back ({ "800 Hz under speech", s, 1 }); }
+        { RoomSpec s; s.freq = 4000.0; s.gain = 1.15; s.driftPct = 6.0; cases.push_back ({ "drifting 4 kHz (+6 % over 6 s)", s, 1 }); }
+        { RoomSpec s; s.freq = 6000.0; s.gain = 1.15; s.warblePct = 2.0; s.warbleHz = 0.5; cases.push_back ({ "wide warble 6 kHz (+-2 % at 0.5 Hz)", s, 1 }); }
+        { RoomSpec s; s.freq = 2500.0; s.gain = 1.15; s.driftPct = 4.0; s.warblePct = 1.0; s.warbleHz = 0.3; cases.push_back ({ "2.5 kHz, Notch Q 60, drift +4 % and warble +-1 %", s, 1 }); }
+        { RoomSpec s; s.freq = 2000.0; s.freq2 = 2000.0 * std::pow (2.0, 1.0 / 3.0); s.gain = 1.2; cases.push_back ({ "two howls 1/3 octave apart (2000 / 2520 Hz)", s, 2 }); }
+        for (const auto& c : cases)
+        {
+            auto p = makeProcessor();
+            if (std::string (c.name).find ("Q 60") != std::string::npos) set (*p, id::notchQ, 60.0f);
+            const auto run = runRoom (p.get(), c.spec, defaultRate, defaultBlock, true);
+            int final = 0;
+            for (const auto& n : run.notches)
+                if (n.active && ! n.merging) ++final;
+            auto quiet = c.spec; quiet.gain = 0.0;
+            const auto base = bandEnvelopeDb (runRoom (nullptr, quiet).mic, defaultRate, c.spec.freq);
+            const auto env = bandEnvelopeDb (run.mic, defaultRate, c.spec.freq);
+            auto baseLevel = 0.0, steady = 0.0;
+            for (size_t i = 50; i < base.size(); ++i) baseLevel += base[i];
+            baseLevel /= (double) (base.size() - 50);
+            for (size_t i = env.size() - 100; i < env.size(); ++i) steady += env[i];
+            steady = steady / 100.0 - baseLevel;
+            // The howl the loop really runs at (the delay picks a mode near the resonance), at the end
+            // of the run with the loop opened up: measured on a no-plugin run over the same seconds.
+            auto loose = c.spec; loose.seconds = std::min (c.spec.seconds, 1.0 + (run.firstNotchSec > 0.0 ? run.firstNotchSec : 0.0));
+            const auto howl = c.spec.driftPct != 0.0 || c.spec.warblePct != 0.0 || c.spec.freq2 > 0.0 ? 0.0
+                            : howlFrequency (runRoom (nullptr, loose).mic, defaultRate, c.spec.freq, run.firstNotchSec > 0.0 ? run.firstNotchSec : loose.seconds);
+            const auto cut = final > 0 && howl > 0.0 ? measuredCutDb (run.notches, defaultRate, howl) : 0.0;
+            const auto needed = 20.0 * std::log10 (c.spec.gain);
+            note (std::string (c.name) + ": " + std::to_string (final) + " notch(es) at the end, at most " + std::to_string (run.maxConcurrent)
+                  + " at once, " + std::to_string (run.ids.size()) + " allocated; " + (howl > 0.0 ? "bank cut at the howl (" + fmt (howl, 0) + " Hz) " + fmt (cut, 1) + " dB" : std::string ("moving howl")) + " (loop needs > "
+                  + fmt (needed, 1) + "); steady " + fmt (steady, 1) + " dB re no-loop; merges " + std::to_string (p->getEngine().getMergeCount()) + "; " + notchList (run.notches));
+            check (final == c.expect, std::string (c.name) + ": " + std::to_string (c.expect) + " notch(es) (" + std::to_string (final) + ")");
+            check (run.maxConcurrent <= c.expect, std::string (c.name) + ": never more than " + std::to_string (c.expect) + " at once (" + std::to_string (run.maxConcurrent) + ")");
+            // Held: an unprotected loop runs 80 dB up; a held one stays near the loop-free level (a
+            // loop just under unity still colours the band a few dB, as in any room).
+            check (steady < 6.0, std::string (c.name) + ": held near the loop-free level (" + fmt (steady, 1) + " dB)");
+            if (howl > 0.0) check (-cut >= needed + 3.0, std::string (c.name) + ": the one notch cuts at least the loop gain + 3 dB (" + fmt (-cut, 1) + " dB)");
+        }
+
+        // Two notches that drifted together are consolidated into one, crossfaded (no gap).
+        auto p = makeProcessor();
+        set (*p, id::detect, 1.0f);
+        set (*p, id::liveNotches, 1.0f);
+        auto& e = p->getEngine();
+        e.addNotch (3000.0f, 12.0f, 20.0f, false);
+        e.addNotch (3030.0f, 9.0f, 20.0f, false);
+        Stereo sine ((size_t) (defaultRate * 1.0));
+        addSine (sine.l, defaultRate, 3015.0, 0.01f);
+        sine.r = sine.l;
+        const auto out = render (*p, sine);
+        check (e.countActive() == 1, "drifted-together notches are consolidated into one (" + std::to_string (e.countActive()) + ")");
+        check (e.getMergeCount() >= 1, "consolidation counted");
+        // During the crossfade the cut at the shared frequency never dips below the survivor's.
+        auto worst = -200.0;
+        for (size_t i = (size_t) (0.2 * defaultRate); i + 960 <= out.l.size(); i += 960)
+            worst = std::max (worst, rmsDb (out.l, i, 960) - rmsDb (sine.l, i, 960));
+        check (worst < -6.0, "no gap in the cut while the duplicate fades (worst " + fmt (worst, 1) + " dB)");
+        check (finiteAndNormal (out.l), "consolidation: finite output");
+    }
+
+    //==============================================================================
+    // Bright programme that must not trigger Safe mode.
+
+    std::vector<float> brightChord (size_t n, double rate, float amplitude, int seed)
+    {
+        // Sawtooth chord (A2 E3 A3 C#4 E4, slightly detuned pairs), every harmonic up to Nyquist
+        // (polyBLEP), re-voiced every 2 s.
+        juce::Random r (seed);
+        std::vector<float> v (n, 0.0f);
+        const double chords[][5] = { { 110.0, 164.81, 220.0, 277.18, 329.63 }, { 98.0, 146.83, 196.0, 246.94, 293.66 }, { 130.81, 196.0, 261.63, 329.63, 392.0 } };
+        std::array<double, 10> phase {};
+        for (auto& ph : phase) ph = r.nextDouble();
+        const auto blep = [] (double t, double dt)
+        {
+            if (t < dt) { t /= dt; return t + t - t * t - 1.0; }
+            if (t > 1.0 - dt) { t = (t - 1.0) / dt; return t * t + t + t + 1.0; }
+            return 0.0;
+        };
+        for (size_t i = 0; i < n; ++i)
+        {
+            const auto& c = chords[(i / (size_t) (2.0 * rate)) % 3];
+            double s = 0.0;
+            for (int k = 0; k < 10; ++k)
+            {
+                const auto f = c[k / 2] * (k % 2 == 0 ? 1.0 : 1.004);
+                const auto dt = f / rate;
+                phase[(size_t) k] += dt;
+                if (phase[(size_t) k] >= 1.0) phase[(size_t) k] -= 1.0;
+                s += 2.0 * phase[(size_t) k] - 1.0 - blep (phase[(size_t) k], dt);
+            }
+            v[i] = (float) (amplitude * s / 10.0);
+        }
+        return v;
+    }
+
+    /** Cymbal: every 1.2 s a crash, ~60 inharmonic modes 3-16 kHz with 0.6-2.5 s decays plus a noise burst. */
+    std::vector<float> cymbals (size_t n, double rate, int seed)
+    {
+        juce::Random r (seed);
+        std::vector<float> v (n, 0.0f);
+        struct Mode { double f, decay, amp, phase; };
+        std::vector<Mode> modes;
+        for (int k = 0; k < 60; ++k)
+            modes.push_back ({ 3000.0 * std::pow (16000.0 / 3000.0, r.nextDouble()), 0.6 + 1.9 * r.nextDouble(), 0.3 + 0.7 * r.nextDouble(), r.nextDouble() * twoPi });
+        const auto period = (size_t) (1.2 * rate);
+        OnePole lp (rate, 2000.0);
+        for (size_t i = 0; i < n; ++i)
+        {
+            const auto t = (double) (i % period) / rate;
+            double s = 0.0;
+            for (const auto& m : modes)
+                s += m.amp * std::exp (-t / m.decay) * std::sin (m.phase + twoPi * m.f * (double) i / rate);
+            const auto w = r.nextDouble() * 2.0 - 1.0;
+            s = 0.02 * s + 0.4 * std::exp (-t / 0.25) * (w - lp.process (w));
+            v[i] = (float) s;
+        }
+        return v;
+    }
+
+    /** Hi-hat: closed hats on 8th notes at 120 bpm (short, high-passed noise with a few metallic modes). */
+    std::vector<float> hiHats (size_t n, double rate, int seed)
+    {
+        juce::Random r (seed);
+        std::vector<float> v (n, 0.0f);
+        const auto period = (size_t) (0.25 * rate);
+        OnePole lp (rate, 6000.0);
+        const double modes[] = { 6120.0, 7340.0, 8810.0, 10450.0, 12900.0 };
+        for (size_t i = 0; i < n; ++i)
+        {
+            const auto t = (double) (i % period) / rate;
+            const auto open = ((i / period) % 8) == 7; // an open hat once a bar
+            const auto e = std::exp (-t / (open ? 0.35 : 0.04));
+            const auto w = r.nextDouble() * 2.0 - 1.0;
+            double s = w - lp.process (w);
+            for (const auto f : modes) s += 0.08 * std::sin (twoPi * f * (double) i / rate);
+            v[i] = (float) (0.5 * e * s);
+        }
+        return v;
+    }
+
+    /** Sibilant speech: the synthetic talker with an 's' or 'sh' (band-passed noise 4-10 kHz, 80-250 ms) every ~0.6 s. */
+    std::vector<float> sibilantSpeech (size_t n, double rate, int seed)
+    {
+        auto v = speech (n, rate, seed);
+        juce::Random r (seed + 1);
+        BandPass s1 (rate, 6500.0, 2.5), s2 (rate, 8500.0, 3.0), sh (rate, 4200.0, 2.0);
+        size_t next = (size_t) (0.3 * rate), end = 0;
+        bool isSh = false;
+        for (size_t i = 0; i < n; ++i)
+        {
+            if (i == next) { end = i + (size_t) ((0.08 + 0.17 * r.nextDouble()) * rate); next = i + (size_t) ((0.45 + 0.3 * r.nextDouble()) * rate); isSh = r.nextBool(); }
+            const auto w = r.nextDouble() * 2.0 - 1.0;
+            const auto a = s1.process (w) + s2.process (w);
+            const auto b = sh.process (w);
+            if (i < end)
+                v[i] += (float) (0.9 * (isSh ? b : a));
+        }
+        return v;
+    }
+
+    /** Bright plucked guitar: Karplus-Strong strums of an E major chord with a bright pick (little damping). */
+    std::vector<float> brightGuitar (size_t n, double rate, int seed)
+    {
+        juce::Random r (seed);
+        std::vector<float> v (n, 0.0f);
+        const double strings[] = { 82.41, 123.47, 164.81, 207.65, 246.94, 329.63 };
+        std::vector<std::vector<double>> lines;
+        std::vector<size_t> idx (6, 0);
+        for (const auto f : strings) lines.emplace_back ((size_t) std::lround (rate / f), 0.0);
+        const auto strum = (size_t) (0.75 * rate);
+        for (size_t i = 0; i < n; ++i)
+        {
+            for (size_t s = 0; s < 6; ++s)
+            {
+                if (i % strum == s * (size_t) (0.012 * rate))
+                    for (auto& x : lines[s]) x = r.nextDouble() * 2.0 - 1.0;
+                auto& line = lines[s];
+                const auto a = line[idx[s]], b = line[(idx[s] + 1) % line.size()];
+                const auto y = 0.4985 * (a + b) + 0.002 * (a - b); // bright: almost no loss per pass
+                line[idx[s]] = y;
+                idx[s] = (idx[s] + 1) % line.size();
+                v[i] += (float) (0.12 * a);
+            }
+        }
+        return v;
+    }
+
+    void testBrightProgrammeIsLeftAlone()
+    {
+        const auto n = (size_t) (defaultRate * 8.0);
+        std::vector<std::pair<std::string, std::vector<float>>> cases;
+        cases.emplace_back ("cymbal crashes", cymbals (n, defaultRate, 61));
+        cases.emplace_back ("hi-hats (closed 8ths, open once a bar)", hiHats (n, defaultRate, 62));
+        cases.emplace_back ("sibilant speech", sibilantSpeech (n, defaultRate, 63));
+        cases.emplace_back ("bright sawtooth chord", brightChord (n, defaultRate, 0.3f, 64));
+        cases.emplace_back ("bright strummed guitar", brightGuitar (n, defaultRate, 65));
+        for (auto& [name, x] : cases)
+        {
+            auto peak = 0.0f;
+            for (auto s : x) peak = std::max (peak, std::abs (s));
+            if (peak > 0.0f) for (auto& s : x) s *= 0.5f / peak; // -6 dBFS peak
+            for (const auto aggressive : { false, true })
+            {
+                auto p = makeProcessor();
+                set (*p, id::mode, aggressive ? 1.0f : 0.0f);
+                render (*p, mono (x));
+                const auto count = activeCount (p->getNotches());
+                const auto label = std::string (aggressive ? "aggressive: " : "safe: ") + name;
+                note (label + ": " + std::to_string (count) + " notches (" + notchList (p->getNotches()) + ")");
+                if (! aggressive) check (count == 0, label + " gets no notches");
+            }
+        }
+    }
+
     struct TestCase { const char* name; void (*run)(); };
 }
 
@@ -1506,6 +2543,7 @@ int main()
         { "sidechain reference mic",                             testSidechain },
         { "clear, lock, release, hold, ring-out, bank size",     testClearLockRelease },
         { "max cut and no zipper noise",                         testMaxCutAndZipper },
+        { "max cut infinity: full notch, ramp, text, old sessions", testInfiniteCut },
         { "state, notes and room presets",                       testStateNotesPresets },
         { "undo and A / B",                                      testUndoAndCompare },
         { "extremes: rates, blocks, NaN / denormals",            testExtremes },
@@ -1514,11 +2552,20 @@ int main()
         { "editor: size, controls, layout, markers, snapshots",  testEditor },
         { "real mouse: every control and marker button",         testRealMouse },
         { "Analyzer Speed setting",                              testAnalyzerSpeed },
+        { "high-frequency feedback (3-18 kHz, room, speech, rates, blocks)", testHighFrequencyFeedback },
+        { "bright programme: cymbals, hi-hats, sibilance, saw chord, guitar", testBrightProgrammeIsLeftAlone },
+        { "one howl, one notch (merge, retune, consolidate)",    testOneNotchPerHowl },
+        { "safety duck: last resort, music untouched, recovery", testSafetyDuck },
+        { "calm labels: steady lanes, no overlaps, idle labels close", testCalmLabels },
     };
+    const auto filter = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_TEST_FILTER", {});
 
     int failedTests = 0;
+    size_t ran = 0;
     for (const auto& test : tests)
     {
+        if (filter.isNotEmpty() && ! juce::String (test.name).containsIgnoreCase (filter)) continue;
+        ++ran;
         const auto before = failedChecks;
         std::cout << test.name << "\n" << std::flush;
         test.run();
@@ -1527,7 +2574,7 @@ int main()
         std::cout << "  " << (ok ? "[PASS]" : "[FAIL]") << "\n";
     }
 
-    std::cout << "\n" << (tests.size() - (size_t) failedTests) << " / " << tests.size() << " tests passed, "
+    std::cout << "\n" << (ran - (size_t) failedTests) << " / " << ran << " tests passed, "
               << passedChecks << " checks passed, " << failedChecks << " failed\n";
     return failedChecks == 0 ? 0 : 1;
 }

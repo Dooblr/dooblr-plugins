@@ -105,6 +105,14 @@ namespace dooblrfeedback::ui
         repaint();
     }
 
+    void OutputMeter::setThresholdDb (float db)
+    {
+        const auto same = (std::isnan (db) && std::isnan (thresholdDb)) || std::abs (db - thresholdDb) < 0.05f;
+        if (same) return;
+        thresholdDb = db;
+        repaint();
+    }
+
     void OutputMeter::mouseDown (const juce::MouseEvent&)
     {
         resetClip();
@@ -157,6 +165,16 @@ namespace dooblrfeedback::ui
             {
                 g.setColour (colourFor (ch.hold).brighter (0.2f));
                 g.fillRect (juce::Rectangle<float> (bar.getX(), dbToY (ch.hold, bar) - 0.75f, bar.getWidth(), 1.5f));
+            }
+
+            if (! std::isnan (thresholdDb) && thresholdDb > minDb && thresholdDb < maxDb)
+            {
+                // Safety threshold: a red dashed tick (two short dashes per bar).
+                const auto ty = dbToY (thresholdDb, bar) - 0.5f;
+                g.setColour (meterRed.withAlpha (0.9f));
+                const auto dash = bar.getWidth() * 0.35f;
+                g.fillRect (juce::Rectangle<float> (bar.getX(), ty, dash, 1.0f));
+                g.fillRect (juce::Rectangle<float> (bar.getRight() - dash, ty, dash, 1.0f));
             }
 
             const juce::Rectangle<float> light (x, clipArea.getY(), barWidth, clipArea.getHeight());
