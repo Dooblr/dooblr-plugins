@@ -1,5 +1,15 @@
 # dooblr-plugins
 
+## **[⬇ Download the dooblr installer for macOS](https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-installer-mac.dmg)**
+
+## **[⬇ Download the dooblr installer for Windows](https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-installer-windows.exe)**
+
+One app installs and updates every dooblr plug-in: tick the ones you want, and it shows what's
+installed, what's new, and installs the VST3s (and the Max for Live devices) for you.
+First launch on a Mac: right-click the app and choose **Open** (macOS 15+: System Settings >
+Privacy & Security > **Open Anyway**); on Windows: **More info > Run anyway**. Details:
+[`dooblr-installer/`](dooblr-installer/).
+
 Monorepo for the **dooblr** audio plug-in suite by Dan Feinstein: VST3 plug-ins for macOS
 (arm64, macOS 11+), built with C++20, CMake and JUCE 8.0.15. Each plug-in is self-contained
 in its own folder and has its own README.
@@ -12,8 +22,9 @@ in its own folder and has its own README.
 | [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
 | [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.3 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display, Analyzer speed setting | Early; its tests and LoadCheck pass, not yet tested in a DAW |
 | [`dooblr-feedback/`](dooblr-feedback/) | dooblr-feedback | 0.1.1 | Automatic live feedback suppressor (VST3 effect, optional reference-mic sidechain): zero-latency notches (one per howl, up to 20 kHz, Max cut to ∞), calm markers on the spectrum with lock / clear, Safety duck, notch table, room notes and room presets | Early; its tests and LoadCheck pass, not yet tested live or in a DAW |
-| [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.2.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
-| [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12) and dooblr-feedback (§13) | Updated 2026-11-01 |
+| [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.3.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
+| [`dooblr-installer/`](dooblr-installer/) | dooblr installer | 0.1.0 | Installer / updater app for the whole suite (macOS dmg, Windows exe): picks what to install or update, sha256-checked downloads from the latest GitHub Release | New; Mac tests and a local end-to-end install pass; Windows not yet built (CI) |
+| [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12), dooblr-feedback (§13) and the installer (§14) | Updated 2026-11-01 |
 
 Versions come from each plug-in's `project(... VERSION ...)` in its `CMakeLists.txt` (dooblr-chords:
 its README / device). Status is as of the last commit; see each folder's README and ROADMAP.

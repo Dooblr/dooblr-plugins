@@ -1061,8 +1061,21 @@ Labels must not bounce while levels change.
 
 ---
 
-## 14. Changelog
+## 14. dooblr installer (I)
 
+Read from **dooblr-installer 0.1.0** (`~/Dropbox/dooblr_plugins/dooblr-installer`, short form **I**). I is a standalone app (not a plug-in) that installs and updates the suite. It uses the K/Q dark palette, type and button styles; it adds no new tokens. Code wins.
+
+- **Window**: native title bar, resizable 720×520 to 1400×1000. Header: "dooblr" wordmark with the accent underline, "installer vX.Y.Z" in muted text, and a step indicator on the right (Welcome · Choose · Install · Done; current step in `accent`, done steps in `textPrimary`, later steps muted).
+- **Pages**: one task per page, a large heading, one primary button bottom right (accent fill, dark text), Back / Cancel as raised secondary buttons beside it.
+- **Item rows**: rounded `panelRaised` rows; add-ons (the prophet panel) are indented 28 px under their parent on a `panel` fill. Left to right: checkbox, name (bold) and one-line description (muted), Installed / Available versions, status tag.
+- **Status tags are labels, not buttons**: *Install* and *Update* get a tinted pill (status colour at 18 % alpha, text in the status colour); *Up to date*, *Newer installed* and *Not available* are plain muted text. Clicking anywhere on a row toggles its checkbox (pointing-hand cursor), so nothing that looks clickable is dead.
+- **Selection helpers**: Select updates / All / None under the list; the primary button counts what it will do ("Install 5 items") and is disabled at zero.
+- **Progress**: a progress bar and a plain-text log, one line per step ("Downloading …", "Checked … (sha256 OK)", "Installed … -> path").
+- **Errors**: say what failed, why, and what was left alone ("… nothing was installed"); a manifest that can't be read shows the address and a Try again button.
+
+## 15. Changelog
+
+- **2026-11-01**: Added §14 dooblr installer (I, 0.1.0): window, pages, item rows with indented add-ons, status tags as labels (tinted pill only for Install / Update), whole-row click toggles, selection helpers, progress log, error wording. Changelog renumbered to §15. Additive only; no existing rule, token name or value changed; §11 (including §11.11) untouched; no JSON change.
 - **2026-11-01**: Added §13 dooblr-feedback (F, 0.1.1): layout, notch markers with lock / clear, calm labels (stable lanes, eased motion, numbered dots, fade when unused), notch table, zero-latency IIR notch bank driven by an FFT (one notch per howl, Max Cut ∞ = true notch), room notes and presets, Safety Duck badge and meter threshold tick. Changelog renumbered to §14. The F 0.1.0 commit (`47f3907`) said "design §13" but did not include this section; this adds it. The F full-cut value text (−∞ dB / ∞) is documented as the one exception to §12.6 "never show inf"; §12.6 itself is unchanged. Additive only; no existing rule, token name or value changed; §11 untouched. JSON: `components.eventMarker.motion`, `.dots`, `.fullCutLine`, `components.safetyBadge`, `components.meterThresholdTick`, a `changelog` entry.
 - **2026-11-01**: Added §11.11 dooblr-vocals De-esser (page, panel, display, meter, placement). Additive only; no existing rule, token name or value changed.
 - **2026-11-01**: Added §11.10 dooblr-vocals Dynamic EQ panel (EQ page: band picker, per-band Dynamic / Range / Threshold / Attack / Release, live dynamic curve), ported from dooblr-q (no RangeRing). Additive only; existing tokens only.
