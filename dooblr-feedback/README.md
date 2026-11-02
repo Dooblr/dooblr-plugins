@@ -13,11 +13,12 @@ Version 0.1.1. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
 
 ## How it works
 
-- **Signal path.** Up to 24 IIR notch filters (zero-delay-feedback state-variable form,
-  stereo, coefficients updated every 16 samples with smoothed depth, frequency and Q). There
-  is no lookahead and no FFT on the audio path, so the plug-in reports and adds no latency.
-  Only live notch slots are processed (an idle slot costs nothing). Bypass and an empty notch
-  bank pass the input bit-exact.
+- **Signal path.** Up to 24 bands. Each one is a parametric peaking EQ (Bell Q, the first
+  12 dB of the cut) in series with a narrow notch (Notch Q, anything deeper, including a true
+  infinite notch). Both are zero-delay-feedback state-variable filters, stereo, with depth,
+  frequency and Q smoothed and coefficients updated every 16 samples. There is no lookahead
+  and no FFT on the audio path, so the plug-in reports and adds no latency. Only live filters
+  are processed (an idle one costs nothing). Bypass and an empty bank pass the input bit-exact.
 - **Detection.** A 4096-point Hann FFT of the detector signal every 256 samples (5.3 ms at
   48 kHz). The detector is the plug-in's own output, which is what reaches the speakers,
   or the sidechain when **SC** is on and a key is connected. A candidate is a narrow peak
@@ -69,9 +70,10 @@ Version 0.1.1. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
   Loud music without feedback never ducks in Feedback mode. A red **SAFETY −12 dB** badge
   shows in the toolbar while it ducks, the status line counts the ducks, and the output
   meter shows the threshold as a red dashed tick. On by default, Feedback mode. No latency.
-- **Float / Hold** (**Live notches**). In Float mode a floating notch that has been quiet for
-  **Release** seconds fades out at 6 dB/s. In Hold mode notches stay until they are
-  cleared. Fixed (locked) notches never release.
+- **HOLD.** Off by default. A floating band that has been quiet (no feedback in its
+  frequency) for **Recover after** seconds steps back toward 0 dB at **Recover speed**, probing
+  between stages, and is freed at 0 dB. HOLD on keeps every floating band until it is cleared.
+  Fixed (locked) bands never release.
 - **Ring-out.** For sound check: Aggressive thresholds, and every notch found is fixed
   (locked). Push the gain up slowly, let it catch each ring, then turn Ring-out off and the
   fixed notches stay for the show.
@@ -81,12 +83,12 @@ Version 0.1.1. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
 
 | Area | Controls |
 | --- | --- |
-| Left column | Name and version, Bypass, Safe / Aggressive, Auto, Ring-out, SC (sidechain), the big **Sensitivity** knob, Max cut, latency and status |
+| Left column | Name and version, Bypass, Safe / Aggressive, the large **HOLD** button, Auto, Ring-out, SC (sidechain), the big **Sensitivity** knob, Max cut, latency and status |
 | Toolbar | Preset `<` list `>` and a `…` menu (Save room preset, Load room preset, Rename), Undo / Redo, A / B compare with a copy button (A→B / B→A), **Clear all** |
 | Graph | Input and output spectrum (Analyzer speed sets the drawn ballistics), the summed notch curve, and a marker per notch: a chip with frequency and note name, cut and Q, hits (×n), time since it was detected, and FIX / FLT. The chip has a padlock (lock = fixed) and × (clear). A dashed line runs down to a diamond handle at the notch's depth (accent = fixed, orange = floating). **Calm labels:** chips sit in stable lanes and are only re-laid out when a notch is added or cleared or the editor is resized, never because a level or cut changed; moves ease over 250 ms, values refresh at most 5 times a second, and a chip fades (300 ms) to a small numbered dot once its notch has been quiet for 4 s. Hovering a dot, its table row or the graph near it, or selecting it, expands it again. Chips never overlap: those that do not fit collapse to numbered dots. Hover reads out the notch, or the frequency, note and output level. Output meter at the right, with the Safety threshold tick |
 | Bottom, Notches view | The notch table: #, Frequency, Note, Cut, Needed (deepest cut it has needed), Q, Level, Detected, Hits, Type, Lock / Unlock, Clear |
 | Bottom, Notes view | Free-text room notes (UTF-8), saved with the session and in room presets |
-| Bottom, Advanced view | Notch Q, Live notches (Float / Hold), Release, Range low, Range high, Output, Analyzer speed; Safety duck, Duck when, Threshold, Depth, Recover |
+| Bottom, Advanced view | Notch Q, Bell Q, Recover after, Recover speed, Range low, Range high, Output, Analyzer speed; Safety duck, Duck when, Threshold, Depth, Recover |
 
 Graph mouse: click a marker to select it (and its table row). Click the padlock to toggle
 fixed / floating. Click × to clear the notch. Right-click a handle to clear it. Clear all is

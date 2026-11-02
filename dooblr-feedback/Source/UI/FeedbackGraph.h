@@ -142,6 +142,7 @@ namespace dooblrfeedback::ui
         double lastTickMs = 0.0;
 
         dsp::NotchArray notches {}, drawnNotches {};
+        float curveBellQ = -1.0f;
         std::vector<Marker> markers;
         std::vector<Label> labels;
         int layoutCount = 0, valueRefreshes = 0;

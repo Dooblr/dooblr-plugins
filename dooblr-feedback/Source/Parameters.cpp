@@ -85,7 +85,7 @@ namespace dooblrfeedback::params
     juce::StringArray safetyTriggerNames() { return { "Feedback", "Always" }; }
 
     juce::StringArray modeNames()      { return { "Safe", "Aggressive" }; }
-    juce::StringArray liveNotchNames() { return { "On", "Off" }; }
+    juce::StringArray liveNotchNames() { return { "Off", "On" }; }
     juce::StringArray recoverSpeedNames() { return { "Slow", "Normal", "Fast" }; }
 
     namespace
@@ -174,7 +174,7 @@ namespace dooblrfeedback::params
             q.setSkewForCentre (16.0f);
             layout.add (floatParam (id::notchQ, "Notch Q", q, 20.0f, {}, 1));
         }
-        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::liveNotches, 1 }, "Auto-recover", liveNotchNames(), 0));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::liveNotches, 1 }, "Hold", liveNotchNames(), 0));
         {
             juce::NormalisableRange<float> r (2.0f, 120.0f, 0.1f);
             r.setSkewForCentre (20.0f);
@@ -204,6 +204,11 @@ namespace dooblrfeedback::params
         }
         // Auto-recover (0.1.2)
         layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::recoverSpeed, 1 }, "Recover speed", recoverSpeedNames(), 0));
+        {
+            juce::NormalisableRange<float> q (0.7f, 16.0f, 0.1f);
+            q.setSkewForCentre (dsp::FeedbackEngine::defaultBellQ);
+            layout.add (floatParam (id::bellQ, "Bell Q", q, dsp::FeedbackEngine::defaultBellQ, {}, 1));
+        }
         return layout;
     }
 }

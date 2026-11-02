@@ -43,6 +43,13 @@ namespace dooblrfeedback::ui
         setColour (juce::CaretComponent::caretColourId, Palette::textPrimary);
     }
 
+    juce::Font DooblrLookAndFeel::getTextButtonFont (juce::TextButton& button, int buttonHeight)
+    {
+        if (buttonHeight >= 44)
+            return juce::Font (juce::FontOptions (18.0f, juce::Font::bold));
+        return juce::LookAndFeel_V4::getTextButtonFont (button, buttonHeight);
+    }
+
     void DooblrLookAndFeel::drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
                                               float sliderPos, float startAngle, float endAngle,
                                               juce::Slider& slider)

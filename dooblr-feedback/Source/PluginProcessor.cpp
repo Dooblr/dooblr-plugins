@@ -21,6 +21,7 @@ namespace dooblrfeedback
             detect = get (id::detect); ringOut = get (id::ringOut); mode = get (id::mode); sensitivity = get (id::sensitivity);
             sidechain = get (id::sidechain); rangeLow = get (id::rangeLow); rangeHigh = get (id::rangeHigh);
             maxCut = get (id::maxCut); notchQ = get (id::notchQ); liveNotches = get (id::liveNotches); release = get (id::release);
+            bellQ = get (id::bellQ);
             output = get (id::output); bypass = get (id::bypass);
             safety = get (id::safety); safetyTrigger = get (id::safetyTrigger); safetyThreshold = get (id::safetyThreshold);
             safetyDepth = get (id::safetyDepth); safetyRelease = get (id::safetyRelease);
@@ -28,7 +29,8 @@ namespace dooblrfeedback
         }
 
         std::atomic<float>* detect, * ringOut, * mode, * sensitivity, * sidechain, * rangeLow, * rangeHigh, * maxCut, * notchQ,
-            * liveNotches, * release, * output, * bypass, * safety, * safetyTrigger, * safetyThreshold, * safetyDepth, * safetyRelease, * recoverSpeed;
+            * liveNotches, * release, * output, * bypass, * safety, * safetyTrigger, * safetyThreshold, * safetyDepth, * safetyRelease, * recoverSpeed,
+            * bellQ;
     };
 
     DooblrFeedbackProcessor::DooblrFeedbackProcessor()
@@ -78,6 +80,7 @@ namespace dooblrfeedback
         s.sensitivity = raw->sensitivity->load() / 100.0f;
         s.maxCutDb = maxCutToEngineDb (raw->maxCut->load());
         s.baseQ = raw->notchQ->load();
+        s.bellQ = raw->bellQ->load();
         s.releaseSec = raw->release->load();
         s.recoverSpeed = juce::jlimit (0, 2, (int) std::lround (raw->recoverSpeed->load()));
         s.lowHz = raw->rangeLow->load();

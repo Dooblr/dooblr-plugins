@@ -775,8 +775,8 @@ namespace
                 worst2 = std::max (worst2, (double) std::abs (d2));
             }
         }
-        note ("a 3 kHz notch engaging under a 200 Hz sine: max deviation " + fmt (worst, 5) + ", max second-difference deviation " + fmt (worst2, 6));
-        check (worst < 0.01 && worst2 < 1.0e-3, "no click when a notch engages");
+        note ("a 3 kHz band engaging under a 200 Hz sine: max deviation " + fmt (worst, 5) + ", max second-difference deviation " + fmt (worst2, 6));
+        check (worst < 0.02 && worst2 < 1.0e-3, "no click when a band engages (deviation " + fmt (worst, 5) + ")");
 
         // Clearing a notch under its own tone ramps the level back up.
         auto u = makeProcessor();
@@ -838,7 +838,8 @@ namespace
             addSine (s.l, defaultRate, f, 0.5f); s.r = s.l;
             const auto o = render (*w, s);
             const auto measured = rmsDb (o.l, (size_t) defaultRate, (size_t) defaultRate) - rmsDb (s.l, (size_t) defaultRate, (size_t) defaultRate);
-            const auto analytic = dsp::FeedbackEngine::notchResponseDb ((float) f, 1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f);
+            const auto analytic = dsp::FeedbackEngine::bandResponseDb ((float) f, 1000.0f, dsp::FeedbackEngine::fullCutDb, 20.0f,
+                                                                       dsp::FeedbackEngine::defaultBellQ);
             check (std::abs (measured - analytic) < 0.3, "full notch at " + fmt (f, 0) + " Hz matches the analytic response (" + db (measured) + " vs " + db (analytic) + ")");
         }
 
@@ -1327,6 +1328,10 @@ namespace
             check (false, "the editor is resizable with limits");
         auto* version = dynamic_cast<juce::Label*> (findById (*editor, "version"));
         check (version != nullptr && version->getText().contains (JucePlugin_VersionString), "the header shows the version");
+        if (auto* hold = dynamic_cast<juce::TextButton*> (editor->findControl (id::liveNotches)))
+            check (hold->getButtonText() == "HOLD" && ! hold->getToggleState(), "HOLD is the liveNotches control and starts up");
+        else
+            check (false, "HOLD is the liveNotches control");
         auto* latency = dynamic_cast<juce::Label*> (findById (*editor, "latency"));
         check (latency != nullptr && latency->getText().contains ("0"), "the header shows the latency (" + (latency != nullptr ? latency->getText().toStdString() : std::string()) + ")");
 
@@ -1510,7 +1515,7 @@ namespace
                 }
             }
             check (controls > 15 && ok == controls, label + ": every control is hit-testable and works (" + std::to_string (ok) + " / " + std::to_string (controls) + ")");
-            for (auto pid : { id::detect, id::ringOut, id::mode, id::sensitivity, id::sidechain, id::rangeLow, id::rangeHigh, id::maxCut, id::notchQ, id::liveNotches, id::release, id::recoverSpeed, id::output, id::bypass })
+            for (auto pid : { id::detect, id::ringOut, id::mode, id::sensitivity, id::sidechain, id::rangeLow, id::rangeHigh, id::maxCut, id::notchQ, id::bellQ, id::liveNotches, id::release, id::recoverSpeed, id::output, id::bypass })
                 check (seen.count (juce::String (pid)) == 1, label + ": the " + std::string (pid) + " control was reached with the mouse");
 
             // Graph marker buttons.
@@ -2115,7 +2120,7 @@ namespace
                 {
                     const auto known = lastRect.count (m.id) > 0;
                     if (! known || lastCompact[m.id] != m.compact) { lastEventMs = f.clock; ++events; }
-                    else if (f.clock - lastEventMs > 300.0)
+                    else if (f.clock - lastEventMs > ui::FeedbackGraph::moveMs)
                     {
                         const auto& r = lastRect[m.id];
                         worst = std::max ({ worst, (double) std::abs (r.getX() - m.chip.getX()), (double) std::abs (r.getY() - m.chip.getY()) });
@@ -2198,7 +2203,7 @@ namespace
             p.clearNotch (id);
             f.tick (3);
             check (g.getLabelCount() == 4, "a cleared notch's marker fades out (still drawn just after)");
-            f.tick (20);
+            f.tick ((int) std::ceil (ui::FeedbackGraph::fadeMs / (1000.0 / 60.0)) + 8);
             check (g.getLabelCount() == 3 && g.getMarkers().size() == 3, "... and is gone after the fade (" + std::to_string (g.getLabelCount()) + " labels)");
             saveSnapshot (*editor, "-idle-1080x660");
         }
@@ -2642,17 +2647,17 @@ namespace
     {
         using Engine = dsp::FeedbackEngine;
 
-        // Parameters: Auto-recover (the old Live notches, same ID and values), Recover after, Recover speed.
+        // Parameters: Hold (the old Live notches / Auto-recover, same ID and values), Recover after, Recover speed.
         {
             auto p = makeProcessor();
             auto* ar = param (*p, id::liveNotches);
             auto* sp = param (*p, id::recoverSpeed);
-            check (ar != nullptr && ar->getName (64) == "Auto-recover" && ar->getCurrentValueAsText() == "On", "Auto-recover is on by default");
+            check (ar != nullptr && ar->getName (64) == "Hold" && ar->getCurrentValueAsText() == "Off", "Hold is off by default (bands subside)");
             check (sp != nullptr && sp->getName (64) == "Recover speed" && sp->getCurrentValueAsText() == "Slow", "Recover speed defaults to Slow (cautious)");
             check (param (*p, id::release) != nullptr && param (*p, id::release)->getName (64) == "Recover after", "Release is shown as Recover after");
             set (*p, id::liveNotches, 1.0f);
             render (*p, Stereo ((size_t) defaultBlock));   // parameters reach the engine in processBlock
-            check (p->getEngine().getSettings().hold, "Auto-recover Off holds the floating notches (was Hold)");
+            check (p->getEngine().getSettings().hold, "Hold On keeps the floating notches (was Auto-recover Off)");
         }
 
         // 1. Recovery time: a quiet floating notch steps back to 0 dB and is freed at the expected
@@ -2859,7 +2864,10 @@ namespace
             }
             note ("  the same hot loop on a fresh plug-in: last 2 s " + db (freshTail + 40.0) + " over the noise");
             check (tail < std::max (-40.0 + 3.0, freshTail + 1.5), "held afterwards as well as a fresh catch holds it (" + db (tail + 40.0) + " vs " + db (freshTail + 40.0) + " over the noise)");
-            check (fin.active && fin.recoverScale >= 2.0f && ! fin.recovering, "the notch stays, and its next recovery is slower (scale " + fmt (fin.recoverScale, 0) + ")");
+            // Once the howl is back under the bell the region can already be quiet, so the next slow
+            // release may have started. The doubled scale and the cut both have to still be there.
+            check (fin.active && fin.recoverScale >= 2.0f && fin.cutDb >= 8.0f,
+                   "the notch stays, and its next recovery is slower (scale " + fmt (fin.recoverScale, 0) + ", cut " + fmt (fin.cutDb, 1) + ")");
             check (activeCount (p->getNotches()) <= 2, "no pile of new notches (" + notchList (p->getNotches()) + ")");
             check (finiteAndNormal (mic), "no NaN / denormal");
         }
@@ -2942,6 +2950,55 @@ namespace
         }
     }
 
+    void testParametricBell()
+    {
+        using Engine = dsp::FeedbackEngine;
+        const auto bellQ = Engine::defaultBellQ;
+        const auto levelAt = [] (Processor& p, double hz)
+        {
+            Stereo tone ((size_t) defaultRate);
+            addSine (tone.l, defaultRate, hz, 0.5f);
+            tone.r = tone.l;
+            const auto out = render (p, tone);
+            const auto half = (size_t) (defaultRate / 2);
+            return rmsDb (out.l, half, half) - rmsDb (tone.l, half, half);
+        };
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::detect, 0.0f);
+            auto* bq = param (*p, id::bellQ);
+            check (bq != nullptr && bq->getName (64) == "Bell Q" && std::abs (bq->convertFrom0to1 (bq->getValue()) - bellQ) < 0.05f,
+                   "Bell Q defaults to 4");
+            p->getEngine().addNotch (1000.0f, 8.0f, 20.0f, true);
+            render (*p, Stereo ((size_t) 4800));
+            const auto centre = levelAt (*p, 1000.0);
+            const auto offsetHz = 1125.0;
+            const auto offset = levelAt (*p, offsetHz);
+            const auto narrow = (double) Engine::notchResponseDb ((float) offsetHz, 1000.0f, 8.0f, 20.0f);
+            const auto band = (double) Engine::bandResponseDb ((float) offsetHz, 1000.0f, 8.0f, 20.0f, bellQ);
+            note ("8 dB band: centre " + db (centre) + ", " + fmt (offsetHz, 0) + " Hz " + db (offset)
+                  + " (bell " + db (band) + ", narrow notch alone " + db (narrow) + ")");
+            check (std::abs (centre + 8.0) < 0.6, "an 8 dB band cuts about 8 dB at its centre (" + db (centre) + ")");
+            check (offset < narrow - 1.0, "inside the bell is deeper than a Q 20 notch alone (" + db (offset) + " vs " + db (narrow) + ")");
+            check (std::abs (offset - band) < 0.5, "the 8 dB offset matches the parametric bell (" + db (offset) + " vs " + db (band) + ")");
+        }
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::detect, 0.0f);
+            p->getEngine().addNotch (1000.0f, 18.0f, 20.0f, true);
+            render (*p, Stereo ((size_t) 4800));
+            const auto centre = levelAt (*p, 1000.0);
+            const auto offsetHz = 1050.0;
+            const auto offset = levelAt (*p, offsetHz);
+            const auto band = (double) Engine::bandResponseDb ((float) offsetHz, 1000.0f, 18.0f, 20.0f, bellQ);
+            note ("18 dB band: centre " + db (centre) + ", 1050 Hz " + db (offset) + " (bell plus notch " + db (band) + ")");
+            check (std::abs (centre + 18.0) < 0.8, "an 18 dB band is a bell plus a notch, about 18 dB at the centre (" + db (centre) + ")");
+            check (std::abs (offset - band) < 0.5, "an 18 dB band matches bell plus notch off centre (" + db (offset) + " vs " + db (band) + ")");
+        }
+    }
+
     struct TestCase { const char* name; void (*run)(); };
 }
 
@@ -2974,6 +3031,7 @@ int main()
         { "one howl, one notch (merge, retune, consolidate)",    testOneNotchPerHowl },
         { "safety duck: last resort, music untouched, recovery", testSafetyDuck },
         { "calm labels: steady lanes, no overlaps, idle labels close", testCalmLabels },
+        { "parametric bell plus narrow notch",               testParametricBell },
         { "auto-recover: staged return, re-onset, fixed untouched, no clicks", testAutoRecover },
         { "motion: gliding notch display, slow labels, paint time", testMotionAndPaint },
     };

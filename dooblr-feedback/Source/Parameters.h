@@ -9,9 +9,9 @@ namespace dooblrfeedback::params
     inline constexpr int stateVersion = 2;
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
-        IDs up to bypass were added in 0.1.0; the safety IDs in 0.1.1; recoverSpeed in 0.1.2.
-        (0.1.2 shows liveNotches as "Auto-recover" On / Off and release as "Recover after": same
-        IDs, same values, so sessions and automation are unchanged.) */
+        IDs up to bypass were added in 0.1.0; the safety IDs in 0.1.1; recoverSpeed in 0.1.2;
+        bellQ with the parametric bell. liveNotches keeps its values: 0 releases, 1 holds.
+        The displayed name is Hold (Off / On); sessions and automation are unchanged. */
     namespace id
     {
         // Detection
@@ -26,7 +26,7 @@ namespace dooblrfeedback::params
         // Notches
         inline constexpr const char* maxCut      = "maxCut";
         inline constexpr const char* notchQ      = "notchQ";
-        inline constexpr const char* liveNotches = "liveNotches"; // Auto-recover: On (0, was Float) | Off (1, was Hold)
+        inline constexpr const char* liveNotches = "liveNotches"; // Hold: Off (0, release) | On (1, was Hold)
         inline constexpr const char* release     = "release";     // Recover after (s of quiet)
 
         // Output
@@ -42,6 +42,9 @@ namespace dooblrfeedback::params
 
         // Auto-recover (0.1.2)
         inline constexpr const char* recoverSpeed    = "recoverSpeed";    // Slow | Normal | Fast
+
+        // Parametric bell in front of each notch
+        inline constexpr const char* bellQ          = "bellQ";
     }
 
     /** Max cut: 3 - 30 dB, and the top of the knob (maxCutInfinite) is a full-depth notch. */
@@ -63,7 +66,7 @@ namespace dooblrfeedback::params
     juce::StringArray safetyTriggerNames(); // Feedback, Always
 
     juce::StringArray modeNames();        // Safe, Aggressive
-    juce::StringArray liveNotchNames();   // On, Off (Auto-recover)
+    juce::StringArray liveNotchNames();   // Off, On (Hold)
     juce::StringArray recoverSpeedNames(); // Slow, Normal, Fast
 
     /** The parameter layout, in the order hosts list it. */

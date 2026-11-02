@@ -95,8 +95,10 @@ namespace dooblrfeedback::ui
             dirty = advanceDisplay (dt) || fresh;
 
         notches = processor.getNotches(); // ringing / hits / levels: labels pick these up calmly below
-        if (easeDrawnNotches (dt))
+        const auto bellQ = processor.getState().getRawParameterValue (params::id::bellQ)->load();
+        if (easeDrawnNotches (dt) || std::abs (bellQ - curveBellQ) > 0.01f)
         {
+            curveBellQ = bellQ;
             rebuildCurve();
             dirty = true;
         }
@@ -615,6 +617,7 @@ namespace dooblrfeedback::ui
     void FeedbackGraph::rebuildCurve()
     {
         // Both paths are cleared and refilled in place (no reallocation once grown).
+        curveBellQ = processor.getState().getRawParameterValue (params::id::bellQ)->load();
         curveFill.clear();
         curveEdge.clear();
         if (plot.isEmpty()) return;
@@ -622,7 +625,7 @@ namespace dooblrfeedback::ui
         for (int i = 0; i <= steps; ++i)
         {
             const auto x = plot.getX() + plot.getWidth() * (float) i / (float) steps;
-            const auto y = yForCut (-dsp::FeedbackEngine::bankResponseDb (drawnNotches, frequencyForX (x)));
+            const auto y = yForCut (-dsp::FeedbackEngine::bankResponseDb (drawnNotches, frequencyForX (x), curveBellQ));
             if (i == 0) { curveEdge.startNewSubPath (x, y); curveFill.startNewSubPath (x, y); }
             else        { curveEdge.lineTo (x, y); curveFill.lineTo (x, y); }
         }

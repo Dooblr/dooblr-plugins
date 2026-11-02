@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdio> // DBGTMP
 
 namespace dooblrfeedback::dsp
 {
@@ -95,12 +94,27 @@ namespace dooblrfeedback::dsp
         return 10.0f * std::log10 ((num + 1.0e-20f) / (den + 1.0e-20f));
     }
 
-    float FeedbackEngine::bankResponseDb (const NotchArray& notches, float freq) noexcept
+    float FeedbackEngine::bandResponseDb (float freq, float centreHz, float cutDb, float notchQ, float bellQ) noexcept
+    {
+        if (cutDb <= 0.0f || centreHz <= 0.0f) return 0.0f;
+        auto total = 0.0f;
+        const auto bellCut = std::min (cutDb, bellShareDb);
+        if (bellCut > 0.0f && bellQ > 0.0f)
+            total += notchResponseDb (freq, centreHz, bellCut, bellQ);
+        if (cutDb > bellShareDb && notchQ > 0.0f)
+        {
+            const auto notchCut = isFullCut (cutDb) ? fullCutDb : cutDb - bellShareDb;
+            total += notchResponseDb (freq, centreHz, notchCut, notchQ);
+        }
+        return total;
+    }
+
+    float FeedbackEngine::bankResponseDb (const NotchArray& notches, float freq, float bellQ) noexcept
     {
         auto total = 0.0f;
         for (const auto& n : notches)
             if (n.active)
-                total += notchResponseDb (freq, n.freq, n.cutDb, n.q);
+                total += bandResponseDb (freq, n.freq, n.cutDb, n.q, bellQ);
         return total;
     }
 
@@ -175,10 +189,7 @@ namespace dooblrfeedback::dsp
         safetyActive.store (false);
         safetyReductionDb.store (0.0f);
         for (auto& s : slots)
-        {
-            s.ic1 = {};
-            s.ic2 = {};
-        }
+            s.bell = s.notch = {};
         {
             const juce::SpinLock::ScopedLockType lock (modelLock);
             for (auto& t : trackers) t = {};
@@ -200,6 +211,21 @@ namespace dooblrfeedback::dsp
     }
 
     //==============================================================================
+    void FeedbackEngine::designCut (Filter& filter, float freq, float q, float cutDb, bool fullNotch) noexcept
+    {
+        // Constant-Q bell up to bellCapDb (A^2 = depth). A full notch (fullNotch and fullCutDb)
+        // puts the zero on the unit circle; see notchResponseDb.
+        const auto nyquistLimit = (float) (sampleRate * 0.45);
+        const auto a = std::pow (10.0f, -std::min (cutDb, bellCapDb) / 40.0f);
+        const auto depth = (fullNotch && isFullCut (cutDb)) ? 0.0f : std::pow (10.0f, -std::max (0.0f, cutDb) / 20.0f);
+        const auto g = std::tan (juce::MathConstants<float>::pi * std::min (freq, nyquistLimit) / (float) sampleRate);
+        const auto k = 1.0f / (std::max (0.5f, q) * a);
+        filter.a1 = 1.0f / (1.0f + g * (g + k));
+        filter.a2 = g * filter.a1;
+        filter.a3 = g * filter.a2;
+        filter.m1 = k * (depth - 1.0f);
+    }
+
     void FeedbackEngine::updateControl() noexcept
     {
         const auto version = modelVersion.load (std::memory_order_acquire);
@@ -221,12 +247,13 @@ namespace dooblrfeedback::dsp
             }
         }
 
-        const auto nyquistLimit = (float) (sampleRate * 0.45);
+        const auto bellQ = juce::jlimit (0.7f, 16.0f, settings.bellQ);
         for (auto& s : slots)
         {
+            s.targetBellQ = bellQ;
             if (s.id != s.targetId)
             {
-                // Fade the previous notch out before this slot takes the new one (no jump in frequency).
+                // Fade the previous band out before this slot takes the new one (no jump in frequency).
                 if (s.id != 0 && s.cut > 0.02f)
                     s.cut += (0.0f - s.cut) * cutAttack * 0.5f;
                 else
@@ -235,8 +262,9 @@ namespace dooblrfeedback::dsp
                     s.cut = 0.0f;
                     s.freq = s.targetFreq;
                     s.q = s.targetQ;
-                    s.ic1 = {};
-                    s.ic2 = {};
+                    s.bellQ = s.targetBellQ;
+                    s.bell = {};
+                    s.notch = {};
                 }
             }
 
@@ -247,28 +275,21 @@ namespace dooblrfeedback::dsp
                 if (s.targetFreq > 0.0f && s.freq > 0.0f)
                     s.freq *= std::exp (glide * std::log (s.targetFreq / s.freq));
                 s.q += (s.targetQ - s.q) * glide;
+                s.bellQ += (s.targetBellQ - s.bellQ) * glide;
             }
 
-            const auto live = s.cut > 1.0e-3f;
-            if (! live && s.live)
-            {
-                s.ic1 = {};
-                s.ic2 = {};
-            }
-            s.live = live;
-            if (live)
-            {
-                // Bell up to bellCapDb (A^2 = depth), then a deepening notch of fixed bandwidth; at
-                // fullCutDb the depth is exactly 0: a zero on the unit circle (see notchResponseDb).
-                const auto a = std::pow (10.0f, -std::min (s.cut, bellCapDb) / 40.0f);
-                const auto depth = isFullCut (s.cut) ? 0.0f : std::pow (10.0f, -s.cut / 20.0f);
-                const auto g = std::tan (juce::MathConstants<float>::pi * std::min (s.freq, nyquistLimit) / (float) sampleRate);
-                const auto k = 1.0f / (std::max (0.5f, s.q) * a);
-                s.a1 = 1.0f / (1.0f + g * (g + k));
-                s.a2 = g * s.a1;
-                s.a3 = g * s.a2;
-                s.m1 = k * (depth - 1.0f);
-            }
+            // The smoothed cut drives both filters: the first bellShareDb is the parametric bell,
+            // and the rest is the narrow notch (a full cut is still a true notch).
+            const auto bellCut = std::min (s.cut, bellShareDb);
+            const auto notchCut = s.cut <= bellShareDb ? 0.0f : (isFullCut (s.cut) ? fullCutDb : s.cut - bellShareDb);
+            const auto bellLive = bellCut > 1.0e-3f;
+            const auto notchLive = notchCut > 1.0e-3f;
+            if (! bellLive && s.bell.live) s.bell = {};
+            if (! notchLive && s.notch.live) s.notch = {};
+            s.bell.live = bellLive;
+            s.notch.live = notchLive;
+            if (bellLive)  designCut (s.bell, s.freq, s.bellQ, bellCut, false);
+            if (notchLive) designCut (s.notch, s.freq, s.q, notchCut, true);
         }
     }
 
@@ -295,25 +316,31 @@ namespace dooblrfeedback::dsp
                 inRing[(size_t) ((ringPos + i) & mask)] = sum * inverse;
             }
 
+            const auto apply = [] (Filter& f, float* x, int n, int ch) noexcept
+            {
+                auto c1 = f.ic1[(size_t) ch], c2 = f.ic2[(size_t) ch];
+                for (int i = 0; i < n; ++i)
+                {
+                    const auto v0 = x[i];
+                    const auto v3 = v0 - c2;
+                    const auto v1 = f.a1 * c1 + f.a2 * v3;
+                    const auto v2 = c2 + f.a2 * c1 + f.a3 * v3;
+                    c1 = 2.0f * v1 - c1;
+                    c2 = 2.0f * v2 - c2;
+                    x[i] = v0 + f.m1 * v1;
+                }
+                f.ic1[(size_t) ch] = c1;
+                f.ic2[(size_t) ch] = c2;
+            };
+
             for (auto& s : slots)
             {
-                if (! s.live) continue;
+                if (! s.bell.live && ! s.notch.live) continue;
                 for (int ch = 0; ch < channels; ++ch)
                 {
                     auto* x = io[ch] + pos;
-                    auto c1 = s.ic1[(size_t) ch], c2 = s.ic2[(size_t) ch];
-                    for (int i = 0; i < len; ++i)
-                    {
-                        const auto v0 = x[i];
-                        const auto v3 = v0 - c2;
-                        const auto v1 = s.a1 * c1 + s.a2 * v3;
-                        const auto v2 = c2 + s.a2 * c1 + s.a3 * v3;
-                        c1 = 2.0f * v1 - c1;
-                        c2 = 2.0f * v2 - c2;
-                        x[i] = v0 + s.m1 * v1;
-                    }
-                    s.ic1[(size_t) ch] = c1;
-                    s.ic2[(size_t) ch] = c2;
+                    if (s.bell.live)  apply (s.bell, x, len, ch);
+                    if (s.notch.live) apply (s.notch, x, len, ch);
                 }
             }
 
@@ -1032,13 +1059,16 @@ namespace dooblrfeedback::dsp
             const auto bandwidth = n.freq / n.q;
             const auto centre = n.freq / binHz;
             const auto radius = std::max (2.0f, bandwidth / binHz);
+            // The peak is read on the narrow notch. Prominence is against bins outside the parametric
+            // bell, so the bell's own scoop is not mistaken for a peak in this region.
+            const auto bellRadius = std::max (radius, (n.freq / std::max (settings.bellQ, 0.7f)) / binHz);
             const auto from = juce::jlimit (1, numBins - 2, (int) std::floor (centre - radius));
             const auto to = juce::jlimit (1, numBins - 2, (int) std::ceil (centre + radius));
             auto peak = -200.0f;
             int peakBin = from;
             for (int k = from; k <= to; ++k)
                 if (detDb[(size_t) k] > peak) { peak = detDb[(size_t) k]; peakBin = k; }
-            const auto prominence = peak - neighbourDb (centre, radius + 3.0f, radius + 12.0f);
+            const auto prominence = peak - neighbourDb (centre, bellRadius + 3.0f, bellRadius + 12.0f);
             const auto peakFreq = (float) peakBin * binHz;
             n.levelDb = peak;
             // Smoothed level for the recovery probe (always running, so it is settled when recovery starts).
@@ -1095,7 +1125,7 @@ namespace dooblrfeedback::dsp
             }
             else if (ringing)
             {
-                if (n.recovering) { std::fprintf (stderr, "DBG ring-reonset f=%.0f cut=%.2f peak=%.1f prom=%.1f\n", n.freq, n.cutDb, peak, prominence); reonset (n); }
+                if (n.recovering) reonset (n);
                 if (! n.ringing)
                 {
                     if (n.quietSec > 0.25f) ++n.hits;
@@ -1200,7 +1230,6 @@ namespace dooblrfeedback::dsp
             n.probeHops = rising ? n.probeHops + 1 : 0;
             if (n.probeHops >= probeConfirmHops)
             {
-                std::fprintf (stderr, "DBG probe-reonset f=%.0f cut=%.2f probe=%.1f base=%.1f\n", n.freq, n.cutDb, n.probeDb, n.stageBaseDb);
                 reonset (n);
                 return;
             }

@@ -85,21 +85,24 @@ namespace dooblrfeedback
         // Left column switches.
         modeToggle.setTooltip ("Safe: waits longer and rejects anything with harmonics (music). "
                                "Aggressive: reacts faster and deeper, for speech or when feedback must never be heard");
+        holdButton.setComponentID (id::liveNotches);
         autoButton.setComponentID (id::detect);
         ringOutButton.setComponentID (id::ringOut);
         sidechainButton.setComponentID (id::sidechain);
         bypassButton.setComponentID (id::bypass);
+        holdButton.setTooltip ("Hold: keep every floating filter where it is. Off: each one slowly subsides once its frequency is quiet");
         autoButton.setTooltip ("Auto: detect feedback and add notches. Off: keep the current notches, add none");
         ringOutButton.setTooltip ("Ring-out: every notch found becomes fixed (stays until cleared). "
                                   "Use it while ringing out the room, then switch it off for the show");
         sidechainButton.setTooltip ("SC: detect on the sidechain input (a reference mic), notch the main input");
         bypassButton.setTooltip ("Bypass: the input unchanged");
-        for (auto* b : { &autoButton, &ringOutButton, &sidechainButton })
+        for (auto* b : { &holdButton, &autoButton, &ringOutButton, &sidechainButton })
         {
             b->setClickingTogglesState (true);
             b->setColour (juce::TextButton::buttonOnColourId, Palette::accent.withAlpha (0.45f));
         }
         ringOutButton.setColour (juce::TextButton::buttonOnColourId, Palette::dynamic.withAlpha (0.55f));
+        holdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::liveNotches, holdButton);
         autoAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::detect, autoButton);
         ringOutAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::ringOut, ringOutButton);
         sidechainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::sidechain, sidechainButton);
@@ -151,7 +154,7 @@ namespace dooblrfeedback
             setStatus ("Cleared all notches");
         };
 
-        for (juce::Component* c : { (juce::Component*) &modeToggle, (juce::Component*) &autoButton, (juce::Component*) &ringOutButton,
+        for (juce::Component* c : { (juce::Component*) &modeToggle, (juce::Component*) &holdButton, (juce::Component*) &autoButton, (juce::Component*) &ringOutButton,
                                     (juce::Component*) &sidechainButton, (juce::Component*) &bypassButton, (juce::Component*) &undoButton,
                                     (juce::Component*) &redoButton, (juce::Component*) &presetPrev, (juce::Component*) &presetBox,
                                     (juce::Component*) &presetNext, (juce::Component*) &presetMenu, (juce::Component*) &compareA,
@@ -196,7 +199,7 @@ namespace dooblrfeedback
         addChildComponent (notesEditor);
 
         advancedPanel = std::make_unique<ui::ControlPanel> (state, "ADVANCED", Palette::dynamic, std::vector<Spec> {
-            { id::notchQ, "Notch Q" }, { id::liveNotches, "Auto-recover", Kind::combo, 112 }, { id::release, "Recover after" },
+            { id::notchQ, "Notch Q" }, { id::bellQ, "Bell Q" }, { id::release, "Recover after" },
             { id::recoverSpeed, "Recover speed", Kind::combo, 112 },
             { id::rangeLow, "Range low" }, { id::rangeHigh, "Range high" }, { id::output, "Output" },
             { id::safety, "Safety duck", Kind::toggle }, { id::safetyTrigger, "Duck when", Kind::combo, 112 },
@@ -264,7 +267,7 @@ namespace dooblrfeedback
         if (auto* c = advancedPanel->findControl (pid))
             return c;
         for (auto* c : { (juce::Component*) &sensitivityKnob, (juce::Component*) &maxCutKnob, (juce::Component*) &modeToggle,
-                         (juce::Component*) &autoButton, (juce::Component*) &ringOutButton, (juce::Component*) &sidechainButton,
+                         (juce::Component*) &holdButton, (juce::Component*) &autoButton, (juce::Component*) &ringOutButton, (juce::Component*) &sidechainButton,
                          (juce::Component*) &bypassButton })
             if (c->getComponentID() == pid)
                 return const_cast<juce::Component*> (c);
@@ -362,6 +365,8 @@ namespace dooblrfeedback
                 status = "Auto off: holding the current notches";
             else if (valueOfBool (id::ringOut))
                 status = "Ring-out: new notches are fixed";
+            else if (valueOfBool (id::liveNotches))
+                status = "Hold: filters stay until cleared";
             else
                 status = ringing > 0 ? "Suppressing" : "Listening";
             if (safety.events > 0)
@@ -604,6 +609,8 @@ namespace dooblrfeedback
             subtitleLabel.setBounds (versionRow);
             col.removeFromTop (12);
             modeToggle.setBounds (col.removeFromTop (32));
+            col.removeFromTop (8);
+            holdButton.setBounds (col.removeFromTop (52));
             col.removeFromTop (8);
             auto row = col.removeFromTop (28);
             const auto scWidth = 40, gap = 4;

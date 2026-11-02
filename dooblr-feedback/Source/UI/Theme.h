@@ -43,6 +43,8 @@ namespace dooblrfeedback::ui
                                float rotaryStartAngle, float rotaryEndAngle, juce::Slider&) override;
 
         void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
+        /** A tall button (HOLD) uses a bold 18 pt label; the toolbar buttons keep the standard face. */
+        juce::Font getTextButtonFont (juce::TextButton&, int buttonHeight) override;
         /** Value boxes squeeze long readouts (e.g. "12.0 kHz") rather than truncating them. */
         juce::Label* createSliderTextBox (juce::Slider&) override;
 

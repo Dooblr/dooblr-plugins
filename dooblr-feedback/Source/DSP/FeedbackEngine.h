@@ -87,11 +87,12 @@ namespace dooblrfeedback::dsp
     /**
         The live feedback suppressor.
 
-        Audio path (zero latency): up to 24 notch filters (Cytomic / Simper trapezoidal SVF, safe
-        under modulation) applied in series to every channel. Cut, frequency and Q are smoothed
-        (cut deepens with a 4 ms time constant, releases with 40 ms) and coefficients are refreshed
-        every 16 samples, so moving notches do not zipper. With no notch active the audio passes
-        bit-exact.
+        Audio path (zero latency): up to 24 bands, each a parametric peaking bell in series with a
+        narrow notch (Cytomic / Simper trapezoidal SVF, safe under modulation). The first
+        bellShareDb of the cut is the bell (Bell Q); anything deeper is the notch, and a full cut
+        is still a zero on the unit circle. Cut, frequency and Q are smoothed (cut deepens with a
+        4 ms time constant, releases with 40 ms) and coefficients are refreshed every 16 samples,
+        so moving bands do not zipper. With no band active the audio passes bit-exact.
 
         Detection (beside the path, never delaying it): a mono sum of the processed output, or of
         the reference / sidechain signal, is analysed with a Hann-windowed FFT (4096 points at
@@ -117,10 +118,11 @@ namespace dooblrfeedback::dsp
             bool detect = true;          // Auto
             bool aggressive = false;     // Aggressive mode (Ring-out implies it)
             bool ringOut = false;        // new / re-ringing notches become fixed
-            bool hold = false;           // Auto-recover off: floating notches never recover
+            bool hold = false;           // HOLD: floating bands never recover
             float sensitivity = 0.5f;    // 0..1
             float maxCutDb = 18.0f;
             float baseQ = 20.0f;
+            float bellQ = 4.0f;          // parametric bell (the first bellShareDb of each cut)
             float releaseSec = 20.0f;    // Recover after: quiet time before the first stage
             int recoverSpeed = 1;        // 0 Slow, 1 Normal, 2 Fast
             float lowHz = 80.0f, highHz = 20000.0f;
@@ -139,6 +141,9 @@ namespace dooblrfeedback::dsp
         /** Up to this cut a notch is the usual constant-Q bell; deeper cuts keep this bell's pole
             bandwidth and only move the zeros towards the unit circle (so the notch does not widen). */
         static constexpr float bellCapDb = 30.0f;
+        /** The first this many dB of a band are a parametric peaking bell. The rest is the narrow notch. */
+        static constexpr float bellShareDb = 12.0f;
+        static constexpr float defaultBellQ = 4.0f;
         static bool isFullCut (float cutDb) noexcept { return cutDb >= fullCutDb - 0.5f; }
         /** Safety depth at (or beyond) which the duck mutes. */
         static constexpr float fullDuckDb = 100.0f;
@@ -231,9 +236,11 @@ namespace dooblrfeedback::dsp
         /** Number of analysis hops whose detection was skipped because the model was locked. */
         int getSkippedHops() const noexcept { return skippedHops.load(); }
 
-        /** The response of one bell (analog prototype, matches the SVF), dB at `freq`. */
+        /** The response of one bell or notch (analog prototype, matches the SVF), dB at `freq`. */
         static float notchResponseDb (float freq, float notchFreq, float cutDb, float q) noexcept;
-        static float bankResponseDb (const NotchArray& notches, float freq) noexcept;
+        /** Bell (min(cut, bellShareDb) at bellQ) plus the narrow notch (the rest, at notchQ). */
+        static float bandResponseDb (float freq, float centreHz, float cutDb, float notchQ, float bellQ) noexcept;
+        static float bankResponseDb (const NotchArray& notches, float freq, float bellQ = defaultBellQ) noexcept;
 
         /** Test / diagnostic hook: counts, per analysis hop, what happened to the strongest peak
             within `toleranceHz` of `freq` (0 = off). Message thread sets it before processing. */
@@ -248,15 +255,20 @@ namespace dooblrfeedback::dsp
         const WatchStats& getWatch() const noexcept { return watch; }
 
     private:
-        struct Slot // the audio side of one notch
+        struct Filter // one SVF, either the parametric bell or the narrow notch
         {
-            int id = 0;
-            float cut = 0.0f, freq = 1000.0f, q = 20.0f;      // smoothed
-            float targetCut = 0.0f, targetFreq = 1000.0f, targetQ = 20.0f;
-            int targetId = 0;
             bool live = false;
             float a1 = 1.0f, a2 = 0.0f, a3 = 0.0f, m1 = 0.0f;
             std::array<float, 2> ic1 {}, ic2 {};               // per channel (stereo)
+        };
+
+        struct Slot // the audio side of one band: a bell and a notch at the same frequency
+        {
+            int id = 0;
+            float cut = 0.0f, freq = 1000.0f, q = 20.0f, bellQ = defaultBellQ; // smoothed
+            float targetCut = 0.0f, targetFreq = 1000.0f, targetQ = 20.0f, targetBellQ = defaultBellQ;
+            int targetId = 0;
+            Filter bell, notch;
         };
 
         struct Tracker
@@ -280,6 +292,7 @@ namespace dooblrfeedback::dsp
         static constexpr int maxPeaks = 64;
 
         void updateControl() noexcept;
+        void designCut (Filter& filter, float freq, float q, float cutDb, bool fullNotch) noexcept;
         void analyseHop (bool analyse) noexcept;
         void processSafety (float* const* io, int channels, int start, int len, bool analyse) noexcept;
         void armSafety() noexcept { safetyHint = (int) (safetyHintSec * (float) sampleRate); }

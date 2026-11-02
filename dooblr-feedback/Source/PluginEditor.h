@@ -44,8 +44,8 @@ namespace dooblrfeedback
     }
 
     /**
-        Left column: name, version, Bypass, the Safe / Aggressive switch, Auto / Ring-out / SC,
-        the big Sensitivity knob and Max cut, latency and status. Right of it the toolbar (preset
+        Left column: name, version, Bypass, the Safe / Aggressive switch, the large HOLD button,
+        Auto / Ring-out / SC, the big Sensitivity knob and Max cut, latency and status. Right of it the toolbar (preset
         prev / list / next / menu, undo / redo, A / B compare and copy, Clear all), the graph with
         the output meter, and a bottom section with three views: the notch table, the room notes
         and the Advanced panel. Every parameter has exactly one control.
@@ -105,9 +105,9 @@ namespace dooblrfeedback
         juce::Label safetyBadge; // "SAFETY -x dB" in the toolbar while the safety duck is pulling the level down
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, presetPrev { "<" }, presetNext { ">" }, presetMenu { "..." };
         juce::TextButton compareA { "A" }, compareB { "B" }, compareCopy { "A>B" }, clearAllButton { "Clear all" };
-        juce::TextButton autoButton { "AUTO" }, ringOutButton { "RING-OUT" }, sidechainButton { "SC" };
+        juce::TextButton holdButton { "HOLD" }, autoButton { "AUTO" }, ringOutButton { "RING-OUT" }, sidechainButton { "SC" };
         juce::ToggleButton bypassButton { "Bypass" };
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> autoAttachment, ringOutAttachment, sidechainAttachment, bypassAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> holdAttachment, autoAttachment, ringOutAttachment, sidechainAttachment, bypassAttachment;
         juce::ComboBox presetBox;
         ui::OutputMeter outputMeter;
         ui::SegmentedToggle modeToggle;
