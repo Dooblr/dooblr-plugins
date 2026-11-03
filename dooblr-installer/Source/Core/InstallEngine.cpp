@@ -212,40 +212,13 @@ namespace dooblr::installer
         return juce::SHA256 (f).toHexString().toLowerCase();
     }
 
-    static std::unique_ptr<juce::InputStream> openUrl (const juce::URL& url, juce::int64& totalLength, juce::String& error)
-    {
-        if (url.isLocalFile())
-        {
-            const auto f = url.getLocalFile();
-            if (! f.existsAsFile()) { error = "File not found: " + f.getFullPathName(); return {}; }
-            totalLength = f.getSize();
-            return f.createInputStream();
-        }
-
-        int status = 0;
-        auto s = url.createInputStream (juce::URL::InputStreamOptions (juce::URL::ParameterHandling::inAddress)
-                                            .withConnectionTimeoutMs (20000)
-                                            .withNumRedirectsToFollow (8)
-                                            .withStatusCode (&status));
-        if (s == nullptr || (status != 0 && (status < 200 || status >= 300)))
-        {
-            error = "Could not download " + url.toString (false)
-                  + (status != 0 ? " (HTTP " + juce::String (status) + (status == 404 ? ": not found, or the release is private" : "") + ")" : " (no connection)");
-            return {};
-        }
-
-        totalLength = s->getTotalLength();
-        return s;
-    }
-
     juce::Result fetchText (const juce::URL& url, juce::String& out)
     {
-        juce::int64 total = -1;
-        juce::String err;
-        auto s = openUrl (url, total, err);
-        if (s == nullptr)
-            return juce::Result::fail (err);
-        out = s->readEntireStreamAsString();
+        ErrorInfo err;
+        auto r = httpGet (url, {}, {}, err);
+        if (! r.ok())
+            return juce::Result::fail (err.message + (err.url.isNotEmpty() && ! err.message.contains (err.url) ? " (" + err.url + ")" : juce::String()));
+        out = r.stream->readEntireStreamAsString();
         return juce::Result::ok();
     }
 
@@ -263,11 +236,36 @@ namespace dooblr::installer
 
     juce::Result downloadAndVerify (const Asset& a, const juce::File& dest, const Progress& progress)
     {
-        juce::int64 total = -1;
-        juce::String err;
-        auto in = openUrl (a.url, total, err);
-        if (in == nullptr)
-            return juce::Result::fail (err);
+        return downloadAndVerify (a, dest, progress, nullptr, nullptr);
+    }
+
+    juce::Result downloadAndVerify (const Asset& a, const juce::File& dest, const Progress& progress,
+                                    const Session* session, ErrorInfo* errorOut)
+    {
+        ErrorInfo err;
+        const auto viaApi = session != nullptr && session->authenticated() && a.apiUrl.isNotEmpty();
+        err.setUrl (viaApi ? a.apiUrl : a.url.toString (true));
+        auto fail = [&] (const juce::String& message)
+        {
+            if (err.message.isEmpty()) err.message = message;
+            if (errorOut != nullptr) *errorOut = err;
+            return juce::Result::fail (message);
+        };
+
+        auto response = openAsset (a, session, err);
+        if (! response.ok())
+        {
+            auto message = err.message;
+            if (err.httpStatus == 404 && ! viaApi)
+                message << " The file is not there (or the release is private).";
+            else if ((err.httpStatus == 401 || err.httpStatus == 403) && viaApi)
+                message << " GitHub refused the token (" << session->tokenSource << ").";
+            err.message = message;
+            return fail (message + " (" + err.url + ")");
+        }
+
+        auto& in = response.stream;
+        auto total = response.totalLength;
         if (total <= 0)
             total = a.size;
 
@@ -276,7 +274,7 @@ namespace dooblr::installer
         {
             juce::FileOutputStream out (dest);
             if (! out.openedOk())
-                return juce::Result::fail ("Cannot write " + dest.getFullPathName());
+                return fail ("Cannot write " + dest.getFullPathName());
 
             juce::HeapBlock<char> buf (65536);
             juce::int64 done = 0;
@@ -291,7 +289,7 @@ namespace dooblr::installer
                 {
                     out.flush();
                     dest.deleteFile();
-                    return juce::Result::fail ("Cancelled");
+                    return fail ("Cancelled");
                 }
             }
             out.flush();
@@ -299,7 +297,11 @@ namespace dooblr::installer
 
         auto r = verify (dest, a);
         if (r.failed())
+        {
             dest.deleteFile();
+            err.httpStatus = response.status;
+            return fail (r.getErrorMessage());
+        }
         return r;
     }
 
@@ -470,9 +472,17 @@ namespace dooblr::installer
     //==========================================================================
     InstallReport installItems (const Manifest& m, const juce::StringArray& ids, const Locations& loc, Receipts& receipts,
                                 const std::function<void (const juce::String&)>& log,
-                                const std::function<bool (int, int, double)>& progress)
+                                const std::function<bool (int, int, double)>& progress,
+                                const Session* session)
     {
         InstallReport report;
+        auto addFailure = [&report] (const juce::String& line, const juce::String& step, ErrorInfo e = {})
+        {
+            report.failed.add (line);
+            if (e.step.isEmpty()) e.step = step;
+            if (e.message.isEmpty()) e.message = line;
+            report.errors.add (e);
+        };
         const auto say = [&log] (const juce::String& s) { if (log) log (s); };
         const auto work = juce::File::getSpecialLocation (juce::File::tempDirectory)
                               .getChildFile ("dooblr-installer-" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64()));
@@ -482,23 +492,26 @@ namespace dooblr::installer
         for (int i = 0; i < ids.size(); ++i)
         {
             const auto* item = m.find (ids[i]);
-            if (item == nullptr) { report.failed.add (ids[i] + ": not in the manifest"); say (report.failed[report.failed.size() - 1]); continue; }
+            if (item == nullptr) { addFailure (ids[i] + ": not in the manifest", "Choosing " + ids[i]); say (report.failed[report.failed.size() - 1]); continue; }
 
             const auto* asset = item->assetFor (currentPlatform());
-            if (asset == nullptr) { report.failed.add (item->name + ": no download for this computer"); say (report.failed[report.failed.size() - 1]); continue; }
+            if (asset == nullptr) { addFailure (item->name + ": no download for this computer", "Choosing " + item->name); say (report.failed[report.failed.size() - 1]); continue; }
 
             say ("Downloading " + item->name + " " + item->version + "...");
             const auto zipName = juce::File::createLegalFileName (asset->url.getFileName());
             const auto zip = work.getChildFile (zipName.endsWithIgnoreCase (".zip") ? zipName : item->id + ".zip");
+            ErrorInfo downloadError;
             auto r = downloadAndVerify (*asset, zip, [&] (juce::int64 done, juce::int64 total)
             {
                 return ! progress || progress (i, ids.size(), total > 0 ? 0.9 * (double) done / (double) total : 0.0);
-            });
+            }, session, &downloadError);
 
             if (r.failed())
             {
                 if (r.getErrorMessage() == "Cancelled") { report.cancelled = true; break; }
-                report.failed.add (item->name + ": " + r.getErrorMessage());
+                downloadError.step = "Downloading " + item->name + " " + item->version;
+                downloadError.message = item->name + ": " + downloadError.message;
+                addFailure (item->name + ": " + r.getErrorMessage(), downloadError.step, downloadError);
                 say (report.failed[report.failed.size() - 1]);
                 continue;
             }
@@ -506,7 +519,7 @@ namespace dooblr::installer
             say ("Checked " + item->name + " (sha256 OK)");
             juce::File extracted;
             r = extractItem (zip, *item, work.getChildFile (item->id), extracted);
-            if (r.failed()) { report.failed.add (item->name + ": " + r.getErrorMessage()); say (report.failed[report.failed.size() - 1]); continue; }
+            if (r.failed()) { addFailure (item->name + ": " + r.getErrorMessage(), "Unzipping " + item->name); say (report.failed[report.failed.size() - 1]); continue; }
 
             staged.add ({ *item, extracted, item->kind == Kind::m4l ? loc.m4lDir : loc.vst3Dir });
             if (progress && ! progress (i, ids.size(), 1.0)) { report.cancelled = true; break; }
@@ -519,7 +532,7 @@ namespace dooblr::installer
             if (r.failed())
             {
                 for (auto& s : staged)
-                    report.failed.add (s.item.name + ": " + r.getErrorMessage());
+                    addFailure (s.item.name + ": " + r.getErrorMessage(), "Installing " + s.item.name + " into " + s.targetDir.getFullPathName());
                 say (r.getErrorMessage());
             }
             else
@@ -535,5 +548,16 @@ namespace dooblr::installer
 
         work.deleteRecursively();
         return report;
+    }
+
+    juce::String InstallReport::copyText() const
+    {
+        juce::String s;
+        for (auto& e : errors)
+            s << e.copyText() << "\n";
+        if (s.isEmpty())
+            s << "dooblr installer " << installerVersion() << " on " << osDescription() << "\n"
+              << done.size() << " installed, " << failed.size() << " failed" << (cancelled ? ", cancelled" : "") << "\n";
+        return redactSecrets (s);
     }
 }

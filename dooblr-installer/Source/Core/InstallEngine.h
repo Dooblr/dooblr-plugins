@@ -1,5 +1,6 @@
 #pragma once
 
+#include "GitHub.h"
 #include "Manifest.h"
 
 #include <functional>
@@ -70,6 +71,9 @@ namespace dooblr::installer
     /** Downloads an asset to dest, then checks its size and sha256. A mismatch deletes the
         download and fails. */
     juce::Result downloadAndVerify (const Asset&, const juce::File& dest, const Progress& = {});
+    /** Same, through the GitHub API with the session's token when the asset has an apiUrl (private
+        release). error (when given) gets the step, redacted URL and HTTP status of a failure. */
+    juce::Result downloadAndVerify (const Asset&, const juce::File& dest, const Progress&, const Session*, ErrorInfo* error);
 
     /** Checks a file against an asset's sha256 (and size when known). */
     juce::Result verify (const juce::File&, const Asset&);
@@ -98,11 +102,16 @@ namespace dooblr::installer
     struct InstallReport
     {
         juce::StringArray done, failed;
+        juce::Array<ErrorInfo> errors;   // one per failure, for "Copy details" and the command line
         bool cancelled = false;
+
+        /** Every error's copyText, or a short summary when nothing failed. */
+        juce::String copyText() const;
     };
 
     /** Downloads, verifies, unzips and installs the given items (by id). log gets one line per step. */
     InstallReport installItems (const Manifest&, const juce::StringArray& ids, const Locations&, Receipts&,
                                 const std::function<void (const juce::String& line)>& log,
-                                const std::function<bool (int itemIndex, int itemCount, double itemProgress)>& progress);
+                                const std::function<bool (int itemIndex, int itemCount, double itemProgress)>& progress,
+                                const Session* session = nullptr);
 }

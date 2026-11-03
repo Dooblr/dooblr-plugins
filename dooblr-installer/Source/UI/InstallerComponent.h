@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Core/InstallEngine.h"
+#include "Core/TokenStore.h"
 #include "Theme.h"
 
 #include <atomic>
@@ -24,8 +25,31 @@ namespace dooblr::installer::ui
         Page getPage() const noexcept { return page; }
 
         //== Test hooks (also what the background fetch calls) ===================
-        void setManifest (const Manifest&);
+        void setManifest (const Manifest&, const Session& = {});
         void setFetchError (const juce::String&);
+        /** Shows the error in a selectable box with "Copy details"; needsSignIn shows the GitHub token panel. */
+        void setFetchError (const ErrorInfo&);
+        const ErrorInfo& getFetchError() const noexcept { return fetchErr; }
+        /** Fetches the manifest again (the "Try again" button). */
+        void refetch() { fetch(); }
+        /** Where tokens come from (tests use fakes). The saved token is always read from the token store. */
+        void setTokenSources (TokenSources s) { tokenSources = std::move (s); }
+        void setTokenStore (const TokenStore& s) { tokenStore = std::make_unique<TokenStore> (s); }
+        /** Where "Copy details" puts the text (default: the system clipboard). */
+        void setClipboardSink (std::function<void (const juce::String&)> f) { clipboard = std::move (f); }
+        /** What "Copy details" copies on the current page (the error, or the install report and log). */
+        juce::String getCopyText() const;
+        /** Presses "Copy details". */
+        void clickCopy() { copyDetails(); }   // what the "Copy details" button runs
+        bool isSignInVisible() const { return tokenField.isVisible(); }
+        bool isCopyVisible() const { return copyButton.isVisible(); }
+        bool isTokenFieldMasked() const { return tokenField.getPasswordCharacter() != 0; }
+        bool isErrorTextSelectable() const { return errorBox.isVisible() && errorBox.isReadOnly() && errorBox.isMultiLine(); }
+        juce::String getErrorBoxText() const { return errorBox.getText(); }
+        juce::String getLogText() const { return log.getText(); }
+        /** Types a token into the sign-in field and presses "Save and retry". */
+        juce::Result saveTokenAndRetry (const juce::String& token);
+        const Session& getSession() const noexcept { return session; }
         void showPage (Page);
         /** The choose page's check boxes, by item id. */
         juce::StringArray getSelectedIds() const;
@@ -47,6 +71,9 @@ namespace dooblr::installer::ui
         void layoutChoose (juce::Rectangle<int>);
         void updateInstallButton();
         void applyLocation();
+        void copyDetails();
+        struct WelcomeLayout { juce::Rectangle<int> title, desc, status, signInText, tokenRow, linkRow, errorBox, notice; };
+        WelcomeLayout welcomeLayout() const;
 
         juce::URL manifestUrl;
         Locations locations;
@@ -57,11 +84,24 @@ namespace dooblr::installer::ui
         bool haveManifest = false;
         Manifest manifest;
         juce::String statusLine = "Checking for the latest versions...";
-        juce::String fetchError;
+        juce::String fetchError;   // short text, empty when the list was read
+        ErrorInfo fetchErr;
+        Session session;
+        TokenSources tokenSources = TokenSources::system();
+        std::unique_ptr<TokenStore> tokenStore = std::make_unique<TokenStore> (TokenStore::defaultStore());
+        std::function<void (const juce::String&)> clipboard = [] (const juce::String& t) { juce::SystemClipboard::copyTextToClipboard (t); };
+        InstallReport lastReport;
+        juce::String tokenNote;
+        bool tokenNoteBad = false;
         juce::StringArray heading { "Welcome", "Choose plug-ins", "Installing", "Done" };
 
         // Welcome
         juce::TextButton continueButton { "Continue" }, retryButton { "Try again" }, newInstallerButton { "Get the new installer" };
+        juce::TextEditor errorBox, tokenField;
+        juce::Label tokenLabel;
+        juce::TextButton saveTokenButton { "Save and retry" }, copyButton { "Copy details" };
+        juce::HyperlinkButton tokenLink { "Create a token on github.com",
+                                          juce::URL ("https://github.com/settings/personal-access-tokens/new") };
         // Choose
         juce::ComboBox locationBox;
         juce::Label locationLabel;

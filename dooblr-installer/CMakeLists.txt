@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-installer VERSION 0.1.0 LANGUAGES C CXX)
+project(dooblr-installer VERSION 0.1.2 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -40,6 +40,8 @@ FetchContent_MakeAvailable(JUCE)
 set(DOOBLRINSTALLER_CORE_SOURCES
     Source/Core/Manifest.cpp
     Source/Core/InstallEngine.cpp
+    Source/Core/GitHub.cpp
+    Source/Core/TokenStore.cpp
     Source/UI/Theme.cpp
     Source/UI/InstallerComponent.cpp)
 
@@ -62,7 +64,9 @@ function(dooblr_installer_setup target)
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
     if(WIN32)
-        target_link_libraries(${target} PRIVATE shell32)
+        target_link_libraries(${target} PRIVATE shell32 advapi32)   # advapi32: Credential Manager (saved GitHub token)
+    elseif(APPLE)
+        target_link_libraries(${target} PRIVATE "-framework Security")   # Keychain (saved GitHub token)
     endif()
 endfunction()
 
@@ -81,5 +85,7 @@ if(DOOBLRINSTALLER_BUILD_TESTS)
     juce_add_console_app(DooblrInstallerTests PRODUCT_NAME "DooblrInstallerTests")
     target_sources(DooblrInstallerTests PRIVATE Tests/InstallerTests.cpp)
     dooblr_installer_setup(DooblrInstallerTests)
+    # The tests spin the message loop while a background fetch runs (runDispatchLoopUntil).
+    target_compile_definitions(DooblrInstallerTests PRIVATE JUCE_MODAL_LOOPS_PERMITTED=1)
     add_test(NAME DooblrInstallerTests COMMAND DooblrInstallerTests)
 endif()
