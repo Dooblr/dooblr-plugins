@@ -97,6 +97,25 @@ namespace dooblr::installer
         /usr/local/bin, Program Files); empty otherwise. */
     juce::String ghCliToken();
 
+    //==============================================================================
+    /** GitHub's "new fine-grained token" page with the form filled in through the query parameters
+        GitHub documents (name, description, target_name, expires_in and one permission: contents=read;
+        see docs.github.com "Pre-filling fine-grained personal access token details using URL
+        parameters"). GitHub has no parameter for the repository list, so the user still picks
+        Repository access > Only select repositories > <repo> on the page. */
+    juce::URL tokenCreationUrl (const juce::String& owner = "Dooblr", const juce::String& repo = "dooblr-plugins");
+    constexpr int tokenExpiryDays = 366;   // the longest GitHub allows other than "none"
+
+    /** True when the whole text (trimmed) looks like one GitHub token: github_pat_... (fine-grained)
+        or ghp_... (classic). Used to notice a token copied on GitHub's page. */
+    bool looksLikeGitHubToken (const juce::String& text);
+
+    /** Checks a token before it is saved: GET <api>/repos/<owner>/<repo> with the token. True when
+        GitHub answers 200 for that repository. Otherwise error says why in plain words (needsSignIn
+        set for 401/403/404), with no token in it. */
+    bool validateToken (const juce::String& token, const juce::String& owner, const juce::String& repo,
+                        ErrorInfo& error, const GitHubConfig& = GitHubConfig::fromEnvironment());
+
     /** The token that worked for the manifest, used for the downloads. Kept in memory only. */
     struct Session
     {

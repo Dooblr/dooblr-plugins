@@ -4,7 +4,10 @@
 //   dooblr-installer --list    [--manifest <url>] [--vst3-dir <dir>] [--m4l-dir <dir>]
 //   dooblr-installer --install <id,id,...|all|updates> [same options]
 //   dooblr-installer --manifest <url>          (opens the window on that list)
-//   dooblr-installer --save-token              (reads a GitHub token from stdin and saves it)
+//   dooblr-installer --get-access              (opens GitHub's token page pre-filled, then reads the token
+//                                               from stdin, checks it with GitHub and saves it;
+//                                               --no-browser only prints the page address)
+//   dooblr-installer --save-token              (reads a GitHub token from stdin, checks it and saves it)
 //   dooblr-installer --forget-token
 //   --no-auth: never look for a GitHub token (anonymous downloads only)
 //
@@ -104,11 +107,39 @@ namespace
     void printSignInHelp()
     {
         std::cerr << "\nThe dooblr releases are in a private GitHub repository for now, so a GitHub token is needed:\n"
-                     "  1. Create a fine-grained token at https://github.com/settings/personal-access-tokens/new\n"
-                     "     Resource owner: Dooblr. Repository access: Only select repositories > dooblr-plugins.\n"
-                     "     Permissions: Contents: Read-only.\n"
-                     "  2. Save it:  \"dooblr installer\" --save-token   (paste it and press Return; it is not shown)\n"
-                     "     or set DOOBLR_GITHUB_TOKEN for this shell, or sign in with the GitHub CLI (gh auth login).\n";
+                     "  1. Run  \"dooblr installer\" --get-access   (opens GitHub's token page, already filled in)\n"
+                     "     or open: " << tokenCreationUrl().toString (true) << "\n"
+                     "     On the page: Repository access > Only select repositories > dooblr-plugins, then Generate token, then Copy.\n"
+                     "  2. Paste the token at the prompt (it is not shown; it is checked with GitHub, then saved),\n"
+                     "     or run --save-token, or set DOOBLR_GITHUB_TOKEN for this shell, or sign in with the GitHub CLI (gh auth login).\n";
+    }
+
+    /** Reads a token, checks it with GitHub and saves it. Exit codes: 0 saved, 1 not saved. */
+    int readCheckAndSaveToken (const juce::URL& manifest)
+    {
+        std::cerr << "Paste the GitHub token and press Return (it is not shown): " << std::flush;
+        const auto token = readSecretLine();
+        if (! TokenStore::looksLikeToken (token))
+        {
+            std::cerr << "error: that does not look like a GitHub token (github_pat_... or ghp_...). Nothing was saved." << std::endl;
+            return 1;
+        }
+        registerSecret (token);
+        const auto ref = parseReleaseUrl (manifest, GitHubConfig::fromEnvironment());
+        const auto owner = ref.isValid() ? ref.owner : juce::String ("Dooblr");
+        const auto repo = ref.isValid() ? ref.repo : juce::String ("dooblr-plugins");
+        std::cerr << "Checking the token with GitHub (" << owner << "/" << repo << ")..." << std::endl;
+        ErrorInfo e;
+        if (! validateToken (token, owner, repo, e))
+        {
+            std::cerr << "error: " << e.message << "\nThe token was not saved.\n\n" << e.copyText() << std::flush;
+            return 1;
+        }
+        juce::String where;
+        const auto r = TokenStore::defaultStore().save (token, where);
+        if (r.failed()) { std::cerr << "error: GitHub accepted the token, but it could not be saved: " << r.getErrorMessage() << std::endl; return 1; }
+        std::cout << "GitHub accepted the token. Saved it in the " << where << "." << std::endl;
+        return 0;
     }
 
     int runCommandLine (const juce::StringArray& args)
@@ -123,16 +154,21 @@ namespace
             return r.wasOk() ? 0 : 1;
         }
 
-        if (args.contains ("--save-token"))
+        if (args.contains ("--get-access"))
         {
-            std::cerr << "Paste the GitHub token and press Return: " << std::flush;
-            const auto token = readSecretLine();
-            juce::String where;
-            const auto r = TokenStore::defaultStore().save (token, where);
-            if (r.failed()) { std::cerr << "error: " << r.getErrorMessage() << std::endl; return 1; }
-            std::cout << "Saved the token in the " << where << "." << std::endl;
-            return 0;
+            const auto m = manifestUrl (args);
+            const auto ref = parseReleaseUrl (m, GitHubConfig::fromEnvironment());
+            const auto page = ref.isValid() ? tokenCreationUrl (ref.owner, ref.repo) : tokenCreationUrl();
+            std::cerr << "Opening GitHub's token page (already filled in):\n  " << page.toString (true) << "\n"
+                         "There: Repository access > Only select repositories > " << (ref.isValid() ? ref.repo : juce::String ("dooblr-plugins"))
+                      << ", then Generate token, then Copy.\n";
+            if (! args.contains ("--no-browser") && ! page.launchInDefaultBrowser())
+                std::cerr << "(Could not open the browser: open the address above.)\n";
+            return readCheckAndSaveToken (m);
         }
+
+        if (args.contains ("--save-token"))
+            return readCheckAndSaveToken (manifestUrl (args));
 
         if (args.contains ("--forget-token"))
         {
@@ -206,7 +242,7 @@ public:
     static bool isCommandLineRun()
     {
         const auto args = getCommandLineParameterArray();
-        for (auto* flag : { "--list", "--install", "--elevated-copy", "--save-token", "--forget-token" })
+        for (auto* flag : { "--list", "--install", "--elevated-copy", "--get-access", "--save-token", "--forget-token" })
             if (args.contains (flag))
                 return true;
         return false;

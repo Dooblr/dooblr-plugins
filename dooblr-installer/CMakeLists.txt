@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-installer VERSION 0.1.2 LANGUAGES C CXX)
+project(dooblr-installer VERSION 0.1.3 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -44,6 +44,11 @@ set(DOOBLRINSTALLER_CORE_SOURCES
     Source/Core/TokenStore.cpp
     Source/UI/Theme.cpp
     Source/UI/InstallerComponent.cpp)
+if(APPLE)
+    list(APPEND DOOBLRINSTALLER_CORE_SOURCES Source/Core/Clipboard.mm)
+else()
+    list(APPEND DOOBLRINSTALLER_CORE_SOURCES Source/Core/Clipboard.cpp)
+endif()
 
 function(dooblr_installer_setup target)
     target_sources(${target} PRIVATE ${DOOBLRINSTALLER_CORE_SOURCES})

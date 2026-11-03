@@ -47,8 +47,29 @@ namespace dooblr::installer::ui
         bool isErrorTextSelectable() const { return errorBox.isVisible() && errorBox.isReadOnly() && errorBox.isMultiLine(); }
         juce::String getErrorBoxText() const { return errorBox.getText(); }
         juce::String getLogText() const { return log.getText(); }
-        /** Types a token into the sign-in field and presses "Save and retry". */
+        /** Types a token into the sign-in field and presses "Save and retry": the token is checked with
+            GitHub (GET /repos/<owner>/<repo>) and saved only when GitHub accepts it, then the list is read
+            again. Fails at once (nothing sent) when the text does not look like a token. */
         juce::Result saveTokenAndRetry (const juce::String& token);
+        /** Presses "Get access on GitHub": opens GitHub's token page (pre-filled) and starts watching the
+            clipboard (about once a second) for a copied token while the sign-in panel is shown. */
+        void clickGetAccess();
+        /** Where "Get access on GitHub" opens the page (default: the browser). Returns false when it could not. */
+        void setBrowserOpener (std::function<bool (const juce::URL&)> f) { browserOpener = std::move (f); }
+        /** Where the clipboard is read from (default: the system clipboard). */
+        void setClipboardSource (std::function<juce::String()> f) { clipboardSource = std::move (f); }
+        /** Reads the clipboard once (what the 1 s timer does). */
+        void pollClipboard();
+        bool isWatchingClipboard() const { return clipboardTimer.isTimerRunning(); }
+        /** "Use the copied token" is offered (a token was found on the clipboard). */
+        bool isUseCopiedVisible() const { return useCopiedButton.isVisible(); }
+        /** Presses "Use the copied token" (synchronously, like a mouse click; triggerClick() would post it). */
+        void clickUseCopied() { if (useCopiedButton.isVisible() && useCopiedButton.isEnabled() && useCopiedButton.onClick) useCopiedButton.onClick(); }
+        bool isCheckingToken() const noexcept { return checkingToken; }
+        juce::String getTokenNote() const { return tokenNote; }
+        bool isTokenNoteBad() const noexcept { return tokenNoteBad; }
+        /** The URL "Get access on GitHub" opens. */
+        juce::URL getAccessUrl() const;
         const Session& getSession() const noexcept { return session; }
         void showPage (Page);
         /** The choose page's check boxes, by item id. */
@@ -72,7 +93,10 @@ namespace dooblr::installer::ui
         void updateInstallButton();
         void applyLocation();
         void copyDetails();
-        struct WelcomeLayout { juce::Rectangle<int> title, desc, status, signInText, tokenRow, linkRow, errorBox, notice; };
+        void checkAndSaveToken (const juce::String& token);
+        void tokenChecked (const juce::String& token, bool ok, const ErrorInfo&);
+        void stopWatchingClipboard();
+        struct WelcomeLayout { juce::Rectangle<int> title, desc, status, signInText, actionRow, tokenRow, errorBox, notice; };
         WelcomeLayout welcomeLayout() const;
 
         juce::URL manifestUrl;
@@ -93,6 +117,14 @@ namespace dooblr::installer::ui
         InstallReport lastReport;
         juce::String tokenNote;
         bool tokenNoteBad = false;
+        juce::String signedInNote;     // "GitHub accepted the token ..." shown on the list once signed in
+        bool checkingToken = false;
+        juce::int64 lastClipboardCount = -2;
+        juce::String offeredToken, rejectedToken;   // in memory only, never shown or logged
+        std::function<bool (const juce::URL&)> browserOpener = [] (const juce::URL& u) { return u.launchInDefaultBrowser(); };
+        std::function<juce::String()> clipboardSource = [] { return juce::SystemClipboard::getTextFromClipboard(); };
+        juce::TimedCallback clipboardTimer { [this] { pollClipboard(); } };
+        std::thread checker;
         juce::StringArray heading { "Welcome", "Choose plug-ins", "Installing", "Done" };
 
         // Welcome
@@ -100,8 +132,7 @@ namespace dooblr::installer::ui
         juce::TextEditor errorBox, tokenField;
         juce::Label tokenLabel;
         juce::TextButton saveTokenButton { "Save and retry" }, copyButton { "Copy details" };
-        juce::HyperlinkButton tokenLink { "Create a token on github.com",
-                                          juce::URL ("https://github.com/settings/personal-access-tokens/new") };
+        juce::TextButton getAccessButton { "Get access on GitHub" }, useCopiedButton { "Use the copied token" };
         // Choose
         juce::ComboBox locationBox;
         juce::Label locationLabel;

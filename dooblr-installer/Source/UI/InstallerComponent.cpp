@@ -1,4 +1,5 @@
 #include "InstallerComponent.h"
+#include "Core/Clipboard.h"
 
 namespace dooblr::installer::ui
 {
@@ -137,7 +138,8 @@ namespace dooblr::installer::ui
         setOpaque (true);
 
         for (auto* b : { &continueButton, &retryButton, &newInstallerButton, &selectUpdates, &selectAll, &selectNone,
-                         &backButton, &installButton, &cancelButton, &againButton, &closeButton, &saveTokenButton, &copyButton })
+                         &backButton, &installButton, &cancelButton, &againButton, &closeButton, &saveTokenButton, &copyButton,
+                         &getAccessButton, &useCopiedButton })
             addChildComponent (b);
 
         // Errors: selectable, read-only text (select and Cmd/Ctrl+C, or right-click > Copy), plus "Copy details".
@@ -155,7 +157,7 @@ namespace dooblr::installer::ui
 
         // GitHub sign-in (private release)
         addChildComponent (tokenLabel);
-        tokenLabel.setText ("GitHub token", juce::dontSendNotification);
+        tokenLabel.setText ("Or paste it", juce::dontSendNotification);
         tokenLabel.setFont (juce::FontOptions (13.0f, juce::Font::bold));
         addChildComponent (tokenField);
         tokenField.setPasswordCharacter ((juce::juce_wchar) 0x2022);
@@ -164,12 +166,25 @@ namespace dooblr::installer::ui
         tokenField.setIndents (8, 7);
         tokenField.setTitle ("GitHub token");
         tokenField.onReturnKey = [this] { saveTokenButton.triggerClick(); };
-        saveTokenButton.setToggleState (true, juce::dontSendNotification);
         saveTokenButton.onClick = [this] { saveTokenAndRetry (tokenField.getText()); };
-        addChildComponent (tokenLink);
-        tokenLink.setFont (juce::FontOptions (13.0f), false, juce::Justification::centredLeft);
-        tokenLink.setColour (juce::HyperlinkButton::textColourId, Palette::accent);
-        tokenLink.setTooltip ("https://github.com/settings/personal-access-tokens/new");
+        getAccessButton.setToggleState (true, juce::dontSendNotification);   // accent fill: the primary action
+        getAccessButton.setClickingTogglesState (false);
+        getAccessButton.setTooltip ("Opens GitHub's new-token page, already filled in (name, owner Dooblr, Contents: Read-only, 366 days). "
+                                    "You pick the dooblr-plugins repository, click Generate token, then Copy.");
+        getAccessButton.onClick = [this] { clickGetAccess(); };
+        useCopiedButton.setToggleState (true, juce::dontSendNotification);
+        useCopiedButton.setClickingTogglesState (false);
+        useCopiedButton.setTooltip ("Checks the token on the clipboard with GitHub and saves it when GitHub accepts it.");
+        useCopiedButton.onClick = [this] { if (offeredToken.isNotEmpty()) checkAndSaveToken (offeredToken); };
+        clipboardSource = [this]
+        {
+            // Read the text only when something new was copied (the change count itself is not the clipboard).
+            const auto count = clipboardChangeCount();
+            if (count >= 0 && count == lastClipboardCount)
+                return juce::String();
+            lastClipboardCount = count;
+            return juce::SystemClipboard::getTextFromClipboard();
+        };
 
         continueButton.setToggleState (true, juce::dontSendNotification); // accent fill: the primary action
         installButton.setToggleState (true, juce::dontSendNotification);
@@ -237,6 +252,9 @@ namespace dooblr::installer::ui
     InstallerComponent::~InstallerComponent()
     {
         cancelFlag = true;
+        clipboardTimer.stopTimer();
+        if (checker.joinable())
+            checker.join();
         if (worker.joinable())
             worker.join();
         viewport.setViewedComponent (nullptr, false);
@@ -286,6 +304,9 @@ namespace dooblr::installer::ui
         fetchError.clear();
         fetchErr = {};
         tokenNote.clear();
+        tokenNoteBad = false;
+        offeredToken.clear();
+        stopWatchingClipboard();
         errorBox.clear();
 
         rows = std::make_unique<RowList>();
@@ -346,22 +367,135 @@ namespace dooblr::installer::ui
         showPage (page);
     }
 
-    juce::Result InstallerComponent::saveTokenAndRetry (const juce::String& token)
+    juce::Result InstallerComponent::saveTokenAndRetry (const juce::String& tokenIn)
     {
-        juce::String where;
-        const auto r = tokenStore->save (token, where);
-        if (r.failed())
+        const auto token = tokenIn.trim();
+        if (! TokenStore::looksLikeToken (token))
         {
+            const auto r = juce::Result::fail ("That does not look like a GitHub token (it should be one word of letters, digits and _ , like github_pat_... or ghp_...). Nothing was saved.");
             tokenNote = r.getErrorMessage();
             tokenNoteBad = true;
             repaint();
             return r;
         }
         tokenField.clear();
-        tokenNote = "Saved in the " + where + ". Checking...";
+        checkAndSaveToken (token);
+        return juce::Result::ok();
+    }
+
+    juce::URL InstallerComponent::getAccessUrl() const
+    {
+        const auto ref = parseReleaseUrl (manifestUrl.toString (true), GitHubConfig::fromEnvironment());
+        return ref.isValid() ? tokenCreationUrl (ref.owner, ref.repo) : tokenCreationUrl();
+    }
+
+    void InstallerComponent::clickGetAccess()
+    {
+        const auto url = getAccessUrl();
+        const bool opened = browserOpener != nullptr && browserOpener (url);
+        tokenNoteBad = ! opened;
+        tokenNote = opened ? "On GitHub: pick dooblr-plugins, Generate token, Copy. The installer is watching for the copied token."
+                           : "Could not open the browser. Go to github.com/settings/personal-access-tokens/new and paste the token below.";
+        clipboardTimer.startTimer (1000);
+        pollClipboard();
+        repaint();
+    }
+
+    void InstallerComponent::stopWatchingClipboard()
+    {
+        clipboardTimer.stopTimer();
+    }
+
+    void InstallerComponent::pollClipboard()
+    {
+        // Only while the sign-in panel is on screen.
+        if (page != Page::welcome || haveManifest || ! fetchErr.needsSignIn)
+        {
+            stopWatchingClipboard();
+            return;
+        }
+        if (checkingToken || clipboardSource == nullptr)
+            return;
+        const auto text = clipboardSource().trim();
+        if (! looksLikeGitHubToken (text) || text == offeredToken || text == rejectedToken)
+            return;
+        registerSecret (text);
+        offeredToken = text;
+        tokenNote = "A GitHub token was copied. Click \"Use the copied token\" to check it and save it.";
         tokenNoteBad = false;
+        showPage (page);
+    }
+
+    void InstallerComponent::checkAndSaveToken (const juce::String& tokenIn)
+    {
+        const auto token = tokenIn.trim();
+        if (token.isEmpty() || checkingToken)
+            return;
+        registerSecret (token);
+        if (checker.joinable())
+            checker.join();
+        checkingToken = true;
+        tokenNote = "Checking the token with GitHub...";
+        tokenNoteBad = false;
+        useCopiedButton.setEnabled (false);
+        saveTokenButton.setEnabled (false);
+        repaint();
+
+        const auto ref = parseReleaseUrl (manifestUrl.toString (true), GitHubConfig::fromEnvironment());
+        const auto owner = ref.isValid() ? ref.owner : juce::String ("Dooblr");
+        const auto repo = ref.isValid() ? ref.repo : juce::String ("dooblr-plugins");
+        checker = std::thread ([token, owner, repo, sp = safeThis]
+        {
+            ErrorInfo e;
+            const auto ok = validateToken (token, owner, repo, e);
+            juce::MessageManager::callAsync ([sp, token, ok, e]
+            {
+                if (auto* self = sp.getComponent())
+                    self->tokenChecked (token, ok, e);
+            });
+        });
+    }
+
+    void InstallerComponent::tokenChecked (const juce::String& token, bool ok, const ErrorInfo& e)
+    {
+        checkingToken = false;
+        useCopiedButton.setEnabled (true);
+        saveTokenButton.setEnabled (true);
+
+        if (! ok)
+        {
+            rejectedToken = token;
+            if (offeredToken == token)
+                offeredToken.clear();
+            auto shown = e;
+            shown.needsSignIn = true;   // keep the sign-in panel up
+            if (shown.details.isNotEmpty()) shown.details << "\n";
+            shown.details << "The token was not saved.";
+            tokenNote = "Not saved: " + e.message.upToFirstOccurrenceOf (".", true, false) + " Details below.";
+            tokenNoteBad = true;
+            setFetchError (shown);
+            return;
+        }
+
+        juce::String where;
+        const auto r = tokenStore->save (token, where);
+        if (r.failed())
+        {
+            tokenNote = "GitHub accepted the token, but it could not be saved: " + r.getErrorMessage();
+            tokenNoteBad = true;
+            repaint();
+            return;
+        }
+        stopWatchingClipboard();
+        offeredToken.clear();
+        rejectedToken.clear();
+        // Leave no token on the clipboard once it is saved.
+        if (clipboardSource != nullptr && clipboardSource().trim() == token && clipboard != nullptr)
+            clipboard ({});
+        tokenNote = "GitHub accepted the token. Saved in the " + where + ". Getting the plug-in list...";
+        tokenNoteBad = false;
+        signedInNote = "GitHub accepted the token (saved in the " + where + ").";
         fetch();
-        return r;
     }
 
     juce::String InstallerComponent::getCopyText() const
@@ -532,6 +666,8 @@ namespace dooblr::installer::ui
         page = p;
         for (auto* c : getChildren())
             c->setVisible (false);
+        if (p != Page::welcome)
+            stopWatchingClipboard();
 
         switch (page)
         {
@@ -541,8 +677,9 @@ namespace dooblr::installer::ui
                 retryButton.setVisible (fetchError.isNotEmpty());
                 errorBox.setVisible (! fetchErr.isEmpty());
                 copyButton.setVisible (! fetchErr.isEmpty());
-                for (auto* c : std::initializer_list<juce::Component*> { &tokenLabel, &tokenField, &saveTokenButton, &tokenLink })
+                for (auto* c : std::initializer_list<juce::Component*> { &tokenLabel, &tokenField, &saveTokenButton, &getAccessButton })
                     c->setVisible (fetchErr.needsSignIn);
+                useCopiedButton.setVisible (fetchErr.needsSignIn && offeredToken.isNotEmpty());
                 newInstallerButton.setVisible (haveManifest && Version::compare (manifest.installerVersion, DOOBLRINSTALLER_VERSION) > 0);
                 break;
             case Page::choose:
@@ -639,15 +776,16 @@ namespace dooblr::installer::ui
                 g.setColour (Palette::textPrimary);
                 g.setFont (juce::FontOptions (13.0f));
                 g.drawFittedText ("The dooblr releases are in a private GitHub repository for now, so the installer needs a GitHub token once. "
-                                  "Create a fine-grained token: Resource owner Dooblr, Repository access: Only select repositories > dooblr-plugins, "
-                                  "Permissions: Contents: Read-only. Paste it here; it is kept in the " + TokenStore::systemStoreName()
-                                  + " and never shown or logged.",
-                                  L.signInText, juce::Justification::topLeft, 4, 1.0f);
+                                  "Click Get access on GitHub: the token page opens already filled in. There, choose Only select repositories > "
+                                  "dooblr-plugins, click Generate token, then Copy. The token is checked with GitHub, kept in the "
+                                  + TokenStore::systemStoreName() + " and never shown or logged.",
+                                  L.signInText, juce::Justification::topLeft, 3, 1.0f);
                 if (tokenNote.isNotEmpty())
                 {
-                    g.setColour (tokenNoteBad ? Palette::danger : Palette::textMuted);
+                    g.setColour (tokenNoteBad ? Palette::danger : (checkingToken ? Palette::dynamic : Palette::textMuted));
                     g.setFont (juce::FontOptions (12.0f));
-                    g.drawFittedText (tokenNote, L.linkRow.withTrimmedLeft (240), juce::Justification::centredLeft, 1, 0.9f);
+                    g.drawFittedText (tokenNote, L.actionRow.withTrimmedLeft (useCopiedButton.isVisible() ? 200 + 190 : 200),
+                                      juce::Justification::centredLeft, 2, 0.9f);
                 }
             }
             else if (! bad && newInstallerButton.isVisible())
@@ -655,6 +793,12 @@ namespace dooblr::installer::ui
                 g.setColour (Palette::dynamic);
                 g.setFont (juce::FontOptions (13.0f));
                 g.drawText ("A newer installer (" + manifest.installerVersion + ") is available.", L.notice, juce::Justification::centredLeft);
+            }
+            else if (! bad && haveManifest && signedInNote.isNotEmpty())
+            {
+                g.setColour (Palette::accent);
+                g.setFont (juce::FontOptions (13.0f));
+                g.drawText (signedInNote, L.notice, juce::Justification::centredLeft);
             }
         }
         else if (page == Page::choose)
@@ -692,12 +836,12 @@ namespace dooblr::installer::ui
         {
             if (fetchErr.needsSignIn)
             {
-                L.signInText = r.removeFromTop (54);
+                L.signInText = r.removeFromTop (50);
                 r.removeFromTop (6);
-                L.tokenRow = r.removeFromTop (32);
-                r.removeFromTop (4);
-                L.linkRow = r.removeFromTop (22);
+                L.actionRow = r.removeFromTop (34);
                 r.removeFromTop (8);
+                L.tokenRow = r.removeFromTop (32);
+                r.removeFromTop (10);
             }
             L.errorBox = r;
         }
@@ -731,7 +875,10 @@ namespace dooblr::installer::ui
                 saveTokenButton.setBounds (row.removeFromRight (140));
                 row.removeFromRight (8);
                 tokenField.setBounds (row);
-                tokenLink.setBounds (L.linkRow.withWidth (230));
+                auto actions = L.actionRow;
+                getAccessButton.setBounds (actions.removeFromLeft (190));
+                actions.removeFromLeft (10);
+                useCopiedButton.setBounds (actions.removeFromLeft (180));
                 break;
             }
             case Page::choose:

@@ -596,4 +596,93 @@ namespace dooblr::installer
             return httpGet (juce::URL::createWithoutParsing (a.apiUrl), session->token, "application/octet-stream", error);
         return httpGet (a.url, {}, {}, error);
     }
+
+    //==============================================================================
+    // Getting a token
+
+    juce::URL tokenCreationUrl (const juce::String& owner, const juce::String& repo)
+    {
+        return juce::URL ("https://github.com/settings/personal-access-tokens/new")
+            .withParameter ("name", "dooblr installer")
+            .withParameter ("description", "Lets the dooblr installer download the plug-ins from the private " + owner + "/" + repo
+                                           + " releases. Repository access: Only select repositories > " + repo + ". Contents: Read-only.")
+            .withParameter ("target_name", owner)
+            .withParameter ("expires_in", juce::String (tokenExpiryDays))
+            .withParameter ("contents", "read");
+    }
+
+    bool looksLikeGitHubToken (const juce::String& text)
+    {
+        const auto t = text.trim();
+        if (t.length() < 30 || t.length() > 255)
+            return false;
+        static const std::regex re (R"(^(github_pat_[A-Za-z0-9_]{22,}|ghp_[A-Za-z0-9]{30,})$)");
+        return std::regex_match (t.toStdString(), re);
+    }
+
+    bool validateToken (const juce::String& tokenIn, const juce::String& owner, const juce::String& repo,
+                        ErrorInfo& error, const GitHubConfig& config)
+    {
+        error = {};
+        const auto token = tokenIn.trim();
+        const auto repoName = owner + "/" + repo;
+        const auto apiUrl = config.apiBase + "/repos/" + owner + "/" + repo;
+        error.step = "Checking the GitHub token";
+        if (token.isEmpty())
+        {
+            error.setUrl (apiUrl);
+            error.message = "No token to check.";
+            error.needsSignIn = true;
+            return false;
+        }
+        registerSecret (token);
+        auto r = httpGet (juce::URL::createWithoutParsing (apiUrl), token, "application/vnd.github+json", error);
+        if (r.ok())
+        {
+            const auto json = juce::JSON::parse (r.stream->readEntireStreamAsString());
+            const auto name = json.getProperty ("full_name", {}).toString();
+            if (name.isEmpty() || name.equalsIgnoreCase (repoName))
+            {
+                // The repository is visible (that needs only Metadata); the releases need Contents: Read-only.
+                ErrorInfo re;
+                const auto relUrl = apiUrl + "/releases/latest";
+                auto rr = httpGet (juce::URL::createWithoutParsing (relUrl), token, "application/vnd.github+json", re);
+                if (rr.ok())
+                {
+                    error = {};
+                    return true;
+                }
+                error = re;
+                error.step = "Checking the GitHub token";
+                if (re.httpStatus == 401 || re.httpStatus == 403 || re.httpStatus == 404)
+                {
+                    error.needsSignIn = true;
+                    error.message = "The token can see " + repoName + " but cannot read its releases (HTTP " + juce::String (re.httpStatus)
+                                    + "). On GitHub, edit the token: Permissions > Contents: Read-only.";
+                }
+                return false;
+            }
+            error.setUrl (apiUrl);
+            error.httpStatus = r.status;
+            error.message = "GitHub answered for " + name + " instead of " + repoName + ".";
+            return false;
+        }
+        const auto st = error.httpStatus;
+        error.step = "Checking the GitHub token";
+        if (st == 401)
+        {
+            error.needsSignIn = true;
+            error.message = "GitHub did not accept this token (HTTP 401). It may be incomplete, expired or revoked. Copy it again from GitHub, or make a new one.";
+        }
+        else if (st == 403 || st == 404)
+        {
+            error.needsSignIn = true;
+            error.message = "The token works, but it cannot read " + repoName + " (HTTP " + juce::String (st) + "). On GitHub, edit the token: "
+                            "Resource owner " + owner + ", Repository access > Only select repositories > " + repo + ", Permissions > Contents: Read-only.";
+        }
+        else if (st != 0)
+            error.message = "GitHub answered HTTP " + juce::String (st) + " " + httpStatusText (st) + " while checking the token. Try again in a minute.";
+        // st == 0: httpGet's "No connection to ..." message stays.
+        return false;
+    }
 }
