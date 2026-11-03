@@ -43,7 +43,7 @@ done
 [ -n "$targets" ] || exit 0
 
 # shellcheck disable=SC2086
-written=$(python3 "$gen" --pending --print-changed $targets 2>&1) || warn "generator failed: $written"
+written=$(python3 "$gen" --pending --print-changed $targets 2>&1) || warn "generator failed: $(printf '%s\n' "$written" | tail -n 3)"
 
 for f in $written; do
     case "$f" in
