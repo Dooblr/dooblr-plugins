@@ -86,6 +86,15 @@ namespace dooblrkick::ui
         g.drawLine ({ centre.getPointOnCircumference (radius * 0.15f, angle), tip }, 2.0f);
     }
 
+    juce::Font DooblrLookAndFeel::getLabelFont (juce::Label& label)
+    {
+        if (auto* slider = dynamic_cast<juce::Slider*> (label.getParentComponent()))
+            if (const auto* height = slider->getProperties().getVarPointer ("readoutFontHeight"))
+                return juce::Font (juce::FontOptions ((float) (double) *height));
+
+        return juce::LookAndFeel_V4::getLabelFont (label);
+    }
+
     void DooblrLookAndFeel::drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height, float sliderPos,
                                               float minSliderPos, float maxSliderPos, juce::Slider::SliderStyle style, juce::Slider& slider)
     {

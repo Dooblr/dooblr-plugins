@@ -30,9 +30,12 @@ namespace dooblrkick::ui
                 case Kind::knob:
                 {
                     auto slider = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
-                    slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, knobWidth, 16);
+                    slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, spec.large ? largeReadoutWidth : knobWidth,
+                                             spec.large ? largeReadoutHeight : 16);
                     slider->setColour (juce::Slider::rotarySliderFillColourId, colour);
-                    slider->getProperties().set ("maxKnobDiameter", 46.0);
+                    slider->getProperties().set ("maxKnobDiameter", (double) (spec.large ? largeKnobDiameter : knobDiameter));
+                    if (spec.large)
+                        slider->getProperties().set ("readoutFontHeight", (double) largeFontHeight);
                     slider->setTooltip (parameter->getName (64));
                     item.sliderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, spec.parameterId, *slider);
 
@@ -47,11 +50,11 @@ namespace dooblrkick::ui
                         slider->setMouseDragSensitivity (720);
 
                     item.control = std::move (slider);
-                    item.width = knobWidth;
+                    item.width = spec.large ? largeKnobWidth : knobWidth;
 
                     item.caption = std::make_unique<juce::Label>();
                     item.caption->setText (spec.caption, juce::dontSendNotification);
-                    item.caption->setFont (juce::FontOptions (12.0f));
+                    item.caption->setFont (juce::FontOptions (spec.large ? largeFontHeight : 12.0f));
                     item.caption->setColour (juce::Label::textColourId, Palette::textMuted);
                     item.caption->setJustificationType (juce::Justification::centred);
                     item.caption->setInterceptsMouseClicks (false, false);
@@ -202,7 +205,7 @@ namespace dooblrkick::ui
         constexpr int gap = 6, minKnobWidth = 56;
 
         // Units of the flow: each shown unslotted item, and each slot (always, shown or not).
-        struct Unit { bool knob = true; int width = 0; int slot = -1; juce::Rectangle<int> bounds; };
+        struct Unit { bool knob = true; int width = 0; int slot = -1; juce::Rectangle<int> bounds; bool large = false; };
         std::vector<Unit> units;
         std::vector<int> unitOf (items.size(), -1);
         std::map<int, int> slotUnits;
@@ -210,7 +213,8 @@ namespace dooblrkick::ui
         for (size_t i = 0; i < items.size(); ++i)
         {
             const auto& item = items[i];
-            const auto isKnob = item.extra == nullptr && item.spec.kind == Kind::knob;
+            const auto isLarge = item.extra == nullptr && item.spec.kind == Kind::knob && item.spec.large;
+            const auto isKnob = item.extra == nullptr && item.spec.kind == Kind::knob && ! isLarge;
             const auto w = isKnob ? (int) knobWidth : item.width;
 
             if (item.spec.slot >= 0)
@@ -232,7 +236,7 @@ namespace dooblrkick::ui
             }
 
             unitOf[i] = (int) units.size();
-            units.push_back ({ isKnob, w, item.spec.slot, {} });
+            units.push_back ({ isKnob, w, item.spec.slot, {}, isLarge });
         }
 
         // Narrow windows: if slimmer knobs (down to 56 px) keep the panel on one row, use them
@@ -248,7 +252,12 @@ namespace dooblrkick::ui
         if (knobs > 0 && fixedWidth + knobs * knobW > width && fixedWidth + knobs * minKnobWidth <= width)
             knobW = (width - fixedWidth) / knobs;
 
-        int x = 0, y = titleHeight;
+        // A large knob on the first row, clear of the panel title, reaches up into the title row:
+        // its caption sits level with the title and its knob centres on the row's regular knobs.
+        const auto titleTextWidth = juce::GlyphArrangement::getStringWidthInt (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)),
+                                                                              title.toUpperCase());
+
+        int x = 0, y = titleHeight, rowBottom = titleHeight;
         for (auto& unit : units)
         {
             const auto w = unit.knob ? knobW : unit.width;
@@ -256,10 +265,20 @@ namespace dooblrkick::ui
             if (x > 0 && x + w > width)
             {
                 x = 0;
-                y += knobHeight + gap;
+                y = rowBottom + gap;
             }
 
-            unit.bounds = { x, y, w, knobHeight };
+            if (unit.large)
+            {
+                const auto lift = (y == titleHeight && x >= titleTextWidth + 2 * gap) ? titleHeight : 0;
+                unit.bounds = { x, y - lift, w, largeKnobHeight };
+            }
+            else
+            {
+                unit.bounds = { x, y, w, knobHeight };
+            }
+
+            rowBottom = std::max (rowBottom, unit.bounds.getBottom());
             x += w + gap;
 
             if (slots != nullptr && unit.slot >= 0)
@@ -277,6 +296,12 @@ namespace dooblrkick::ui
 
             const auto& unit = units[(size_t) unitOf[i]];
             const auto& item = items[i];
+            if (unit.large)
+            {
+                cells.push_back (unit.bounds);
+                continue;
+            }
+
             const auto isKnob = item.extra == nullptr && item.spec.kind == Kind::knob;
             // A member narrower than its slot sits at the slot's left (knobs: centred).
             const auto w = isKnob ? (unit.knob ? unit.bounds.getWidth() : std::min ((int) knobWidth, unit.bounds.getWidth())) : std::min (item.width, unit.bounds.getWidth());
@@ -335,7 +360,7 @@ namespace dooblrkick::ui
             switch (item.spec.kind)
             {
                 case Kind::knob:
-                    item.caption->setBounds (cell.removeFromTop (16));
+                    item.caption->setBounds (cell.removeFromTop (item.spec.large ? largeCaptionHeight : 16));
                     item.control->setBounds (cell);
                     break;
                 case Kind::combo:
@@ -449,7 +474,7 @@ namespace dooblrkick::ui
             knob.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
             knob.setTextBoxStyle (juce::Slider::TextBoxBelow, false, ControlPanel::knobWidth, 16);
             knob.setColour (juce::Slider::rotarySliderFillColourId, colour);
-            knob.getProperties().set ("maxKnobDiameter", 46.0);
+            knob.getProperties().set ("maxKnobDiameter", (double) ControlPanel::knobDiameter);
             knob.setVelocityModeParameters (0.15, 1, 0.0, true, juce::ModifierKeys::shiftModifier);
             knob.setComponentID (ids[k]);
             addAndMakeVisible (knob);

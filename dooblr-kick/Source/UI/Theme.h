@@ -34,6 +34,10 @@ namespace dooblrkick::ui
 
         void drawToggleButton (juce::Graphics&, juce::ToggleButton&, bool highlighted, bool down) override;
 
+        /** v0.3.7: a slider's readout uses its "readoutFontHeight" property when set (the large
+            Time Scale knob); every other label keeps its own font. */
+        juce::Font getLabelFont (juce::Label&) override;
+
         /** Vertical sliders (the layer Level faders, v0.3.3): a slim groove filled from the bottom
             and a flat cap. Other linear styles use the default look. */
         void drawLinearSlider (juce::Graphics&, int x, int y, int width, int height, float sliderPos, float minSliderPos,

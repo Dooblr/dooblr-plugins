@@ -37,6 +37,11 @@ namespace dooblrkick::ui
             int hiddenLeadingChoices = 0;
             /** >= 0: the fixed slot this control shares (see the class comment). */
             int slot = -1;
+            /** v0.3.7 knobs: a large knob, twice the diameter of the others, with a larger caption
+                and readout (the Envelope page's Time Scale). Its cell is largeKnobWidth wide; on a
+                panel's first row it reaches up into the title row (when clear of the title), so its
+                knob centres on the row's regular knobs and the panel grows only by the readout. */
+            bool large = false;
         };
 
         ControlPanel (juce::AudioProcessorValueTreeState& state, const juce::String& title, juce::Colour colour,
@@ -69,6 +74,11 @@ namespace dooblrkick::ui
         juce::Rectangle<int> getSlotBounds (int slot) const;
 
         static constexpr int titleHeight = 20, knobWidth = 70, knobHeight = 84, comboWidth = 128, toggleWidth = 104;
+        /** Regular knobs draw at most knobDiameter - 8 = 38 px; large ones at largeKnobDiameter - 8 = 76 px. */
+        static constexpr int knobDiameter = 46, largeKnobDiameter = 2 * (knobDiameter - 8) + 8;
+        static constexpr int largeCaptionHeight = 18, largeReadoutWidth = 96, largeReadoutHeight = 22;
+        static constexpr int largeKnobWidth = 112, largeKnobHeight = largeCaptionHeight + largeKnobDiameter + 2 + largeReadoutHeight;
+        static constexpr float largeFontHeight = 15.0f;
 
     private:
         struct Item

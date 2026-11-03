@@ -496,6 +496,13 @@ namespace
 
     bool isEnvelopeParam (const juce::String& id) { return envelopeParamInfo (id).isEnvelope; }
 
+    /** The centre of a rect in a component's coordinates, as a y in its top-level component's space. */
+    float centreYInTopLevel (juce::Component& c, juce::Rectangle<int> local)
+    {
+        auto* top = c.getTopLevelComponent();
+        return top->getLocalPoint (&c, local.getCentre().toFloat()).y;
+    }
+
     void saveSnapshot (const juce::Image& image, const juce::String& suffix)
     {
         const auto* prefix = std::getenv ("DOOBLRKICK_EDITOR_SNAPSHOT");
@@ -524,7 +531,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.6", "version 0.3.6");
+        check (juce::String (JucePlugin_VersionString) == "0.3.7", "version 0.3.7");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -5017,8 +5024,8 @@ namespace
         auto& editor = *h.editor;
 
         auto* version = dynamic_cast<juce::Label*> (editor.findChildWithID ("version"));
-        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.6",
-               "header subtitle is the build version (v0.3.6)");
+        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.7",
+               "header subtitle is the build version (v0.3.7)");
         juce::StringArray texts;
         collectLabels (editor, texts);
         bool tagLine = false;
@@ -5316,6 +5323,46 @@ namespace
             for (const auto* id : { "menv_knob_time", "menv_knob_level", "menv_knob_curve", "menv_point_prev", "menv_point_next", "menv_tscale", "menv_depth" })
                 all = all && visible.count (id) == 1;
             check (all && problems == 0, size + ": the envelope knobs are shown, inside the editor, with no overlaps");
+
+            // v0.3.7: Time Scale draws at twice the diameter of the other knobs (the look and feel
+            // draws min (rotary area - 8, maxKnobDiameter - 8)), with its caption and readout inside
+            // its panel, and its knob centred level with the regular knobs beside it.
+            auto* scale = dynamic_cast<juce::Slider*> (findById (editor, "menv_tscale"));
+            auto* depth = dynamic_cast<juce::Slider*> (findById (editor, "menv_depth"));
+            auto* pointTime = dynamic_cast<juce::Slider*> (findById (editor, "menv_knob_time"));
+            if (scale != nullptr && depth != nullptr && pointTime != nullptr)
+            {
+                const auto drawn = [] (juce::Slider& s)
+                {
+                    const auto area = s.getLookAndFeel().getSliderLayout (s).sliderBounds.toFloat().reduced (4.0f);
+                    const auto cap = (float) (double) s.getProperties().getWithDefault ("maxKnobDiameter", 1.0e6) - 8.0f;
+                    return std::pair { juce::jmin (area.getWidth(), area.getHeight(), cap),
+                                       centreYInTopLevel (s, s.getLookAndFeel().getSliderLayout (s).sliderBounds) };
+                };
+                const auto [big, bigY] = drawn (*scale);
+                const auto [small, smallY] = drawn (*depth);
+                const auto [point, pointY] = drawn (*pointTime);
+                check (std::abs (big - 2.0f * small) < 0.5f && std::abs (point - small) < 0.5f && small >= 37.5f,
+                       size + ": Time Scale knob " + format (big, 1) + " px = 2 x the other knobs (" + format (small, 1) + " px)");
+                check (std::abs (bigY - smallY) <= 2.0f && std::abs (pointY - smallY) <= 2.0f,
+                       size + ": Time Scale's knob centres level with Depth and the point knobs (" + format (bigY, 1) + " vs " + format (smallY, 1) + ")");
+                auto* panel = scale->getParentComponent();
+                const auto* caption = [&]() -> juce::Component*
+                {
+                    for (auto* child : panel->getChildren())
+                        if (auto* label = dynamic_cast<juce::Label*> (child); label != nullptr && label->getText() == "Time scale")
+                            return label;
+                    return nullptr;
+                }();
+                check (caption != nullptr && panel->getLocalBounds().contains (caption->getBounds()) && panel->getLocalBounds().contains (scale->getBounds())
+                           && caption->getBottom() <= scale->getY(),
+                       size + ": Time Scale's caption sits above it and both are inside the panel");
+                check (scale->getTextBoxHeight() > depth->getTextBoxHeight() && scale->getTextBoxWidth() > depth->getTextBoxWidth(),
+                       size + ": Time Scale's readout is larger than the others");
+            }
+            else
+                check (false, size + ": Time Scale, Depth and the point Time knobs found");
+            saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.7-timescale-" + juce::String (size));
         }
 
         editor.setSize (1080, 660);

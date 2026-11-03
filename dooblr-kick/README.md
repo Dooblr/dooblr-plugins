@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.6 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.7 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -79,6 +79,9 @@ Version 0.3.6 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   beside them: **Time Scale** (25 % .. 400 %, stretches every point's time) and **Depth**
   (0 .. 100 %, blends between flat unity and the drawn shape). At their defaults (100 %, 100 %)
   the sound is unchanged.
+  Since 0.3.7 the Time Scale knob is twice the diameter of the other knobs, with a larger
+  caption and readout; its caption sits level with the panel title and its knob lines up with
+  the point knobs beside it.
 - **Zoom on envelope graphs.** On the master envelope and the Body pitch and amp envelopes,
   drag up or down in an empty part of the graph (not on a line or point) to zoom the time
   axis in or out around the mouse. Double-click the time ruler to show the whole envelope
