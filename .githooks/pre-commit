@@ -1,0 +1,54 @@
+#!/bin/sh
+# dooblr pre-commit hook: refresh the generated design maps for the plugins this commit touches.
+#
+# Enable once per clone:   git config core.hooksPath .githooks
+# Skip for one commit:     DOOBLR_SKIP_DESIGN=1 git commit ...   (or git commit --no-verify)
+#
+# Fail-safe: this hook never blocks a commit. Any problem prints a warning and exits 0; the
+# design-maps GitHub workflow regenerates the maps on main anyway.
+
+warn() { echo "design hook: $*; commit continues without refreshing design maps" >&2; exit 0; }
+
+[ -n "$DOOBLR_SKIP_DESIGN" ] && exit 0
+
+top=$(git rev-parse --show-toplevel 2>/dev/null) || warn "not in a git work tree"
+cd "$top" || warn "cannot cd to $top"
+gen="design/tools/update-design.py"
+[ -f "$gen" ] || exit 0
+
+# `git commit --only` / `git commit -- <paths>` commits from a temporary index; adding files to it
+# would commit them without the user asking, so leave those commits alone.
+case "${GIT_INDEX_FILE:-}" in
+    *next-index*) warn "partial commit (--only / paths)" ;;
+esac
+
+command -v python3 >/dev/null 2>&1 || warn "python3 not found"
+
+# Plugins with staged changes (a change to the generator itself refreshes every plugin).
+changed=$(git diff --cached --name-only --diff-filter=ACMRD 2>/dev/null) || warn "git diff failed"
+plugins=$(printf '%s\n' "$changed" | sed -n 's#^\(dooblr-[^/]*\)/.*#\1#p' | sort -u)
+if printf '%s\n' "$changed" | grep -q '^design/tools/update-design\.py$'; then
+    plugins=$(git ls-files 'dooblr-*/CMakeLists.txt' 'dooblr-*/package.json' | sed 's#/.*##' | sort -u)
+fi
+[ -n "$plugins" ] || exit 0
+
+# Only plugins that have a design file or a build file (skips stray folders such as build outputs).
+targets=""
+for p in $plugins; do
+    if [ -f "design/plugins/$p.md" ] || git ls-files --error-unmatch "$p/CMakeLists.txt" >/dev/null 2>&1 \
+        || git ls-files --error-unmatch "$p/package.json" >/dev/null 2>&1; then
+        targets="$targets $p"
+    fi
+done
+[ -n "$targets" ] || exit 0
+
+# shellcheck disable=SC2086
+written=$(python3 "$gen" --pending --print-changed $targets 2>&1) || warn "generator failed: $written"
+
+for f in $written; do
+    case "$f" in
+        design/INDEX.md|design/plugins/*.md) git add -- "$f" || warn "git add $f failed" ;;
+    esac
+done
+[ -n "$written" ] && echo "design hook: refreshed $(echo $written | tr '\n' ' ')" >&2
+exit 0
