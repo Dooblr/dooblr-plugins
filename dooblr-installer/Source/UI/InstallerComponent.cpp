@@ -19,6 +19,16 @@ namespace dooblr::installer::ui
         }
 
         constexpr int rowHeight = 58, addOnHeight = 46;
+        constexpr int gap = 8;   // between buttons, everywhere
+
+        // What "All" ticks: everything that can go on this computer, including a reinstall of an
+        // up-to-date plug-in. Never a downgrade (a newer version is installed) or an unavailable item.
+        bool selectableByAll (Status s) { return s == Status::notInstalled || s == Status::updateAvailable || s == Status::upToDate; }
+
+        juce::String dotJoin (const juce::StringArray& parts)
+        {
+            return parts.joinIntoString (juce::String::fromUTF8 ("  \xc2\xb7  "));
+        }
     }
 
     //==========================================================================
@@ -204,17 +214,23 @@ namespace dooblr::installer::ui
         againButton.onClick = [this] { fetch(); showPage (Page::welcome); };
         closeButton.onClick = [] { if (auto* app = juce::JUCEApplicationBase::getInstance()) app->systemRequestedQuit(); };
 
-        const auto selectWhere = [this] (std::function<bool (const Row&)> pred)
-        {
-            if (rows != nullptr)
-                for (auto* r : rows->rows)
-                    if (r->check.isEnabled())
-                        r->check.setToggleState (pred (*r), juce::dontSendNotification);
-            updateInstallButton();
-        };
-        selectUpdates.onClick = [selectWhere] { selectWhere ([] (const Row& r) { return r.status == Status::updateAvailable; }); };
-        selectAll.onClick = [selectWhere] { selectWhere ([] (const Row& r) { return r.status == Status::notInstalled || r.status == Status::updateAvailable; }); };
-        selectNone.onClick = [selectWhere] { selectWhere ([] (const Row&) { return false; }); };
+        selectUpdates.onClick = [this] { selectWhere ([] (Status s) { return s == Status::updateAvailable; }); };
+        selectAll.onClick     = [this] { selectWhere (selectableByAll); };
+        selectNone.onClick    = [this] { selectWhere ([] (Status) { return false; }); };
+        selectUpdates.setTooltip ("Ticks only the plug-ins that have an update.");
+        selectAll.setTooltip ("Ticks everything that can be installed here: new plug-ins, updates, and a fresh copy of the ones that are up to date.");
+        selectNone.setTooltip ("Unticks everything.");
+
+        addChildComponent (ring);
+        addChildComponent (detailsBox);
+        detailsBox.setMultiLine (true, true);
+        detailsBox.setReadOnly (true);
+        detailsBox.setScrollbarsShown (true);
+        detailsBox.setCaretVisible (false);
+        detailsBox.setPopupMenuEnabled (true);
+        detailsBox.setFont (juce::FontOptions (13.0f));
+        detailsBox.setColour (juce::TextEditor::textColourId, Palette::textPrimary);
+        detailsBox.setTitle ("What went wrong");
 
         addChildComponent (locationBox);
         addChildComponent (locationLabel);
@@ -235,7 +251,7 @@ namespace dooblr::installer::ui
         viewport.setScrollBarsShown (true, false);
         viewport.setScrollBarThickness (8);
 
-        addChildComponent (progressBar);
+        // The step log is not shown (the wheel is); it is what "Copy details" copies.
         addChildComponent (log);
         log.setMultiLine (true);
         log.setReadOnly (true);
@@ -309,9 +325,16 @@ namespace dooblr::installer::ui
         stopWatchingClipboard();
         errorBox.clear();
 
+        // When the user already chose (All, None, Updates or a tick), reading the list again keeps that choice.
+        std::map<juce::String, bool> chosen;
+        if (selectionChosen && rows != nullptr)
+            for (auto* r : rows->rows)
+                chosen[r->item.id] = r->check.getToggleState();
+
+        viewport.setViewedComponent (nullptr, false);
         rows = std::make_unique<RowList>();
         for (auto& item : manifest.items)
-            rows->addAndMakeVisible (rows->rows.add (new Row (item, [this] { updateInstallButton(); })));
+            rows->addAndMakeVisible (rows->rows.add (new Row (item, [this] { selectionChosen = true; updateInstallButton(); })));
         viewport.setViewedComponent (rows.get(), false);
 
         refreshInstalled();
@@ -321,9 +344,13 @@ namespace dooblr::installer::ui
         for (auto* r : rows->rows)
             anyInstalled = anyInstalled || r->installed.present;
         for (auto* r : rows->rows)
-            r->check.setToggleState (r->status == Status::updateAvailable
-                                     || (! anyInstalled && ! r->item.optional && r->status == Status::notInstalled),
-                                     juce::dontSendNotification);
+        {
+            const auto it = chosen.find (r->item.id);
+            const auto on = it != chosen.end() ? it->second
+                                               : (r->status == Status::updateAvailable
+                                                  || (! anyInstalled && ! r->item.optional && r->status == Status::notInstalled));
+            r->check.setToggleState (on && r->check.isEnabled(), juce::dontSendNotification);
+        }
         updateInstallButton();
 
         int updates = 0, missing = 0;
@@ -333,12 +360,12 @@ namespace dooblr::installer::ui
             missing += r->status == Status::notInstalled ? 1 : 0;
         }
 
-        const auto dot = juce::String::fromUTF8 ("  \xc2\xb7  ");
-        statusLine = juce::String (manifest.items.size()) + " items available";
-        if (updates > 0) statusLine << dot << updates << (updates == 1 ? " update" : " updates");
-        if (missing > 0) statusLine << dot << missing << " not installed";
-        if (updates == 0 && missing == 0) statusLine << dot << "everything is up to date";
-        if (session.authenticated()) statusLine << dot << "signed in to GitHub";
+        juce::StringArray parts { juce::String (manifest.items.size()) + " items available" };
+        if (updates > 0) parts.add (juce::String (updates) + (updates == 1 ? " update" : " updates"));
+        if (missing > 0) parts.add (juce::String (missing) + " not installed");
+        if (updates == 0 && missing == 0) parts.add ("everything is up to date");
+        if (session.authenticated()) parts.add ("signed in to GitHub");
+        statusLine = dotJoin (parts);
         showPage (page);
     }
 
@@ -513,6 +540,8 @@ namespace dooblr::installer::ui
                 s << lastReport.copyText();
             else
                 s << "dooblr installer " << installerVersion() << " on " << osDescription() << "\n";
+            if (page == Page::done && summaryText.isNotEmpty())
+                s << "Result: " << summaryText << "\n";
             s << "\nLog:\n" << log.getText();
         }
         return redactSecrets (s);
@@ -559,9 +588,40 @@ namespace dooblr::installer::ui
     {
         if (rows != nullptr)
             for (auto* r : rows->rows)
-                if (r->item.id == id)
+                if (r->item.id == id && r->check.isEnabled())
                     r->check.setToggleState (on, juce::dontSendNotification);
+        selectionChosen = true;
         updateInstallButton();
+    }
+
+    void InstallerComponent::clickRow (const juce::String& id)
+    {
+        if (rows != nullptr)
+            for (auto* r : rows->rows)
+                if (r->item.id == id && r->check.isEnabled())
+                {
+                    // What a mouse click does (Button::triggerClick is asynchronous).
+                    r->check.setToggleState (! r->check.getToggleState(), juce::dontSendNotification);
+                    if (r->check.onClick) r->check.onClick();
+                }
+    }
+
+    void InstallerComponent::selectWhere (const std::function<bool (Status)>& pred)
+    {
+        if (rows != nullptr)
+            for (auto* r : rows->rows)
+                r->check.setToggleState (r->check.isEnabled() && pred (r->status), juce::dontSendNotification);
+        selectionChosen = true;
+        updateInstallButton();
+        if (rows != nullptr)
+            rows->repaint();
+    }
+
+    juce::String InstallerComponent::itemLabel (const juce::String& id) const
+    {
+        if (const auto* item = manifest.find (id))
+            return item->name + " " + item->version;
+        return id;
     }
 
     juce::String InstallerComponent::rowStatus (const juce::String& id) const
@@ -577,9 +637,33 @@ namespace dooblr::installer::ui
 
     void InstallerComponent::updateInstallButton()
     {
-        const auto n = getSelectedIds().size();
-        installButton.setButtonText (n == 0 ? juce::String ("Install") : "Install " + juce::String (n) + (n == 1 ? " item" : " items"));
+        int updates = 0, others = 0, selectable = 0;
+        if (rows != nullptr)
+            for (auto* r : rows->rows)
+            {
+                if (! r->check.isEnabled())
+                    continue;
+                ++selectable;
+                if (r->check.getToggleState())
+                    (r->status == Status::updateAvailable ? updates : others)++;
+            }
+        const auto n = updates + others;
+        const auto verb = n == 0 ? juce::String ("Install")
+                        : others == 0 ? juce::String ("Update")
+                        : updates == 0 ? juce::String ("Install")
+                                       : juce::String ("Install and update");
+        installButton.setButtonText (n == 0 ? verb : verb + " " + juce::String (n));
         installButton.setEnabled (n > 0);
+        selectionSummary = selectable == 0 ? juce::String() : juce::String (n) + " of " + juce::String (selectable) + " selected";
+        selectAll.setEnabled (selectable > 0);
+        selectNone.setEnabled (n > 0);
+        int updatable = 0;
+        if (rows != nullptr)
+            for (auto* r : rows->rows)
+                updatable += r->status == Status::updateAvailable ? 1 : 0;
+        selectUpdates.setEnabled (updatable > 0);
+        if (page == Page::choose)
+            repaint();
     }
 
     //==========================================================================
@@ -592,10 +676,7 @@ namespace dooblr::installer::ui
             worker.join();
 
         cancelFlag = false;
-        cancelButton.setEnabled (true);
-        log.clear();
-        progress = 0.0;
-        showPage (Page::progress);
+        beginProgress (ids);
 
         worker = std::thread ([this, ids, m = manifest, loc = locations, sess = session, sp = safeThis]
         {
@@ -607,8 +688,7 @@ namespace dooblr::installer::ui
                 },
                 [this, sp] (int i, int n, double p)
                 {
-                    const auto overall = ((double) i + p) / (double) juce::jmax (1, n);
-                    juce::MessageManager::callAsync ([sp, overall] { if (auto* s = sp.getComponent()) s->setProgress (overall, {}); });
+                    juce::MessageManager::callAsync ([sp, i, n, p] { if (auto* s = sp.getComponent()) s->setItemProgress (i, n, p); });
                     return ! cancelFlag.load();
                 }, &sess);
 
@@ -616,21 +696,99 @@ namespace dooblr::installer::ui
         });
     }
 
+    void InstallerComponent::beginProgress (const juce::StringArray& ids)
+    {
+        progressIds = ids;
+        statusBefore.clear();
+        if (rows != nullptr)
+            for (auto* r : rows->rows)
+                statusBefore[r->item.id] = r->status;
+        log.clear();
+        summaryText.clear();
+        progressItem = ids.isEmpty() ? juce::String() : itemLabel (ids[0]);
+        progressStep = "Starting";
+        progressCount = ids.size() > 0 ? "1 of " + juce::String (ids.size()) : juce::String();
+        ring.setProgress (0.0);
+        ring.setState (ProgressRing::State::busy);
+        cancelButton.setEnabled (true);
+        showPage (Page::progress);
+    }
+
     void InstallerComponent::setProgress (double p, const juce::String& line)
     {
         if (p >= 0.0)
-            progress = p;
+            ring.setProgress (p);
         if (line.isNotEmpty())
         {
             log.moveCaretToEnd();
             log.insertTextAtCaret (line + "\n");
+
+            // One short step under the wheel instead of a list of lines.
+            if (line.startsWith ("Downloading "))
+            {
+                progressItem = line.fromFirstOccurrenceOf ("Downloading ", false, false).upToLastOccurrenceOf ("...", false, false).trim();
+                progressStep = "Downloading and checking";
+            }
+            else if (line.startsWith ("Checked "))
+                progressStep = "Download checked (sha256 OK)";
+            else if (line.startsWith ("Installing"))
+            {
+                progressItem = "Putting the plug-ins in place";
+                progressStep = "Your password may be asked for";
+                progressCount.clear();
+            }
+            else if (line.startsWith ("Installed "))
+                progressStep = "Installed " + line.fromFirstOccurrenceOf ("Installed ", false, false).upToFirstOccurrenceOf (" -> ", false, false);
+            else if (line.containsChar (':'))
+                progressStep = "A problem (details at the end)";
         }
+        repaint();
+    }
+
+    void InstallerComponent::setItemProgress (int index, int count, double itemProgress)
+    {
+        const auto n = juce::jmax (1, count);
+        ring.setProgress (((double) index + juce::jlimit (0.0, 1.0, itemProgress)) / (double) n);
+        if (index >= 0 && index < progressIds.size() && progressItem != "Putting the plug-ins in place")
+        {
+            progressItem = itemLabel (progressIds[index]);
+            progressCount = juce::String (index + 1) + " of " + juce::String (n);
+        }
+        repaint();
     }
 
     void InstallerComponent::showReport (const InstallReport& r)
     {
-        progress = 1.0;
         lastReport = r;
+
+        // Installed / updated / reinstalled, from each item's status when the install started.
+        int installed = 0, updated = 0, reinstalled = 0;
+        for (auto& d : r.done)
+        {
+            Status before = Status::notInstalled;
+            juce::String best;
+            for (auto& item : manifest.items)
+                if (d.startsWith (item.name + " ") && item.name.length() > best.length())
+                {
+                    best = item.name;
+                    const auto it = statusBefore.find (item.id);
+                    before = it != statusBefore.end() ? it->second : Status::notInstalled;
+                }
+            if (before == Status::updateAvailable)                                    ++updated;
+            else if (before == Status::upToDate || before == Status::newerInstalled) ++reinstalled;
+            else                                                                       ++installed;
+        }
+        juce::StringArray parts;
+        if (installed > 0)   parts.add (juce::String (installed) + " installed");
+        if (updated > 0)     parts.add (juce::String (updated) + " updated");
+        if (reinstalled > 0) parts.add (juce::String (reinstalled) + " reinstalled");
+        if (r.failed.size() > 0) parts.add (juce::String (r.failed.size()) + " failed");
+        if (r.cancelled)     parts.add ("cancelled");
+        summaryText = parts.isEmpty() ? juce::String ("Nothing was installed") : dotJoin (parts);
+        progressItem.clear();
+        progressStep.clear();
+        progressCount.clear();
+        selectionChosen = false;   // the next list shows the default choice again
         if (r.cancelled)
         {
             doneTitle = "Cancelled";
@@ -647,15 +805,21 @@ namespace dooblr::installer::ui
             doneSubtitle = "See below (select the text, or Copy details). You can run the installer again to retry.";
         }
 
-        log.clear();
-        for (auto& d : r.done)   log.insertTextAtCaret (juce::String::fromUTF8 ("\xe2\x9c\x93  ") + d + "\n");
-        for (auto& f : r.failed) log.insertTextAtCaret (juce::String::fromUTF8 ("\xe2\x9c\x95  ") + redactSecrets (f) + "\n");
+        ring.setState (r.cancelled ? ProgressRing::State::cancelled
+                     : r.failed.isEmpty() ? ProgressRing::State::done
+                     : r.done.isEmpty() ? ProgressRing::State::failed
+                                        : ProgressRing::State::problems);
+
+        // Failures only: selectable, read-only text (and Copy details, which adds the step log).
+        juce::String details;
+        for (auto& f : r.failed) details << juce::String::fromUTF8 ("\xe2\x9c\x95  ") << redactSecrets (f) << "\n";
         if (! r.errors.isEmpty())
         {
-            log.insertTextAtCaret ("\nDetails:\n");
+            details << "\nDetails:\n";
             for (auto& e : r.errors)
-                log.insertTextAtCaret (e.shortText() + "\n\n");
+                details << redactSecrets (e.shortText()) << "\n\n";
         }
+        detailsBox.setText (details.trimEnd(), false);
         refreshInstalled();
         showPage (Page::done);
     }
@@ -689,13 +853,13 @@ namespace dooblr::installer::ui
                 locationBox.setEnabled (! locations.overridden);
                 break;
             case Page::progress:
-                progressBar.setVisible (true);
-                log.setVisible (true);
+                ring.setVisible (true);
                 cancelButton.setVisible (true);
                 copyButton.setVisible (true);
                 break;
             case Page::done:
-                log.setVisible (true);
+                ring.setVisible (true);
+                detailsBox.setVisible (detailsBox.getText().isNotEmpty());
                 copyButton.setVisible (true);
                 againButton.setVisible (true);
                 closeButton.setVisible (true);
@@ -804,19 +968,88 @@ namespace dooblr::installer::ui
         else if (page == Page::choose)
         {
             g.drawText ("Choose what to install or update", r.removeFromTop (38), juce::Justification::centredLeft);
+            // "3 of 8 selected", between the selection buttons and Back
+            auto bottom = getLocalBounds().reduced (28, 22).removeFromBottom (36);
+            bottom.removeFromLeft (selectNone.getRight() - bottom.getX() + 16);
+            bottom.removeFromRight (getLocalBounds().reduced (28, 22).getRight() - backButton.getX() + 16);
+            g.setColour (Palette::textMuted);
+            g.setFont (juce::FontOptions (13.0f));
+            g.drawText (selectionSummary, bottom, juce::Justification::centredLeft);
         }
         else if (page == Page::progress)
         {
-            g.drawText ("Installing...", r.removeFromTop (38), juce::Justification::centredLeft);
+            g.drawText ("Installing", r.removeFromTop (38), juce::Justification::centredLeft);
+            const auto L = progressLayout();
+            g.setColour (Palette::textPrimary);
+            g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+            g.drawFittedText (progressItem, L.item, juce::Justification::centred, 1);
+            g.setColour (Palette::textMuted);
+            g.setFont (juce::FontOptions (14.0f));
+            g.drawFittedText (progressStep, L.step, juce::Justification::centred, 1);
+            g.setFont (juce::FontOptions (13.0f));
+            g.drawText (progressCount, L.count, juce::Justification::centred);
         }
         else
         {
             g.setColour (doneTitle == "All done" ? Palette::textPrimary : Palette::dynamic);
             g.drawText (doneTitle, r.removeFromTop (38), juce::Justification::centredLeft);
+            const auto L = progressLayout();
+            g.setColour (Palette::textPrimary);
+            g.setFont (juce::FontOptions (18.0f, juce::Font::bold));
+            g.drawFittedText (summaryText, L.summary, detailsBox.isVisible() ? juce::Justification::bottomLeft : juce::Justification::centred, 1);
             g.setColour (Palette::textMuted);
-            g.setFont (juce::FontOptions (15.0f));
-            g.drawText (doneSubtitle, r.removeFromTop (26), juce::Justification::centredLeft);
+            g.setFont (juce::FontOptions (14.0f));
+            g.drawFittedText (doneSubtitle, L.subtitle, detailsBox.isVisible() ? juce::Justification::topLeft : juce::Justification::centredTop, 2, 0.95f);
         }
+    }
+
+    juce::Rectangle<int> InstallerComponent::contentArea() const
+    {
+        auto r = getLocalBounds().reduced (28, 22);
+        r.removeFromTop (44 + 14 + 1 + 20 + 38);
+        r.removeFromBottom (36 + 16);
+        return r;
+    }
+
+    InstallerComponent::ProgressLayout InstallerComponent::progressLayout() const
+    {
+        ProgressLayout L;
+        auto r = contentArea();
+        if (page == Page::done && detailsBox.isVisible())
+        {
+            // Problems: a small wheel with the summary beside it, the details below.
+            r.removeFromTop (8);
+            auto top = r.removeFromTop (96);
+            L.ring = top.removeFromLeft (96);
+            top.removeFromLeft (20);
+            L.summary = top.removeFromTop (46);
+            top.removeFromTop (4);
+            L.subtitle = top;
+            r.removeFromTop (16);
+            L.details = r;
+            return L;
+        }
+        // One wheel in the middle, the text under it.
+        const auto textHeight = page == Page::done ? 26 + 6 + 40 : 26 + 4 + 22 + 2 + 20;
+        const auto size = juce::jlimit (96, 180, r.getHeight() - textHeight - 24);
+        r.removeFromTop (juce::jmax (0, (r.getHeight() - size - 18 - textHeight) / 2));
+        L.ring = r.removeFromTop (size).withSizeKeepingCentre (size, size);
+        r.removeFromTop (18);
+        if (page == Page::done)
+        {
+            L.summary = r.removeFromTop (26);
+            r.removeFromTop (6);
+            L.subtitle = r.removeFromTop (40);
+        }
+        else
+        {
+            L.item = r.removeFromTop (26);
+            r.removeFromTop (4);
+            L.step = r.removeFromTop (22);
+            r.removeFromTop (2);
+            L.count = r.removeFromTop (20);
+        }
+        return L;
     }
 
     InstallerComponent::WelcomeLayout InstallerComponent::welcomeLayout() const
@@ -857,8 +1090,8 @@ namespace dooblr::installer::ui
         auto bottom = r.removeFromBottom (36);
         r.removeFromBottom (16);
 
-        const auto right = [&bottom] (juce::Button& b, int w) { b.setBounds (bottom.removeFromRight (w)); bottom.removeFromRight (8); };
-        const auto left = [&bottom] (juce::Button& b, int w) { b.setBounds (bottom.removeFromLeft (w)); bottom.removeFromLeft (6); };
+        const auto right = [&bottom] (juce::Button& b, int w) { b.setBounds (bottom.removeFromRight (w)); bottom.removeFromRight (gap); };
+        const auto left = [&bottom] (juce::Button& b, int w) { b.setBounds (bottom.removeFromLeft (w)); bottom.removeFromLeft (gap); };
 
         switch (page)
         {
@@ -883,11 +1116,11 @@ namespace dooblr::installer::ui
             }
             case Page::choose:
             {
-                right (installButton, 160);
-                right (backButton, 90);
-                left (selectUpdates, 130);
-                left (selectAll, 56);
-                left (selectNone, 64);
+                right (installButton, 190);
+                right (backButton, 100);
+                left (selectUpdates, 96);
+                left (selectAll, 72);
+                left (selectNone, 72);
                 r.removeFromTop (6);
                 auto loc = r.removeFromTop (30);
                 locationLabel.setBounds (loc.removeFromLeft (140));
@@ -901,20 +1134,22 @@ namespace dooblr::installer::ui
                 break;
             }
             case Page::progress:
-                right (cancelButton, 110);
+            {
+                right (cancelButton, 100);
                 left (copyButton, 130);
-                r.removeFromTop (8);
-                progressBar.setBounds (r.removeFromTop (28));
-                r.removeFromTop (12);
-                log.setBounds (r);
+                ring.setBounds (progressLayout().ring);
                 break;
+            }
             case Page::done:
-                right (closeButton, 120);
+            {
+                right (closeButton, 100);
                 right (againButton, 130);
                 left (copyButton, 130);
-                r.removeFromTop (34);
-                log.setBounds (r);
+                const auto L = progressLayout();
+                ring.setBounds (L.ring);
+                detailsBox.setBounds (L.details);
                 break;
+            }
         }
     }
 }

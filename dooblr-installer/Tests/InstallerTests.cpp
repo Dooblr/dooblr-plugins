@@ -611,7 +611,7 @@ namespace
                    && ct.contains ("HTTP status: 404") && ct.contains ("Message: ") && ct.contains ("Tried: DOOBLR_GITHUB_TOKEN"),
                "copy text has version, OS, step, URL, HTTP status, message, details");
         check (! ct.contains (goodToken) && ! e.shortText().contains (goodToken) && ! e.url.contains (goodToken), "copy text never contains a token");
-        check (installerVersion() == "0.1.3", "installer version 0.1.3: " + installerVersion());
+        check (installerVersion() == "0.1.4", "installer version 0.1.4: " + installerVersion());
 
         // "Get access on GitHub": the pre-filled token page (only the parameters GitHub documents).
         {
@@ -921,6 +921,56 @@ namespace
         note ("snapshot " + f.getFullPathName());
     }
 
+    /** Install button -> worker -> wheel -> summary, for real (file:// zips into temp folders). */
+    void testUiInstall()
+    {
+        std::cout << "window install (temp folders)" << std::endl;
+        const auto root = tempRoot().getChildFile ("uiflow");
+        const auto release = root.getChildFile ("release");
+        const auto vst3 = root.getChildFile ("VST3");
+        release.createDirectory();
+        setEnv ("DOOBLR_INSTALLER_RECEIPTS", root.getChildFile ("receipts.json").getFullPathName());
+
+        makeBundle (vst3, "dooblr-old", "0.1.0");
+        makeBundle (vst3, "dooblr-same", "1.0.0");
+        const auto zNew  = zipFolder (makeBundle (root.getChildFile ("s1"), "dooblr-new", "0.2.0"), release.getChildFile ("new.zip"));
+        const auto zOld  = zipFolder (makeBundle (root.getChildFile ("s2"), "dooblr-old", "0.2.0"), release.getChildFile ("old.zip"));
+        const auto zSame = zipFolder (makeBundle (root.getChildFile ("s3"), "dooblr-same", "1.0.0"), release.getChildFile ("same.zip"));
+        const auto zBad  = zipFolder (makeBundle (root.getChildFile ("s4"), "dooblr-bad", "0.1.0"), release.getChildFile ("bad.zip"));
+        const auto mf = writeManifest (release, { itemVar ("dooblr-new", "0.2.0", "dooblr-new.vst3", "vst3", assetVar (zNew)),
+                                                  itemVar ("dooblr-old", "0.2.0", "dooblr-old.vst3", "vst3", assetVar (zOld)),
+                                                  itemVar ("dooblr-same", "1.0.0", "dooblr-same.vst3", "vst3", assetVar (zSame)),
+                                                  itemVar ("dooblr-bad", "0.1.0", "dooblr-bad.vst3", "vst3",
+                                                           assetVar (zBad, juce::String::repeatedString ("0", 64))) });
+        Manifest m;
+        if (! loadManifest (mf, m).wasOk()) { check (false, "ui install manifest loads"); return; }
+        Locations loc;
+        loc.vst3Dir = vst3;
+        loc.m4lDir = root.getChildFile ("User Library/dooblr");
+        loc.overridden = true;
+
+        ui::InstallerComponent c (juce::URL (mf), loc, false);
+        c.setSize (820, 600);
+        c.setManifest (m);
+        c.showPage (ui::InstallerComponent::Page::choose);
+        c.clickSelectAll();
+        check (c.getSelectedIds().size() == 4 && c.getInstallButtonText() == "Install and update 4", "All: 4 (new, update, reinstall, bad)");
+        c.clickInstall();
+        check (c.getPage() == ui::InstallerComponent::Page::progress && c.isRingVisible() && ! c.isLogVisible(), "Install: the wheel");
+        check (waitFor ([&] { return c.getPage() == ui::InstallerComponent::Page::done; }), "install finished");
+        note ("summary: " + c.getSummaryText());
+        check (c.getSummaryText() == juce::String::fromUTF8 ("1 installed  \xc2\xb7  1 updated  \xc2\xb7  1 reinstalled  \xc2\xb7  1 failed"),
+               "real install summary: " + c.getSummaryText());
+        check (readBundleVersion (vst3.getChildFile ("dooblr-new.vst3")) == "0.2.0" && readBundleVersion (vst3.getChildFile ("dooblr-old.vst3")) == "0.2.0"
+               && ! vst3.getChildFile ("dooblr-bad.vst3").exists(), "files: new and updated in place, the damaged one not installed");
+        check (std::abs (c.getProgressFraction() - 1.0) < 1.0e-9 && c.isDetailsSelectable() && c.getDetailsText().contains ("dooblr-bad"),
+               "wheel full, the failure selectable");
+        juce::String clip;
+        c.setClipboardSink ([&clip] (const juce::String& t) { clip = t; });
+        c.clickCopy();
+        check (clip.contains ("Log:") && clip.contains ("Downloading dooblr-new") && clip.contains ("Result: "), "Copy details: result and step log");
+    }
+
     void testErrorWindows()
     {
         std::cout << "sign-in panel and copyable errors (window)" << std::endl;
@@ -1081,25 +1131,117 @@ namespace
         };
 
         save ("welcome");
-        c.setSelected ("dooblr-vocals", true);
-        c.setSelected ("dooblr-prophet-panel", true);
         c.showPage (ui::InstallerComponent::Page::choose);
+        check (c.getInstallButtonText() == "Update 3" && c.isInstallEnabled() && c.getSelectionSummary() == "3 of 8 selected",
+               "default: the 3 updates, button \"" + c.getInstallButtonText() + "\", " + c.getSelectionSummary());
+
+        // All / None (0.1.3 bug: All ticked only Install/Update rows and unticked the rest, so on a computer where
+        // everything is up to date it did nothing; and reading the list again threw the choice away).
+        c.clickSelectNone();
+        check (c.getSelectedIds().isEmpty() && ! c.isInstallEnabled() && c.getInstallButtonText() == "Install"
+               && c.getSelectionSummary() == "0 of 8 selected", "None unticks everything and disables Install");
+        c.clickSelectAll();
+        check (c.getSelectedIds().size() == 8, "All ticks every item (new, updates, up to date): " + c.getSelectedIds().joinIntoString (","));
+        check (c.isInstallEnabled() && c.getInstallButtonText() == "Install and update 8" && c.getSelectionSummary() == "8 of 8 selected",
+               "All: button \"" + c.getInstallButtonText() + "\", " + c.getSelectionSummary());
+        c.clickRow ("dooblr-q");
+        check (c.getSelectedIds().size() == 7 && ! c.getSelectedIds().contains ("dooblr-q") && c.getSelectionSummary() == "7 of 8 selected",
+               "a row tick still works after All");
+        c.clickRow ("dooblr-q");
+        check (c.getSelectedIds().contains ("dooblr-q") && c.getSelectedIds().size() == 8, "and ticks again");
+        c.clickSelectNone();
+        check (c.getSelectedIds().isEmpty() && ! c.isInstallEnabled(), "None after All clears every row");
+        c.clickRow ("dooblr-vocals");
+        check (c.getSelectedIds() == juce::StringArray { "dooblr-vocals" } && c.getInstallButtonText() == "Install 1", "one tick after None: Install 1");
+        c.clickSelectUpdates();
+        const auto ups = c.getSelectedIds();
+        check (ups.size() == 3 && ups.contains ("dooblr-kick") && ups.contains ("dooblr-soothe") && ups.contains ("dooblr-chords")
+               && c.getInstallButtonText() == "Update 3", "Updates ticks only the 3 updates: " + ups.joinIntoString (","));
+
+        // The choice survives reading the list again (after sign-in or Check again).
+        c.clickRow ("dooblr-vocals");
+        c.setManifest (m);
+        check (c.getSelectedIds().size() == 4 && c.getSelectedIds().contains ("dooblr-vocals") && c.getInstallButtonText() == "Install and update 4",
+               "the selection survives a refresh: " + c.getSelectedIds().joinIntoString (","));
+        c.clickSelectNone();
+        c.setManifest (m);
+        check (c.getSelectedIds().isEmpty() && ! c.isInstallEnabled(), "None survives a refresh");
+        c.clickSelectAll();
+        c.setManifest (m);
+        check (c.getSelectedIds().size() == 8, "All survives a refresh");
+
+        // A computer where everything is up to date (where All/None did nothing in 0.1.3).
+        {
+            const auto root2 = root.getChildFile ("uptodate");
+            const auto v2 = root2.getChildFile ("VST3");
+            juce::Array<juce::var> items2;
+            for (auto [id, v] : { std::pair<const char*, const char*> { "dooblr-q", "0.9.5" }, { "dooblr-kick", "0.3.6" }, { "dooblr-soothe", "0.1.3" } })
+            {
+                makeBundle (v2, id, v);
+                auto* a = new juce::DynamicObject();
+                a->setProperty ("url", juce::String (id) + ".zip");
+                a->setProperty ("sha256", sha);
+                items2.add (itemVar (id, v, juce::String (id) + ".vst3", "vst3", juce::var (a)));
+            }
+            Manifest m2;
+            check (loadManifest (writeManifest (root2, items2), m2).wasOk(), "up-to-date manifest loads");
+            Locations loc2 = loc;
+            loc2.vst3Dir = v2;
+            ui::InstallerComponent u (juce::URL (mf), loc2, false);
+            u.setSize (820, 600);
+            u.setManifest (m2);
+            u.showPage (ui::InstallerComponent::Page::choose);
+            check (u.getSelectedIds().isEmpty() && ! u.isInstallEnabled() && u.rowStatus ("dooblr-kick") == "Up to date",
+                   "all up to date: nothing ticked by default");
+            u.clickSelectAll();
+            check (u.getSelectedIds().size() == 3 && u.isInstallEnabled() && u.getInstallButtonText() == "Install 3",
+                   "all up to date: All ticks all 3 (reinstall), button \"" + u.getInstallButtonText() + "\"");
+            u.clickSelectNone();
+            check (u.getSelectedIds().isEmpty() && ! u.isInstallEnabled(), "all up to date: None unticks them");
+        }
+
+        c.clickSelectNone();
+        c.clickSelectUpdates();
+        c.clickRow ("dooblr-vocals");
+        c.clickRow ("dooblr-prophet-panel");
         check (c.getSelectedIds().size() == 5, "select two more");
         save ("choose");
+        save ("chooser");
 
-        c.showPage (ui::InstallerComponent::Page::progress);
-        c.setProgress (0.45, "Downloading dooblr-kick 0.3.6...");
+        // Progress: one wheel, the current item and step, no list of lines.
+        c.beginProgress (c.getSelectedIds());
+        check (c.getPage() == ui::InstallerComponent::Page::progress && c.isRingVisible() && ! c.isLogVisible(), "progress page: the wheel, no log list");
+        c.setProgress (-1, "Downloading dooblr-kick 0.3.6...");
+        c.setItemProgress (0, 5, 1.0);
         c.setProgress (-1, "Checked dooblr-kick (sha256 OK)");
-        c.setProgress (-1, "Downloading dooblr-soothe 0.1.3...");
+        c.setProgress (-1, "Downloading dooblr-vocals 0.2.0...");
+        c.setItemProgress (1, 5, 0.4);
+        note ("progress: " + c.getProgressItem() + " / " + c.getProgressStep() + " / " + juce::String (c.getProgressFraction()));
+        check (c.getProgressItem() == "dooblr-vocals 0.2.0" && c.getProgressStep() == "Downloading and checking"
+               && std::abs (c.getProgressFraction() - 0.28) < 1.0e-6, "the wheel shows the overall progress and the current item");
         save ("progress");
+        c.setProgress (-1, "Installing...");
+        check (c.getProgressItem() == "Putting the plug-ins in place", "last step shown");
 
         InstallReport rep;
         rep.done.add ("dooblr-kick 0.3.6 -> /Library/Audio/Plug-Ins/VST3/dooblr-kick.vst3");
         rep.done.add ("dooblr-soothe 0.1.3 -> /Library/Audio/Plug-Ins/VST3/dooblr-soothe.vst3");
+        rep.done.add ("dooblr-prophet-panel 0.3.2 -> " + m4l.getChildFile ("dooblr-prophet").getFullPathName());
         rep.failed.add ("dooblr-vocals: dooblr-vocals-0.2.0-mac.zip: checksum mismatch (sha256 3f1c..., expected 0000...). The download is damaged or was changed; nothing was installed.");
         c.showReport (rep);
         check (c.getPage() == ui::InstallerComponent::Page::done, "report shows Done");
+        note ("summary: " + c.getSummaryText());
+        check (c.getSummaryText().contains ("2 updated") && c.getSummaryText().contains ("1 reinstalled") && c.getSummaryText().contains ("1 failed")
+               && ! c.getSummaryText().contains ("installed ·"), "done summary counts updated / reinstalled / failed");
+        check (c.isDetailsSelectable() && c.getDetailsText().contains ("checksum mismatch") && c.isCopyVisible(), "failures: selectable text and Copy");
         save ("done");
+
+        InstallReport ok;
+        ok.done.add ("dooblr-vocals 0.2.0 -> /Library/Audio/Plug-Ins/VST3/dooblr-vocals.vst3");
+        c.beginProgress ({ "dooblr-vocals" });
+        c.showReport (ok);
+        check (c.getSummaryText() == "1 installed" && ! c.isDetailsSelectable(), "all good: \"1 installed\", no details box");
+        save ("done-ok");
 
         ui::InstallerComponent e (juce::URL ("https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json"), loc, false);
         e.setSize (820, 600);
@@ -1126,6 +1268,7 @@ int main()
     testWindow();
     testTokensAndRedaction();
     testPrivateRelease();
+    testUiInstall();
     testErrorWindows();
 
     tempRoot().deleteRecursively();
