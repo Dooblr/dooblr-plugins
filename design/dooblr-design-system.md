@@ -1063,7 +1063,7 @@ Labels must not bounce while levels change.
 
 ## 14. dooblr installer (I)
 
-Read from **dooblr-installer 0.1.0** (`~/Dropbox/dooblr_plugins/dooblr-installer`, short form **I**). I is a standalone app (not a plug-in) that installs and updates the suite. It uses the K/Q dark palette, type and button styles; it adds no new tokens. Code wins.
+Read from **dooblr-installer 0.1.0–0.1.2** (`~/Dropbox/dooblr_plugins/dooblr-installer`, short form **I**). I is a standalone app (not a plug-in) that installs and updates the suite. It uses the K/Q dark palette, type and button styles; it adds no new tokens. Code wins.
 
 - **Window**: native title bar, resizable 720×520 to 1400×1000. Header: "dooblr" wordmark with the accent underline, "installer vX.Y.Z" in muted text, and a step indicator on the right (Welcome · Choose · Install · Done; current step in `accent`, done steps in `textPrimary`, later steps muted).
 - **Pages**: one task per page, a large heading, one primary button bottom right (accent fill, dark text), Back / Cancel as raised secondary buttons beside it.
@@ -1072,9 +1072,12 @@ Read from **dooblr-installer 0.1.0** (`~/Dropbox/dooblr_plugins/dooblr-installer
 - **Selection helpers**: Select updates / All / None under the list; the primary button counts what it will do ("Install 5 items") and is disabled at zero.
 - **Progress**: a progress bar and a plain-text log, one line per step ("Downloading …", "Checked … (sha256 OK)", "Installed … -> path").
 - **Errors**: say what failed, why, and what was left alone ("… nothing was installed"); a manifest that can't be read shows the address and a Try again button.
+- **Copyable errors (0.1.2)**: error text sits in a read-only, selectable multi-line box (`panel` fill, `textPrimary`); a raised secondary **Copy details** button bottom left copies version, OS, step, redacted address, HTTP status and message, and reads "Copied" for 1.6 s. Copy is also on the Install and Done pages.
+- **GitHub sign-in (0.1.2)**: when the release can't be read without a token, the Welcome status reads "Sign in to GitHub to get the plug-in list." (amber dot), followed by one short paragraph on what token to create, a masked token field (bullets) with a primary **Save and retry** button, and a "Create a token on github.com" link in `accent`. A refused saved token shows its note in the error colour. The token is never displayed.
 
 ## 15. Changelog
 
+- **2026-11-02**: §14 installer 0.1.2: copyable error box with Copy details, GitHub sign-in panel (masked token field, Save and retry, token link) for the private repository. Additive only; existing tokens only; no existing rule, token name or value changed; §11 (including §11.11) untouched; no JSON change.
 - **2026-11-01**: Added §14 dooblr installer (I, 0.1.0): window, pages, item rows with indented add-ons, status tags as labels (tinted pill only for Install / Update), whole-row click toggles, selection helpers, progress log, error wording. Changelog renumbered to §15. Additive only; no existing rule, token name or value changed; §11 (including §11.11) untouched; no JSON change.
 - **2026-11-01**: Added §13 dooblr-feedback (F, 0.1.1): layout, notch markers with lock / clear, calm labels (stable lanes, eased motion, numbered dots, fade when unused), notch table, zero-latency IIR notch bank driven by an FFT (one notch per howl, Max Cut ∞ = true notch), room notes and presets, Safety Duck badge and meter threshold tick. Changelog renumbered to §14. The F 0.1.0 commit (`47f3907`) said "design §13" but did not include this section; this adds it. The F full-cut value text (−∞ dB / ∞) is documented as the one exception to §12.6 "never show inf"; §12.6 itself is unchanged. Additive only; no existing rule, token name or value changed; §11 untouched. JSON: `components.eventMarker.motion`, `.dots`, `.fullCutLine`, `components.safetyBadge`, `components.meterThresholdTick`, a `changelog` entry.
 - **2026-11-01**: Added §11.11 dooblr-vocals De-esser (page, panel, display, meter, placement). Additive only; no existing rule, token name or value changed.
