@@ -137,8 +137,39 @@ namespace dooblr::installer::ui
         setOpaque (true);
 
         for (auto* b : { &continueButton, &retryButton, &newInstallerButton, &selectUpdates, &selectAll, &selectNone,
-                         &backButton, &installButton, &cancelButton, &againButton, &closeButton })
+                         &backButton, &installButton, &cancelButton, &againButton, &closeButton, &saveTokenButton, &copyButton })
             addChildComponent (b);
+
+        // Errors: selectable, read-only text (select and Cmd/Ctrl+C, or right-click > Copy), plus "Copy details".
+        addChildComponent (errorBox);
+        errorBox.setMultiLine (true, true);
+        errorBox.setReadOnly (true);
+        errorBox.setScrollbarsShown (true);
+        errorBox.setCaretVisible (false);
+        errorBox.setPopupMenuEnabled (true);
+        errorBox.setFont (juce::FontOptions (13.0f));
+        errorBox.setColour (juce::TextEditor::textColourId, Palette::textPrimary);
+        errorBox.setTitle ("Error details");
+        copyButton.setTooltip ("Copies the full error details (installer version, system, step, address, HTTP status, message). No token is ever included.");
+        copyButton.onClick = [this] { copyDetails(); };
+
+        // GitHub sign-in (private release)
+        addChildComponent (tokenLabel);
+        tokenLabel.setText ("GitHub token", juce::dontSendNotification);
+        tokenLabel.setFont (juce::FontOptions (13.0f, juce::Font::bold));
+        addChildComponent (tokenField);
+        tokenField.setPasswordCharacter ((juce::juce_wchar) 0x2022);
+        tokenField.setTextToShowWhenEmpty ("Paste a token (github_pat_... or ghp_...)", Palette::textMuted);
+        tokenField.setFont (juce::FontOptions (14.0f));
+        tokenField.setIndents (8, 7);
+        tokenField.setTitle ("GitHub token");
+        tokenField.onReturnKey = [this] { saveTokenButton.triggerClick(); };
+        saveTokenButton.setToggleState (true, juce::dontSendNotification);
+        saveTokenButton.onClick = [this] { saveTokenAndRetry (tokenField.getText()); };
+        addChildComponent (tokenLink);
+        tokenLink.setFont (juce::FontOptions (13.0f), false, juce::Justification::centredLeft);
+        tokenLink.setColour (juce::HyperlinkButton::textColourId, Palette::accent);
+        tokenLink.setTooltip ("https://github.com/settings/personal-access-tokens/new");
 
         continueButton.setToggleState (true, juce::dontSendNotification); // accent fill: the primary action
         installButton.setToggleState (true, juce::dontSendNotification);
@@ -220,33 +251,42 @@ namespace dooblr::installer::ui
 
         haveManifest = false;
         fetchError.clear();
+        fetchErr = {};
+        errorBox.clear();
         statusLine = "Checking for the latest versions...";
         showPage (page);
 
-        worker = std::thread ([url = manifestUrl, sp = safeThis]
-        {
-            juce::String text;
-            auto r = fetchText (url, text);
-            Manifest m;
-            if (r.wasOk())
-                r = Manifest::parse (text, url, m);
+        // The saved token always comes from this window's token store (the one "Save and retry" writes).
+        auto sources = tokenSources;
+        sources.saved = [store = *tokenStore] (juce::String& where) { return store.load (where); };
 
-            juce::MessageManager::callAsync ([sp, r, m]
+        worker = std::thread ([url = manifestUrl, sources, sp = safeThis]
+        {
+            Manifest m;
+            Session s;
+            ErrorInfo e;
+            const auto ok = fetchManifest (url, m, s, e, sources);
+
+            juce::MessageManager::callAsync ([sp, ok, m, s, e]
             {
                 if (auto* self = sp.getComponent())
                 {
-                    if (r.wasOk()) self->setManifest (m);
-                    else           self->setFetchError (r.getErrorMessage());
+                    if (ok) self->setManifest (m, s);
+                    else    self->setFetchError (e);
                 }
             });
         });
     }
 
-    void InstallerComponent::setManifest (const Manifest& m)
+    void InstallerComponent::setManifest (const Manifest& m, const Session& s)
     {
         manifest = m;
+        session = s;
         haveManifest = true;
         fetchError.clear();
+        fetchErr = {};
+        tokenNote.clear();
+        errorBox.clear();
 
         rows = std::make_unique<RowList>();
         for (auto& item : manifest.items)
@@ -277,14 +317,81 @@ namespace dooblr::installer::ui
         if (updates > 0) statusLine << dot << updates << (updates == 1 ? " update" : " updates");
         if (missing > 0) statusLine << dot << missing << " not installed";
         if (updates == 0 && missing == 0) statusLine << dot << "everything is up to date";
+        if (session.authenticated()) statusLine << dot << "signed in to GitHub";
         showPage (page);
     }
 
     void InstallerComponent::setFetchError (const juce::String& e)
     {
-        fetchError = e;
-        statusLine = "Could not get the plug-in list.";
+        ErrorInfo info;
+        info.step = "Getting the plug-in list (the manifest)";
+        info.message = e;
+        info.setUrl (manifestUrl.toString (true));
+        setFetchError (info);
+    }
+
+    void InstallerComponent::setFetchError (const ErrorInfo& e)
+    {
+        fetchErr = e;
+        if (fetchErr.message.isEmpty())
+            fetchErr.message = "Unknown error";
+        fetchError = fetchErr.message;
+        if (fetchErr.needsSignIn && tokenNote.isNotEmpty() && ! tokenNoteBad)
+        {
+            tokenNote = "GitHub did not accept the saved token. Paste a new one.";
+            tokenNoteBad = true;
+        }
+        statusLine = fetchErr.needsSignIn ? "Sign in to GitHub to get the plug-in list." : "Could not get the plug-in list.";
+        errorBox.setText (fetchErr.shortText() + "\nList address: " + redactUrl (manifestUrl.toString (true)), false);
         showPage (page);
+    }
+
+    juce::Result InstallerComponent::saveTokenAndRetry (const juce::String& token)
+    {
+        juce::String where;
+        const auto r = tokenStore->save (token, where);
+        if (r.failed())
+        {
+            tokenNote = r.getErrorMessage();
+            tokenNoteBad = true;
+            repaint();
+            return r;
+        }
+        tokenField.clear();
+        tokenNote = "Saved in the " + where + ". Checking...";
+        tokenNoteBad = false;
+        fetch();
+        return r;
+    }
+
+    juce::String InstallerComponent::getCopyText() const
+    {
+        juce::String s;
+        if (page == Page::welcome)
+        {
+            if (fetchErr.isEmpty())
+                return {};
+            s << fetchErr.copyText() << "Manifest: " << manifestUrl.toString (true) << "\n";
+        }
+        else
+        {
+            if (page == Page::done)
+                s << lastReport.copyText();
+            else
+                s << "dooblr installer " << installerVersion() << " on " << osDescription() << "\n";
+            s << "\nLog:\n" << log.getText();
+        }
+        return redactSecrets (s);
+    }
+
+    void InstallerComponent::copyDetails()
+    {
+        const auto text = getCopyText();
+        if (text.isEmpty() || ! clipboard)
+            return;
+        clipboard (text);
+        copyButton.setButtonText ("Copied");
+        juce::Timer::callAfterDelay (1600, [sp = safeThis] { if (auto* s = sp.getComponent()) s->copyButton.setButtonText ("Copy details"); });
     }
 
     void InstallerComponent::refreshInstalled()
@@ -356,7 +463,7 @@ namespace dooblr::installer::ui
         progress = 0.0;
         showPage (Page::progress);
 
-        worker = std::thread ([this, ids, m = manifest, loc = locations, sp = safeThis]
+        worker = std::thread ([this, ids, m = manifest, loc = locations, sess = session, sp = safeThis]
         {
             Receipts rec (Receipts::defaultFile());
             const auto report = installItems (m, ids, loc, rec,
@@ -369,7 +476,7 @@ namespace dooblr::installer::ui
                     const auto overall = ((double) i + p) / (double) juce::jmax (1, n);
                     juce::MessageManager::callAsync ([sp, overall] { if (auto* s = sp.getComponent()) s->setProgress (overall, {}); });
                     return ! cancelFlag.load();
-                });
+                }, &sess);
 
             juce::MessageManager::callAsync ([sp, report] { if (auto* s = sp.getComponent()) s->showReport (report); });
         });
@@ -389,6 +496,7 @@ namespace dooblr::installer::ui
     void InstallerComponent::showReport (const InstallReport& r)
     {
         progress = 1.0;
+        lastReport = r;
         if (r.cancelled)
         {
             doneTitle = "Cancelled";
@@ -402,12 +510,18 @@ namespace dooblr::installer::ui
         else
         {
             doneTitle = r.done.isEmpty() ? "Nothing was installed" : "Finished with problems";
-            doneSubtitle = "See below. You can run the installer again to retry.";
+            doneSubtitle = "See below (select the text, or Copy details). You can run the installer again to retry.";
         }
 
         log.clear();
         for (auto& d : r.done)   log.insertTextAtCaret (juce::String::fromUTF8 ("\xe2\x9c\x93  ") + d + "\n");
-        for (auto& f : r.failed) log.insertTextAtCaret (juce::String::fromUTF8 ("\xe2\x9c\x95  ") + f + "\n");
+        for (auto& f : r.failed) log.insertTextAtCaret (juce::String::fromUTF8 ("\xe2\x9c\x95  ") + redactSecrets (f) + "\n");
+        if (! r.errors.isEmpty())
+        {
+            log.insertTextAtCaret ("\nDetails:\n");
+            for (auto& e : r.errors)
+                log.insertTextAtCaret (e.shortText() + "\n\n");
+        }
         refreshInstalled();
         showPage (Page::done);
     }
@@ -425,6 +539,10 @@ namespace dooblr::installer::ui
                 continueButton.setVisible (true);
                 continueButton.setEnabled (haveManifest);
                 retryButton.setVisible (fetchError.isNotEmpty());
+                errorBox.setVisible (! fetchErr.isEmpty());
+                copyButton.setVisible (! fetchErr.isEmpty());
+                for (auto* c : std::initializer_list<juce::Component*> { &tokenLabel, &tokenField, &saveTokenButton, &tokenLink })
+                    c->setVisible (fetchErr.needsSignIn);
                 newInstallerButton.setVisible (haveManifest && Version::compare (manifest.installerVersion, DOOBLRINSTALLER_VERSION) > 0);
                 break;
             case Page::choose:
@@ -437,9 +555,11 @@ namespace dooblr::installer::ui
                 progressBar.setVisible (true);
                 log.setVisible (true);
                 cancelButton.setVisible (true);
+                copyButton.setVisible (true);
                 break;
             case Page::done:
                 log.setVisible (true);
+                copyButton.setVisible (true);
                 againButton.setVisible (true);
                 closeButton.setVisible (true);
                 break;
@@ -488,43 +608,53 @@ namespace dooblr::installer::ui
 
         if (page == Page::welcome)
         {
-            g.drawText ("Welcome to the dooblr plug-in suite", r.removeFromTop (38), juce::Justification::centredLeft);
-            r.removeFromTop (10);
+            const auto L = welcomeLayout();
+            const auto bad = ! fetchErr.isEmpty();
+            g.drawText ("Welcome to the dooblr plug-in suite", L.title, juce::Justification::centredLeft);
             g.setColour (Palette::textMuted);
             g.setFont (juce::FontOptions (15.0f));
             const auto vst3 = locations.vst3Dir.getFullPathName();
-            g.drawFittedText ("This installs and updates the dooblr VST3 plug-ins (effects and instruments for Ableton Live, "
-                              "Bitwig, Reaper, Cubase, Studio One and any other VST3 host) and the dooblr Max for Live devices.\n\n"
-                              "Next you pick what to install or update. Plug-ins go into the VST3 folder (" + vst3 + "); "
-                              "Max for Live devices go into Ableton's User Library (Presets > MIDI Effects > Max MIDI Effect). Every download is checked (sha256) before "
-                              "anything is installed.",
-                              r.removeFromTop (130), juce::Justification::topLeft, 7, 1.0f);
-            r.removeFromTop (16);
+            if (bad)
+                g.drawFittedText ("This installs and updates the dooblr VST3 plug-ins and Max for Live devices. Every download is checked (sha256) before anything is installed.",
+                                  L.desc, juce::Justification::topLeft, 2, 1.0f);
+            else
+                g.drawFittedText ("This installs and updates the dooblr VST3 plug-ins (effects and instruments for Ableton Live, "
+                                  "Bitwig, Reaper, Cubase, Studio One and any other VST3 host) and the dooblr Max for Live devices.\n\n"
+                                  "Next you pick what to install or update. Plug-ins go into the VST3 folder (" + vst3 + "); "
+                                  "Max for Live devices go into Ableton's User Library (Presets > MIDI Effects > Max MIDI Effect). Every download is checked (sha256) before "
+                                  "anything is installed.",
+                                  L.desc, juce::Justification::topLeft, 7, 1.0f);
 
-            auto status = r.removeFromTop (46);
+            auto status = L.status;
             g.setColour (Palette::panel);
             g.fillRoundedRectangle (status.toFloat(), 6.0f);
-            const auto bad = fetchError.isNotEmpty();
-            g.setColour (bad ? Palette::danger : (haveManifest ? Palette::accent : Palette::textMuted));
+            g.setColour (bad ? (fetchErr.needsSignIn ? Palette::dynamic : Palette::danger) : (haveManifest ? Palette::accent : Palette::textMuted));
             g.fillEllipse (status.removeFromLeft (34).withSizeKeepingCentre (10, 10).toFloat());
             g.setColour (Palette::textPrimary);
             g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
             g.drawText (statusLine, status, juce::Justification::centredLeft);
 
-            if (bad)
+            if (bad && fetchErr.needsSignIn)
             {
-                r.removeFromTop (10);
-                g.setColour (Palette::textMuted);
+                g.setColour (Palette::textPrimary);
                 g.setFont (juce::FontOptions (13.0f));
-                g.drawFittedText (fetchError + "\nList address: " + manifestUrl.toString (false), r.removeFromTop (56),
-                                  juce::Justification::topLeft, 4, 1.0f);
+                g.drawFittedText ("The dooblr releases are in a private GitHub repository for now, so the installer needs a GitHub token once. "
+                                  "Create a fine-grained token: Resource owner Dooblr, Repository access: Only select repositories > dooblr-plugins, "
+                                  "Permissions: Contents: Read-only. Paste it here; it is kept in the " + TokenStore::systemStoreName()
+                                  + " and never shown or logged.",
+                                  L.signInText, juce::Justification::topLeft, 4, 1.0f);
+                if (tokenNote.isNotEmpty())
+                {
+                    g.setColour (tokenNoteBad ? Palette::danger : Palette::textMuted);
+                    g.setFont (juce::FontOptions (12.0f));
+                    g.drawFittedText (tokenNote, L.linkRow.withTrimmedLeft (240), juce::Justification::centredLeft, 1, 0.9f);
+                }
             }
-            else if (newInstallerButton.isVisible())
+            else if (! bad && newInstallerButton.isVisible())
             {
-                r.removeFromTop (10);
                 g.setColour (Palette::dynamic);
                 g.setFont (juce::FontOptions (13.0f));
-                g.drawText ("A newer installer (" + manifest.installerVersion + ") is available.", r.removeFromTop (24), juce::Justification::centredLeft);
+                g.drawText ("A newer installer (" + manifest.installerVersion + ") is available.", L.notice, juce::Justification::centredLeft);
             }
         }
         else if (page == Page::choose)
@@ -545,6 +675,37 @@ namespace dooblr::installer::ui
         }
     }
 
+    InstallerComponent::WelcomeLayout InstallerComponent::welcomeLayout() const
+    {
+        WelcomeLayout L;
+        auto r = getLocalBounds().reduced (28, 22);
+        r.removeFromTop (44 + 14 + 1 + 20);
+        r.removeFromBottom (36 + 16);
+        const auto bad = ! fetchErr.isEmpty();
+        L.title = r.removeFromTop (38);
+        r.removeFromTop (10);
+        L.desc = r.removeFromTop (bad ? 40 : 130);
+        r.removeFromTop (bad ? 10 : 16);
+        L.status = r.removeFromTop (46);
+        r.removeFromTop (10);
+        if (bad)
+        {
+            if (fetchErr.needsSignIn)
+            {
+                L.signInText = r.removeFromTop (54);
+                r.removeFromTop (6);
+                L.tokenRow = r.removeFromTop (32);
+                r.removeFromTop (4);
+                L.linkRow = r.removeFromTop (22);
+                r.removeFromTop (8);
+            }
+            L.errorBox = r;
+        }
+        else
+            L.notice = r.removeFromTop (24);
+        return L;
+    }
+
     void InstallerComponent::resized()
     {
         auto r = getLocalBounds().reduced (28, 22);
@@ -558,10 +719,21 @@ namespace dooblr::installer::ui
         switch (page)
         {
             case Page::welcome:
+            {
                 right (continueButton, 150);
                 right (retryButton, 110);
-                left (newInstallerButton, 190);
+                if (newInstallerButton.isVisible()) left (newInstallerButton, 190);
+                else                                left (copyButton, 130);
+                const auto L = welcomeLayout();
+                errorBox.setBounds (L.errorBox);
+                auto row = L.tokenRow;
+                tokenLabel.setBounds (row.removeFromLeft (104));
+                saveTokenButton.setBounds (row.removeFromRight (140));
+                row.removeFromRight (8);
+                tokenField.setBounds (row);
+                tokenLink.setBounds (L.linkRow.withWidth (230));
                 break;
+            }
             case Page::choose:
             {
                 right (installButton, 160);
@@ -583,6 +755,7 @@ namespace dooblr::installer::ui
             }
             case Page::progress:
                 right (cancelButton, 110);
+                left (copyButton, 130);
                 r.removeFromTop (8);
                 progressBar.setBounds (r.removeFromTop (28));
                 r.removeFromTop (12);
@@ -591,6 +764,7 @@ namespace dooblr::installer::ui
             case Page::done:
                 right (closeButton, 120);
                 right (againButton, 130);
+                left (copyButton, 130);
                 r.removeFromTop (34);
                 log.setBounds (r);
                 break;

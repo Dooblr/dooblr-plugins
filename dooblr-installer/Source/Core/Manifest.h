@@ -21,6 +21,8 @@ namespace dooblr::installer
         juce::URL url;
         juce::String sha256;   // lowercase hex
         juce::int64 size = 0;  // bytes, 0 = unknown
+        juce::String apiUrl;   // GitHub REST asset URL, set when the release is read through the API (private repo)
+        juce::String fileName() const { return url.getFileName(); }
         bool isValid() const   { return url.toString (false).isNotEmpty() && sha256.length() == 64; }
     };
 

@@ -9,7 +9,7 @@ update.
 | dooblr-q, dooblr-kick, dooblr-vocals, dooblr-prophet, dooblr-soothe, dooblr-feedback | VST3 | Mac: `/Library/Audio/Plug-Ins/VST3` (asks for your password once), or `~/Library/Audio/Plug-Ins/VST3` (just you).<br>Windows: `C:\Program Files\Common Files\VST3` (asks for permission, UAC), or `%LOCALAPPDATA%\Programs\Common\VST3` |
 | dooblr-prophet panel (optional), dooblr-chords | Max for Live device (Ableton Live only) | `<Ableton User Library>/Presets/MIDI Effects/Max MIDI Effect/<device>`, the same folder the dooblr-chords and dooblr-prophet build scripts use, so Live's browser shows them under MIDI Effects > Max MIDI Effect |
 
-Version 0.1.0.
+Version 0.1.2.
 
 ## Download
 
@@ -17,9 +17,34 @@ Version 0.1.0.
 - **Windows:** [dooblr-installer-windows.exe](https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-installer-windows.exe)
 
 These links work once a release has been published (see [Releasing](#releasing)). **The repository is
-private right now**, so the links (and the installer's own download of the manifest) only work for
-people signed in to GitHub with access. For public downloads, make the repository public, or host the
-release files somewhere public and change the manifest address (see [Changing the download address](#changing-the-download-address)).
+private right now**, so the links only work while you are signed in to GitHub with access, and the
+installer needs a GitHub token to read the releases (below).
+
+## First launch (private repository)
+
+On first launch the Welcome page says **Sign in to GitHub to get the plug-in list** (GitHub answers
+404 to anyone not signed in to a private repository). Once:
+
+1. Click **Create a token on github.com** (or open <https://github.com/settings/personal-access-tokens/new>).
+2. Fine-grained token: **Resource owner** Dooblr, **Repository access** > *Only select repositories* >
+   **dooblr-plugins**, **Permissions** > Repository permissions > **Contents: Read-only**. Pick an
+   expiry, click **Generate token** and copy it.
+3. Paste it in the **GitHub token** box (it shows as dots) and click **Save and retry**.
+
+The token is kept in the macOS Keychain (macOS may ask once whether the installer may use it: choose
+**Always Allow**) or the Windows Credential Manager, and is never shown or written to the log. If
+GitHub later refuses it (expired or revoked), the same box comes back with "GitHub did not accept the
+saved token".
+
+Where the installer looks for a token, in order: `DOOBLR_GITHUB_TOKEN`, `GITHUB_TOKEN`, `GH_TOKEN`,
+the saved token, then `gh auth token` (the GitHub CLI, if you are signed in with `gh auth login`). It
+tries without a token first, so nothing changes if the repository becomes public. With a token it
+reads the release through the GitHub API (`api.github.com`) and sends the token only to GitHub's API,
+never to the file host GitHub redirects downloads to. The sha256 check of every file is unchanged.
+
+**Errors** are shown in a box you can select and copy from; **Copy details** copies the installer
+version, the OS, the step, the address (with any secret removed), the HTTP status and the message,
+ready to paste into a bug report.
 
 ## Using it
 
@@ -71,10 +96,17 @@ APP="dooblr installer.app/Contents/MacOS/dooblr installer"
 "$APP" --install dooblr-q,dooblr-soothe
 "$APP" --list --manifest /path/to/dooblr-manifest.json   # a local or other manifest
 "$APP" --install all --vst3-dir /tmp/v --m4l-dir /tmp/m   # other folders (tests)
+"$APP" --save-token        # paste a GitHub token (not echoed); saved in the Keychain / Credential Manager
+"$APP" --forget-token      # remove the saved token
+"$APP" --list --no-auth    # never use a token (anonymous only)
 ```
 
-Environment: `DOOBLR_MANIFEST_URL`, `DOOBLR_VST3_DIR`, `DOOBLR_M4L_DIR`, `DOOBLR_INSTALLER_RECEIPTS`.
-Exit codes: 0 ok, 1 something failed, 2 bad arguments, 3 manifest could not be read.
+Command-line runs work even while the installer window is open. On failure it prints the same
+details as **Copy details** to stderr.
+
+Environment: `DOOBLR_GITHUB_TOKEN` (or `GITHUB_TOKEN`, `GH_TOKEN`), `DOOBLR_MANIFEST_URL`, `DOOBLR_VST3_DIR`, `DOOBLR_M4L_DIR`, `DOOBLR_INSTALLER_RECEIPTS`.
+Exit codes: 0 ok, 1 something failed, 2 bad arguments, 3 manifest could not be read,
+4 GitHub sign-in needed (no token, or GitHub refused it).
 
 ## Building
 
@@ -88,6 +120,13 @@ JUCE 8.0.15 comes from `~/dooblr-build/_deps/juce-src` when it exists (`JUCE_SOU
 The tests (`DooblrInstallerTests`) cover version compare, manifest parsing, sha256, reading
 installed versions, a full install and update into a temp folder from `file://` zips, rejection
 of corrupted, truncated and path-escaping zips, cancel, and the window's rows, ticks and pages.
+They also cover GitHub sign-in against a local mock of the GitHub API: the token lookup order, the
+saved-token file (user-only permissions), redaction of tokens and signed URLs, that the token is
+never sent to the redirected file host, the 404 > sign-in > save > retry flow in the window, a
+refused token, and the copied error text. They never read your real token (`DOOBLR_INSTALLER_NO_GH=1`,
+`DOOBLR_INSTALLER_TOKEN_FILE=<temp file>`). Opt in: `DOOBLRINSTALLER_NETWORK_TESTS=1` also checks the
+real anonymous answer from GitHub; `DOOBLRINSTALLER_TEST_KEYCHAIN=1` saves and removes a test item in
+the Keychain.
 
 `scripts/e2e-local.sh` (Mac) packages the plug-ins you have built in `~/dooblr-build`, lists them
 against your real folders (read only), installs everything into a temp folder, checks the
@@ -98,7 +137,7 @@ signatures, and checks that a corrupted zip is rejected.
 Releases are built by GitHub Actions (`.github/workflows/release.yml`):
 
 ```sh
-git tag v0.1.0 && git push origin v0.1.0
+git tag v0.1.2 && git push origin v0.1.2
 ```
 
 The workflow builds every VST3 plug-in and the installer on macOS (universal, ad-hoc signed) and
@@ -133,5 +172,6 @@ needs the new manifest address:
 ## Not tested yet
 
 - Windows: the code builds only in CI and no CI run has happened yet.
+- Signing in with a real GitHub token: tested only against a local mock of the GitHub API.
 - The Mac administrator prompt (installing into `/Library`): the local tests install only into temp folders.
 - The universal (x86_64) build; local builds are arm64.

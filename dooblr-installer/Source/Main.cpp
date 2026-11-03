@@ -4,6 +4,9 @@
 //   dooblr-installer --list    [--manifest <url>] [--vst3-dir <dir>] [--m4l-dir <dir>]
 //   dooblr-installer --install <id,id,...|all|updates> [same options]
 //   dooblr-installer --manifest <url>          (opens the window on that list)
+//   dooblr-installer --save-token              (reads a GitHub token from stdin and saves it)
+//   dooblr-installer --forget-token
+//   --no-auth: never look for a GitHub token (anonymous downloads only)
 //
 // The manifest URL defaults to the latest GitHub release (DOOBLRINSTALLER_MANIFEST_URL at build
 // time); DOOBLR_MANIFEST_URL overrides it. --vst3-dir installs into (and reads only) that folder.
@@ -11,10 +14,14 @@
 #include "UI/InstallerComponent.h"
 
 #include <iostream>
+#include <string>
 
 #if JUCE_WINDOWS
  #include <windows.h>
  #include <cstdio>
+#else
+ #include <termios.h>
+ #include <unistd.h>
 #endif
 
 using namespace dooblr::installer;
@@ -60,8 +67,48 @@ namespace
             FILE* f = nullptr;
             freopen_s (&f, "CONOUT$", "w", stdout);
             freopen_s (&f, "CONOUT$", "w", stderr);
+            freopen_s (&f, "CONIN$", "r", stdin);
         }
        #endif
+    }
+
+    /** One line from stdin without echoing it when stdin is a terminal. */
+    juce::String readSecretLine()
+    {
+       #if JUCE_WINDOWS
+        HANDLE in = GetStdHandle (STD_INPUT_HANDLE);
+        DWORD mode = 0;
+        const bool console = GetConsoleMode (in, &mode) != 0;
+        if (console) SetConsoleMode (in, mode & ~(DWORD) ENABLE_ECHO_INPUT);
+       #else
+        termios old {};
+        const bool console = isatty (STDIN_FILENO) && tcgetattr (STDIN_FILENO, &old) == 0;
+        if (console)
+        {
+            auto quiet = old;
+            quiet.c_lflag &= ~(tcflag_t) ECHO;
+            tcsetattr (STDIN_FILENO, TCSANOW, &quiet);
+        }
+       #endif
+        std::string line;
+        std::getline (std::cin, line);
+       #if JUCE_WINDOWS
+        if (console) SetConsoleMode (in, mode);
+       #else
+        if (console) tcsetattr (STDIN_FILENO, TCSANOW, &old);
+       #endif
+        if (console) std::cerr << std::endl;
+        return juce::String (line).trim();
+    }
+
+    void printSignInHelp()
+    {
+        std::cerr << "\nThe dooblr releases are in a private GitHub repository for now, so a GitHub token is needed:\n"
+                     "  1. Create a fine-grained token at https://github.com/settings/personal-access-tokens/new\n"
+                     "     Resource owner: Dooblr. Repository access: Only select repositories > dooblr-plugins.\n"
+                     "     Permissions: Contents: Read-only.\n"
+                     "  2. Save it:  \"dooblr installer\" --save-token   (paste it and press Return; it is not shown)\n"
+                     "     or set DOOBLR_GITHUB_TOKEN for this shell, or sign in with the GitHub CLI (gh auth login).\n";
     }
 
     int runCommandLine (const juce::StringArray& args)
@@ -76,20 +123,43 @@ namespace
             return r.wasOk() ? 0 : 1;
         }
 
+        if (args.contains ("--save-token"))
+        {
+            std::cerr << "Paste the GitHub token and press Return: " << std::flush;
+            const auto token = readSecretLine();
+            juce::String where;
+            const auto r = TokenStore::defaultStore().save (token, where);
+            if (r.failed()) { std::cerr << "error: " << r.getErrorMessage() << std::endl; return 1; }
+            std::cout << "Saved the token in the " << where << "." << std::endl;
+            return 0;
+        }
+
+        if (args.contains ("--forget-token"))
+        {
+            const auto r = TokenStore::defaultStore().forget();
+            std::cout << (r.wasOk() ? "Removed the saved token." : r.getErrorMessage()) << std::endl;
+            return r.wasOk() ? 0 : 1;
+        }
+
         const auto url = manifestUrl (args);
         const auto loc = locations (args);
-        juce::String text;
         Manifest m;
-        auto r = fetchText (url, text);
-        if (r.wasOk()) r = Manifest::parse (text, url, m);
-        if (r.failed())
+        Session session;
+        ErrorInfo err;
+        if (! fetchManifest (url, m, session, err, args.contains ("--no-auth") ? TokenSources::none() : TokenSources::system()))
         {
-            std::cerr << "error: " << r.getErrorMessage() << "\n  manifest: " << url.toString (false) << std::endl;
+            std::cerr << "error: " << err.message << "\n\n" << err.copyText() << "Manifest: " << redactUrl (url.toString (true)) << std::endl;
+            if (err.needsSignIn)
+            {
+                printSignInHelp();
+                return 4;
+            }
             return 3;
         }
 
         Receipts receipts;
         std::cout << "manifest " << url.toString (false) << " (" << m.items.size() << " items, generated " << m.generated << ")\n"
+                  << (session.authenticated() ? "signed in to GitHub with the " + session.tokenSource + "\n" : juce::String())
                   << "VST3 folder " << loc.vst3Dir.getFullPathName() << "\nM4L folder  " << loc.m4lDir.getFullPathName() << "\n";
 
         juce::StringArray wanted;
@@ -117,8 +187,10 @@ namespace
         if (ids.isEmpty()) { std::cout << "nothing to install" << std::endl; return 0; }
 
         const auto report = installItems (m, ids, loc, receipts,
-                                          [] (const juce::String& line) { std::cout << line << std::endl; }, {});
+                                          [] (const juce::String& line) { std::cout << redactSecrets (line) << std::endl; }, {}, &session);
         std::cout << report.done.size() << " installed, " << report.failed.size() << " failed" << std::endl;
+        for (auto& e : report.errors)
+            std::cerr << "\n" << e.copyText();
         return report.failed.isEmpty() && ! report.cancelled ? 0 : 1;
     }
 }
@@ -128,14 +200,32 @@ class DooblrInstallerApplication final : public juce::JUCEApplication
 public:
     const juce::String getApplicationName() override    { return "dooblr installer"; }
     const juce::String getApplicationVersion() override { return DOOBLRINSTALLER_VERSION; }
-    bool moreThanOneInstanceAllowed() override          { return false; }
+    // Command-line runs (--list, --install, ...) always run in their own process, even while an
+    // installer window is open; otherwise JUCE would hand the arguments to the open window and
+    // exit 0 without doing anything. Only plain window launches stay single-instance.
+    static bool isCommandLineRun()
+    {
+        const auto args = getCommandLineParameterArray();
+        for (auto* flag : { "--list", "--install", "--elevated-copy", "--save-token", "--forget-token" })
+            if (args.contains (flag))
+                return true;
+        return false;
+    }
+
+    bool moreThanOneInstanceAllowed() override          { return isCommandLineRun(); }
+
+    void anotherInstanceStarted (const juce::String&) override
+    {
+        if (window != nullptr)
+            window->toFront (true);
+    }
 
     void initialise (const juce::String& commandLine) override
     {
         const auto args = getCommandLineParameterArray();
         juce::ignoreUnused (commandLine);
 
-        if (args.contains ("--list") || args.contains ("--install") || args.contains ("--elevated-copy"))
+        if (isCommandLineRun())
         {
             setApplicationReturnValue (runCommandLine (args));
             quit();

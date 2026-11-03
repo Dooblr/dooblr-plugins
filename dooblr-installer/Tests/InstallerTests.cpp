@@ -4,11 +4,16 @@
 
 #include "UI/InstallerComponent.h"
 
+#include <atomic>
 #include <cstdlib>
 #include <iostream>
+#include <map>
+#include <mutex>
+#include <vector>
 
 #if JUCE_MAC || JUCE_LINUX
  #include <unistd.h>
+ #include <sys/stat.h>
 #endif
 
 using namespace dooblr::installer;
@@ -108,6 +113,223 @@ namespace
         f.replaceWithText (juce::JSON::toString (juce::var (o)));
         return f;
     }
+
+
+    void setEnv (const char* name, const juce::String& value)
+    {
+       #if JUCE_WINDOWS
+        _putenv_s (name, value.toRawUTF8());   // "" removes it
+       #else
+        if (value.isEmpty()) unsetenv (name);
+        else                 setenv (name, value.toRawUTF8(), 1);
+       #endif
+    }
+
+    //==========================================================================
+    /** A tiny HTTP/1.1 server on 127.0.0.1 for the GitHub tests. Records every request's headers. */
+    struct MockRequest
+    {
+        juce::String method, path;
+        juce::StringPairArray headers;   // case-insensitive keys
+    };
+
+    struct MockResponse
+    {
+        int status = 200;
+        juce::StringPairArray headers;
+        juce::MemoryBlock body;
+
+        static MockResponse text (int status, const juce::String& t)
+        {
+            MockResponse r;
+            r.status = status;
+            r.body.append (t.toRawUTF8(), t.getNumBytesAsUTF8());
+            return r;
+        }
+    };
+
+    class MockServer : private juce::Thread
+    {
+    public:
+        explicit MockServer (std::function<MockResponse (const MockRequest&)> h) : juce::Thread ("mock http"), handler (std::move (h)) {}
+
+        ~MockServer() override
+        {
+            signalThreadShouldExit();
+            { juce::StreamingSocket wake; wake.connect ("127.0.0.1", port, 300); }
+            stopThread (3000);
+            listener.close();
+        }
+
+        bool start()
+        {
+            for (int i = 0; i < 40; ++i)
+            {
+                const int p = 20000 + juce::Random::getSystemRandom().nextInt (30000);
+                if (listener.createListener (p, "127.0.0.1")) { port = p; startThread(); return true; }
+            }
+            return false;
+        }
+
+        int getPort() const { return port; }
+
+        std::vector<MockRequest> requests() const
+        {
+            std::lock_guard<std::mutex> l (lock);
+            return seen;
+        }
+
+        int count (const juce::String& pathStart) const
+        {
+            int n = 0;
+            for (auto& r : requests()) n += r.path.startsWith (pathStart) ? 1 : 0;
+            return n;
+        }
+
+    private:
+        void run() override
+        {
+            while (! threadShouldExit())
+            {
+                std::unique_ptr<juce::StreamingSocket> c (listener.waitForNextConnection());
+                if (c == nullptr || threadShouldExit()) break;
+                serve (*c);
+            }
+        }
+
+        void serve (juce::StreamingSocket& c)
+        {
+            juce::MemoryBlock in;
+            char buf[4096];
+            for (int guard = 0; guard < 200; ++guard)
+            {
+                const auto s = juce::String::fromUTF8 ((const char*) in.getData(), (int) in.getSize());
+                if (s.contains ("\r\n\r\n")) break;
+                if (c.waitUntilReady (true, 2000) != 1) return;
+                const int n = c.read (buf, sizeof (buf), false);
+                if (n <= 0) return;
+                in.append (buf, (size_t) n);
+            }
+            const auto head = juce::String::fromUTF8 ((const char*) in.getData(), (int) in.getSize()).upToFirstOccurrenceOf ("\r\n\r\n", false, false);
+            auto lines = juce::StringArray::fromLines (head);
+            MockRequest req;
+            req.method = lines[0].upToFirstOccurrenceOf (" ", false, false);
+            req.path = lines[0].fromFirstOccurrenceOf (" ", false, false).upToLastOccurrenceOf (" ", false, false);
+            for (int i = 1; i < lines.size(); ++i)
+                if (lines[i].contains (":"))
+                    req.headers.set (lines[i].upToFirstOccurrenceOf (":", false, false).trim(), lines[i].fromFirstOccurrenceOf (":", false, false).trim());
+            { std::lock_guard<std::mutex> l (lock); seen.push_back (req); }
+
+            const auto res = handler (req);
+            juce::String h;
+            h << "HTTP/1.1 " << res.status << " " << (res.status == 200 ? "OK" : res.status == 302 ? "Found" : "Error") << "\r\n"
+              << "Content-Length: " << (int) res.body.getSize() << "\r\nConnection: close\r\n";
+            for (auto& k : res.headers.getAllKeys())
+                h << k << ": " << res.headers[k] << "\r\n";
+            h << "\r\n";
+            c.write (h.toRawUTF8(), (int) h.getNumBytesAsUTF8());
+            if (res.body.getSize() > 0)
+                c.write (res.body.getData(), (int) res.body.getSize());
+            c.close();
+        }
+
+        std::function<MockResponse (const MockRequest&)> handler;
+        juce::StreamingSocket listener;
+        int port = 0;
+        mutable std::mutex lock;
+        std::vector<MockRequest> seen;
+    };
+
+    const juce::String goodToken = "github_pat_TESTONLY0good0token0abcdefghijklmnop";
+    const juce::String badToken  = "github_pat_TESTONLY0bad00token0abcdefghijklmnop";
+
+    /** A fake GitHub: "web" + API on 127.0.0.1:A (the anonymous release URL 404s, like a private
+        repo); asset downloads redirect to an "objects" host on localhost:B (another origin). */
+    struct FakeGitHub
+    {
+        juce::String manifestText;
+        juce::MemoryBlock zipBytes;
+        juce::String zipName;
+        std::atomic<bool> publicRelease { false }, corruptZip { false };
+
+        std::unique_ptr<MockServer> objects, api;
+
+        bool start()
+        {
+            objects = std::make_unique<MockServer> ([this] (const MockRequest& r)
+            {
+                if (r.path.startsWith ("/objects/1?")) return MockResponse::text (200, manifestText);
+                if (r.path.startsWith ("/objects/2?"))
+                {
+                    MockResponse res;
+                    res.body = zipBytes;
+                    if (corruptZip.load() && res.body.getSize() > 10) static_cast<char*> (res.body.getData())[res.body.getSize() / 2] ^= 0x5a;
+                    return res;
+                }
+                return MockResponse::text (404, "not found");
+            });
+            if (! objects->start()) return false;
+
+            api = std::make_unique<MockServer> ([this] (const MockRequest& r)
+            {
+                const auto base = "http://127.0.0.1:" + juce::String (api->getPort());
+                const bool authed = r.headers["Authorization"] == "Bearer " + goodToken;
+                if (r.path == "/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json")
+                    return publicRelease.load() ? MockResponse::text (200, manifestText) : MockResponse::text (404, "Not Found");
+                if (r.path == "/repos/Dooblr/dooblr-plugins/releases/latest")
+                {
+                    if (! authed) return MockResponse::text (r.headers.containsKey ("Authorization") ? 401 : 404, "{\"message\":\"Bad credentials\"}");
+                    return MockResponse::text (200, "{\"tag_name\":\"v9.9.9\",\"assets\":["
+                        "{\"name\":\"dooblr-manifest.json\",\"url\":\"" + base + "/repos/Dooblr/dooblr-plugins/releases/assets/1\"},"
+                        "{\"name\":\"" + zipName + "\",\"url\":\"" + base + "/repos/Dooblr/dooblr-plugins/releases/assets/2\"}]}");
+                }
+                if (r.path.startsWith ("/repos/Dooblr/dooblr-plugins/releases/assets/"))
+                {
+                    if (! authed) return MockResponse::text (404, "{\"message\":\"Not Found\"}");
+                    if (r.headers["Accept"] != "application/octet-stream") return MockResponse::text (200, "{\"json\":\"metadata, not the file\"}");
+                    MockResponse res;
+                    res.status = 302;
+                    res.headers.set ("Location", "http://localhost:" + juce::String (objects->getPort()) + "/objects/"
+                                                 + r.path.fromLastOccurrenceOf ("/", false, false) + "?X-Amz-Signature=SECRETSIG123&jwt=SECRETJWT456&response-content-type=x");
+                    return res;
+                }
+                return MockResponse::text (404, "unknown");
+            });
+            return api->start();
+        }
+
+        juce::String apiBase() const { return "http://127.0.0.1:" + juce::String (api->getPort()); }
+        juce::URL manifestUrl() const { return juce::URL (apiBase() + "/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json"); }
+        GitHubConfig config() const
+        {
+            GitHubConfig c;
+            c.apiBase = apiBase();
+            c.webHosts = { "127.0.0.1:" + juce::String (api->getPort()) };
+            return c;
+        }
+    };
+
+    /** Fake token sources that count how often each one was asked. */
+    struct FakeTokens
+    {
+        std::map<juce::String, juce::String> env;
+        juce::String saved, gh;
+        std::shared_ptr<std::atomic<int>> envAsked = std::make_shared<std::atomic<int>> (0),
+                                          savedAsked = std::make_shared<std::atomic<int>> (0),
+                                          ghAsked = std::make_shared<std::atomic<int>> (0);
+
+        TokenSources sources() const
+        {
+            TokenSources s;
+            s.env = [e = env, n = envAsked] (const juce::String& k) { ++*n; auto it = e.find (k); return it == e.end() ? juce::String() : it->second; };
+            s.saved = [v = saved, n = savedAsked] (juce::String& where) { ++*n; where = "test store"; return v; };
+            s.ghCli = [v = gh, n = ghAsked] { ++*n; return v; };
+            return s;
+        }
+    };
+
+    const auto noProgress = [] (int, int, double) { return true; };
+    const auto noLog = [] (const juce::String&) {};
 
     juce::Result loadManifest (const juce::File& f, Manifest& m)
     {
@@ -293,6 +515,338 @@ namespace
     }
 
     //==========================================================================
+    void testTokensAndRedaction()
+    {
+        std::cout << "GitHub token lookup order, token store, redaction, error details" << std::endl;
+
+        FakeTokens f;
+        f.env = { { "DOOBLR_GITHUB_TOKEN", "tok_dooblr_aaaaaaaaaaaaaaaaaaaa" }, { "GITHUB_TOKEN", "tok_github_bbbbbbbbbbbbbbbbbbbb" },
+                  { "GH_TOKEN", "tok_gh_cccccccccccccccccccccc" } };
+        f.saved = "tok_saved_dddddddddddddddddddd";
+        f.gh = "tok_ghcli_eeeeeeeeeeeeeeeeeeee";
+        auto all = findTokens (f.sources());
+        juce::StringArray order;
+        for (auto& c : all) order.add (c.source);
+        note ("order: " + order.joinIntoString (" | "));
+        check (all.size() == 5 && all[0].token.startsWith ("tok_dooblr") && all[1].token.startsWith ("tok_github") && all[2].token.startsWith ("tok_gh_")
+                   && all[3].token.startsWith ("tok_saved") && all[4].token.startsWith ("tok_ghcli"),
+               "order: DOOBLR_GITHUB_TOKEN, GITHUB_TOKEN, GH_TOKEN, saved, gh auth token");
+        check (all.size() == 5 && all[0].source == "DOOBLR_GITHUB_TOKEN" && all[3].source.containsIgnoreCase ("saved") && all[3].source.contains ("test store")
+                   && all[4].source.contains ("gh"),
+               "each candidate names its source");
+        check (! order.joinIntoString ("").contains ("tok_"), "source names never contain the token");
+
+        FakeTokens g;
+        g.env = { { "GH_TOKEN", "tok_same_ffffffffffffffffffff" } };
+        g.gh = "tok_same_ffffffffffffffffffff";
+        check (findTokens (g.sources()).size() == 1, "the same token from two places is tried once");
+        check (findTokens (TokenSources::none()).isEmpty(), "no sources: no tokens");
+        FakeTokens h;
+        h.env = { { "GITHUB_TOKEN", "  tok_trim_gggggggggggggggggggg \n" } };
+        const auto trimmed = findTokens (h.sources());
+        check (trimmed.size() == 1 && trimmed[0].token == "tok_trim_gggggggggggggggggggg", "tokens are trimmed");
+
+        // Token store, file backend (temp file).
+        const auto file = tempRoot().getChildFile ("token-store/github-token");
+        TokenStore store (TokenStore::Backend::file, file);
+        juce::String where;
+        check (store.save ("not a token!", where).failed(), "save rejects text that is not a token");
+        check (store.save (goodToken, where).wasOk() && file.existsAsFile(), "save writes the file");
+        check (store.load (where) == goodToken && where.contains (file.getFileName()), "load returns it (" + where + ")");
+       #if JUCE_MAC || JUCE_LINUX
+        struct stat st {};
+        check (stat (file.getFullPathName().toRawUTF8(), &st) == 0 && (st.st_mode & 0777) == 0600, "token file is user-only (0600)");
+       #endif
+        check (store.save (badToken, where).wasOk() && store.load (where) == badToken, "save replaces the token");
+        check (store.forget().wasOk() && ! file.exists() && store.load (where).isEmpty(), "forget removes it");
+        check (TokenStore::looksLikeToken (goodToken) && TokenStore::looksLikeToken ("ghp_" + juce::String::repeatedString ("A", 36))
+                   && ! TokenStore::looksLikeToken ("short") && ! TokenStore::looksLikeToken ("has space in it 1234567890"),
+               "looksLikeToken");
+
+        if (juce::SystemStats::getEnvironmentVariable ("DOOBLRINSTALLER_TEST_KEYCHAIN", {}) == "1")
+        {
+            // Opt-in: its own service name, so the real saved token is never read or changed.
+            TokenStore sys (TokenStore::Backend::system, file, "com.dooblr.installer.selftest");
+            const juce::String dummy = "dooblr_selftest_" + juce::String::toHexString (juce::Random::getSystemRandom().nextInt64());
+            check (sys.save (dummy, where).wasOk(), "system store save (" + TokenStore::systemStoreName() + ")");
+            check (sys.load (where) == dummy, "system store load");
+            check (sys.forget().wasOk() && sys.load (where).isEmpty(), "system store forget");
+        }
+
+        // Redaction
+        const auto ru = redactUrl ("https://user:hunter2@objects.example.com/x/y.zip?a=1&X-Amz-Signature=SECRETSIG&sig=S1G&jwt=J.W.T&token=TOK&response-content-type=zip#frag");
+        note ("redacted URL: " + ru);
+        check (ru.contains ("a=1") && ru.contains ("response-content-type=zip") && ru.contains ("objects.example.com/x/y.zip"), "redactUrl keeps the address");
+        check (! ru.contains ("hunter2") && ! ru.contains ("SECRETSIG") && ! ru.contains ("S1G") && ! ru.contains ("J.W.T") && ! ru.contains ("TOK"), "redactUrl removes secrets");
+        const auto rs = redactSecrets ("Authorization: Bearer abc.def-123 token ghp_" + juce::String::repeatedString ("Z", 36) + " and " + goodToken
+                                       + " at https://x.test/a?token=QQQ");
+        note ("redacted text: " + rs);
+        check (! rs.contains ("abc.def-123") && ! rs.contains ("ZZZZZZZZ") && ! rs.contains (goodToken) && ! rs.contains ("QQQ"), "redactSecrets removes tokens");
+        registerSecret ("plain-secret-value-1234567890");
+        check (! redactSecrets ("x plain-secret-value-1234567890 y").contains ("plain-secret"), "registered secrets are removed");
+
+        ErrorInfo e;
+        e.step = "Getting the plug-in list";
+        e.setUrl ("https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json?token=" + goodToken);
+        e.httpStatus = 404;
+        e.message = "GitHub answered HTTP 404 with " + goodToken;
+        e.details = "Tried: DOOBLR_GITHUB_TOKEN (HTTP 401)";
+        const auto ct = e.copyText();
+        note ("copy text:\n" + ct);
+        check (ct.contains ("Installer: " + installerVersion()) && ct.contains ("OS: ") && ct.contains ("Step: Getting the plug-in list")
+                   && ct.contains ("URL: https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json")
+                   && ct.contains ("HTTP status: 404") && ct.contains ("Message: ") && ct.contains ("Tried: DOOBLR_GITHUB_TOKEN"),
+               "copy text has version, OS, step, URL, HTTP status, message, details");
+        check (! ct.contains (goodToken) && ! e.shortText().contains (goodToken) && ! e.url.contains (goodToken), "copy text never contains a token");
+        check (installerVersion() == "0.1.2", "installer version 0.1.2: " + installerVersion());
+
+        const juce::URL latest ("https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json");
+        const auto ref = parseReleaseUrl (latest, GitHubConfig());
+        check (ref.isValid() && ref.owner == "Dooblr" && ref.repo == "dooblr-plugins" && ref.tag.isEmpty() && ref.assetName == "dooblr-manifest.json"
+                   && ref.releaseApiPath() == "/repos/Dooblr/dooblr-plugins/releases/latest",
+               "release URL (latest) parsed");
+        const auto tagged = parseReleaseUrl (juce::URL ("https://github.com/Dooblr/dooblr-plugins/releases/download/v0.1.2/x.zip"), GitHubConfig());
+        check (tagged.isValid() && tagged.tag == "v0.1.2" && tagged.releaseApiPath() == "/repos/Dooblr/dooblr-plugins/releases/tags/v0.1.2", "release URL (tag) parsed");
+        check (! parseReleaseUrl (juce::URL ("https://example.com/Dooblr/dooblr-plugins/releases/latest/download/x.json"), GitHubConfig()).isValid(),
+               "other hosts are not GitHub releases");
+    }
+
+    //==========================================================================
+    bool waitFor (const std::function<bool()>& done)
+    {
+        for (int i = 0; i < 300 && ! done(); ++i)
+            juce::MessageManager::getInstance()->runDispatchLoopUntil (50);
+        return done();
+    }
+
+    void testPrivateRelease()
+    {
+        std::cout << "private release through the GitHub API (local mock server)" << std::endl;
+        const auto root = tempRoot().getChildFile ("private");
+        const auto src = root.getChildFile ("src");
+        const auto zip = zipFolder (makeBundle (src, "dooblr-test", "0.5.0"), root.getChildFile ("dooblr-test-0.5.0.zip"));
+
+        FakeGitHub gh;
+        gh.zipName = zip.getFileName();
+        zip.loadFileAsData (gh.zipBytes);
+        {
+            juce::Array<juce::var> items;
+            items.add (itemVar ("dooblr-test", "0.5.0", "dooblr-test.vst3", "vst3", assetVar (zip)));
+            gh.manifestText = writeManifest (root, items).loadFileAsString();
+        }
+        if (! gh.start()) { check (false, "mock servers start"); return; }
+        const auto url = gh.manifestUrl();
+        const auto cfg = gh.config();
+
+        // 1. No token: the 404 becomes "sign in".
+        {
+            Manifest m; Session s; ErrorInfo e;
+            const auto ok = fetchManifest (url, m, s, e, TokenSources::none(), cfg);
+            note ("no token: " + e.shortText().replace ("\n", " / "));
+            check (! ok && e.needsSignIn && e.httpStatus == 404, "404 without a token -> needs sign-in");
+            check (e.url.contains ("/releases/latest/download/dooblr-manifest.json") && e.step.isNotEmpty() && e.message.containsIgnoreCase ("private"),
+                   "the error names the URL and the step, and says the release is private");
+            check (gh.api->count ("/repos/") == 0, "no API call without a token");
+        }
+
+        // 2. A wrong token: refused, still sign-in; the token never appears.
+        {
+            FakeTokens f;
+            f.env = { { "DOOBLR_GITHUB_TOKEN", badToken } };
+            Manifest m; Session s; ErrorInfo e;
+            const auto ok = fetchManifest (url, m, s, e, f.sources(), cfg);
+            note ("bad token: " + e.copyText().replace ("\n", " / "));
+            check (! ok && e.needsSignIn && e.details.contains ("DOOBLR_GITHUB_TOKEN") && e.details.contains ("401"), "refused token -> sign-in; details name the source tried");
+            check (! e.copyText().contains (badToken) && ! s.authenticated(), "the refused token is not in the error details");
+        }
+
+        // 3. Env token refused, saved token works; gh is never asked.
+        const auto objectsBefore = gh.objects->requests().size();
+        FakeTokens f;
+        f.env = { { "DOOBLR_GITHUB_TOKEN", badToken } };
+        f.saved = goodToken;
+        f.gh = "tok_should_never_be_asked_zzzzzzzz";
+        Manifest m; Session s; ErrorInfo e;
+        const auto ok = fetchManifest (url, m, s, e, f.sources(), cfg);
+        check (ok && m.items.size() == 1, "saved token: manifest read through the API: " + e.message);
+        check (s.authenticated() && s.tokenSource.containsIgnoreCase ("saved") && *f.ghAsked == 0, "session uses the saved token; gh auth token not asked");
+        const auto* asset = m.items.isEmpty() ? nullptr : m.items.getReference (0).assetFor (currentPlatform());
+        check (asset != nullptr && asset->apiUrl.contains ("/releases/assets/2"), "zip asset gets its API download URL");
+
+        bool sawApiAuth = false, sawOctet = false;
+        for (auto& r : gh.api->requests())
+            if (r.path.startsWith ("/repos/Dooblr/dooblr-plugins/releases/assets/1"))
+            {
+                sawApiAuth = sawApiAuth || r.headers["Authorization"] == "Bearer " + goodToken;
+                sawOctet = sawOctet || r.headers["Accept"] == "application/octet-stream";
+            }
+        check (sawApiAuth && sawOctet, "asset request to the API: Bearer token + Accept: application/octet-stream");
+        check (gh.objects->requests().size() > objectsBefore, "the API redirect was followed to the objects host");
+
+        // 4. Install with the session: zip downloaded via the API, sha256 checked.
+        Locations loc;
+        loc.vst3Dir = root.getChildFile ("VST3");
+        loc.m4lDir = root.getChildFile ("m4l");
+        loc.overridden = true;
+        Receipts receipts (root.getChildFile ("receipts.json"));
+        auto rep = installItems (m, { "dooblr-test" }, loc, receipts, noLog, noProgress, &s);
+        check (rep.failed.isEmpty() && rep.done.size() == 1 && loc.vst3Dir.getChildFile ("dooblr-test.vst3/Contents/Info.plist").existsAsFile(),
+               "installs from the private release: " + rep.failed.joinIntoString ("; "));
+        check (gh.api->count ("/repos/Dooblr/dooblr-plugins/releases/assets/2") >= 1 && gh.objects->count ("/objects/2") >= 1, "zip came through the API asset URL");
+
+        gh.corruptZip = true;
+        loc.vst3Dir.getChildFile ("dooblr-test.vst3").deleteRecursively();
+        auto bad = installItems (m, { "dooblr-test" }, loc, receipts, noLog, noProgress, &s);
+        check (bad.failed.size() == 1 && bad.failed[0].containsIgnoreCase ("checksum") && ! loc.vst3Dir.getChildFile ("dooblr-test.vst3").exists(),
+               "a damaged private download is rejected (sha256): " + bad.failed.joinIntoString ("; "));
+        check (bad.errors.size() == 1 && bad.errors[0].step.isNotEmpty() && bad.copyText().containsIgnoreCase ("checksum") && ! bad.copyText().contains (goodToken),
+               "install failure has copyable details without the token");
+        note ("install failure copy text: " + bad.copyText().replace ("\n", " / "));
+        gh.corruptZip = false;
+
+        // The Authorization header never left the API origin.
+        bool leaked = false;
+        for (auto& r : gh.objects->requests())
+            leaked = leaked || r.headers.containsKey ("Authorization") || r.headers.getAllValues().joinIntoString (" ").contains (goodToken);
+        check (! leaked && gh.objects->requests().size() >= 3, "no Authorization header sent to the redirected (objects) host ("
+                                                                 + juce::String ((int) gh.objects->requests().size()) + " requests)");
+
+        // 5. A public release never needs a token (no API call, no token lookup).
+        gh.publicRelease = true;
+        FakeTokens p;
+        p.env = { { "DOOBLR_GITHUB_TOKEN", goodToken } };
+        const auto apiBefore = gh.api->count ("/repos/");
+        Manifest pm; Session ps; ErrorInfo pe;
+        check (fetchManifest (url, pm, ps, pe, p.sources(), cfg) && ! ps.authenticated() && gh.api->count ("/repos/") == apiBefore
+                   && *p.envAsked == 0 && *p.ghAsked == 0,
+               "public release: read anonymously, no token looked up");
+        gh.publicRelease = false;
+
+        // 6. The window: 404 -> sign-in panel -> Save and retry -> signed in.
+        setEnv ("DOOBLR_GITHUB_API", cfg.apiBase);
+        setEnv ("DOOBLR_GITHUB_WEB_HOSTS", cfg.webHosts[0]);
+        {
+            const auto tokenFile = root.getChildFile ("ui-token");
+            ui::InstallerComponent c (url, loc, false);
+            c.setSize (820, 600);
+            c.setTokenSources (TokenSources::none());
+            c.setTokenStore (TokenStore (TokenStore::Backend::file, tokenFile));
+            juce::String clip;
+            c.setClipboardSink ([&clip] (const juce::String& t) { clip = t; });
+            c.refetch();
+            check (waitFor ([&] { return ! c.getFetchError().isEmpty(); }), "window: fetch finished");
+            check (c.isSignInVisible() && c.getFetchError().needsSignIn && c.getFetchError().httpStatus == 404, "window: 404 shows the sign-in panel");
+            check (c.isTokenFieldMasked(), "window: token field is masked");
+            check (c.isErrorTextSelectable() && c.isCopyVisible() && c.getErrorBoxText().contains ("404"), "window: error is selectable text with Copy details");
+            c.clickCopy();
+            check (clip.contains ("HTTP status: 404") && clip.contains ("Installer: ") && clip.contains ("/releases/latest/download/dooblr-manifest.json"),
+                   "window: Copy details copies the full details");
+            check (c.saveTokenAndRetry ("nope").failed() && c.isSignInVisible(), "window: a non-token is refused without retrying");
+            check (c.saveTokenAndRetry (badToken).wasOk(), "window: bad token saved");
+            check (waitFor ([&] { return ! c.getFetchError().isEmpty(); }) && c.isSignInVisible(), "window: refused token -> sign-in again");
+            check (c.saveTokenAndRetry (goodToken).wasOk(), "window: good token saved");
+            check (waitFor ([&] { return c.getSession().authenticated(); }), "window: signed in after Save and retry");
+            check (c.getFetchError().isEmpty() && ! c.isSignInVisible() && c.numRows() == 1 && c.getStatusLine().contains ("signed in"),
+                   "window: list shown, panel hidden: " + c.getStatusLine());
+            juce::String w;
+            check (TokenStore (TokenStore::Backend::file, tokenFile).load (w) == goodToken, "window: token kept in the store");
+        }
+        setEnv ("DOOBLR_GITHUB_API", {});
+        setEnv ("DOOBLR_GITHUB_WEB_HOSTS", {});
+    }
+
+    //==========================================================================
+    void snapshot (juce::Component& c, const juce::String& name)
+    {
+        const auto snap = juce::SystemStats::getEnvironmentVariable ("DOOBLRINSTALLER_SNAPSHOT", {});
+        if (snap.isEmpty()) return;
+        const auto f = juce::File (snap + "-" + name + ".png");
+        f.getParentDirectory().createDirectory();
+        f.deleteFile();
+        juce::FileOutputStream out (f);
+        juce::PNGImageFormat().writeImageToStream (c.createComponentSnapshot (c.getLocalBounds(), true, 2.0f), out);
+        note ("snapshot " + f.getFullPathName());
+    }
+
+    void testErrorWindows()
+    {
+        std::cout << "sign-in panel and copyable errors (window)" << std::endl;
+        Locations loc;
+        loc.vst3Dir = tempRoot().getChildFile ("errwin/VST3");
+        loc.m4lDir = tempRoot().getChildFile ("errwin/m4l");
+        loc.overridden = true;
+        const juce::URL real ("https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json");
+
+        // The real release URL, anonymously (opt-in network test). While the repo is private this is a 404.
+        ErrorInfo signIn;
+        if (juce::SystemStats::getEnvironmentVariable ("DOOBLRINSTALLER_NETWORK_TESTS", {}) == "1")
+        {
+            Manifest m; Session s;
+            const auto ok = fetchManifest (real, m, s, signIn, TokenSources::none(), GitHubConfig());
+            note ("real anonymous fetch: " + (ok ? juce::String ("OK (release is public)") : signIn.shortText().replace ("\n", " / ")));
+            check (ok || (signIn.needsSignIn && (signIn.httpStatus == 404 || signIn.httpStatus == 401 || signIn.httpStatus == 403)),
+                   "real release URL: works, or the private 404 asks for sign-in");
+        }
+        if (signIn.isEmpty() || ! signIn.needsSignIn)
+        {
+            Manifest m; Session s;
+            // Same wording as a real private 404, produced by a local server.
+            FakeGitHub gh;
+            if (gh.start())
+            {
+                fetchManifest (gh.manifestUrl(), m, s, signIn, TokenSources::none(), gh.config());
+                signIn.setUrl (real.toString (true));
+            }
+        }
+
+        ui::InstallerComponent c (real, loc, false);
+        c.setSize (820, 600);
+        juce::String clip;
+        c.setClipboardSink ([&clip] (const juce::String& t) { clip = t; });
+        c.setFetchError (signIn);
+        check (c.isSignInVisible() && c.isTokenFieldMasked() && c.isErrorTextSelectable() && c.isCopyVisible(), "sign-in panel, masked field, selectable error, Copy");
+        snapshot (c, "signin");
+
+        // A connection error (nothing listens on this port): no sign-in, but selectable + Copy.
+        int deadPort = 0;
+        for (int i = 0; i < 20 && deadPort == 0; ++i)
+        {
+            juce::StreamingSocket probe;
+            const int p = 20000 + juce::Random::getSystemRandom().nextInt (30000);
+            if (probe.createListener (p, "127.0.0.1")) { deadPort = p; probe.close(); }
+        }
+        const juce::URL dead ("http://127.0.0.1:" + juce::String (deadPort) + "/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json?token=SHOULDNOTSHOW");
+        ErrorInfo ce;
+        const auto resp = httpGet (dead, {}, {}, ce, 2, 3000);
+        check (! resp.ok() && ce.message.isNotEmpty() && ! ce.needsSignIn, "connection refused gives an error: " + ce.message);
+        ce.step = "Getting the plug-in list (the manifest)";
+        ui::InstallerComponent d (dead, loc, false);
+        d.setSize (820, 600);
+        d.setClipboardSink ([&clip] (const juce::String& t) { clip = t; });
+        d.setFetchError (ce);
+        check (! d.isSignInVisible() && d.isCopyVisible() && d.isErrorTextSelectable(), "connection error: no sign-in panel, Copy shown");
+        d.clickCopy();
+        note ("copied:\n" + clip);
+        check (clip.contains ("Installer: ") && clip.contains ("Step: ") && clip.contains ("127.0.0.1") && ! clip.contains ("SHOULDNOTSHOW"),
+               "copied connection error has the details, redacted");
+        snapshot (d, "error-copy");
+
+        // Done page: failures are selectable and copyable.
+        InstallReport rep;
+        rep.done.add ("dooblr-kick 0.3.6");
+        rep.failed.add ("dooblr-vocals: checksum mismatch");
+        ErrorInfo ie;
+        ie.step = "Downloading dooblr-vocals 0.2.0";
+        ie.message = "checksum mismatch (sha256 3f1c..., expected 0000...)";
+        ie.setUrl ("https://api.github.com/repos/Dooblr/dooblr-plugins/releases/assets/7");
+        rep.errors.add (ie);
+        c.showReport (rep);
+        c.clickCopy();
+        check (clip.contains ("Downloading dooblr-vocals") && clip.contains ("checksum mismatch") && clip.contains ("Log:") && c.isCopyVisible(),
+               "done page: Copy details has the failures and the log");
+    }
+
+    //==========================================================================
     /** The real suite list, with a temp folder holding some older copies. */
     void testWindow()
     {
@@ -417,6 +971,9 @@ int main()
     testSha256AndVersions();
     testInstallFlow();
     testWindow();
+    testTokensAndRedaction();
+    testPrivateRelease();
+    testErrorWindows();
 
     tempRoot().deleteRecursively();
     std::cout << (failures == 0 ? "PASS" : "FAIL") << ": " << checks << " checks, " << failures << " failed" << std::endl;
