@@ -27,6 +27,7 @@ env:
     dooblr-kick:DOOBLRKICK:DooblrKick
     dooblr-vocals:DOOBLRVOCALS:DooblrVocals
     dooblr-prophet:DOOBLRPROPHET:DooblrProphet
+    dooblr-bass:DOOBLRBASS:DooblrBass
     dooblr-soothe:DOOBLRSOOTHE:DooblrSoothe
     dooblr-feedback:DOOBLRFEEDBACK:DooblrFeedback
 

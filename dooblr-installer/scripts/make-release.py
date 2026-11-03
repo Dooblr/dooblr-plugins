@@ -24,6 +24,7 @@ SUITE = [
     ('dooblr-kick',     'dooblr-kick',     'Layered kick drum designer (instrument)',               'vst3', 'dooblr-kick.vst3',     'dooblr-kick',     None),
     ('dooblr-vocals',   'dooblr-vocals',   'Pitch correction and vocal chain',                      'vst3', 'dooblr-vocals.vst3',   'dooblr-vocals',   None),
     ('dooblr-prophet',  'dooblr-prophet',  'Analog-modelled polyphonic synth (instrument)',         'vst3', 'dooblr-prophet.vst3',  'dooblr-prophet',  None),
+    ('dooblr-bass',     'dooblr-bass',     'Analog-style monophonic bass synth (instrument)',       'vst3', 'dooblr-bass.vst3',     'dooblr-bass',     None),
     ('dooblr-prophet-panel', 'dooblr-prophet panel', 'Max for Live panel for dooblr-prophet (optional, Ableton Live only)',
                                                                                                     'm4l',  'dooblr-prophet',       'dooblr-prophet',  'dooblr-prophet'),
     ('dooblr-soothe',   'dooblr-soothe',   'Dynamic resonance reducer',                             'vst3', 'dooblr-soothe.vst3',   'dooblr-soothe',   None),
