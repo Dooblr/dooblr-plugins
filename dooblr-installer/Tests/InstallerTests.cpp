@@ -242,6 +242,8 @@ namespace
 
     const juce::String goodToken = "github_pat_TESTONLY0good0token0abcdefghijklmnop";
     const juce::String badToken  = "github_pat_TESTONLY0bad00token0abcdefghijklmnop";
+    const juce::String noRepoToken = "github_pat_TESTONLY0norepo0token0abcdefghijklm";       // valid, but dooblr-plugins not selected
+    const juce::String noContentsToken = "github_pat_TESTONLY0nocont0token0abcdefghijklm";   // repo selected, Contents not granted
 
     /** A fake GitHub: "web" + API on 127.0.0.1:A (the anonymous release URL 404s, like a private
         repo); asset downloads redirect to an "objects" host on localhost:B (another origin). */
@@ -276,6 +278,17 @@ namespace
                 const bool authed = r.headers["Authorization"] == "Bearer " + goodToken;
                 if (r.path == "/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json")
                     return publicRelease.load() ? MockResponse::text (200, manifestText) : MockResponse::text (404, "Not Found");
+                const auto auth = r.headers["Authorization"];
+                if (r.path == "/repos/Dooblr/dooblr-plugins")
+                {
+                    if (authed || auth == "Bearer " + noContentsToken)
+                        return MockResponse::text (200, "{\"full_name\":\"Dooblr/dooblr-plugins\",\"private\":true}");
+                    if (auth.isEmpty() || auth == "Bearer " + noRepoToken)
+                        return MockResponse::text (404, "{\"message\":\"Not Found\"}");
+                    return MockResponse::text (401, "{\"message\":\"Bad credentials\"}");
+                }
+                if (r.path == "/repos/Dooblr/dooblr-plugins/releases/latest" && auth == "Bearer " + noContentsToken)
+                    return MockResponse::text (403, "{\"message\":\"Resource not accessible by personal access token\"}");
                 if (r.path == "/repos/Dooblr/dooblr-plugins/releases/latest")
                 {
                     if (! authed) return MockResponse::text (r.headers.containsKey ("Authorization") ? 401 : 404, "{\"message\":\"Bad credentials\"}");
@@ -598,7 +611,41 @@ namespace
                    && ct.contains ("HTTP status: 404") && ct.contains ("Message: ") && ct.contains ("Tried: DOOBLR_GITHUB_TOKEN"),
                "copy text has version, OS, step, URL, HTTP status, message, details");
         check (! ct.contains (goodToken) && ! e.shortText().contains (goodToken) && ! e.url.contains (goodToken), "copy text never contains a token");
-        check (installerVersion() == "0.1.2", "installer version 0.1.2: " + installerVersion());
+        check (installerVersion() == "0.1.3", "installer version 0.1.3: " + installerVersion());
+
+        // "Get access on GitHub": the pre-filled token page (only the parameters GitHub documents).
+        {
+            const auto u = tokenCreationUrl();
+            const juce::URL back (u.toString (true));   // what the browser gets, parsed again
+            const auto names = back.getParameterNames();
+            const auto values = back.getParameterValues();
+            const auto param = [&] (const juce::String& n) { const auto i = names.indexOf (n); return i >= 0 ? values[i] : juce::String ("<missing>"); };
+            note ("token page: " + u.toString (true));
+            check (u.toString (false) == "https://github.com/settings/personal-access-tokens/new", "token page address: " + u.toString (false));
+            check (names.size() == 5 && param ("name") == "dooblr installer" && param ("target_name") == "Dooblr"
+                       && param ("expires_in") == "366" && param ("contents") == "read",
+                   "token page pre-fills name, owner Dooblr, 366 days, Contents read: " + names.joinIntoString (","));
+            check (param ("name").length() <= 40 && param ("description").length() <= 1024
+                       && param ("description").contains ("Only select repositories > dooblr-plugins"),
+                   "token page name <= 40, description <= 1024 and says which repository to pick");
+            check (! u.toString (true).contains (" "), "token page address is encoded");
+            const auto other = juce::URL (tokenCreationUrl ("someone", "other-repo").toString (true));
+            check (other.getParameterValues()[other.getParameterNames().indexOf ("target_name")] == "someone"
+                       && other.getParameterValues()[other.getParameterNames().indexOf ("description")].contains ("other-repo"),
+                   "token page follows the release's owner and repository");
+        }
+
+        // Noticing a copied token.
+        check (looksLikeGitHubToken (goodToken) && looksLikeGitHubToken ("  " + goodToken + "\n")
+                   && looksLikeGitHubToken ("ghp_" + juce::String::repeatedString ("aB3", 12)),
+               "copied github_pat_ / ghp_ tokens are noticed (trimmed)");
+        check (! looksLikeGitHubToken ({}) && ! looksLikeGitHubToken ("hello") && ! looksLikeGitHubToken ("github_pat_short")
+                   && ! looksLikeGitHubToken ("ghp_abc") && ! looksLikeGitHubToken ("Bearer " + goodToken)
+                   && ! looksLikeGitHubToken (goodToken + " and more text") && ! looksLikeGitHubToken ("https://x.com/?t=" + goodToken)
+                   && ! looksLikeGitHubToken ("gho_" + juce::String::repeatedString ("aB3", 12))
+                   && ! looksLikeGitHubToken ("github_pat_" + juce::String::repeatedString ("a", 300))
+                   && ! looksLikeGitHubToken ("ghp_" + juce::String::repeatedString ("aB-", 12)),
+               "other clipboard text is not taken for a token");
 
         const juce::URL latest ("https://github.com/Dooblr/dooblr-plugins/releases/latest/download/dooblr-manifest.json");
         const auto ref = parseReleaseUrl (latest, GitHubConfig());
@@ -612,6 +659,8 @@ namespace
     }
 
     //==========================================================================
+    void snapshot (juce::Component& c, const juce::String& name);
+
     bool waitFor (const std::function<bool()>& done)
     {
         for (int i = 0; i < 300 && ! done(); ++i)
@@ -741,16 +790,120 @@ namespace
             c.clickCopy();
             check (clip.contains ("HTTP status: 404") && clip.contains ("Installer: ") && clip.contains ("/releases/latest/download/dooblr-manifest.json"),
                    "window: Copy details copies the full details");
-            check (c.saveTokenAndRetry ("nope").failed() && c.isSignInVisible(), "window: a non-token is refused without retrying");
-            check (c.saveTokenAndRetry (badToken).wasOk(), "window: bad token saved");
-            check (waitFor ([&] { return ! c.getFetchError().isEmpty(); }) && c.isSignInVisible(), "window: refused token -> sign-in again");
-            check (c.saveTokenAndRetry (goodToken).wasOk(), "window: good token saved");
+            const auto checksBefore = gh.api->count ("/repos/Dooblr/dooblr-plugins");
+            check (c.saveTokenAndRetry ("nope").failed() && c.isSignInVisible() && gh.api->count ("/repos/Dooblr/dooblr-plugins") == checksBefore,
+                   "window: a non-token is refused without asking GitHub");
+            check (c.saveTokenAndRetry (badToken).wasOk(), "window: bad token goes to GitHub for a check");
+            check (waitFor ([&] { return ! c.isCheckingToken(); }) && c.isSignInVisible() && c.isTokenNoteBad() && ! tokenFile.existsAsFile()
+                       && c.getFetchError().httpStatus == 401,
+                   "window: refused token is not saved, sign-in stays: " + c.getTokenNote());
+            check (c.saveTokenAndRetry (goodToken).wasOk(), "window: good token checked");
             check (waitFor ([&] { return c.getSession().authenticated(); }), "window: signed in after Save and retry");
             check (c.getFetchError().isEmpty() && ! c.isSignInVisible() && c.numRows() == 1 && c.getStatusLine().contains ("signed in"),
                    "window: list shown, panel hidden: " + c.getStatusLine());
             juce::String w;
             check (TokenStore (TokenStore::Backend::file, tokenFile).load (w) == goodToken, "window: token kept in the store");
         }
+
+        // 7. Checking a token before it is saved (GET /repos/Dooblr/dooblr-plugins, then its releases).
+        {
+            ErrorInfo ve;
+            check (validateToken (goodToken, "Dooblr", "dooblr-plugins", ve, cfg) && ve.isEmpty(), "validate: a good token is accepted");
+            check (! validateToken (badToken, "Dooblr", "dooblr-plugins", ve, cfg) && ve.httpStatus == 401 && ve.needsSignIn
+                       && ve.message.contains ("did not accept"),
+                   "validate: bad token -> 401, plain words: " + ve.message);
+            check (! validateToken (noRepoToken, "Dooblr", "dooblr-plugins", ve, cfg) && ve.httpStatus == 404
+                       && ve.message.contains ("Only select repositories > dooblr-plugins"),
+                   "validate: repository not selected -> 404 says what to pick: " + ve.message);
+            check (! validateToken (noContentsToken, "Dooblr", "dooblr-plugins", ve, cfg) && ve.httpStatus == 403
+                       && ve.message.contains ("Contents: Read-only"),
+                   "validate: no Contents permission -> says to grant Contents: Read-only: " + ve.message);
+            const auto ct = ve.copyText() + ve.shortText() + ve.url;
+            check (! ct.contains (noContentsToken) && ! ct.contains ("TESTONLY"), "validate: error text never contains the token");
+            int deadPort = 0;
+            for (int i = 0; i < 20 && deadPort == 0; ++i)
+            {
+                juce::StreamingSocket probe;
+                const int probePort = 20000 + juce::Random::getSystemRandom().nextInt (30000);
+                if (probe.createListener (probePort, "127.0.0.1")) { deadPort = probePort; probe.close(); }
+            }
+            GitHubConfig offline;
+            offline.apiBase = "http://127.0.0.1:" + juce::String (deadPort);
+            check (! validateToken (goodToken, "Dooblr", "dooblr-plugins", ve, offline) && ve.httpStatus == 0 && ve.message.contains ("No connection"),
+                   "validate: offline -> a connection error, not a token error: " + ve.message);
+        }
+
+        // 8. "Get access on GitHub" -> browser opens the pre-filled page -> clipboard watched -> "Use the copied token".
+        {
+            const auto tokenFile = root.getChildFile ("ui-token-clip");
+            ui::InstallerComponent c (url, loc, false);
+            c.setSize (820, 600);
+            c.setTokenSources (TokenSources::none());
+            c.setTokenStore (TokenStore (TokenStore::Backend::file, tokenFile));
+            juce::Array<juce::URL> opened;
+            c.setBrowserOpener ([&opened] (const juce::URL& u) { opened.add (u); return true; });
+            juce::String board = "some text copied earlier";
+            int reads = 0;
+            c.setClipboardSource ([&] { ++reads; return board; });
+            c.setClipboardSink ([&board] (const juce::String& t) { board = t; });
+            c.refetch();
+            check (waitFor ([&] { return ! c.getFetchError().isEmpty(); }) && c.isSignInVisible(), "clipboard: sign-in panel shown");
+            check (! c.isWatchingClipboard() && reads == 0 && ! c.isUseCopiedVisible(), "clipboard: not read before Get access is clicked");
+
+            c.clickGetAccess();
+            check (opened.size() == 1 && opened[0].toString (true) == tokenCreationUrl().toString (true), "clipboard: Get access opens the pre-filled page");
+            check (c.isWatchingClipboard() && reads == 1 && ! c.isUseCopiedVisible(), "clipboard: watched after the click; other text ignored");
+            check (waitFor ([&] { return reads >= 2; }), "clipboard: read again by the 1 s timer");
+
+            board = badToken;
+            c.pollClipboard();
+            check (c.isUseCopiedVisible() && ! tokenFile.existsAsFile(), "clipboard: a copied token is offered (not saved yet)");
+            c.clickUseCopied();
+            check (waitFor ([&] { return ! c.isCheckingToken(); }) && c.isTokenNoteBad() && ! tokenFile.existsAsFile() && c.isSignInVisible()
+                       && c.getFetchError().httpStatus == 401 && c.isCopyVisible() && c.getErrorBoxText().contains ("Checking the GitHub token"),
+                   "clipboard: refused token -> not saved, red note, copyable error: " + c.getTokenNote());
+            c.pollClipboard();
+            check (! c.isUseCopiedVisible(), "clipboard: a refused token is not offered again");
+            juce::String copied;
+            c.setClipboardSink ([&copied] (const juce::String& t) { copied = t; });
+            c.clickCopy();
+            check (copied.contains ("Checking the GitHub token") && copied.contains ("401") && ! copied.contains (badToken) && ! copied.contains ("TESTONLY"),
+                   "clipboard: Copy details has the check failure, no token");
+            c.setClipboardSink ([&board] (const juce::String& t) { board = t; });
+
+            board = noRepoToken;
+            c.pollClipboard();
+            c.clickUseCopied();
+            check (waitFor ([&] { return ! c.isCheckingToken(); }) && c.getFetchError().httpStatus == 404 && ! tokenFile.existsAsFile()
+                       && c.getErrorBoxText().contains ("Only select repositories"),
+                   "clipboard: token without the repository -> says to select dooblr-plugins");
+
+            board = goodToken;
+            c.pollClipboard();
+            check (c.isUseCopiedVisible(), "clipboard: the new token is offered");
+            snapshot (c, "signin-offer");
+            c.clickUseCopied();
+            check (waitFor ([&] { return c.getSession().authenticated(); }) && c.numRows() == 1 && ! c.isSignInVisible(),
+                   "clipboard: accepted token -> signed in, list shown");
+            juce::String w;
+            check (TokenStore (TokenStore::Backend::file, tokenFile).load (w) == goodToken, "clipboard: accepted token saved");
+            check (board.isEmpty(), "clipboard: the token is cleared from the clipboard once saved");
+            check (! c.isWatchingClipboard(), "clipboard: watching stops once signed in");
+            const auto seen = c.getTokenNote() + c.getStatusLine() + c.getErrorBoxText() + c.getCopyText();
+            for (auto& t : { goodToken, badToken, noRepoToken })
+                check (! seen.contains (t), "clipboard: no token in notes, status, error text or copy text");
+        }
+
+        // The token never reaches the window's text even when an error message would carry it.
+        {
+            ErrorInfo leak;
+            leak.step = "Checking the GitHub token";
+            leak.message = "GitHub said: bad token " + goodToken;
+            leak.setUrl (cfg.apiBase + "/repos/Dooblr/dooblr-plugins?access_token=" + goodToken);
+            registerSecret (goodToken);
+            check (! leak.copyText().contains (goodToken) && ! redactSecrets (leak.message).contains (goodToken), "a token inside an error is redacted");
+        }
+
         setEnv ("DOOBLR_GITHUB_API", {});
         setEnv ("DOOBLR_GITHUB_WEB_HOSTS", {});
     }

@@ -25,11 +25,24 @@ installer needs a GitHub token to read the releases (below).
 On first launch the Welcome page says **Sign in to GitHub to get the plug-in list** (GitHub answers
 404 to anyone not signed in to a private repository). Once:
 
-1. Click **Create a token on github.com** (or open <https://github.com/settings/personal-access-tokens/new>).
-2. Fine-grained token: **Resource owner** Dooblr, **Repository access** > *Only select repositories* >
-   **dooblr-plugins**, **Permissions** > Repository permissions > **Contents: Read-only**. Pick an
-   expiry, click **Generate token** and copy it.
-3. Paste it in the **GitHub token** box (it shows as dots) and click **Save and retry**.
+1. Click **Get access on GitHub**. Your browser opens GitHub's *new fine-grained token* page with the
+   form already filled in: token name *dooblr installer*, a description, **Resource owner** Dooblr,
+   **Expiration** 366 days and **Contents: Read-only** (through the URL parameters GitHub documents).
+2. On that page do the one thing GitHub cannot pre-fill: **Repository access** > *Only select
+   repositories* > **dooblr-plugins**. Then click **Generate token** and **Copy** (sign in to GitHub
+   first if it asks).
+3. Back in the installer, which watches the clipboard (about once a second, only while this panel is
+   open and only after you clicked the button), click **Use the copied token**. The installer checks
+   the token with GitHub (it must be able to read `Dooblr/dooblr-plugins` and its releases) and saves
+   it only if GitHub accepts it, then clears it from the clipboard and loads the plug-in list. If GitHub
+   refuses it the reason is shown (bad or expired token, repository not selected, Contents not granted)
+   in the copyable error box, and nothing is saved.
+
+You can also paste a token into the **Or paste it** box (it shows as dots) and click **Save and
+retry**; it is checked the same way. Fine-grained tokens can only be made for your own account or an
+organization you belong to: the *Dooblr* account is a personal account, so this works when you are
+signed in to GitHub as Dooblr. Anyone else with access needs a classic token (`ghp_...`, scope `repo`)
+or `gh auth login`.
 
 The token is kept in the macOS Keychain (macOS may ask once whether the installer may use it: choose
 **Always Allow**) or the Windows Credential Manager, and is never shown or written to the log. If
@@ -96,7 +109,9 @@ APP="dooblr installer.app/Contents/MacOS/dooblr installer"
 "$APP" --install dooblr-q,dooblr-soothe
 "$APP" --list --manifest /path/to/dooblr-manifest.json   # a local or other manifest
 "$APP" --install all --vst3-dir /tmp/v --m4l-dir /tmp/m   # other folders (tests)
-"$APP" --save-token        # paste a GitHub token (not echoed); saved in the Keychain / Credential Manager
+"$APP" --get-access        # open GitHub's pre-filled token page, then paste the token (checked, then saved)
+"$APP" --get-access --no-browser   # the same, but only print the page address
+"$APP" --save-token        # paste a GitHub token (not echoed); checked with GitHub, saved in the Keychain / Credential Manager
 "$APP" --forget-token      # remove the saved token
 "$APP" --list --no-auth    # never use a token (anonymous only)
 ```
@@ -171,7 +186,11 @@ needs the new manifest address:
 
 ## Not tested yet
 
-- Windows: the code builds only in CI and no CI run has happened yet.
-- Signing in with a real GitHub token: tested only against a local mock of the GitHub API.
+- Windows: built and tested only in CI (GitHub Actions `windows-latest`, the same test suite as on the
+  Mac, with a mock GitHub API); not yet run on a real Windows PC. The Windows Credential Manager and
+  the clipboard-change counter are compiled there but the tests do not exercise them (they use a token
+  file and a fake clipboard).
+- Signing in with a real GitHub token, and the pre-filled token page in a real browser: tested only
+  against a local mock of the GitHub API and by checking the page address the button opens.
 - The Mac administrator prompt (installing into `/Library`): the local tests install only into temp folders.
 - The universal (x86_64) build; local builds are arm64.
