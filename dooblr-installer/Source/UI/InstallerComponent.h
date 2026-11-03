@@ -2,9 +2,11 @@
 
 #include "Core/InstallEngine.h"
 #include "Core/TokenStore.h"
+#include "ProgressRing.h"
 #include "Theme.h"
 
 #include <atomic>
+#include <map>
 #include <thread>
 
 namespace dooblr::installer::ui
@@ -74,10 +76,38 @@ namespace dooblr::installer::ui
         void showPage (Page);
         /** The choose page's check boxes, by item id. */
         juce::StringArray getSelectedIds() const;
+        /** Ticks or unticks one item, like clicking its check box (counts as the user's choice). */
         void setSelected (const juce::String& id, bool);
+        /** Clicks one row's check box (synchronously, like a mouse click). */
+        void clickRow (const juce::String& id);
+        /** The choose page's "Updates", "All" and "None" buttons (synchronously). */
+        void clickSelectUpdates() { selectUpdates.onClick(); }
+        void clickSelectAll()     { selectAll.onClick(); }
+        void clickSelectNone()    { selectNone.onClick(); }
+        juce::String getInstallButtonText() const { return installButton.getButtonText(); }
+        bool isInstallEnabled() const { return installButton.isEnabled(); }
+        /** "3 of 8 selected" (shown next to the selection buttons). */
+        juce::String getSelectionSummary() const { return selectionSummary; }
+        /** Presses the install button (starts the install on a worker thread). */
+        void clickInstall() { if (installButton.isEnabled()) startInstall(); }
         /** Shows the result of an install (done page). */
         void showReport (const InstallReport&);
+        /** Starts the progress page for these item ids (what the install button does before the worker runs). */
+        void beginProgress (const juce::StringArray& ids);
+        /** Overall progress (0..1, or < 0 to keep it) and a step line (kept in the log for Copy details). */
         void setProgress (double p, const juce::String& line);
+        /** Which item is being worked on (index into the ids given to beginProgress) and its own progress. */
+        void setItemProgress (int index, int count, double itemProgress);
+        double getProgressFraction() const noexcept { return ring.getProgress(); }
+        juce::String getProgressItem() const { return progressItem; }
+        juce::String getProgressStep() const { return progressStep; }
+        /** The done page summary ("2 installed · 1 updated · 1 failed"). */
+        juce::String getSummaryText() const { return summaryText; }
+        bool isLogVisible() const { return log.isVisible(); }
+        bool isRingVisible() const { return ring.isVisible(); }
+        /** Done page: the failures box is shown, read-only, multi-line (select + Cmd/Ctrl+C). */
+        bool isDetailsSelectable() const { return detailsBox.isVisible() && detailsBox.isReadOnly() && detailsBox.isMultiLine(); }
+        juce::String getDetailsText() const { return detailsBox.getText(); }
         juce::String getStatusLine() const { return statusLine; }
         juce::String rowStatus (const juce::String& id) const;
         int numRows() const;
@@ -91,6 +121,8 @@ namespace dooblr::installer::ui
         void startInstall();
         void layoutChoose (juce::Rectangle<int>);
         void updateInstallButton();
+        void selectWhere (const std::function<bool (Status)>&);
+        juce::String itemLabel (const juce::String& id) const;
         void applyLocation();
         void copyDetails();
         void checkAndSaveToken (const juce::String& token);
@@ -98,6 +130,9 @@ namespace dooblr::installer::ui
         void stopWatchingClipboard();
         struct WelcomeLayout { juce::Rectangle<int> title, desc, status, signInText, actionRow, tokenRow, errorBox, notice; };
         WelcomeLayout welcomeLayout() const;
+        struct ProgressLayout { juce::Rectangle<int> ring, item, step, count, summary, subtitle, details; };
+        ProgressLayout progressLayout() const;
+        juce::Rectangle<int> contentArea() const;   // below the page title, above the button row
 
         juce::URL manifestUrl;
         Locations locations;
@@ -138,12 +173,17 @@ namespace dooblr::installer::ui
         juce::Label locationLabel;
         std::unique_ptr<RowList> rows;
         juce::Viewport viewport;
-        juce::TextButton selectUpdates { "Select updates" }, selectAll { "All" }, selectNone { "None" },
+        juce::TextButton selectUpdates { "Updates" }, selectAll { "All" }, selectNone { "None" },
                          backButton { "Back" }, installButton { "Install" };
+        juce::String selectionSummary;
+        bool selectionChosen = false;   // the user changed the ticks: keep them when the list is read again
         // Progress / done
-        double progress = 0.0;
-        juce::ProgressBar progressBar { progress };
-        juce::TextEditor log;
+        ProgressRing ring;
+        juce::StringArray progressIds;
+        std::map<juce::String, Status> statusBefore;   // per id, when the install started (installed vs updated)
+        juce::String progressItem, progressStep, progressCount, summaryText;
+        juce::TextEditor detailsBox;   // done page: what failed and why (selectable, Copy details)
+        juce::TextEditor log;          // every step, for Copy details; shown on the done page only when something failed
         juce::TextButton cancelButton { "Cancel" }, againButton { "Check again" }, closeButton { "Close" };
         juce::String doneTitle, doneSubtitle;
 

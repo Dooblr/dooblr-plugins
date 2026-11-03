@@ -9,7 +9,7 @@ update.
 | dooblr-q, dooblr-kick, dooblr-vocals, dooblr-prophet, dooblr-soothe, dooblr-feedback | VST3 | Mac: `/Library/Audio/Plug-Ins/VST3` (asks for your password once), or `~/Library/Audio/Plug-Ins/VST3` (just you).<br>Windows: `C:\Program Files\Common Files\VST3` (asks for permission, UAC), or `%LOCALAPPDATA%\Programs\Common\VST3` |
 | dooblr-prophet panel (optional), dooblr-chords | Max for Live device (Ableton Live only) | `<Ableton User Library>/Presets/MIDI Effects/Max MIDI Effect/<device>`, the same folder the dooblr-chords and dooblr-prophet build scripts use, so Live's browser shows them under MIDI Effects > Max MIDI Effect |
 
-Version 0.1.2.
+Version 0.1.4.
 
 ## Download
 
@@ -84,13 +84,19 @@ ready to paste into a bug report.
 2. **Choose**: one row per item with the installed and the available version and a tag: *Install*
    (not installed), *Update* (older version installed, or a version the installer can't read),
    *Up to date*, *Newer installed* or *Not available* (no file for this platform). Updates are
-   ticked to start with. Click a row or its box to tick it; **Select updates**, **All** and
-   **None** set the ticks; the folder menu switches between the system and the user VST3 folder.
-3. **Install**: downloads each file, checks its size and sha256 against the manifest, and only
-   then installs. A damaged or changed download is rejected and nothing of it is installed. An
-   existing copy is replaced completely (no leftover files). **Cancel** stops before installing.
-4. **Done**: what was installed and anything that failed, with the reason. Restart or rescan
-   plug-ins in your DAW afterwards.
+   ticked to start with. Click a row or its box to tick it. **Updates** ticks just the updates,
+   **All** ticks everything that can be installed here (new plug-ins, updates, and a fresh copy of
+   the ones that are up to date, never a downgrade) and **None** unticks everything. The count
+   next to them and the button (*Install 2*, *Update 3*, *Install and update 5*) follow the ticks,
+   and your choice is kept when the list is read again (after signing in or **Check again**). The
+   folder menu switches between the system and the user VST3 folder.
+3. **Install**: one progress wheel for the whole install, with the item being worked on and its
+   step under it. Each file is downloaded, its size and sha256 checked against the manifest, and
+   only then installed. A damaged or changed download is rejected and nothing of it is installed.
+   An existing copy is replaced completely (no leftover files). **Cancel** stops before installing.
+4. **Done**: a summary (*2 installed · 1 updated · 1 failed*). Anything that failed is listed with
+   the reason as selectable text, and **Copy details** copies it with every step of the install.
+   Restart or rescan plug-ins in your DAW afterwards.
 
 How it reads the installed version: from the VST3 bundle's `Info.plist` (Mac) or
 `moduleinfo.json` (Windows), then from its own receipts (`~/Library/dooblr/installer-receipts.json`,
@@ -134,7 +140,10 @@ DOOBLRINSTALLER_SNAPSHOT=/tmp/shot dooblr-installer/scripts/build.sh   # also wr
 JUCE 8.0.15 comes from `~/dooblr-build/_deps/juce-src` when it exists (`JUCE_SOURCE_DIR`), otherwise it is fetched.
 The tests (`DooblrInstallerTests`) cover version compare, manifest parsing, sha256, reading
 installed versions, a full install and update into a temp folder from `file://` zips, rejection
-of corrupted, truncated and path-escaping zips, cancel, and the window's rows, ticks and pages.
+of corrupted, truncated and path-escaping zips, cancel, and the window's rows, ticks and pages:
+All / None / Updates on a normal and an all-up-to-date computer, the choice surviving a refresh,
+the progress wheel, and a real install through the window (new, update, reinstall and a damaged
+download) with its summary.
 They also cover GitHub sign-in against a local mock of the GitHub API: the token lookup order, the
 saved-token file (user-only permissions), redaction of tokens and signed URLs, that the token is
 never sent to the redirected file host, the 404 > sign-in > save > retry flow in the window, a
@@ -152,7 +161,7 @@ signatures, and checks that a corrupted zip is rejected.
 Releases are built by GitHub Actions (`.github/workflows/release.yml`):
 
 ```sh
-git tag v0.1.2 && git push origin v0.1.2
+git tag -a v0.1.4 -m "dooblr installer 0.1.4" && git push origin v0.1.4
 ```
 
 The workflow builds every VST3 plug-in and the installer on macOS (universal, ad-hoc signed) and
