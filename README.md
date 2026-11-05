@@ -23,7 +23,7 @@ in its own folder and has its own README.
 | Folder | Plug-in | Version | Type | Status |
 | --- | --- | --- | --- | --- |
 | [`dooblr-q/`](dooblr-q/) | dooblr-q | 0.9.5 | Dynamic parametric EQ (VST3 effect) | Mature; most features, see its README |
-| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.6 | Layered kick drum designer (VST3 instrument) | Active |
+| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.8 | Layered kick drum designer (VST3 instrument) | Active |
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.2.0 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
 | [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
 | [`dooblr-bass/`](dooblr-bass/) | dooblr-bass | 0.1.0 | Analog-modelled monophonic bass synth (VST3 instrument), one-page Mini-style board: two main oscillators, sub, optional third/lo-freq osc, mixer drive/overload, 24 dB/oct transistor ladder | New; its tests pass in this repo |

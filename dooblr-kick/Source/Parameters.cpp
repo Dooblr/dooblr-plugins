@@ -43,6 +43,26 @@ namespace dooblrkick::params
         StringFn percentString() { return [] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + " %"; }; }
         StringFn bipolarPercent(){ return [] (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + " %"; }; }
 
+        /** Time Scale readout / Ableton text: "1.00x", "2.50x". Accepts "2x", "2.5", "200 %". */
+        StringFn scaleString()
+        {
+            return [] (float v, int) { return juce::String (v, 2) + "x"; };
+        }
+
+        float parseScale (const juce::String& text)
+        {
+            auto t = text.trim().toLowerCase().replace (juce::String (juce::CharPointer_UTF8 ("\xe2\x88\x92")), "-");
+            t = t.replace ("x", "").replace (" ", "");
+
+            if (t.endsWithChar ('%'))
+            {
+                const auto pct = t.dropLastCharacters (1).getFloatValue();
+                return juce::jlimit (minMasterTimeScale, maxMasterTimeScale, pct / 100.0f);
+            }
+
+            return juce::jlimit (minMasterTimeScale, maxMasterTimeScale, t.getFloatValue());
+        }
+
         StringFn msString()
         {
             return [] (float v, int) { return v < 10.0f ? juce::String (v, 2) + " ms"
@@ -462,9 +482,12 @@ namespace dooblrkick::params
         addFloat (layout, "mix_drywet", "Dry/Wet", range (0.0f, 1.0f), 1.0f, percentString());
         addChoice (layout, "chain_order", "Chain Order", chainOrderChoices(), 0);
 
-        //== 0.3.3 (appended): master envelope macros for the Envelope page knobs ==============
-        // Both default to transparent (100 %): the times and levels are then exactly the points'.
-        addFloat (layout, "menv_tscale", "Master Env Time Scale", logRange (minMasterTimeScale, maxMasterTimeScale), 1.0f, percentString());
+        //== 0.3.3 / 0.3.8 (appended): master envelope macros for the Envelope page knobs ======
+        // Defaults 1.00x / 100 % leave the point times and levels unchanged.
+        // Time Scale (Ableton / host name "Time Scale"): multiplies every Master Env N Time in DSP.
+        // Stored point times stay editable; effectiveTimeMs = min (stored * scale, 6000). Readout "1.00x".
+        addFloat (layout, "menv_tscale", "Time Scale", logRange (minMasterTimeScale, maxMasterTimeScale), 1.0f, scaleString(),
+                  {}, [] (const juce::String& text) { return parseScale (text); });
         addFloat (layout, "menv_depth", "Master Env Depth", range (0.0f, 1.0f), 1.0f, percentString());
 
         // 0.3.5: key tracking on every layer (appended; Click / Body / Tail reuse their old

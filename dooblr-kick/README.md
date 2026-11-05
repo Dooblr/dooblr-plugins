@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.7 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.8 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -75,13 +75,18 @@ Version 0.3.7 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   6000 ms. Its tab has a power toggle (off is a unity bypass; the tab and graph are drawn
   dimmed and can still be edited). Knobs under the graph follow the selected point (Time, Level
   and the Curve into that point; point 0 has Level only) and are the existing "Master Env N"
-  host parameters, so they map and automate like any knob. Two extra automatable macros sit
-  beside them: **Time Scale** (25 % .. 400 %, stretches every point's time) and **Depth**
-  (0 .. 100 %, blends between flat unity and the drawn shape). At their defaults (100 %, 100 %)
-  the sound is unchanged.
+  host parameters, so they map and automate like any knob. Those point **Time** values are the
+  editable stage times (delay / attack / hold / sustain / release of the shape you draw).
+  Two extra automatable macros sit beside them:
+  - **Time Scale** (`menv_tscale`, Ableton name **"Time Scale"**, 0.25x .. 4.00x, default
+    1.00x): multiplies every Master Env point time in the DSP without changing the stored
+    values. Effective time = min(stored × scale, 6000 ms). Map this one VST parameter in
+    Ableton to stretch delay, sustain, release and every other stage together.
+  - **Depth** (`menv_depth`, "Master Env Depth", 0 .. 100 %): blends between flat unity and
+    the drawn shape. At the defaults (1.00x, 100 %) the sound is unchanged.
   Since 0.3.7 the Time Scale knob is twice the diameter of the other knobs, with a larger
-  caption and readout; its caption sits level with the panel title and its knob lines up with
-  the point knobs beside it.
+  caption and a **"1.00x"** readout (0.3.8); its caption sits level with the panel title and
+  its knob lines up with the point knobs beside it.
 - **Zoom on envelope graphs.** On the master envelope and the Body pitch and amp envelopes,
   drag up or down in an empty part of the graph (not on a line or point) to zoom the time
   axis in or out around the mouse. Double-click the time ruler to show the whole envelope
@@ -216,6 +221,10 @@ installing.
 3. Play or program notes. Every note plays the same kick; set its pitch with **Key** (default
    F0; Live names middle C "C3") and the layer tunes. Turn on **Smp key track** on a sample layer
    to play that sample chromatically.
+4. **Map Time Scale:** open the device's parameter list (or Configure) and pick **Time Scale**.
+   It is a normal automatable VST parameter (`menv_tscale`). Automating it stretches every
+   Master Env point time (delay / sustain / release stages of the drawn envelope) together.
+   Individual **Master Env N Time** parameters stay editable and keep their stored values.
 
 ## Tests
 
@@ -248,6 +257,154 @@ installing.
 `~/dooblr-build/dooblr-kick/Tools/FrameBench/DooblrKickFrameBench` measures frame times per page while dragging.
 
 Set `DOOBLRKICK_EDITOR_SNAPSHOT=/path/prefix` to also write editor PNG snapshots.
+
+
+## Parameter reference
+
+Every control is an automatable VST3 parameter (APVTS). Ableton Live lists them by the
+**Ableton / host name** below. Ids are stable across versions; do not rename them in projects.
+
+### Master envelope & Time Scale (Envelope page)
+
+| Id | Ableton / host name | Type | Range | Default | Notes |
+| --- | --- | --- | --- | --- | --- |
+| `menv_on` | Master Env On | bool | off/on | on | Tab power; off = unity bypass |
+| `menv_count` | Master Env Points | int | 2..8 | 2 | Active points |
+| `menv{N}_time` | Master Env {N} Time | float | 0..6000 ms | see defaults | Editable stage times (N = 2..8; point 1 is fixed at 0 ms). These are the delay / sustain / release (and attack / hold) stages of the shape you draw |
+| `menv{N}_level` | Master Env {N} Level | float | 0..1 | 1 | Point level |
+| `menv{N}_curve` | Master Env {N} Curve | float | -1..1 | 0 | Curve into the next point |
+| **`menv_tscale`** | **Time Scale** | float (log) | **0.25x .. 4.00x** | **1.00x** | **Multiplies every `menv{N}_time` in the DSP; stored times stay as set. Easy Ableton map target.** Readout shows `1.00x` |
+| `menv_depth` | Master Env Depth | float | 0..1 (0..100 %) | 1 (100 %) | Blends shape toward unity gain |
+
+### Play & mix (Envelope page)
+
+| Id | Ableton / host name | Type | Range | Default |
+| --- | --- | --- | --- | --- |
+| `root_note` | Key | int | 12..72 | 29 (F0) |
+| `vel_sens` | Velocity Sensitivity | float | 0..1 | 0.5 |
+| `gate` | Gate | bool | off/on | off |
+| `release` | Gate Release | float | 1..2000 ms | 50 ms |
+| `mix_drywet` | Dry/Wet | float | 0..1 | 1 |
+| `chain_order` | Chain Order | choice | 24 orders | Drive > EQ > Dynamics > Limiter |
+
+### Per-layer common (Click / Body / Sub / Tail / Noise)
+
+For each layer prefix `click`, `body`, `sub`, `tail`, `noise`:
+
+| Id suffix | Ableton name pattern | Range | Default (typical) |
+| --- | --- | --- | --- |
+| `_on` | {Layer} On | off/on | on (Click/Body), varies |
+| `_solo` | {Layer} Solo | off/on | off |
+| `_level` | {Layer} Level | -60..12 dB (fader taper) | layer default |
+| `_pan` | {Layer} Pan | -1..1 | 0 |
+| `_start` | {Layer} Start | 0..100 ms | 0 |
+| `_send` | {Layer} Drive Send | 0..1 | 1 |
+| `_ftype` | {Layer} Filter | Off / LP / HP / BP | Off |
+| `_cutoff` | {Layer} Cutoff | 20..20000 Hz | 2000 |
+| `_reso` | {Layer} Resonance | 0..1 | 0.1 |
+| `_source` | {Layer} Source | Synth / Sample | Synth (layers with samples) |
+| `_sample` | {Layer} Sample | factory list + User file | layer default |
+| `_keytrack` | {Layer} Key Track | off/on | off |
+
+### Layer sound (selection)
+
+| Id | Ableton / host name | Range | Default |
+| --- | --- | --- | --- |
+| `click_type` | Click Type | Chirp, Noise burst, Snap, Tick, Knock | Chirp |
+| `click_pitch` | Click Pitch | -48..24 st | 0 |
+| `click_tone` | Click Tone | -1..1 | 0 |
+| `body_wave` | Body Wave | Sine, Triangle, Saturated, Square | Sine |
+| `body_harm` | Body Harmonics | 0..1 | 0 |
+| `body_tune` | Body Tune | -48..24 st | 0 |
+| `body_phase` | Body Start Phase | 0..360 ° | 0 |
+| `body_drive` | Body Drive | 0..1 | 0 |
+| `body_smp_penv` | Body Sample Pitch Env | 0..1 | 0 |
+| `sub_tune` | Sub Tune | -24..24 st | 0 |
+| `sub_fine` | Sub Fine | -100..100 ct | 0 |
+| `sub_phase` | Sub Start Phase | 0..360 ° | 0 |
+| `sub_envamt` | Sub Follow Body Pitch | 0..1 | 0 |
+| `tail_wave` | Tail Wave | Sine, Triangle, Saturated | Sine |
+| `tail_tune` | Tail Tune | -48..24 st | 0 |
+| `tail_spread` | Tail Spread | 0..50 | 8 |
+| `tail_phase` | Tail Start Phase | 0..360 ° | 0 |
+| `tail_drive` | Tail Drive | 0..1 | 0.3 |
+| `noise_color` | Noise Colour | White, Pink, Brown | White |
+| `noise_width` | Noise Width | 0..1 | 0.5 |
+| `noise_tune` | Noise Sample Tune | -48..24 st | 0 |
+| `click_smp_penv` / `tail_smp_penv` / `noise_smp_penv` | {Layer} Sample Pitch Env | 0..1 | 1 |
+
+### Layer pitch & amp envelopes (every layer, 0.3.6)
+
+Prefixes: Body `penv` / `aenv`; Click `cpenv` / `caenv`; Sub `spenv` / `saenv`; Tail `tpenv` /
+`taenv`; Noise `npenv` / `naenv`. Same layout as the master envelope: `{prefix}_count`,
+`{prefix}{N}_time`, value (`_freq` Hz on Body pitch, `_st` semitones on other pitch envelopes,
+`_level` on amp), `{prefix}{N}_curve`. Max time 2000 ms on Body/Click, 6000 ms on Sub/Tail/Noise
+and master. All are automatable ("Sub Pitch Env 2 Time", "Click Amp Env 3 Level", …).
+
+### Drive
+
+| Id | Ableton / host name | Range | Default |
+| --- | --- | --- | --- |
+| `dist_on` | Drive On | off/on | off |
+| `dist_type` | Drive Type | Soft clip, Hard clip, Tube, Fold, Bitcrush | Soft clip |
+| `dist_drive` | Drive | 0..48 dB | 12 |
+| `dist_tone` | Drive Tone | 0..1 | 1 |
+| `dist_bits` | Crush Bits | 1..16 | 8 |
+| `dist_rate` | Crush Rate | 500..48000 Hz | 12000 |
+| `dist_out` | Drive Output | -24..12 dB | -3 |
+| `dist_mix` | Drive Mix | 0..1 | 1 |
+
+### EQ
+
+| Id | Ableton / host name | Range | Default |
+| --- | --- | --- | --- |
+| `eq_on` | EQ On | off/on | off |
+| `eq_low_freq` / `eq_low_gain` | EQ Low Freq / Gain | 20..500 Hz / -24..24 dB | 60 / 0 |
+| `eq_mid_freq` / `eq_mid_gain` / `eq_mid_q` | EQ Mid Freq / Gain / Q | 100..10000 Hz / -24..24 dB / 0.2..10 | 1000 / 0 / 1 |
+| `eq_high_freq` / `eq_high_gain` | EQ High Freq / Gain | 2000..20000 Hz / -24..24 dB | 8000 / 0 |
+
+### Dynamics
+
+| Id | Ableton / host name | Range | Default |
+| --- | --- | --- | --- |
+| `shape_on` | Transient On | off/on | off |
+| `shape_attack` | Transient Attack | -1..1 | 0 |
+| `shape_sustain` | Transient Sustain | -1..1 | 0 |
+| `comp_on` | Comp On | off/on | off |
+| `comp_threshold` | Comp Threshold | -48..0 dB | -12 |
+| `comp_ratio` | Comp Ratio | 1..20 | 4 |
+| `comp_attack` | Comp Attack | 0.1..100 ms | 5 |
+| `comp_release` | Comp Release | 10..1000 ms | 80 |
+| `comp_makeup` | Comp Makeup | 0..24 dB | 0 |
+
+### Limiter / output
+
+| Id | Ableton / host name | Range | Default |
+| --- | --- | --- | --- |
+| `lim_mode` | Master Mode | Off, Clipper, Limiter | Limiter |
+| `lim_ceiling` | Ceiling | -24..0 dB | -0.3 |
+| `lim_release` | Limiter Release | 1..500 ms | 60 |
+| `output_gain` | Output | -24..6 dB | 0 |
+
+## Presets
+
+Init plus six factory kicks: Hardstyle, Techno Rumble, Dubstep Punch, House Thump, Trap
+808-ish and DnB. User presets are `.dkick` files. Random creates a new kick within musical
+ranges as one undo step (see Features).
+
+## Version history
+
+- **0.3.8** — Time Scale is the Ableton-facing host name for `menv_tscale` (was "Master Env
+  Time Scale"); knob readout shows `1.00x` .. `4.00x`. Confirmed: Time Scale multiplies every
+  Master Env point time in the DSP (delay / sustain / release stages of the drawn envelope)
+  while leaving stored `menv{N}_time` values editable. README parameter reference added.
+- **0.3.7** — Time Scale knob drawn at 2× the diameter of the other Envelope knobs.
+- **0.3.6** — Pitch and amp envelopes on every layer; AHD knobs removed.
+- **0.3.5** — Playhead follows level, key track, Pitch/Amp switch, splitter, Export, fader taper.
+- **0.3.4** — Envelope pan + auto-fit, playhead, header meter, no graph captions.
+- **0.3.3** — Master envelope macros (Time Scale, Depth), 6 s master envelope, knobs, zoom.
+- **0.3.1** — Processor power toggles on tabs.
+- **0.3.0** — Envelope page, Drive view, reorderable chain, responsive sizes.
 
 ## Notes
 

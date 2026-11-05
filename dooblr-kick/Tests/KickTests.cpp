@@ -531,7 +531,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.7", "version 0.3.7");
+        check (juce::String (JucePlugin_VersionString) == "0.3.8", "version 0.3.8");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -5024,8 +5024,8 @@ namespace
         auto& editor = *h.editor;
 
         auto* version = dynamic_cast<juce::Label*> (editor.findChildWithID ("version"));
-        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.7",
-               "header subtitle is the build version (v0.3.7)");
+        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.8",
+               "header subtitle is the build version (v0.3.8)");
         juce::StringArray texts;
         collectLabels (editor, texts);
         bool tagLine = false;
@@ -5143,11 +5143,13 @@ namespace
             const auto* tscale = getParam (*p, "menv_tscale");
             const auto* depth = getParam (*p, "menv_depth");
             check (tscale != nullptr && depth != nullptr && tscale->isAutomatable() && depth->isAutomatable()
-                       && tscale->getName (64) == "Master Env Time Scale" && depth->getName (64) == "Master Env Depth",
-                   "Time Scale and Depth are automatable host parameters with clear names");
+                       && tscale->getName (64) == "Time Scale" && depth->getName (64) == "Master Env Depth",
+                   "Time Scale and Depth are automatable host parameters with clear Ableton-facing names");
             check (getPlain (*p, "menv_tscale") == 1.0f && getPlain (*p, "menv_depth") == 1.0f
-                       && std::abs (tscale->getDefaultValue() - 0.5f) < 1.0e-4f,
-                   "they default to 100 % (Time Scale's 100 % sits at the knob's centre)");
+                       && std::abs (tscale->getDefaultValue() - 0.5f) < 1.0e-4f
+                       && tscale->getText (tscale->convertTo0to1 (1.0f), 16) == "1.00x"
+                       && tscale->getText (tscale->convertTo0to1 (2.0f), 16) == "2.00x",
+                   "they default to 1.00x / 100 % (Time Scale's 1.00x sits at the knob's centre; readout is Nx)");
 
             // Transparent at the defaults: the envelope the DSP gets is exactly the parameters.
             setValues (*p, { { params::envelopeCountId (Envelope::master), 4.0f },
@@ -5161,7 +5163,34 @@ namespace
             for (int n = 1; n < 4; ++n)
                 exact = exact && settings.master.envelope.nodes[(size_t) n].timeMs == getPlain (*p, params::nodeTimeId (Envelope::master, n))
                         && settings.master.envelope.nodes[(size_t) n].value == getPlain (*p, params::nodeValueId (Envelope::master, n));
-            check (exact, "at 100 % the master envelope is exactly its point parameters (bit-exact)");
+            check (exact, "at 1.00x the master envelope is exactly its point parameters (bit-exact)");
+
+            // Delay / sustain / release-like stages: Master Env 2/3/4 Time stay editable; Time Scale
+            // multiplies each one in the DSP without rewriting the stored parameters.
+            {
+                setValues (*p, { { params::envelopeCountId (Envelope::master), 4.0f },
+                                 { params::nodeTimeId (Envelope::master, 1), 50.0f },   // delay-like
+                                 { params::nodeTimeId (Envelope::master, 2), 220.0f },  // sustain-like
+                                 { params::nodeTimeId (Envelope::master, 3), 480.0f },  // release-like
+                                 { params::nodeValueId (Envelope::master, 0), 1.0f },
+                                 { params::nodeValueId (Envelope::master, 1), 1.0f },
+                                 { params::nodeValueId (Envelope::master, 2), 0.55f },
+                                 { params::nodeValueId (Envelope::master, 3), 0.0f } });
+                setParam (*p, "menv_tscale", 2.0f);
+                auto scaledStages = params::SettingsReader (p->getParameterState()).read();
+                const float stored[] { 50.0f, 220.0f, 480.0f };
+                bool stagesOk = true;
+                for (int n = 1; n <= 3; ++n)
+                {
+                    const auto effective = scaledStages.master.envelope.nodes[(size_t) n].timeMs;
+                    const auto kept = getPlain (*p, params::nodeTimeId (Envelope::master, n));
+                    stagesOk = stagesOk && std::abs (kept - stored[n - 1]) < 1.0e-4f
+                               && std::abs (effective - stored[n - 1] * 2.0f) < 0.5f;
+                }
+                check (stagesOk && std::abs (scaledStages.master.envelope.getEndTimeMs() - 960.0f) < 0.5f,
+                       "Time Scale 2.00x multiplies Delay/Sustain/Release-like Master Env times (50/220/480 -> 100/440/960) and leaves stored params editable");
+                setParam (*p, "menv_tscale", 1.0f);
+            }
 
             // Time Scale and Depth, set as a host would (automation), change the render as expected.
             setValues (*p, { { params::envelopeCountId (Envelope::master), 3.0f },
@@ -5175,11 +5204,11 @@ namespace
             settings = params::SettingsReader (p->getParameterState()).read();
             const auto scaled = renderNote (*p, 36, 1.0f, 0.6);
             check (std::abs (settings.master.envelope.getEndTimeMs() - 400.0f) < 0.5f && window (plain) < 1.0e-3f && window (scaled) > 0.01f,
-                   "Time Scale 200 % doubles the envelope (ends at " + format (settings.master.envelope.getEndTimeMs(), 1)
+                   "Time Scale 2.00x doubles the envelope (ends at " + format (settings.master.envelope.getEndTimeMs(), 1)
                        + " ms; 250-350 ms peak " + format (window (plain), 4) + " -> " + format (window (scaled), 3) + ")");
             setParam (*p, "menv_tscale", 0.5f);
             settings = params::SettingsReader (p->getParameterState()).read();
-            check (std::abs (settings.master.envelope.getEndTimeMs() - 100.0f) < 0.5f, "Time Scale 50 % halves it");
+            check (std::abs (settings.master.envelope.getEndTimeMs() - 100.0f) < 0.5f, "Time Scale 0.50x halves it");
             setParam (*p, "menv_tscale", 1.0f);
 
             setParam (*p, "menv_depth", 0.5f);
@@ -5290,7 +5319,7 @@ namespace
             const auto factor = getPlain (p, "menv_tscale");
             check (factor > 1.05f && graph.showsEffectiveCurve()
                        && std::abs (effective.getEndTimeMs() - 700.0f * factor) < 1.0f && undo.getNumUndoableSteps() == 1,
-                   "dragging the Time Scale knob sets its parameter (" + format (factor * 100.0f, 0) + " %, one undo step) and the graph draws the scaled curve (ends at "
+                   "dragging the Time Scale knob sets its parameter (" + format (factor, 2) + "x, one undo step) and the graph draws the scaled curve (ends at "
                        + format (effective.getEndTimeMs(), 0) + " ms)");
         }
         else
@@ -5362,7 +5391,7 @@ namespace
             }
             else
                 check (false, size + ": Time Scale, Depth and the point Time knobs found");
-            saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.7-timescale-" + juce::String (size));
+            saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.8-timescale-" + juce::String (size));
         }
 
         editor.setSize (1080, 660);

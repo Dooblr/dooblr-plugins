@@ -594,6 +594,7 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
     // v0.3.3: knobs for the master envelope (the selected point's Time / Level / Curve, plus Time
     // Scale and Depth), then Play and the mix in one row. On / off: the Envelope tab's power toggle.
     // v0.3.7: Time Scale is a large knob, twice the diameter of the others.
+    // v0.3.8: Time Scale host name is "Time Scale"; readout shows 1.00x (multiplies all menv times).
     pagePanels[envelopePage].push_back (std::make_unique<ControlPanel> (state, "Master envelope", pageColour (envelopePage), Specs {
         { "menv_tscale", "Time scale", K::knob, 0, 0, -1, true }, { "menv_depth", "Depth", K::knob } }));
     pagePanels[envelopePage].push_back (std::make_unique<ControlPanel> (state, "Play & mix", pageColour (envelopePage), Specs {

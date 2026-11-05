@@ -92,10 +92,15 @@ namespace dooblrkick::params
         return layer == dsp::bodyLayer || layer == dsp::clickLayer ? maxNodeTimeMs : maxMasterNodeTimeMs;
     }
 
-    /** v0.3.3 master envelope macros: "Master Env Time Scale" (menv_tscale, 25 % .. 400 %) stretches
-        every point's time (capped at 6000 ms) and "Master Env Depth" (menv_depth, 0 .. 100 %) blends
-        the envelope towards unity: gain = 1 - depth * (1 - level). At 100 % / 100 % (the defaults)
-        a point is returned unchanged, bit for bit. */
+    /** v0.3.3 / 0.3.8 master envelope macros.
+        "Time Scale" (menv_tscale, 0.25x .. 4.00x, default 1.00x) is an automatable host parameter
+        Ableton can map like any other VST knob. It multiplies every Master Env point time in the
+        DSP (the editable stage times that form delay / attack / hold / sustain / release of the
+        drawn shape), capped at 6000 ms. The stored Master Env N Time values stay as the user set
+        them; effectiveTimeMs = min (storedTimeMs * timeScale, 6000).
+        "Master Env Depth" (menv_depth, 0 .. 100 %) blends the envelope towards unity:
+        gain = 1 - depth * (1 - level). At 1.00x / 100 % (the defaults) a point is returned
+        unchanged, bit for bit. */
     inline constexpr float minMasterTimeScale = 0.25f, maxMasterTimeScale = 4.0f;
 
     inline dsp::EnvelopeNode applyMasterMacros (dsp::EnvelopeNode node, float timeScale, float depth) noexcept
