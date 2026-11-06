@@ -29,6 +29,7 @@ SUITE = [
                                                                                                     'm4l',  'dooblr-prophet',       'dooblr-prophet',  'dooblr-prophet'),
     ('dooblr-soothe',   'dooblr-soothe',   'Dynamic resonance reducer',                             'vst3', 'dooblr-soothe.vst3',   'dooblr-soothe',   None),
     ('dooblr-feedback', 'dooblr-feedback', 'Automatic live feedback suppressor',                    'vst3', 'dooblr-feedback.vst3', 'dooblr-feedback', None),
+    ('dooblr-distressor', 'dooblr-distressor', 'EL8-style compressor',                              'vst3', 'dooblr-distressor.vst3', 'dooblr-distressor', None),
     ('dooblr-chords',   'dooblr-chords',   'Chord progression generator (Max for Live MIDI effect, Ableton Live only)',
                                                                                                     'm4l',  'dooblr-chords',        'dooblr-chords',   None),
 ]

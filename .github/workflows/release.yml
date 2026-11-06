@@ -30,6 +30,7 @@ env:
     dooblr-bass:DOOBLRBASS:DooblrBass
     dooblr-soothe:DOOBLRSOOTHE:DooblrSoothe
     dooblr-feedback:DOOBLRFEEDBACK:DooblrFeedback
+    dooblr-distressor:DOOBLRDISTRESSOR:DooblrDistressor
 
 jobs:
   mac:
