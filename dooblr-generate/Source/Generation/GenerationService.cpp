@@ -418,7 +418,7 @@ namespace dooblrgenerate::gen
         pending = Job { JobStatus::Kind::generate, request, request.model };
         hasPending = true;
         cancelRequested = false;
-        status = JobStatus { JobStatus::Kind::generate, JobStatus::Result::running, request.model, "starting", {}, 0.0f, {},
+        status = JobStatus { JobStatus::Kind::generate, JobStatus::Result::running, request.model, "starting", {}, 0.0f, {}, {},
                              juce::Time::currentTimeMillis(), 0, status.serial + 1 };
         wake.signal();
         return true;
@@ -438,7 +438,7 @@ namespace dooblrgenerate::gen
         hasPending = true;
         cancelRequested = false;
         lastModelErrors.erase (modelId);
-        status = JobStatus { JobStatus::Kind::download, JobStatus::Result::running, modelId, "starting", {}, 0.0f, {},
+        status = JobStatus { JobStatus::Kind::download, JobStatus::Result::running, modelId, "starting", {}, 0.0f, {}, {},
                              juce::Time::currentTimeMillis(), 0, status.serial + 1 };
         wake.signal();
         return true;
@@ -499,6 +499,7 @@ namespace dooblrgenerate::gen
             {
                 s.result = JobStatus::Result::failed;
                 s.error = report;
+                s.errorCode = code;
                 s.finishedMs = juce::Time::currentTimeMillis();
             });
 

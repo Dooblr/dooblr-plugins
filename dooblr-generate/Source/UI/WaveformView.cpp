@@ -13,7 +13,7 @@ namespace dooblrgenerate::ui
     void WaveformView::setStartFraction (float f)
     {
         f = juce::jlimit (0.0f, 1.0f, f);
-        if (f != startFraction)
+        if (! juce::approximatelyEqual (f, startFraction))
         {
             startFraction = f;
             repaint();

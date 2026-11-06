@@ -36,7 +36,7 @@ import time
 import traceback
 import wave
 
-WORKER_VERSION = "1"
+WORKER_VERSION = "2"
 
 MODELS = {
     "stable-audio-open-small": {
@@ -149,6 +149,49 @@ def pick_device(torch):
     return "cpu"
 
 
+RUNTIME_HELP = ("The Python runtime is broken or incomplete. Reinstall it: run "
+                "dooblr-generate/scripts/setup-runtime.sh (it installs the pinned, tested versions from "
+                "dooblr-generate/worker/requirements-lock.txt).")
+
+
+def runtime_self_check(model_id):
+    """Imports the model's whole Python stack before any model work, so a broken environment
+    (e.g. a compiled package built for a different NumPy ABI) is reported up front as a
+    'runtime' error (exit 5) instead of a traceback half way through a generation."""
+    if model_id == "test-backend":
+        return {}
+    import importlib
+    stacks = {
+        # Everything create_model_from_config() + generate_diffusion_cond() import for this model
+        # (stable-audio-tools' DiT imports pytorch_lightning through its LoRA helpers).
+        "stable-audio-open-small": ["numpy", "scipy", "torch", "torchaudio", "pywt", "transformers", "pytorch_lightning",
+                                    "stable_audio_tools.models.factory", "stable_audio_tools.models.conditioners",
+                                    "stable_audio_tools.models.pretransforms", "stable_audio_tools.models.autoencoders",
+                                    "stable_audio_tools.models.diffusion", "stable_audio_tools.models.dit",
+                                    "stable_audio_tools.models.utils", "stable_audio_tools.inference.generation"],
+        "audioldm-s-full-v2": ["numpy", "scipy", "torch", "transformers", "diffusers"],
+    }
+    versions = {}
+    for name in stacks.get(model_id, []):
+        try:
+            module = importlib.import_module(name)
+        except Exception as e:  # ImportError, the NumPy ABI ValueError, ...
+            fail("runtime", "%s\nWhile importing %s: %s: %s" % (RUNTIME_HELP, name, type(e).__name__, e), 5)
+        if "." not in name:
+            versions[name] = getattr(module, "__version__", "?")
+    numpy_version = versions.get("numpy", "")
+    if numpy_version.startswith("2.") and model_id == "stable-audio-open-small":
+        try:
+            import pywt
+            if tuple(int(x) for x in pywt.__version__.split(".")[:2]) < (1, 6):
+                fail("runtime", "%s\nNumPy %s is installed but PyWavelets %s needs NumPy 1.x." % (RUNTIME_HELP, numpy_version, pywt.__version__), 5)
+        except SystemExit:
+            raise
+        except Exception:
+            pass
+    return versions
+
+
 def import_torch():
     try:
         import torch  # noqa: F401
@@ -259,6 +302,8 @@ def cmd_generate(args):
         os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
     os.makedirs(os.path.dirname(os.path.abspath(args.out)), exist_ok=True)
+    progress("loading", 0.01, "checking the Python runtime")
+    runtime_self_check(args.model)
     t0 = time.time()
     try:
         if args.model == "test-backend":
@@ -358,6 +403,13 @@ def cmd_check(args):
     emit("done", model=args.model, ready=True)
 
 
+def cmd_check_runtime(args):
+    versions = {}
+    for model_id in ([args.model] if args.model else ["stable-audio-open-small", "audioldm-s-full-v2"]):
+        versions.update(runtime_self_check(model_id))
+    emit("done", python=sys.version.split()[0], versions=versions)
+
+
 def cmd_env(_args):
     info = {"python": sys.version.split()[0], "worker": WORKER_VERSION}
     try:
@@ -389,9 +441,12 @@ def main(argv=None):
     c = sub.add_parser("check")
     c.add_argument("--model", required=True)
     c.add_argument("--model-dir", default="")
+    r = sub.add_parser("check-runtime")
+    r.add_argument("--model", default="")
     sub.add_parser("env")
     args = p.parse_args(argv)
-    {"generate": cmd_generate, "download": cmd_download, "check": cmd_check, "env": cmd_env}[args.command](args)
+    {"generate": cmd_generate, "download": cmd_download, "check": cmd_check, "check-runtime": cmd_check_runtime,
+     "env": cmd_env}[args.command](args)
 
 
 if __name__ == "__main__":

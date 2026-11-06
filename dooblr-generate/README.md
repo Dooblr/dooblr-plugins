@@ -5,7 +5,7 @@ and a text-to-audio model running on your own Mac makes a one-shot sample. The p
 it as a sampler from MIDI, and you can drag the WAV straight into Ableton. Every generation is kept
 in a history you can go back to.
 
-- VST3 instrument (MIDI in, stereo out), version **0.1.0**, plug-in code `Dbgn`, bundle
+- VST3 instrument (MIDI in, stereo out), version **0.1.1**, plug-in code `Dbgn`, bundle
   `com.dooblr.dooblrgenerate`.
 - Generation is **offline**: press Generate, wait a few seconds, then play. It never runs on, or
   waits for, the audio thread.
@@ -20,7 +20,7 @@ in a history you can go back to.
 
 | model (id) | licence | access | output | notes |
 |---|---|---|---|---|
-| **Stable Audio Open Small** (`stable-audio-open-small`), [stabilityai/stable-audio-open-small](https://huggingface.co/stabilityai/stable-audio-open-small) | [Stability AI Community License](https://huggingface.co/stabilityai/stable-audio-open-small/blob/main/LICENSE): free for research, non-commercial and commercial use while you (and affiliates) make **under US $1M a year**; commercial use requires [registering with Stability AI](https://stability.ai/community-license); above $1M you need an enterprise licence. If you distribute it, ship the licence, a "Notice" file and show "Powered by Stability AI". You own your outputs. | **Gated** on Hugging Face (accept the terms with a Hugging Face account; approval is automatic), so a token is needed to download | stereo 44.1 kHz, up to 11 s, 8 steps | ~0.5 B parameters; the download is `model.safetensors` (1.68 GB) plus the config; the T5-base text encoder (~0.9 GB, open) is fetched on first use. The default model, built for short sounds. Wired up but **not yet run here**: the weights need Dan's Hugging Face access (see below). |
+| **Stable Audio Open Small** (`stable-audio-open-small`), [stabilityai/stable-audio-open-small](https://huggingface.co/stabilityai/stable-audio-open-small) | [Stability AI Community License](https://huggingface.co/stabilityai/stable-audio-open-small/blob/main/LICENSE): free for research, non-commercial and commercial use while you (and affiliates) make **under US $1M a year**; commercial use requires [registering with Stability AI](https://stability.ai/community-license); above $1M you need an enterprise licence. If you distribute it, ship the licence, a "Notice" file and show "Powered by Stability AI". You own your outputs. | **Gated** on Hugging Face (accept the terms with a Hugging Face account; approval is automatic), so a token is needed to download | stereo 44.1 kHz, up to 11 s, 8 steps | ~0.5 B parameters; the download is `model.safetensors` (1.68 GB) plus the config; the T5-base text encoder (~0.9 GB, open) is fetched on first use. The default model, built for short sounds. Runs on the Mac GPU: about 10-12 s per 2 s sample once warm (first run ~40 s). |
 | **AudioLDM S v2** (`audioldm-s-full-v2`), [cvssp/audioldm-s-full-v2](https://huggingface.co/cvssp/audioldm-s-full-v2) | CC BY-NC-SA 4.0: **non-commercial use only** | open, no account | mono 16 kHz, up to 10 s, 25 steps | ~1.7 GB (safetensors only). Works today without any account; lower fidelity (16 kHz). Labelled "(non-commercial)" in the plug-in. |
 | Test backend (`test-backend`) | — | — | stereo 44.1 kHz | **Not AI.** A seeded synthetic burst for checking the plug-in without a model. Hidden unless `DOOBLR_GENERATE_TEST_BACKEND=1`; its results are marked "TEST BACKEND (not AI)" everywhere. |
 
@@ -52,6 +52,15 @@ conversion of the diffusion transformer and are not used.
    (permissions 0600) and handed to the worker as a file path, never on a command line.
    Alternatively download `model_config.json` and `model.safetensors` yourself and pick their
    folder with **Folder...**.
+
+**Runtime pins** (`worker/requirements-lock.txt`, installed by `setup-runtime.sh`): NumPy must
+stay **1.26.x**, because stable-audio-tools 0.0.20 pins PyWavelets 1.4.1, which is compiled against the
+NumPy 1 ABI (with NumPy 2 it fails with "numpy.dtype size changed ... Expected 96 from C header,
+got 88"); and `pytorch_lightning` 2.5.5 is required at inference time (stable-audio-tools' DiT imports
+it, though it is only in its `[train]` extra). Before any model work the worker imports the model's
+whole stack; if that fails the job ends at once with "Python runtime broken: run
+scripts/setup-runtime.sh" and a copyable report (worker exit code 5). Re-running
+`setup-runtime.sh` repairs a broken runtime (it force-reinstalls the pinned set).
 
 Files live in `~/Library/Application Support/dooblr/generate/`: `models/<id>/` (weights),
 `hf-cache/` (the T5 text encoder Stable Audio fetches on first use), `history/` (every generated
@@ -118,7 +127,6 @@ during generation (no allocation, timing) and the editor at 940x600, 1080x660 an
 `DOOBLRGENERATE_EDITOR_SNAPSHOT=/path/prefix` to write editor PNGs, and
 `DOOBLRGENERATE_LIVE_PROMPTS="a|b"` to generate with the real model (not counted as a test).
 
-Not tested yet: inside Ableton Live (loading, MIDI, drag-out into a track), and Stable Audio Open
-Small itself (needs the gated weights).
+Not tested yet by us: inside Ableton Live (loading, MIDI, drag-out into a track).
 
 No third-party artwork or logos are used. Model names are used only to identify the models.

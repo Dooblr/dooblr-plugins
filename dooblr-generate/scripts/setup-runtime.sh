@@ -2,7 +2,8 @@
 #
 # Sets up the Python runtime the dooblr-generate worker runs models with: a virtual environment
 # with PyTorch (Metal/MPS on Apple Silicon), diffusers (AudioLDM) and stable-audio-tools
-# (Stable Audio Open Small). No sudo, nothing installed system-wide. Model weights are NOT
+# (Stable Audio Open Small), pinned by worker/requirements-lock.txt. Re-running it repairs a
+# broken runtime. No sudo, nothing installed system-wide. Model weights are NOT
 # downloaded here; the plug-in downloads them (or you pick a folder) on first use.
 #
 # Environment variables:
@@ -30,17 +31,18 @@ if [[ -z "${PYTHON:-}" ]]; then
     exit 1
 fi
 
+LOCK="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/worker/requirements-lock.txt"
+WORKER="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/worker/dooblr_generate_worker.py"
+
 echo "==> Creating $VENV with $PYTHON"
 "$PYTHON" -m venv "$VENV"
 "$VENV/bin/pip" install --upgrade pip
-"$VENV/bin/pip" install torch torchaudio "diffusers>=0.30" "transformers>=4.40,<4.50" accelerate soundfile scipy numpy safetensors huggingface_hub einops
-"$VENV/bin/pip" install --ignore-requires-python stable-audio-tools==0.0.20
+# The exact, tested set (see the lock file's header). --ignore-requires-python: stable-audio-tools
+# 0.0.20 declares Python <3.11 but installs and runs on 3.11. --force-reinstall also repairs an
+# existing venv (e.g. one where NumPy 2 replaced the NumPy 1.x that PyWavelets 1.4.1 needs).
+"$VENV/bin/pip" install --ignore-requires-python --force-reinstall --no-cache-dir -r "$LOCK"
 
-echo "==> Checking imports"
-"$VENV/bin/python" - <<'PY'
-import torch, diffusers
-from stable_audio_tools.models.factory import create_model_from_config
-print("torch", torch.__version__, "mps" if torch.backends.mps.is_available() else "cpu", "diffusers", diffusers.__version__)
-PY
+echo "==> Self-check (imports both model stacks)"
+"$VENV/bin/python" "$WORKER" check-runtime
 
 echo "Runtime ready: $VENV/bin/python3"

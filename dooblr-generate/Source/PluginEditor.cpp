@@ -362,7 +362,8 @@ void DooblrGenerateEditor::refreshJob()
                 break;
             case gen::JobStatus::Result::failed:
                 progress = 0.0;
-                text << "Generation failed (details in MODEL; Copy copies them)";
+                text << (job.errorCode == "runtime" ? "Python runtime broken: run scripts/setup-runtime.sh (details in MODEL; Copy copies them)"
+                                                    : "Generation failed (details in MODEL; Copy copies them)");
                 break;
             case gen::JobStatus::Result::cancelled:
                 progress = 0.0;

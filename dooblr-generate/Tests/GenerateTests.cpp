@@ -146,6 +146,7 @@ namespace
             "echo 'some library warning on stderr' 1>&2\n"
             "case \"$mode\" in\n"
             "  crash) echo '{\"event\":\"progress\",\"stage\":\"sampling\",\"fraction\":0.3}'; kill -KILL $$;;\n"
+            "  runtime) echo '{\"event\":\"error\",\"code\":\"runtime\",\"message\":\"The Python runtime is broken or incomplete. Reinstall it: run setup-runtime.sh\"}'; exit 5;;\n"
             "  error) echo '{\"event\":\"error\",\"code\":\"generate\",\"message\":\"stub: simulated generation error\"}'; exit 6;;\n"
             "  hang) echo '{\"event\":\"progress\",\"stage\":\"sampling\",\"fraction\":0.1}'; while true; do sleep 1; done;;\n"
             "esac\n"
@@ -820,7 +821,7 @@ namespace
         check (p.getService().startGenerate (crash), "crashing job starts");
         check (p.getService().waitUntilIdle (20000), "crashed job ends");
         auto status = p.getService().jobStatus();
-        check (status.result == gen::JobStatus::Result::failed, "worker crash: the job fails");
+        check (status.result == gen::JobStatus::Result::failed && status.errorCode == "crash", "worker crash: the job fails (code crash)");
         check (status.error.contains ("stopped unexpectedly") && status.error.contains ("signal 9") && status.error.contains ("dooblr-generate "),
                "crash report is copyable text naming the signal");
         check (status.error.contains ("some library warning"), "the worker's other output is in the report");
@@ -1092,6 +1093,17 @@ namespace
         editor->refresh();
         check (p.getCurrentSample() != nullptr && p.getCurrentSample()->historyId == first.id, "clicking a history row loads it");
         check (p.getSeed() == first.seed && editor->getSeedEditor().getText() == juce::String (first.seed), "and restores its seed");
+
+        // A broken Python runtime (the worker's self-check) is named as such, with the fix.
+        gen::GenerateRequest broken { "x", gen::ModelCatalog::testBackend, 1, 0.2, 0 };
+        setStubMode (rig.home.root, "runtime");
+        p.getService().startGenerate (broken);
+        p.getService().waitUntilIdle (20000);
+        editor->refresh();
+        check (p.getService().jobStatus().errorCode == "runtime", "runtime self-check failure has the runtime code");
+        check (editor->getProgressLabel().getText().startsWith ("Python runtime broken"), "progress line says the runtime is broken");
+        check (editor->getDetails().getText().contains ("Reinstall it") && editor->getDetails().getText().contains ("exit code 5"),
+               "details carry the worker's reinstall message and exit code");
 
         // A failure shows red text and the copyable report.
         gen::GenerateRequest crash { "x", gen::ModelCatalog::testBackend, 1, 0.2, 0 };

@@ -41,6 +41,7 @@ namespace dooblrgenerate::gen
         juce::String model, stage, message;
         float fraction = 0.0f;
         juce::String error;               // copyable report when failed
+        juce::String errorCode;           // the worker's error code ("runtime", "missing", "access", "crash", ...)
         juce::int64 startedMs = 0, finishedMs = 0;
         int serial = 0;                   // increments with every job
     };
