@@ -27,6 +27,7 @@ in its own folder and has its own README.
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.2.0 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
 | [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
 | [`dooblr-bass/`](dooblr-bass/) | dooblr-bass | 0.1.0 | Analog-modelled monophonic bass synth (VST3 instrument), one-page Mini-style board: two main oscillators, sub, optional third/lo-freq osc, mixer drive/overload, 24 dB/oct transistor ladder | New; its tests pass in this repo |
+| [`dooblr-generate/`](dooblr-generate/) | dooblr-generate | 0.1.0 | Text-to-sample generator (VST3 instrument): type "909 kick", a local model (Stable Audio Open Small, or AudioLDM for non-commercial use) runs in a separate worker process on the Mac's GPU, then the result plays as a one-shot sampler from MIDI; drag the WAV into Ableton; history of every generation. Model weights are downloaded on request, never bundled | New; tests and LoadCheck pass, AudioLDM generation works on the Mac; Stable Audio needs Hugging Face access; not yet tested in Live; not in the installer yet |
 | [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.3 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display, Analyzer speed setting | Early; its tests and LoadCheck pass, not yet tested in a DAW |
 | [`dooblr-feedback/`](dooblr-feedback/) | dooblr-feedback | 0.1.1 | Automatic live feedback suppressor (VST3 effect, optional reference-mic sidechain): zero-latency notches (one per howl, up to 20 kHz, Max cut to ∞), calm markers on the spectrum with lock / clear, Safety duck, notch table, room notes and room presets | Early; its tests and LoadCheck pass, not yet tested live or in a DAW |
 | [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.3.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
@@ -39,7 +40,7 @@ its README / device). Status is as of the last commit; see each folder's README 
 ## Building
 
 VST3 plug-ins (each with `scripts/build.sh`): dooblr-q, dooblr-kick, dooblr-vocals,
-dooblr-prophet, dooblr-bass, dooblr-soothe, dooblr-feedback. Max for Live devices: dooblr-chords (see its README) and the
+dooblr-prophet, dooblr-bass, dooblr-soothe, dooblr-feedback, dooblr-generate. Max for Live devices: dooblr-chords (see its README) and the
 dooblr-prophet panel 0.3.2 (`dooblr-prophet/m4l/`).
 
 Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
@@ -54,6 +55,7 @@ dooblr-prophet/scripts/build.sh  # builds in ~/dooblr-build/dooblr-prophet
 dooblr-bass/scripts/build.sh     # builds in ~/dooblr-build/dooblr-bass
 dooblr-soothe/scripts/build.sh   # builds in ~/dooblr-build/dooblr-soothe
 dooblr-feedback/scripts/build.sh # builds in ~/dooblr-build/dooblr-feedback
+dooblr-generate/scripts/build.sh # builds in ~/dooblr-build/dooblr-generate
 ```
 
 Useful environment variables (see the top of each `build.sh`):
