@@ -31,6 +31,7 @@ env:
     dooblr-soothe:DOOBLRSOOTHE:DooblrSoothe
     dooblr-feedback:DOOBLRFEEDBACK:DooblrFeedback
     dooblr-distressor:DOOBLRDISTRESSOR:DooblrDistressor
+    dooblr-0coast:DOOBLR0COAST:Dooblr0Coast
 
 jobs:
   mac:

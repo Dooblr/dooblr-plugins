@@ -20,6 +20,7 @@ outside the markers are never touched; keep them current with any behaviour chan
 
 | plugin | version | kind | params | last source change | design file |
 |---|---|---|---|---|---|
+| dooblr-0coast | 0.1.0 | JUCE instrument VST3 | 30 | 2026-11-07 | [design/plugins/dooblr-0coast.md](plugins/dooblr-0coast.md) |
 | dooblr-bass | 0.1.0 | JUCE instrument VST3 | 46 | 2026-11-03 | [design/plugins/dooblr-bass.md](plugins/dooblr-bass.md) |
 | dooblr-chords | 0.3.0 | Max for Live MIDI effect that writes chord progressions into Session View clip slots. | 19 | 2026-11-01 | [design/plugins/dooblr-chords.md](plugins/dooblr-chords.md) |
 | dooblr-distressor | 0.1.0 | JUCE effect VST3 | 13 | 2026-11-06 | [design/plugins/dooblr-distressor.md](plugins/dooblr-distressor.md) |
