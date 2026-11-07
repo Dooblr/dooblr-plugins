@@ -8,7 +8,7 @@ Universal Audio EL8 manuals.
 Part of Dan Feinstein's **dooblr** suite. VST3 effect, macOS 11+ (arm64) and Windows x64,
 C++20, CMake, JUCE 8.0.15.
 
-Version **0.1.0**.
+Version **0.1.1**.
 
 ## What it does
 
@@ -60,9 +60,17 @@ Every control below is an Ableton-automatable VST parameter.
 - **Headroom**, **Mix**, **Bypass**
 
 The layout follows the hardware / UAD panel: ratio row and GR lamps on top, detector
-and audio modes, the four main knobs, then headroom, mix and I/O meters. Drawn entirely
+and audio modes, a compression display (transfer curve, GR meter with peak-hold, scrolling
+history), the four main knobs, then headroom, mix and I/O meters. Drawn entirely
 in the dooblr look (no third-party logos, assets or trademarks; no fake or dead
 controls; no hint text on graphs). Window 1080×660, resizable 940×600–2400×1400.
+
+The compression display is interactive. A knee point on the transfer curve drags
+horizontally for Input and vertically for Output; a slope handle snaps through the
+stepped Ratio values; Attack and Release handles sit on the history envelope.
+Dragging a point moves the knob, turning the knob (or host automation) moves the
+point. Double-click a point to reset it. Gestures go through the APVTS so undo and
+Ableton automation work. The GR meter and history keep running while Bypass is on.
 
 Factory presets are original starting points named after uses (Vocals, Bass, Room Nuke,
 …), not copies of anyone's commercial presets.

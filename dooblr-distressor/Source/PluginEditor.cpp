@@ -37,7 +37,8 @@ namespace dooblrdistressor
     DooblrDistressorEditor::DooblrDistressorEditor (DooblrDistressorProcessor& p)
         : juce::AudioProcessorEditor (p),
           proc (p),
-          state (p.getState())
+          state (p.getState()),
+          compressionDisplay (p.getState())
     {
         setLookAndFeel (&lookAndFeel);
         setWantsKeyboardFocus (true);
@@ -90,6 +91,7 @@ namespace dooblrdistressor
         addAndMakeVisible (*distToggle);
         addAndMakeVisible (grMeter);
         addAndMakeVisible (distLeds);
+        addAndMakeVisible (compressionDisplay);
 
         addToggle (id::detHp, "HP");
         addToggle (id::detBand, "Band");
@@ -129,6 +131,8 @@ namespace dooblrdistressor
             grMeter.setGainReductionDb (m.gainReductionDb);
             distLeds.setState (m.led1pct, m.led3pct);
             const auto now = juce::Time::getMillisecondCounterHiRes();
+            compressionDisplay.pushMeters (m.gainReductionDb, m.inputPeakL, m.inputPeakR,
+                                           m.outputPeakL, m.outputPeakR, now);
             inMeter.pushPeaks (m.inputPeakL, m.inputPeakR, now);
             outMeter.pushPeaks (m.outputPeakL, m.outputPeakR, now);
         });
@@ -370,7 +374,7 @@ namespace dooblrdistressor
         contentArea = bounds.reduced (margin, 12);
         auto area = contentArea;
 
-        const auto ratioH = juce::jlimit (72, 96, area.getHeight() / 7);
+        const auto ratioH = juce::jlimit (64, 88, area.getHeight() / 8);
         ratioArea = area.removeFromTop (ratioH);
         area.removeFromTop (panelGap);
         {
@@ -382,7 +386,7 @@ namespace dooblrdistressor
             ratioStrip->setBounds (row);
         }
 
-        const auto modeH = juce::jlimit (70, 96, area.getHeight() / 7);
+        const auto modeH = juce::jlimit (60, 84, area.getHeight() / 8);
         modeArea = area.removeFromTop (modeH);
         area.removeFromTop (panelGap);
         {
@@ -412,9 +416,14 @@ namespace dooblrdistressor
             distToggle->setBounds (audio.withSizeKeepingCentre (audio.getWidth(), juce::jmin (32, audio.getHeight())));
         }
 
-        const auto bottomH = juce::jlimit (110, 160, area.getHeight() / 4);
+        const auto bottomH = juce::jlimit (100, 148, area.getHeight() / 5);
         bottomArea = area.removeFromBottom (bottomH);
         area.removeFromBottom (panelGap);
+
+        const auto displayH = juce::jlimit (96, 220, area.getHeight() * 11 / 20);
+        displayArea = area.removeFromTop (displayH);
+        area.removeFromTop (panelGap);
+        compressionDisplay.setBounds (displayArea);
         knobArea = area;
         {
             auto row = knobArea.reduced (8, 6);

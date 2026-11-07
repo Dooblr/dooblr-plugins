@@ -10,6 +10,7 @@
 #include "Parameters.h"
 #include "Presets.h"
 #include "DSP/DistressorEngine.h"
+#include "UI/GrMeterModel.h"
 
 #include <algorithm>
 #include <cmath>
@@ -181,7 +182,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRDISTRESSOR_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check (p->getLatencySamples() == 0, "zero latency");
 
@@ -997,7 +998,132 @@ namespace
                 }
             }
             check (overlaps == 0 && outside == 0 && tooSmall == 0, label + " layout fit (" + std::to_string (rects.size()) + " controls)");
+
+            const auto display = editor->getCompressionDisplay().getBounds();
+            check (editor->getLocalBounds().contains (display) && display.getWidth() >= 200 && display.getHeight() >= 80,
+                   label + " compression display fits (" + display.toString().toStdString() + ")");
+            check (display.getIntersection (editor->getRatioStrip().getBounds()).isEmpty(),
+                   label + " compression display does not overlap the ratio strip");
         }
+    }
+
+    void testGrMeterBallistics()
+    {
+        ui::GrMeterModel m;
+        m.tick (12.0f, 0.0, 0.0);
+        check (std::abs (m.getDisplayedDb() - 12.0f) < 1.0e-5f, "GR attack is instant (" + fmt (m.getDisplayedDb(), 3) + ")");
+        m.tick (0.0f, 0.5, 500.0);
+        const auto after = m.getDisplayedDb();
+        check (after > 5.5f && after < 6.5f, "GR release is 12 dB/s (0.5 s from 12 dB -> ~6 dB, got " + fmt (after, 2) + ")");
+        m.tick (0.0f, 1.0, 1500.0);
+        check (m.getDisplayedDb() < 0.05f, "GR display reaches 0 after the rest of the release (" + fmt (m.getDisplayedDb(), 3) + ")");
+        m.tick (30.0f, 0.0, 1600.0);
+        check (std::abs (m.getDisplayedDb() - ui::GrMeterModel::rangeDb) < 1.0e-5f, "incoming GR clamps to the 24 dB range");
+        m.reset();
+        m.tick (-3.0f, 0.0, 0.0);
+        check (m.getDisplayedDb() >= 0.0f && m.getDisplayedDb() < 1.0e-5f, "negative GR is clamped to 0");
+    }
+
+    void testGrMeterPeakHold()
+    {
+        ui::GrMeterModel m;
+        m.tick (10.0f, 0.0, 0.0);
+        check (std::abs (m.getPeakHoldDb() - 10.0f) < 1.0e-5f, "peak-hold captures a spike");
+        check (m.getPeakHoldUntilMs() >= 700.0, "hold deadline is 700 ms after the peak");
+        m.tick (0.0f, 0.2, 200.0);
+        check (std::abs (m.getPeakHoldDb() - 10.0f) < 0.05f, "peak-hold stays put 200 ms after the spike (" + fmt (m.getPeakHoldDb(), 2) + ")");
+        m.tick (0.0f, 0.49, 690.0);
+        check (std::abs (m.getPeakHoldDb() - 10.0f) < 0.05f, "peak-hold still held just before 700 ms (" + fmt (m.getPeakHoldDb(), 2) + ")");
+        m.tick (0.0f, 0.5, 1190.0);
+        const auto decayed = m.getPeakHoldDb();
+        const auto expect = 10.0f - ui::GrMeterModel::holdDecayDbPerSecond * 0.5f;
+        check (decayed < 10.0f * 0.95f, "peak-hold decays after the hold (" + fmt (decayed, 2) + " dB)");
+        check (std::abs (decayed - expect) < 0.15f, "peak-hold decays at 18 dB/s (" + fmt (decayed, 2) + " vs " + fmt (expect, 2) + ")");
+        m.tick (0.0f, 1.0, 2190.0);
+        check (m.getPeakHoldDb() <= m.getDisplayedDb() + 0.05f, "peak-hold does not sit below the displayed GR");
+    }
+
+    void testGrMeterHistory()
+    {
+        ui::GrMeterModel m;
+        const auto dt = 1.0 / ui::GrMeterModel::historyHz;
+        for (int i = 0; i < 60; ++i)
+            m.tick (i < 30 ? 6.0f : 2.0f, dt, (double) (i + 1) * dt * 1000.0);
+        check (m.getHistoryFilled() == 60, "1 s at 60 Hz fills 60 history samples (" + std::to_string (m.getHistoryFilled()) + ")");
+        check (std::abs (m.historyOldest (0) - 6.0f) < 0.05f, "oldest sample is the first value written");
+        check (std::abs (m.historyNewest() - 2.0f) < 0.05f, "newest sample is the latest value");
+        check (m.historyOldest (29) > 5.5f, "the 6 dB hold occupies the first half of the buffer (" + fmt (m.historyOldest (29), 2) + ")");
+        check (m.historyOldest (30) < m.historyOldest (29) && m.historyOldest (30) > 5.0f,
+               "history records the 12 dB/s release after the step (" + fmt (m.historyOldest (30), 2) + ")");
+        check (m.historyOldest (50) < 2.2f, "history has settled at 2 dB after the release (" + fmt (m.historyOldest (50), 2) + ")");
+
+        for (int i = 0; i < ui::GrMeterModel::historyLength + 20; ++i)
+            m.tick (1.0f, dt, 2000.0 + (double) i * dt * 1000.0);
+        check (m.getHistoryFilled() == ui::GrMeterModel::historyLength, "history caps at 180 samples (3 s)");
+        check (std::abs (m.historyOldest (0) - 1.0f) < 0.05f, "after wrapping, the oldest sample is the retained 1 dB");
+        check (std::abs (m.historyNewest() - 1.0f) < 0.05f, "newest after wrapping is still 1 dB");
+        check (std::abs (m.historyOldest (-1)) < 1.0e-6f && std::abs (m.historyOldest (m.getHistoryFilled())) < 1.0e-6f, "out-of-range history reads 0");
+    }
+
+    void testCompressionMap()
+    {
+        using Map = ui::CompressionMap;
+        Map::Params p;
+
+        const auto mid = Map::fromParams (p);
+        check (std::abs (mid.kneeX - 5.0f / 10.5f) < 1.0e-6f && std::abs (mid.kneeY - 5.0f / 10.5f) < 1.0e-6f,
+               "default Input/Output land at the centre of the pad");
+        check (std::abs (mid.slopeT - 4.0f / 7.0f) < 1.0e-6f, "default 6:1 is slope step 4 of 0..7");
+        check (std::abs (mid.attackT - 5.0f / 10.5f) < 1.0e-6f && std::abs (mid.releaseT - 5.0f / 10.5f) < 1.0e-6f,
+               "default Attack/Release land at mid-travel");
+
+        for (float knob : { 0.0f, 0.01f, 5.0f, 10.0f, 10.5f })
+        {
+            const auto n = Map::knobToNorm (knob);
+            check (std::abs (Map::normToKnob (n) - knob) < 1.0e-4f, "knob " + fmt (knob, 2) + " round-trips through norm");
+        }
+
+        for (int r = 0; r < Map::numRatios; ++r)
+        {
+            Map::Params q;
+            q.ratio = r;
+            const auto back = Map::applySlope (q, Map::fromParams (q).slopeT);
+            check (back.ratio == r, "ratio " + std::to_string (r) + " round-trips through the slope handle");
+        }
+
+        p = Map::applyKnee (p, 0.0f, 1.0f);
+        check (std::abs (p.input - 0.0f) < 1.0e-4f && std::abs (p.output - 10.5f) < 1.0e-4f, "knee bottom-left/top maps to Input 0, Output 10.5");
+        const auto kneePts = Map::fromParams (p);
+        check (std::abs (kneePts.kneeX) < 1.0e-6f && std::abs (kneePts.kneeY - 1.0f) < 1.0e-6f, "knee point round-trips");
+
+        p = Map::applyKnee (p, -0.4f, 1.7f);
+        check (std::abs (p.input - 0.0f) < 1.0e-4f && std::abs (p.output - 10.5f) < 1.0e-4f, "knee coordinates clamp to 0..1");
+
+        check (Map::snapRatio (-1.0f) == 0 && Map::snapRatio (0.0f) == 0, "slope below 0 snaps to 1:1");
+        check (Map::snapRatio (1.0f) == 7 && Map::snapRatio (2.0f) == 7, "slope above 1 snaps to Nuke");
+        check (Map::snapRatio (0.5f) == 4, "slope 0.5 snaps to 6:1 (index 4)");
+        check (std::abs (Map::normToKnob (-2.0f)) < 1.0e-6f && std::abs (Map::normToKnob (3.0f) - 10.5f) < 1.0e-6f, "knob norms clamp at the edges");
+
+        p = Map::applyAttack (Map::Params {}, -0.2f);
+        check (std::abs (p.attack - 0.0f) < 1.0e-4f, "attack handle clamps at 0");
+        p = Map::applyRelease (Map::Params {}, 1.4f);
+        check (std::abs (p.release - 10.5f) < 1.0e-4f, "release handle clamps at 10.5");
+
+        Map::Params round;
+        round.input = 2.5f;
+        round.output = 8.0f;
+        round.attack = 1.0f;
+        round.release = 9.5f;
+        round.ratio = 6;
+        const auto pts = Map::fromParams (round);
+        auto back = Map::applyKnee (round, pts.kneeX, pts.kneeY);
+        back = Map::applySlope (back, pts.slopeT);
+        back = Map::applyAttack (back, pts.attackT);
+        back = Map::applyRelease (back, pts.releaseT);
+        check (std::abs (back.input - round.input) < 0.02f && std::abs (back.output - round.output) < 0.02f
+               && std::abs (back.attack - round.attack) < 0.02f && std::abs (back.release - round.release) < 0.02f
+               && back.ratio == round.ratio,
+               "full handle set round-trips to the same parameters");
     }
 
     struct TestCase { const char* name; std::function<void()> run; };
@@ -1025,6 +1151,10 @@ int main()
         { "state, presets, undo",                          testStatePresetsUndo },
         { "value text",                                    testValueText },
         { "editor: size, version, one control each, layout", testEditor },
+        { "GR meter ballistics",                           testGrMeterBallistics },
+        { "GR meter peak-hold",                            testGrMeterPeakHold },
+        { "GR meter history buffer",                       testGrMeterHistory },
+        { "compression-display handle map",                testCompressionMap },
     };
 
     int failedTests = 0;
