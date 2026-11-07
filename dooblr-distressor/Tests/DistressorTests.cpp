@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <cmath>
 #include <complex>
+#include <cstring>
 #include <cstdlib>
 #include <functional>
 #include <iomanip>
@@ -182,7 +183,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRDISTRESSOR_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
+        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check (p->getLatencySamples() == 0, "zero latency");
 
@@ -193,7 +194,11 @@ namespace
         layout.outputBuses.getReference (0) = juce::AudioChannelSet::stereo();
         check (! p->checkBusesLayoutSupported (layout), "mono in / stereo out is refused");
         note ("version " JucePlugin_VersionString);
-        check ((int) p->getParameters().size() == 13, "13 automatable parameters");
+        check ((int) p->getParameters().size() == 14, "14 automatable parameters");
+        auto* match = param (*p, id::gainMatch);
+        check (match != nullptr && match->isBoolean() && match->isAutomatable()
+               && match->getDefaultValue() < 0.5f && match->getName (64) == "Gain Match",
+               "Gain Match is a host-visible automatable bool, default off");
     }
 
     void testOneToOneUnity()
@@ -738,7 +743,7 @@ namespace
 
         const std::vector<const char*> ids { id::input, id::attack, id::release, id::output, id::ratio,
                                              id::audioHp, id::distMode, id::detHp, id::detBand, id::stereoLink,
-                                             id::headroom, id::mix, id::bypass };
+                                             id::headroom, id::mix, id::bypass, id::gainMatch };
         size_t cursor = 0;
         Stereo out (in.size());
         juce::AudioBuffer<float> buffer (2, defaultBlock);
@@ -822,6 +827,26 @@ namespace
             for (size_t i = n / 4; i < n; ++i)
                 diff = std::max (diff, std::abs (out.l[i] - base.l[i]));
             check (diff > 1.0e-4f, std::string (c.why) + " changes the audio (max diff " + fmt (diff, 6) + ")");
+        }
+
+        // Gain Match's RMS window is ~1 s, so a 0.35 s burst never moves it enough to hear.
+        {
+            const auto longIn = sine ((size_t) (4.0 * defaultRate), 1000.0, 0.35);
+            auto run = [&] (bool matchOn)
+            {
+                defaults (*p);
+                set (*p, id::input, 8.0f);
+                set (*p, id::attack, 0.0f);
+                set (*p, id::gainMatch, matchOn ? 1.0f : 0.0f);
+                p->prepareToPlay (defaultRate, defaultBlock);
+                return render (*p, longIn);
+            };
+            const auto off = run (false);
+            const auto on = run (true);
+            float diff = 0.0f;
+            for (size_t i = on.size() / 2; i < on.size(); ++i)
+                diff = std::max (diff, std::abs (on.l[i] - off.l[i]));
+            check (diff > 1.0e-4f, "Gain Match changes the audio (max diff " + fmt (diff, 6) + ")");
         }
     }
 
@@ -1126,6 +1151,206 @@ namespace
                "full handle set round-trips to the same parameters");
     }
 
+    bool bitsMatch (const Stereo& a, const Stereo& b)
+    {
+        if (a.size() != b.size()) return false;
+        return std::memcmp (a.l.data(), b.l.data(), a.l.size() * sizeof (float)) == 0
+            && std::memcmp (a.r.data(), b.r.data(), a.r.size() * sizeof (float)) == 0;
+    }
+
+    float maxAbsDelta (const std::vector<float>& x, size_t start, size_t end)
+    {
+        float m = 0.0f;
+        if (end > x.size()) end = x.size();
+        if (start + 1 >= end) return 0.0f;
+        for (size_t i = start + 1; i < end; ++i)
+            m = std::max (m, std::abs (x[i] - x[i - 1]));
+        return m;
+    }
+
+    void testGainMatch()
+    {
+        auto configure = [] (Processor& p, float inputKnob, int ratioIndex, bool matchOn)
+        {
+            defaults (p);
+            set (p, id::input, inputKnob);
+            set (p, id::output, 5.0f);
+            set (p, id::attack, 0.0f);
+            set (p, id::release, 5.0f);
+            set (p, id::ratio, (float) ratioIndex);
+            set (p, id::distMode, 0.0f);
+            set (p, id::mix, 100.0f);
+            set (p, id::bypass, 0.0f);
+            set (p, id::gainMatch, matchOn ? 1.0f : 0.0f);
+            p.prepareToPlay (defaultRate, defaultBlock);
+        };
+
+        const auto n = (size_t) (6.0 * defaultRate);
+        const auto amp = 0.35;
+        const auto in = sine (n, 1000.0, amp);
+        const auto tail = n - (size_t) (0.5 * defaultRate);
+
+        // Off is bit-identical to a processor that never saw the parameter.
+        {
+            auto a = makeProcessor();
+            auto b = makeProcessor();
+            configure (*a, 8.0f, 4, false);
+            configure (*b, 8.0f, 4, false);
+            const auto oa = render (*a, in);
+            const auto ob = render (*b, in);
+            check (bitsMatch (oa, ob), "Gain Match off is deterministic");
+            check (std::abs (a->getEngine().lastMatchDb()) < 1.0e-4f, "match dB stays at 0 when off");
+        }
+
+        {
+            auto off = makeProcessor();
+            auto implicit = makeProcessor();
+            defaults (*off);
+            set (*off, id::gainMatch, 0.0f);
+            defaults (*implicit);
+            off->prepareToPlay (defaultRate, defaultBlock);
+            implicit->prepareToPlay (defaultRate, defaultBlock);
+            check (bitsMatch (render (*off, in), render (*implicit, in)),
+                   "Gain Match off is bit-identical to the previous (default) path");
+        }
+
+        const int ratios[] { 0, 3, 4, 7 }; // 1:1, 4:1, 6:1, Nuke
+        const float inputs[] { 5.0f, 7.0f, 9.0f };
+        for (int ratio : ratios)
+        {
+            for (float inputKnob : inputs)
+            {
+                auto p = makeProcessor();
+                configure (*p, inputKnob, ratio, true);
+                const auto out = render (*p, in);
+                const auto inRms = rms (in.l, tail, (size_t) (0.5 * defaultRate));
+                const auto outRms = rms (out.l, tail, (size_t) (0.5 * defaultRate));
+                const auto errDb = 20.0 * std::log10 ((double) outRms / (double) inRms);
+                const auto label = "Input " + fmt (inputKnob, 1) + " ratio " + std::to_string (ratio);
+                check (std::abs (errDb) < 0.5, label + " match within 0.5 dB (" + fmt (errDb, 3) + " dB, match "
+                       + fmt (p->getEngine().lastMatchDb(), 2) + " dB)");
+                check (std::abs (p->getEngine().lastMatchDb()) <= Engine::matchMaxDb + 1.0e-3f,
+                       label + " clamp holds (" + fmt (p->getEngine().lastMatchDb(), 2) + " dB)");
+                note (label + " err " + fmt (errDb, 3) + " dB, compensation " + fmt (p->getEngine().lastMatchDb(), 2) + " dB");
+            }
+        }
+
+        // Output is still a trim on top of the match.
+        {
+            auto p = makeProcessor();
+            configure (*p, 8.0f, 4, true);
+            set (*p, id::output, 8.0f); // +9 dB
+            const auto out = render (*p, in);
+            const auto inRms = rms (in.l, tail, (size_t) (0.5 * defaultRate));
+            const auto outRms = rms (out.l, tail, (size_t) (0.5 * defaultRate));
+            const auto errDb = 20.0 * std::log10 ((double) outRms / (double) inRms);
+            check (std::abs (errDb - 9.0) < 0.5, "Output trim sits on top of match (" + fmt (errDb, 3) + " dB, want ~9)");
+        }
+
+        // Mix of the matched wet/dry stays level-matched; Mix 0 is still a bit copy.
+        {
+            auto p = makeProcessor();
+            configure (*p, 8.0f, 4, true);
+            set (*p, id::mix, 0.0f);
+            const auto copied = render (*p, in);
+            check (bitsMatch (copied, in), "Gain Match on, Mix 0 is a bit copy of the input");
+        }
+        {
+            auto p = makeProcessor();
+            configure (*p, 8.0f, 4, true);
+            set (*p, id::mix, 50.0f);
+            const auto out = render (*p, in);
+            const auto inRms = rms (in.l, tail, (size_t) (0.5 * defaultRate));
+            const auto outRms = rms (out.l, tail, (size_t) (0.5 * defaultRate));
+            const auto errDb = 20.0 * std::log10 ((double) outRms / (double) inRms);
+            check (std::abs (errDb) < 0.5, "Mix 50 % of a matched wet is still level-matched (" + fmt (errDb, 3) + " dB)");
+        }
+
+        // Bypass with match on is still a dry copy.
+        {
+            auto p = makeProcessor();
+            configure (*p, 8.0f, 4, true);
+            set (*p, id::bypass, 1.0f);
+            const auto out = render (*p, in);
+            check (bitsMatch (out, in), "Gain Match does nothing while Bypass is on");
+        }
+
+        // Silence / gated signal does not drift the compensation.
+        {
+            auto p = makeProcessor();
+            configure (*p, 8.0f, 4, true);
+            render (*p, in);
+            const auto settled = p->getEngine().lastMatchDb();
+            check (std::abs (settled) > 0.2f, "pre-silence match is actually compensating (" + fmt (settled, 2) + " dB)");
+            const auto quiet = Stereo ((size_t) (3.0 * defaultRate));
+            render (*p, quiet);
+            const auto after = p->getEngine().lastMatchDb();
+            check (std::abs (after - settled) < 0.05f, "silence does not drift match (" + fmt (settled, 2)
+                   + " -> " + fmt (after, 2) + " dB)");
+            note ("silence freeze " + fmt (settled, 2) + " -> " + fmt (after, 2) + " dB");
+        }
+
+        // +24 dB clamp rail: Nuke + Audio HP on a hot low tone needs more than 24 dB.
+        {
+            auto p = makeProcessor();
+            configure (*p, 10.5f, 7, true);
+            set (*p, id::audioHp, 1.0f);
+            const auto hot = sine ((size_t) (5.0 * defaultRate), 40.0, 1.0);
+            render (*p, hot);
+            const auto m = p->getEngine().lastMatchDb();
+            check (m <= Engine::matchMaxDb + 1.0e-3f, "clamp does not exceed +24 dB (got " + fmt (m, 2) + " dB)");
+            check (m >= Engine::matchMaxDb - 0.25f, "clamp sits on the +24 dB rail (got " + fmt (m, 2) + " dB)");
+            note ("Nuke+HP clamp " + fmt (m, 2) + " dB");
+        }
+
+        // Toggling on and off does not produce a discontinuity spike.
+        {
+            auto p = makeProcessor();
+            configure (*p, 8.0f, 4, false);
+            const auto total = (size_t) (3.0 * defaultRate);
+            const auto tone = sine (total, 1000.0, 0.35);
+            Stereo out (total);
+            juce::AudioBuffer<float> buffer (2, defaultBlock);
+            juce::MidiBuffer midi;
+            size_t i = 0;
+            const auto toggleOn = (size_t) (0.4 * defaultRate);
+            const auto toggleOff = (size_t) (1.8 * defaultRate);
+            while (i < total)
+            {
+                const auto nBlock = (int) std::min ((size_t) defaultBlock, total - i);
+                if (i >= toggleOn && get (*p, id::gainMatch) < 0.5f)
+                    set (*p, id::gainMatch, 1.0f);
+                if (i >= toggleOff && get (*p, id::gainMatch) > 0.5f)
+                    set (*p, id::gainMatch, 0.0f);
+                buffer.setSize (2, nBlock, false, false, true);
+                for (int s = 0; s < nBlock; ++s)
+                {
+                    buffer.setSample (0, s, tone.l[i + (size_t) s]);
+                    buffer.setSample (1, s, tone.r[i + (size_t) s]);
+                }
+                p->processBlock (buffer, midi);
+                for (int s = 0; s < nBlock; ++s)
+                {
+                    out.l[i + (size_t) s] = buffer.getSample (0, s);
+                    out.r[i + (size_t) s] = buffer.getSample (1, s);
+                }
+                i += (size_t) nBlock;
+            }
+
+            const auto win = (size_t) (0.02 * defaultRate); // 20 ms
+            const auto preOn = maxAbsDelta (out.l, toggleOn > win ? toggleOn - win : 0, toggleOn);
+            const auto atOn = maxAbsDelta (out.l, toggleOn, toggleOn + win);
+            const auto preOff = maxAbsDelta (out.l, toggleOff - win, toggleOff);
+            const auto atOff = maxAbsDelta (out.l, toggleOff, toggleOff + win);
+            check (atOn <= preOn * 1.5f + 1.0e-4f, "toggle on has no discontinuity spike (" + fmt (atOn, 5)
+                   + " vs pre " + fmt (preOn, 5) + ")");
+            check (atOff <= preOff * 1.5f + 1.0e-4f, "toggle off has no discontinuity spike (" + fmt (atOff, 5)
+                   + " vs pre " + fmt (preOff, 5) + ")");
+            check (allFinite (out), "toggle sweep stays finite");
+            note ("toggle deltas on " + fmt (atOn, 5) + " / off " + fmt (atOff, 5));
+        }
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -1155,6 +1380,7 @@ int main()
         { "GR meter peak-hold",                            testGrMeterPeakHold },
         { "GR meter history buffer",                       testGrMeterHistory },
         { "compression-display handle map",                testCompressionMap },
+        { "Gain Match loudness, freeze, clamp, toggle",    testGainMatch },
     };
 
     int failedTests = 0;

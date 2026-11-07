@@ -28,7 +28,8 @@ namespace dooblrdistressor::ui
         const GrMeterModel& model() const noexcept { return meter; }
 
         /** Audio-thread meters, called on VBlank. GR keeps updating while Bypass is on. */
-        void pushMeters (float grDb, float inPeakL, float inPeakR, float /*outPeakL*/, float /*outPeakR*/, double nowMs);
+        void pushMeters (float grDb, float inPeakL, float inPeakR, float /*outPeakL*/, float /*outPeakR*/,
+                         float matchDb, double nowMs);
 
         Handle handleAt (juce::Point<float> position) const;
         juce::Point<float> handleCentre (Handle handle) const;
@@ -67,7 +68,7 @@ namespace dooblrdistressor::ui
         juce::AudioProcessorValueTreeState& state;
         GrMeterModel meter;
         double lastNowMs = -1.0;
-        float inPeak = 0.0f;
+        float inPeak = 0.0f, matchDb = 0.0f;
 
         juce::Rectangle<float> curveArea, meterArea, historyArea;
 

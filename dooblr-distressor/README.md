@@ -8,7 +8,7 @@ Universal Audio EL8 manuals.
 Part of Dan Feinstein's **dooblr** suite. VST3 effect, macOS 11+ (arm64) and Windows x64,
 C++20, CMake, JUCE 8.0.15.
 
-Version **0.1.1**.
+Version **0.1.2**.
 
 ## What it does
 
@@ -54,6 +54,12 @@ yellow LED is 0.25 % THD. This plug-in follows UA. The red lamp is 3 % THD / cli
 Every control below is an Ableton-automatable VST parameter.
 
 - **Input / Attack / Release / Output** — 0–10.5
+- **Gain Match** — off by default. When on, a slow (~1 s) RMS detector compares the dry
+  input (before the Input stage) to the processed signal (after compression, before the
+  Output knob) and applies a smoothed compensation of up to ±24 dB so the wet loudness
+  matches the dry. Output remains a trim on top. Mix is matching the final wet/dry blend.
+  Frozen below about −60 dBFS so silence and gated signal do not pump. Does nothing
+  while Bypass is on. Live compensation in dB is shown under the Match button.
 - **Ratio** — 1:1 … Nuke
 - **Audio HP**, **Distortion** (Off / Dist 2 / Dist 3)
 - **Detector HP**, **Band Emphasis**, **Link**
@@ -61,8 +67,8 @@ Every control below is an Ableton-automatable VST parameter.
 
 The layout follows the hardware / UAD panel: ratio row and GR lamps on top, detector
 and audio modes, a compression display (transfer curve, GR meter with peak-hold, scrolling
-history), the four main knobs, then headroom, mix and I/O meters. Drawn entirely
-in the dooblr look (no third-party logos, assets or trademarks; no fake or dead
+history), the four main knobs plus Gain Match, then headroom, mix and I/O meters. Drawn
+entirely in the dooblr look (no third-party logos, assets or trademarks; no fake or dead
 controls; no hint text on graphs). Window 1080×660, resizable 940×600–2400×1400.
 
 The compression display is interactive. A knee point on the transfer curve drags

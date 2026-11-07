@@ -50,7 +50,7 @@ namespace dooblrdistressor
         statusLabel.setComponentID ("status");
 
         for (auto* label : { &titleLabel, &subtitleLabel, &statusLabel, &ratioCaption, &detectorCaption, &audioCaption,
-                             &headroomCaption, &mixCaption })
+                             &headroomCaption, &mixCaption, &matchCaption })
             addAndMakeVisible (label);
 
         styleLabel (ratioCaption, "RATIO", 11.0f, Palette::dynamic, juce::Justification::centredLeft, true);
@@ -103,6 +103,15 @@ namespace dooblrdistressor
         addKnob (id::release, "RELEASE", Palette::dynamic);
         addKnob (id::output, "OUTPUT", Palette::accent);
 
+        styleLabel (matchCaption, "GAIN MATCH", 12.0f, Palette::textMuted, juce::Justification::centred);
+        matchButton.setComponentID (id::gainMatch);
+        matchButton.setTooltip (state.getParameter (id::gainMatch)->getName (64));
+        matchAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::gainMatch, matchButton);
+        addAndMakeVisible (matchButton);
+        styleLabel (matchReadout, {}, 11.0f, Palette::textMuted, juce::Justification::centred);
+        matchReadout.setInterceptsMouseClicks (false, false);
+        addAndMakeVisible (matchReadout);
+
         headroomBox.setComponentID (id::headroom);
         headroomBox.setTooltip (state.getParameter (id::headroom)->getName (64));
         headroomBox.addItemList (params::headroomNames(), 1);
@@ -132,9 +141,19 @@ namespace dooblrdistressor
             distLeds.setState (m.led1pct, m.led3pct);
             const auto now = juce::Time::getMillisecondCounterHiRes();
             compressionDisplay.pushMeters (m.gainReductionDb, m.inputPeakL, m.inputPeakR,
-                                           m.outputPeakL, m.outputPeakR, now);
+                                           m.outputPeakL, m.outputPeakR, m.matchDb, now);
             inMeter.pushPeaks (m.inputPeakL, m.inputPeakR, now);
             outMeter.pushPeaks (m.outputPeakL, m.outputPeakR, now);
+            const auto matchOn = proc.readSettings().gainMatch;
+            if (matchOn)
+            {
+                const auto text = params::formatValue ((double) m.matchDb, 1) + " dB";
+                matchReadout.setText (m.matchDb > 0.05f ? "+" + text : text, juce::dontSendNotification);
+            }
+            else
+            {
+                matchReadout.setText ({}, juce::dontSendNotification);
+            }
         });
 
         setResizable (true, true);
@@ -428,13 +447,18 @@ namespace dooblrdistressor
         {
             auto row = knobArea.reduced (8, 6);
             const auto n = (int) knobs.size();
-            const auto cellW = n > 0 ? row.getWidth() / n : row.getWidth();
-            for (auto& knob : knobs)
+            const auto columns = n + 1; // Gain Match sits with Input / Output
+            const auto cellW = columns > 0 ? row.getWidth() / columns : row.getWidth();
+            for (int i = 0; i < n; ++i)
             {
                 auto cell = row.removeFromLeft (cellW).reduced (6, 0);
-                knob->caption.setBounds (cell.removeFromTop (18));
-                knob->slider.setBounds (cell);
+                knobs[(size_t) i]->caption.setBounds (cell.removeFromTop (18));
+                knobs[(size_t) i]->slider.setBounds (cell);
             }
+            auto matchCell = row.reduced (6, 0);
+            matchCaption.setBounds (matchCell.removeFromTop (18));
+            matchReadout.setBounds (matchCell.removeFromBottom (18));
+            matchButton.setBounds (matchCell.withSizeKeepingCentre (juce::jmin (132, matchCell.getWidth()), 26));
         }
 
         {

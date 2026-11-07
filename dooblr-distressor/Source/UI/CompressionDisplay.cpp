@@ -27,12 +27,13 @@ namespace dooblrdistressor::ui
         setMouseCursor (juce::MouseCursor::NormalCursor);
     }
 
-    void CompressionDisplay::pushMeters (float grDb, float inPeakL, float inPeakR, float, float, double nowMs)
+    void CompressionDisplay::pushMeters (float grDb, float inPeakL, float inPeakR, float, float, float newMatchDb, double nowMs)
     {
         const auto dt = lastNowMs > 0.0 ? juce::jlimit (0.0, 0.1, (nowMs - lastNowMs) * 0.001) : 1.0 / GrMeterModel::historyHz;
         lastNowMs = nowMs;
         meter.tick (grDb, dt, nowMs);
         inPeak = juce::jmax (inPeakL, inPeakR);
+        matchDb = newMatchDb;
         repaint();
     }
 
@@ -175,6 +176,8 @@ namespace dooblrdistressor::ui
         const auto p = readParams();
         const auto curve = dsp::DistressorEngine::curveFor (p.ratio, p.attack, p.release);
         const auto inGainDb = dsp::DistressorEngine::inputGainDb (p.input);
+        // Output trim only: Gain Match shifts the painted curve, not the knee handle, so
+        // dragging Y still writes Output.
         const auto outGainDb = dsp::DistressorEngine::outputGainDb (p.output) + curve.makeupDb;
         const auto threshShift = (p.input - 5.0f) * 1.2f;
         auto* hrParam = state.getParameter (params::id::headroom);
@@ -201,7 +204,7 @@ namespace dooblrdistressor::ui
                 const auto inDb = plotMinDb + (plotMaxDb - plotMinDb) * (float) i / (float) (curvePoints - 1);
                 const auto detector = inDb + inGainDb + drive + threshShift;
                 const auto gr = dsp::DistressorEngine::staticReductionDb (detector, p.ratio, p.attack, p.release);
-                const auto outDb = inDb + inGainDb + drive + gr + outGainDb - drive;
+                const auto outDb = inDb + inGainDb + drive + gr + outGainDb - drive + matchDb;
                 const auto x = dbToX (inDb);
                 const auto y = dbToYCurve (outDb);
                 if (i == 0) io.startNewSubPath (x, y); else io.lineTo (x, y);
@@ -220,7 +223,7 @@ namespace dooblrdistressor::ui
                 const auto inDb = dsp::DistressorEngine::gainToDb (inPeak);
                 const auto detector = inDb + inGainDb + drive + threshShift;
                 const auto gr = dsp::DistressorEngine::staticReductionDb (detector, p.ratio, p.attack, p.release);
-                const auto outDb = inDb + inGainDb + gr + outGainDb;
+                const auto outDb = inDb + inGainDb + gr + outGainDb + matchDb;
                 g.setColour (Palette::textPrimary);
                 g.fillEllipse (dbToX (inDb) - 3.5f, dbToYCurve (outDb) - 3.5f, 7.0f, 7.0f);
             }

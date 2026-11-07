@@ -30,6 +30,18 @@ Read `design/INDEX.md` first. This file has two parts:
   stretch to 20 s after a long sustain. Nuke release is logarithmic in remaining GR.
 - Mix is zero-latency and phase-aligned: Mix 0 is a bit copy of the input; wet and dry peak
   on the same sample when Audio HP is off.
+- **Gain Match** (0.1.2): APVTS bool `gainMatch`, default off, automatable. A ~1 s one-pole
+  mean-square RMS of the dry input (before the Input stage) versus the processed signal
+  (after GR / waveshape / makeup, before the Output knob) drives a compensation gain,
+  smoothed at 0.4 s and clamped to ±24 dB. Frozen when either RMS is below about −60 dBFS
+  so silence and gated signal do not pump or zipper. Off is the original `y *= outGain`
+  path (bit-identical). Turning it on or off starts from 0 dB of extra gain and eases,
+  so there is no click. Output stays a trim on top of the match; Mix matches the final
+  wet/dry blend because the wet loudness equals the dry. Bypass copies the input and
+  leaves the compensation unused. The Match button sits with the Input / Output knobs
+  (dooblr pill toggle) and shows a live dB readout of the current compensation. The
+  transfer curve and signal dot shift by that amount; the knee handle's Y still maps
+  only to Output, so the trim stays independently draggable.
 - **Compression display** (0.1.1): a transfer curve, a vertical GR meter with a decaying
   peak-hold tick, and a 3 s / 60 Hz GR history, driven from the DSP's real gain reduction
   (including while Bypass is on). Instant GR attack, 12 dB/s display release, 700 ms hold
@@ -42,15 +54,15 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE effect VST3 (target `DooblrDistressor`, product "dooblr-distressor", code Dbdt)
-- Version: 0.1.1
+- Version: 0.1.2
 - Last source change: 2026-11-07
-- Source tree: `d5d85ee04d3f` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-distressor`)
+- Source tree: `464fa5f997ed` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-distressor`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-distressor/scripts/build.sh` (build dir `~/dooblr-build/dooblr-distressor`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrDistressorTests` (Tests/CMakeLists.txt)
 - Build/test: target `DooblrDistressorLoadCheck` (Tools/LoadCheck/CMakeLists.txt)
 
-### Parameters (13 rows, 13 parameters after loops; from `Source/Parameters.cpp`)
+### Parameters (14 rows, 14 parameters after loops; from `Source/Parameters.cpp`)
 
 `{n}` = index or name filled in by a loop; `x` = loop condition or repeat count.
 
@@ -69,6 +81,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | headroom | choice | Headroom | [4 dB, 8 dB, 12 dB, 16 dB, 20 dB, 24 dB, 28 dB] | 3 (16 dB) |  |
 | mix | float | Mix | 0..100 step 0.1 | 100 |  |
 | bypass | bool | Bypass | on/off | false |  |
+| gainMatch | bool | Gain Match | on/off | false |  |
 
 ### Source map
 
@@ -107,5 +120,5 @@ Read `design/INDEX.md` first. This file has two parts:
 
 ### Tests
 
-- `Tests/DistressorTests.cpp` (21): Metadata, OneToOneUnity, RatioBehaviour, AttackRelease, OptoAndNukeRelease, AudioHp, Detector, StereoAndMonoLink, MixPhase, BypassKeepsMeter, Distortion, Headroom, NoNanDenormalsAutomation, NoDeadParameters, StatePresetsUndo, ValueText, Editor, GrMeterBallistics, GrMeterPeakHold, GrMeterHistory, CompressionMap
+- `Tests/DistressorTests.cpp` (22): Metadata, OneToOneUnity, RatioBehaviour, AttackRelease, OptoAndNukeRelease, AudioHp, Detector, StereoAndMonoLink, MixPhase, BypassKeepsMeter, Distortion, Headroom, NoNanDenormalsAutomation, NoDeadParameters, StatePresetsUndo, ValueText, Editor, GrMeterBallistics, GrMeterPeakHold, GrMeterHistory, CompressionMap, GainMatch
 <!-- END AUTO-GENERATED -->

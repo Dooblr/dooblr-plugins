@@ -39,6 +39,7 @@ namespace dooblrdistressor::dsp
         float headroomDb = 16.0f;
         float mix = 1.0f;
         bool bypass = false;
+        bool gainMatch = false;
     };
 
     struct Meters
@@ -47,6 +48,7 @@ namespace dooblrdistressor::dsp
         float inputPeakL = 0.0f, inputPeakR = 0.0f;
         float outputPeakL = 0.0f, outputPeakR = 0.0f;
         float thd = 0.0f;             // 0.01 = 1 %
+        float matchDb = 0.0f;         // live Gain Match compensation (0 when off and settled)
         bool led1pct = false;
         bool led3pct = false;
     };
@@ -68,6 +70,8 @@ namespace dooblrdistressor::dsp
         static constexpr float attackMinFastSec = 20.0e-6f; // 2:1, 3:1, 4:1 at knob 0
         static constexpr float releaseMinSec = 50.0e-3f, releaseMaxSec = 3.5f, optoReleaseMaxSec = 20.0f;
         static constexpr float thdLed1 = 0.01f, thdLed3 = 0.03f; // UA: 1 % and 3 %
+        static constexpr float matchWindowSec = 1.0f, matchSmoothSec = 0.4f;
+        static constexpr float matchMaxDb = 24.0f, matchSilenceDb = -60.0f;
 
         static bool usesFastMinAttack (int ratio) noexcept;
         static float attackSeconds (float knob, int ratio) noexcept;
@@ -101,6 +105,7 @@ namespace dooblrdistressor::dsp
         static float gainToDb (float g) noexcept { return g > 1.0e-12f ? 20.0f * std::log10 (g) : -240.0f; }
 
         float lastGainReductionDb() const noexcept { return displayedGrDb; }
+        float lastMatchDb() const noexcept { return matchDb; }
 
     private:
         struct Biquad
@@ -158,7 +163,10 @@ namespace dooblrdistressor::dsp
         bool clipLatch = false;
         float inPeak[maxChannels] { 0, 0 };
         float outPeak[maxChannels] { 0, 0 };
-        float meterGr = 0.0f, meterThd = 0.0f;
+        float meterGr = 0.0f, meterThd = 0.0f, meterMatchDb = 0.0f;
         bool meterLed1 = false, meterLed3 = false;
+
+        float dryMs = 0.0f, procMs = 0.0f;
+        float matchDb = 0.0f, matchTargetDb = 0.0f;
     };
 }
