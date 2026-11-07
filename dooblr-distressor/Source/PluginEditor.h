@@ -7,14 +7,16 @@
 
 #include "PluginProcessor.h"
 #include "UI/Board.h"
+#include "UI/CompressionDisplay.h"
 #include "UI/ControlPanel.h"
 #include "UI/Theme.h"
 
 namespace dooblrdistressor
 {
     /**
-        Hardware-style board in the dooblr look: header, ratio row + GR meter, detector / audio
-        modes, four main knobs, then headroom, mix and I/O meters. Resize 940x600 .. 2400x1400.
+        Hardware-style board in the dooblr look: header, ratio row + GR LEDs, detector / audio
+        modes, compression display (transfer curve, GR meter + history), four main knobs plus
+        Gain Match, then headroom, mix and I/O meters. Resize 940x600 .. 2400x1400.
     */
     class DooblrDistressorEditor final : public juce::AudioProcessorEditor,
                                          private juce::Timer,
@@ -33,6 +35,7 @@ namespace dooblrdistressor
         ui::SegmentedToggle& getDistToggle() noexcept { return *distToggle; }
         ui::GrLedMeter& getGrMeter() noexcept { return grMeter; }
         ui::DistLeds& getDistLeds() noexcept { return distLeds; }
+        ui::CompressionDisplay& getCompressionDisplay() noexcept { return compressionDisplay; }
         juce::Rectangle<int> getContentArea() const noexcept { return contentArea; }
 
         static constexpr int defaultWidth = 1080, defaultHeight = 660;
@@ -59,13 +62,15 @@ namespace dooblrdistressor
 
         DooblrDistressorProcessor& proc;
         juce::AudioProcessorValueTreeState& state;
+        ui::CompressionDisplay compressionDisplay;
         ui::DooblrLookAndFeel lookAndFeel;
 
         juce::Label titleLabel, subtitleLabel, statusLabel;
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, saveButton { "Save" }, loadButton { "Load" };
         juce::ComboBox presetBox;
-        juce::ToggleButton bypassButton { "Bypass" };
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
+        juce::ToggleButton bypassButton { "Bypass" }, matchButton { "Match" };
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment, matchAttachment;
+        juce::Label matchCaption, matchReadout;
 
         std::unique_ptr<ui::SegmentedToggle> ratioStrip, distToggle;
         ui::GrLedMeter grMeter;
@@ -80,7 +85,7 @@ namespace dooblrdistressor
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> mixAttachment;
         ui::StereoMeter inMeter { "IN" }, outMeter { "OUT" };
 
-        juce::Rectangle<int> headerArea, contentArea, ratioArea, modeArea, knobArea, bottomArea;
+        juce::Rectangle<int> headerArea, contentArea, ratioArea, modeArea, displayArea, knobArea, bottomArea;
 
         std::unique_ptr<juce::FileChooser> fileChooser;
         juce::Array<juce::File> userPresetFiles;

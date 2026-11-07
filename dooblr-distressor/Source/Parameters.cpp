@@ -71,6 +71,7 @@ namespace dooblrdistressor::params
                             return juce::jlimit (0.0f, 100.0f, text.retainCharacters ("-0123456789.").getFloatValue());
                         })));
         layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::bypass, 1 }, "Bypass", false));
+        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::gainMatch, 1 }, "Gain Match", false));
         return layout;
     }
 }
