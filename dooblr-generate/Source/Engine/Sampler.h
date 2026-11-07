@@ -35,9 +35,10 @@ namespace dooblrgenerate::engine
         void prepare (double sampleRate, int maxBlockSize);
         void reset();
 
-        /** Renders into out (adds nothing first: clears the region it writes). */
+        /** Renders into out (adds nothing first: clears the region it writes).
+            extraKeep: a second sample whose voices must stay alive (the dropped source, while previewing). */
         void process (juce::AudioBuffer<float>& out, const juce::MidiBuffer& midi, const Sample* sample,
-                      const PlaybackSettings& settings);
+                      const PlaybackSettings& settings, const Sample* extraKeep = nullptr);
 
         /** Starts a voice (used for MIDI notes and the editor's Play button). */
         void noteOn (int note, float velocity, const Sample* sample, const PlaybackSettings& settings);

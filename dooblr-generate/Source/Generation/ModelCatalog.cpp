@@ -10,14 +10,14 @@ namespace dooblrgenerate::gen::ModelCatalog
                 { stableAudioOpenSmall, "Stable Audio Open Small", "stabilityai/stable-audio-open-small",
                   "Stability AI Community License (free under $1M annual revenue; register for commercial use)",
                   "https://huggingface.co/stabilityai/stable-audio-open-small/blob/main/LICENSE",
-                  true, false, 11.0, { "model_config.json", "model.safetensors" } },
+                  true, false, true, 11.0, { "model_config.json", "model.safetensors" } },
                 { audioLdm, "AudioLDM S v2 (non-commercial)", "cvssp/audioldm-s-full-v2",
                   "CC BY-NC-SA 4.0 (non-commercial use only)",
                   "https://huggingface.co/cvssp/audioldm-s-full-v2",
-                  false, false, 10.0,
+                  false, false, false, 10.0,
                   { "model_index.json", "unet/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.safetensors",
                     "vocoder/model.safetensors", "text_encoder/model.safetensors" } },
-                { testBackend, "Test backend (not AI)", "", "dooblr test signal", "", false, true, 10.0, {} },
+                { testBackend, "Test backend (not AI)", "", "dooblr test signal", "", false, true, true, 10.0, {} },
             };
             return list;
         }

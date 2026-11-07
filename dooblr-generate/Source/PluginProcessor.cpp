@@ -1,5 +1,6 @@
 #include "PluginProcessor.h"
 #include "PluginEditor.h"
+#include "Generation/SourceAudio.h"
 
 using namespace dooblrgenerate;
 
@@ -58,9 +59,31 @@ juce::int64 DooblrGenerateProcessor::randomSeed()
     return (juce::int64) juce::Random::getSystemRandom().nextInt (2147483647);
 }
 
+float DooblrGenerateProcessor::getVariationAmount() const
+{
+    if (auto* p = state.getRawParameterValue (params::id::variationAmount))
+        return p->load();
+    return 50.0f;
+}
+
+bool DooblrGenerateProcessor::currentModelSupportsSourceVariation()
+{
+    return gen::modelSupportsSourceVariation (getModel());
+}
+
 bool DooblrGenerateProcessor::generate (bool variation)
 {
-    if (getPrompt().trim().isEmpty() || service.isBusy())
+    if (service.isBusy())
+        return false;
+
+    const auto* model = gen::ModelCatalog::find (getModel());
+    const auto source = sourceSlot.current();
+    const bool varySource = variation && source != nullptr && source->file.existsAsFile();
+
+    if (varySource && (model == nullptr || ! model->supportsSourceVariation))
+        return false;
+
+    if (getPrompt().trim().isEmpty() && ! varySource)
         return false;
 
     if (variation)
@@ -70,8 +93,19 @@ bool DooblrGenerateProcessor::generate (bool variation)
     r.prompt = getPrompt();
     r.model = getModel();
     r.seed = getSeed();
-    const auto* model = gen::ModelCatalog::find (r.model);
-    r.seconds = juce::jmin (getSeconds(), model != nullptr ? model->maxSeconds : params::maxSeconds);
+    const auto maxSeconds = model != nullptr ? model->maxSeconds : params::maxSeconds;
+
+    if (varySource)
+    {
+        r.initAudio = source->file;
+        r.initNoiseLevel = juce::jlimit (0.0f, 1.0f, getVariationAmount() / 100.0f);
+        r.seconds = juce::jmin (source->lengthSeconds(), maxSeconds);
+    }
+    else
+    {
+        r.seconds = juce::jmin (getSeconds(), maxSeconds);
+    }
+
     return service.startGenerate (r);
 }
 
@@ -128,6 +162,53 @@ bool DooblrGenerateProcessor::loadFile (const juce::File& file, juce::String& er
     return true;
 }
 
+bool DooblrGenerateProcessor::loadSourceFile (const juce::File& file, juce::String& error)
+{
+    const auto dest = paths.source().getChildFile ("src-" + juce::Uuid().toDashedString() + ".wav");
+    auto loaded = gen::SourceAudio::loadAndStore (file, dest, error);
+    if (loaded == nullptr)
+    {
+        sourceMessage = error;
+        sourceMessageError = true;
+        return false;
+    }
+
+    if (const auto previous = sourceSlot.current(); previous != nullptr
+        && previous->file.getParentDirectory() == paths.source()
+        && previous->file != dest)
+        previous->file.deleteFile();
+
+    auto sample = std::make_shared<engine::Sample>();
+    sample->audio = std::move (loaded->audio);
+    sample->sampleRate = loaded->sampleRate;
+    sample->file = loaded->file;
+    sourceName = loaded->originalName;
+    sourceTrimmed = loaded->trimmed;
+    sourceSlot.publish (std::move (sample));
+    ++sourceSerial;
+
+    sourceMessage = "Loaded " + sourceName;
+    if (sourceTrimmed)
+        sourceMessage << " (trimmed to " << juce::String (gen::SourceAudio::maxSeconds, 1) << " s)";
+    sourceMessageError = false;
+    error = sourceMessage;
+    return true;
+}
+
+void DooblrGenerateProcessor::clearSource()
+{
+    if (const auto previous = sourceSlot.current(); previous != nullptr
+        && previous->file.getParentDirectory() == paths.source())
+        previous->file.deleteFile();
+
+    sourceSlot.publish (nullptr);
+    ++sourceSerial;
+    sourceName = {};
+    sourceTrimmed = false;
+    sourceMessage = {};
+    sourceMessageError = false;
+}
+
 //==============================================================================
 void DooblrGenerateProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
@@ -162,10 +243,23 @@ void DooblrGenerateProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     const auto* sample = slot.acquire();
     const auto settings = readSettings();
 
+    const auto* source = sourceSlot.acquire();
+
+    if (sourcePreviewRequested.exchange (false))
+    {
+        auto preview = settings;
+        preview.startPercent = 0.0f;
+        preview.tuneSemitones = 0;
+        preview.fineCents = 0.0f;
+        preview.attackMs = 0.0f;
+        preview.decayMs = params::decayOffMs;
+        sampler.noteOn (engine::Sampler::rootNote, 1.0f, source, preview);
+    }
+
     if (previewRequested.exchange (false))
         sampler.noteOn (engine::Sampler::rootNote, 1.0f, sample, settings);
 
-    sampler.process (buffer, midi, sample, settings);
+    sampler.process (buffer, midi, sample, settings, source);
 }
 
 //==============================================================================
@@ -186,6 +280,19 @@ void DooblrGenerateProcessor::getStateInformation (juce::MemoryBlock& destData)
         settings.removeProperty (params::setting::currentId, nullptr);
     }
 
+    if (const auto source = sourceSlot.current(); source != nullptr && source->file.existsAsFile())
+    {
+        settings.setProperty (params::setting::sourceWav, source->file.getFullPathName(), nullptr);
+        settings.setProperty (params::setting::sourceName, sourceName, nullptr);
+        settings.setProperty (params::setting::sourceTrimmed, sourceTrimmed, nullptr);
+    }
+    else
+    {
+        settings.removeProperty (params::setting::sourceWav, nullptr);
+        settings.removeProperty (params::setting::sourceName, nullptr);
+        settings.removeProperty (params::setting::sourceTrimmed, nullptr);
+    }
+
     if (auto xml = copy.createXml())
         copyXmlToBinary (*xml, destData);
 }
@@ -204,11 +311,34 @@ void DooblrGenerateProcessor::setStateInformation (const void* data, int sizeInB
     const auto id = settings[params::setting::currentId].toString();
     juce::String error;
 
-    if (id.isNotEmpty() && loadHistoryEntry (id, error))
-        return;
-
-    if (wav.existsAsFile())
+    if (! (id.isNotEmpty() && loadHistoryEntry (id, error)) && wav.existsAsFile())
         loadFile (wav, error);
+
+    const auto sourceWav = juce::File (settings[params::setting::sourceWav].toString());
+    juce::String sourceError;
+    auto sample = sourceWav.existsAsFile() ? engine::Sample::load (sourceWav, sourceError) : nullptr;
+
+    if (sample == nullptr)
+    {
+        sourceSlot.publish (nullptr);
+        ++sourceSerial;
+        sourceName = {};
+        sourceTrimmed = false;
+        sourceMessage = {};
+        sourceMessageError = false;
+        return;
+    }
+
+    sourceName = settings[params::setting::sourceName].toString();
+    if (sourceName.isEmpty())
+        sourceName = sourceWav.getFileName();
+    sourceTrimmed = (bool) settings[params::setting::sourceTrimmed];
+    sourceSlot.publish (std::move (sample));
+    ++sourceSerial;
+    sourceMessage = "Loaded " + sourceName;
+    if (sourceTrimmed)
+        sourceMessage << " (trimmed to " << juce::String (gen::SourceAudio::maxSeconds, 1) << " s)";
+    sourceMessageError = false;
 }
 
 juce::AudioProcessorEditor* DooblrGenerateProcessor::createEditor()

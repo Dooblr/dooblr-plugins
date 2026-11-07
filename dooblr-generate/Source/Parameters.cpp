@@ -28,7 +28,7 @@ namespace dooblrgenerate::params
 
     juce::StringArray allIds()
     {
-        return { id::output, id::tune, id::fine, id::start, id::attack, id::decay, id::velocity };
+        return { id::output, id::tune, id::fine, id::start, id::attack, id::decay, id::velocity, id::variationAmount };
     }
 
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
@@ -82,6 +82,13 @@ namespace dooblrgenerate::params
             Attributes().withLabel ("%").withStringFromValueFunction ([] (float v, int)
             {
                 return juce::String (v, 0) + " %";
+            })));
+
+        layout.add (std::make_unique<Float> (juce::ParameterID { id::variationAmount, 1 }, "Variation Amount",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
+            Attributes().withLabel ("%").withStringFromValueFunction ([] (float v, int)
+            {
+                return juce::String (v, 1) + " %";
             })));
 
         return layout;

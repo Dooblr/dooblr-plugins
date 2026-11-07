@@ -5,7 +5,7 @@ and a text-to-audio model running on your own Mac makes a one-shot sample. The p
 it as a sampler from MIDI, and you can drag the WAV straight into Ableton. Every generation is kept
 in a history you can go back to.
 
-- VST3 instrument (MIDI in, stereo out), version **0.1.1**, plug-in code `Dbgn`, bundle
+- VST3 instrument (MIDI in, stereo out), version **0.2.0**, plug-in code `Dbgn`, bundle
   `com.dooblr.dooblrgenerate`.
 - Generation is **offline**: press Generate, wait a few seconds, then play. It never runs on, or
   waits for, the audio thread.
@@ -64,14 +64,27 @@ scripts/setup-runtime.sh" and a copyable report (worker exit code 5). Re-running
 
 Files live in `~/Library/Application Support/dooblr/generate/`: `models/<id>/` (weights),
 `hf-cache/` (the T5 text encoder Stable Audio fetches on first use), `history/` (every generated
-WAV plus `history.json`), `runtime/` (the worker script, rewritten from the plug-in when it changes)
-and `settings.json`. The plug-in never deletes a WAV.
+WAV plus `history.json`), `source/` (copies of dropped samples for Variation), `runtime/` (the worker
+script, rewritten from the plug-in when it changes)
+and `settings.json`. The plug-in never deletes a generated WAV.
 
 ## Using it
 
 - **Prompt**, **Seed**, **Length** (0.25–10 s, capped at the model's maximum), **Generate**
-  (Return also works; becomes **Cancel** while running) and **Variation** (a new random seed, then
-  generate). Same prompt + seed + model gives the same result.
+  (Return also works; becomes **Cancel** while running) and **Variation**. With no source sample,
+  Variation is a new random seed, then generate. Same prompt + seed + model gives the same result.
+- **SOURCE**: drop an audio file from Finder, or a clip from Ableton Live (Live hands the clip's
+  audio file to the plug-in window), onto the drop zone. wav / aif / aiff / flac / mp3 (whatever
+  JUCE can read, including CoreAudio on Mac). Ableton `.alc` clip files are accepted only when they
+  name a real audio file that is still on disk; otherwise they are rejected with a short status.
+  The plug-in copies the audio into its own folder (44.1 kHz stereo, trimmed to 11 s if longer) so
+  the source survives the original file moving, and restores it with the Live set. **Play** auditions
+  the source; **x** clears it. History rows can be dropped here too.
+- With a source loaded, **Variation** is an audio-to-audio variation of that sample, guided by the
+  prompt if there is one. **Amount** (0–100 %, default 50 %) is how far from the source.
+  Source variation runs on **Stable Audio Open Small** (and the test backend). **AudioLDM** has no
+  audio-to-audio path in this runtime: Variation and Amount are disabled with that message, never
+  faked. Generate without a source is still text-to-audio.
 - The line under the prompt bar shows the stage and elapsed time, then "Generated in x s".
 - **Waveform**: the current sample, with the Start point as a line. **Drag the waveform** (or the
   **Drag WAV** button) into an Ableton track, Simpler or Finder to drop a copy of the WAV; a click
@@ -86,7 +99,7 @@ and `settings.json`. The plug-in never deletes a WAV.
 
 ## Parameters
 
-All seven are normal VST3 parameters: they appear in Ableton's device parameter list, can be
+All eight are normal VST3 parameters: they appear in Ableton's device parameter list, can be
 automated, mapped to Macro / MIDI controls and are saved with the set.
 
 | name | id | range | default | notes |
@@ -98,13 +111,15 @@ automated, mapped to Macro / MIDI controls and are saved with the set.
 | Decay | `decay` | 10 ms..20 s (skewed, centre 1 s); max = **Off** | Off | Time to fall 60 dB after the attack; Off plays the sample out at full level. |
 | Velocity | `velocity` | 0..100 % | 100 % | Velocity sensitivity (0 %: every hit at full level). |
 | Output | `output` | -48 (= -inf)..+12 dB | 0.0 dB | Smoothed. |
+| Variation Amount | `variationAmount` | 0..100 % | 50.0 % | How far a source Variation is from the dropped sample (init noise). Ignored until a source is loaded. |
 
 Playback: 16-voice one-shot sampler (note-offs are ignored, like a drum sampler; All Notes Off
 stops everything; the oldest voice is stolen). The root key is **C3 (MIDI 60)**: C3 plays the
 sample at its own pitch and speed, other keys repitch it. Sample-rate conversion is automatic.
 
-Saved with the set but not automatable: prompt, seed, length, model, and the current sample
-(by its history id, falling back to the WAV path). If the WAV is gone the settings still restore.
+Saved with the set but not automatable: prompt, seed, length, model, the current sample
+(by its history id, falling back to the WAV path), and the dropped source (path of the plug-in's
+working copy, original name, whether it was trimmed). If a WAV is gone the settings still restore.
 
 ## Build and install
 
@@ -117,11 +132,13 @@ dooblr-generate/scripts/build.sh   # builds in ~/dooblr-build/dooblr-generate, r
 Same environment variables as the other plug-ins' `build.sh` (`BUILD_DIR`, `JUCE_SOURCE_DIR`,
 `CONFIG`, `RUN_TESTS`, `INSTALL_VST3`, `LOAD_CHECK`, `JOBS`). JUCE 8.0.15.
 
-Tests (`Tests/GenerateTests.cpp`, 13 tests) cover metadata and parameters, value text, the
+Tests (`Tests/GenerateTests.cpp`, 14 tests) cover metadata and parameters, value text, the
 sampler (timing, pitch, sample-rate conversion, Start, Attack, Decay, Velocity, Output, one-shot
 behaviour, voice stealing), MIDI playback through the processor, the lock-free sample hand-over,
-the history, state save / restore, model status states, token storage, worker-script embedding,
-generation end to end, worker crash / error / hang / cancel, a partial model, the audio thread
+the history, state save / restore (including the source sample), model status states, token storage, worker-script embedding,
+generation end to end, worker crash / error / hang / cancel, a partial model, source-sample loading
+(mono→stereo, sample-rate conversion, trim, non-audio / unresolved .alc rejection, worker
+`--init-audio` / `--init-noise`), the audio thread
 during generation (no allocation, timing) and the editor at 940x600, 1080x660 and 2400x1400.
 **The tests never start Python**: a stub shell script stands in for the worker. Set
 `DOOBLRGENERATE_EDITOR_SNAPSHOT=/path/prefix` to write editor PNGs, and

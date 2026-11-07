@@ -17,7 +17,8 @@ namespace dooblrgenerate::params
         inline constexpr const char* start    = "start";
         inline constexpr const char* attack   = "attack";
         inline constexpr const char* decay    = "decay";
-        inline constexpr const char* velocity = "velocity";
+        inline constexpr const char* velocity         = "velocity";
+        inline constexpr const char* variationAmount  = "variationAmount"; // added in 0.2.0
     }
 
     /** Decay at its maximum means no decay (the sample plays to its end at full level). */
@@ -36,8 +37,11 @@ namespace dooblrgenerate::params
         inline constexpr const char* seed        = "seed";
         inline constexpr const char* seconds     = "seconds";
         inline constexpr const char* model       = "model";
-        inline constexpr const char* currentWav  = "currentWav";
-        inline constexpr const char* currentId   = "currentId";
+        inline constexpr const char* currentWav     = "currentWav";
+        inline constexpr const char* currentId      = "currentId";
+        inline constexpr const char* sourceWav      = "sourceWav";      // added in 0.2.0
+        inline constexpr const char* sourceName     = "sourceName";
+        inline constexpr const char* sourceTrimmed  = "sourceTrimmed";
     }
 
     inline constexpr double minSeconds = 0.25, maxSeconds = 10.0, defaultSeconds = 2.0;

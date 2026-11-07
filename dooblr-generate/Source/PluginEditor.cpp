@@ -20,7 +20,7 @@ namespace
 }
 
 DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
-    : AudioProcessorEditor (p), generator (p)
+    : AudioProcessorEditor (p), generator (p), sourceDropZone (p)
 {
     setLookAndFeel (&lookAndFeel);
 
@@ -141,6 +141,7 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
         }
         refresh();
     };
+    addAndMakeVisible (sourceDropZone);
     addAndMakeVisible (historyList);
 
     // --- Playback --------------------------------------------------------------------
@@ -289,6 +290,7 @@ void DooblrGenerateEditor::timerCallback()
     refreshSample();
     refreshJob();
     refreshModel();
+    sourceDropZone.refresh();
 }
 
 void DooblrGenerateEditor::refreshSample()
@@ -342,9 +344,15 @@ void DooblrGenerateEditor::refreshJob()
     const auto generating = running && job.kind == gen::JobStatus::Kind::generate;
     const auto modelReady = service.modelStatus (generator.getModel()).state == gen::ModelState::ready;
 
+    const auto hasSource = generator.getSourceSample() != nullptr;
+    const auto canVarySource = hasSource && generator.currentModelSupportsSourceVariation();
     generateButton.setButtonText (generating ? "Cancel" : "Generate");
     generateButton.setEnabled (generating || (! running && modelReady && generator.getPrompt().trim().isNotEmpty()));
-    variationButton.setEnabled (! running && modelReady && generator.getPrompt().trim().isNotEmpty());
+    variationButton.setEnabled (! running && modelReady
+                                && (canVarySource || (! hasSource && generator.getPrompt().trim().isNotEmpty())));
+    variationButton.setTooltip (hasSource && ! generator.currentModelSupportsSourceVariation()
+                                    ? "AudioLDM has no audio-to-audio path; use Stable Audio Open Small"
+                                    : "New seed, then generate (uses the dropped source when one is loaded)");
 
     juce::String text;
     if (job.kind == gen::JobStatus::Kind::generate)
@@ -461,6 +469,7 @@ void DooblrGenerateEditor::paint (juce::Graphics& g)
     g.setColour (Palette::divider);
     g.drawHorizontalLine (headerArea.getBottom() - 1, 0.0f, (float) getWidth());
 
+    paintPanel (g, sourceArea, "SOURCE", Palette::textMuted);
     paintPanel (g, historyArea, "HISTORY", Palette::textMuted);
     paintPanel (g, modelArea, "MODEL", Palette::textMuted);
 }
@@ -557,10 +566,14 @@ void DooblrGenerateEditor::resized()
         details.setBounds (m);
     }
 
-    // Middle: waveform (left) and history (right).
+    // Middle: source drop zone, waveform, history.
     historyArea = area.removeFromRight (sideWidth);
     historyList.setBounds (historyArea.reduced (8, 6).withTrimmedTop (20));
     area.removeFromRight (12);
+    const auto sourceWidth = juce::jlimit (176, 260, area.getWidth() * 28 / 100);
+    sourceArea = area.removeFromLeft (sourceWidth);
+    sourceDropZone.setBounds (sourceArea.reduced (8, 6).withTrimmedTop (20));
+    area.removeFromLeft (12);
     waveArea = area;
 
     auto under = area.removeFromBottom (30);

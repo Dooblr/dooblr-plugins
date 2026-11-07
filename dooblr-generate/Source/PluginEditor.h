@@ -3,6 +3,7 @@
 #include "PluginProcessor.h"
 #include "UI/ControlPanel.h"
 #include "UI/HistoryList.h"
+#include "UI/SourceDropZone.h"
 #include "UI/Theme.h"
 #include "UI/WaveformView.h"
 
@@ -10,8 +11,9 @@
 
 /**
     One page: a prompt bar (prompt, seed, length, Generate, Variation) with the job's progress
-    under it; the current sample's waveform (drag it out to Ableton) with Play and its details;
-    the history of generations on the right; PLAYBACK knobs and the MODEL panel along the bottom.
+    under it; a SOURCE drop zone (dropped sample for Variation); the current sample's waveform
+    (drag it out to Ableton) with Play and its details; the history of generations on the right;
+    PLAYBACK knobs and the MODEL panel along the bottom.
 */
 class DooblrGenerateEditor final : public juce::AudioProcessorEditor,
                                    public juce::DragAndDropContainer,
@@ -54,6 +56,7 @@ public:
     juce::Label& getInfoLabel() noexcept { return infoLabel; }
     dooblrgenerate::ui::WaveformView& getWaveform() noexcept { return waveform; }
     dooblrgenerate::ui::HistoryList& getHistoryList() noexcept { return historyList; }
+    dooblrgenerate::ui::SourceDropZone& getSourceDropZone() noexcept { return sourceDropZone; }
     dooblrgenerate::ui::ControlPanel& getPlaybackPanel() noexcept { return *playbackPanel; }
     double getProgress() const noexcept { return progress; }
     juce::String getCopyText() const { return copyText; }
@@ -87,6 +90,7 @@ private:
     juce::TextButton playButton { "Play" }, dragButton { "Drag WAV" };
     juce::Label infoLabel;
 
+    dooblrgenerate::ui::SourceDropZone sourceDropZone;
     dooblrgenerate::ui::HistoryList historyList;
 
     std::unique_ptr<dooblrgenerate::ui::ControlPanel> playbackPanel;
@@ -98,7 +102,7 @@ private:
     bool tokenEntryShown = false, dragFromButtonStarted = false;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> headerArea, waveArea, historyArea, playbackArea, modelArea;
+    juce::Rectangle<int> headerArea, waveArea, sourceArea, historyArea, playbackArea, modelArea;
     int lastSampleSerial = -1, lastHistorySize = -1, lastJobSerial = -1;
     juce::String copyText;
     dooblrgenerate::gen::JobStatus::Result lastJobResult = dooblrgenerate::gen::JobStatus::Result::none;

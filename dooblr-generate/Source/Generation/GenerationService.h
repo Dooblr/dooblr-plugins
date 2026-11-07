@@ -25,10 +25,20 @@ namespace dooblrgenerate::gen
 
     struct GenerateRequest
     {
+        GenerateRequest() = default;
+        GenerateRequest (juce::String promptIn, juce::String modelIn, juce::int64 seedIn,
+                         double secondsIn, int stepsIn = 0,
+                         juce::File initAudioIn = {}, float initNoiseLevelIn = 1.0f)
+            : prompt (std::move (promptIn)), model (std::move (modelIn)), seed (seedIn),
+              seconds (secondsIn), steps (stepsIn), initAudio (std::move (initAudioIn)),
+              initNoiseLevel (initNoiseLevelIn) {}
+
         juce::String prompt, model;
         juce::int64 seed = 0;
         double seconds = 2.0;
         int steps = 0;                    // 0: the model's default
+        juce::File initAudio;             // Variation from a dropped source; empty: text-to-audio
+        float initNoiseLevel = 1.0f;      // 0 = closest to the source, 1 = furthest
     };
 
     struct JobStatus

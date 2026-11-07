@@ -408,7 +408,9 @@ namespace dooblrgenerate::gen
 
     bool GenerationService::startGenerate (const GenerateRequest& request)
     {
-        if (request.prompt.trim().isEmpty() || ModelCatalog::find (request.model) == nullptr)
+        if (ModelCatalog::find (request.model) == nullptr)
+            return false;
+        if (request.prompt.trim().isEmpty() && ! request.initAudio.existsAsFile())
             return false;
 
         const juce::ScopedLock sl (lock);
@@ -520,13 +522,25 @@ namespace dooblrgenerate::gen
         if (! python.existsAsFile())
             return finishFailed ("Python runtime not installed (the system Python is never used). Run dooblr-generate/scripts/setup-runtime.sh or set DOOBLR_GENERATE_PYTHON.", "runtime");
 
-        if (const auto* model = ModelCatalog::find (job.modelId); isGenerate && model != nullptr && ! model->isTest)
+        if (const auto* model = ModelCatalog::find (job.modelId); isGenerate && model != nullptr)
         {
-            const auto folder = modelFolder (job.modelId);
-            const auto missing = ModelCatalog::missingFiles (*model, folder);
-            if (! missing.isEmpty())
-                return finishFailed (model->displayName + " is not installed or incomplete. Missing in "
-                                     + folder.getFullPathName() + ": " + missing.joinIntoString (", "), "missing");
+            if (job.request.initAudio != juce::File())
+            {
+                if (! model->supportsSourceVariation)
+                    return finishFailed (model->displayName + " has no audio-to-audio path in this runtime. "
+                                         "Source variation is only available with Stable Audio Open Small.", "args");
+                if (! job.request.initAudio.existsAsFile())
+                    return finishFailed ("Source sample is missing: " + job.request.initAudio.getFullPathName(), "args");
+            }
+
+            if (! model->isTest)
+            {
+                const auto folder = modelFolder (job.modelId);
+                const auto missing = ModelCatalog::missingFiles (*model, folder);
+                if (! missing.isEmpty())
+                    return finishFailed (model->displayName + " is not installed or incomplete. Missing in "
+                                         + folder.getFullPathName() + ": " + missing.joinIntoString (", "), "missing");
+            }
         }
 
         const auto worker = installWorker();
@@ -552,6 +566,9 @@ namespace dooblrgenerate::gen
                              "--out", outFile.getFullPathName() });
             if (r.steps > 0)
                 args.addArray ({ "--steps", juce::String (r.steps) });
+            if (r.initAudio.existsAsFile())
+                args.addArray ({ "--init-audio", r.initAudio.getFullPathName(),
+                                 "--init-noise", juce::String (r.initNoiseLevel, 3) });
         }
         else
         {

@@ -20,6 +20,7 @@
 #include "Generation/GenerationService.h"
 #include "Generation/History.h"
 #include "Generation/ModelCatalog.h"
+#include "Generation/SourceAudio.h"
 #include "BinaryData.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -37,7 +38,9 @@
 #include <vector>
 #include <sys/stat.h>
 #include <pthread.h>
+#if JUCE_MAC
 #include <sys/qos.h>
+#endif
 
 //==============================================================================
 // Counts operator new calls made on a thread marked as the audio thread (real-time safety).
@@ -139,10 +142,10 @@ namespace
         stub.replaceWithText (
             "#!/bin/sh\n"
             "cmd=\"$2\"; shift 2\n"
-            "out=''; seed=0; model=''\n"
-            "while [ $# -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift;; --seed) seed=\"$2\"; shift;; --model) model=\"$2\"; shift;; esac; shift; done\n"
+            "out=''; seed=0; model=''; init=''; noise=''\n"
+            "while [ $# -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift;; --seed) seed=\"$2\"; shift;; --model) model=\"$2\"; shift;; --init-audio) init=\"$2\"; shift;; --init-noise) noise=\"$2\"; shift;; esac; shift; done\n"
             "mode=$(cat '" + rootPath + "/stub-mode' 2>/dev/null || echo ok)\n"
-            "echo \"$cmd $model $seed\" >> '" + rootPath + "/stub-calls'\n"
+            "echo \"$cmd $model $seed init=$init noise=$noise\" >> '" + rootPath + "/stub-calls'\n"
             "echo 'some library warning on stderr' 1>&2\n"
             "case \"$mode\" in\n"
             "  crash) echo '{\"event\":\"progress\",\"stage\":\"sampling\",\"fraction\":0.3}'; kill -KILL $$;;\n"
@@ -298,8 +301,8 @@ namespace
         check (p.hasEditor(), "has an editor");
 
         const auto ids = params::allIds();
-        check (ids.size() == 7, "7 automatable parameters");
-        check (p.getParameters().size() == 7, "the processor exposes exactly the 7 parameters to the host");
+        check (ids.size() == 8, "8 automatable parameters");
+        check (p.getParameters().size() == 8, "the processor exposes exactly the 8 parameters to the host");
 
         for (const auto& id : ids)
         {
@@ -313,7 +316,8 @@ namespace
         for (const auto& e : { Expect { "output", -48.0f, 12.0f, 0.0f }, Expect { "tune", -24.0f, 24.0f, 0.0f },
                                Expect { "fine", -100.0f, 100.0f, 0.0f }, Expect { "start", 0.0f, 95.0f, 0.0f },
                                Expect { "attack", 0.0f, 1000.0f, 0.0f }, Expect { "decay", 10.0f, 20000.0f, 20000.0f },
-                               Expect { "velocity", 0.0f, 100.0f, 100.0f } })
+                               Expect { "velocity", 0.0f, 100.0f, 100.0f },
+                               Expect { "variationAmount", 0.0f, 100.0f, 50.0f } })
         {
             auto* param = dynamic_cast<juce::RangedAudioParameter*> (p.getState().getParameter (e.id));
             const auto& r = param->getNormalisableRange();
@@ -323,8 +327,10 @@ namespace
 
         const auto models = gen::ModelCatalog::all (false);
         check (models.size() == 2, "two real models offered");
-        check (models[0].id == "stable-audio-open-small" && models[0].gated, "Stable Audio Open Small first and gated");
-        check (models[1].id == "audioldm-s-full-v2" && ! models[1].gated, "AudioLDM second, not gated");
+        check (models[0].id == "stable-audio-open-small" && models[0].gated && models[0].supportsSourceVariation,
+               "Stable Audio Open Small first, gated, supports source variation");
+        check (models[1].id == "audioldm-s-full-v2" && ! models[1].gated && ! models[1].supportsSourceVariation,
+               "AudioLDM second, not gated, no source variation");
         for (const auto& m : models)
             check (! m.isTest && m.licence.isNotEmpty() && m.licenceUrl.startsWith ("https://"), str (m.id) + " has a licence line and link");
         check (gen::ModelCatalog::all (true).back().isTest, "test backend only with includeTest");
@@ -350,6 +356,7 @@ namespace
         check (text ("fine", -0.01f) == "0.0 ct", "Fine 0 reads 0.0 ct");
         check (text ("start", 25.0f) == "25.0 %", "Start 25.0 %");
         check (text ("velocity", 80.0f) == "80 %", "Velocity 80 %");
+        check (text ("variationAmount", 50.0f) == "50.0 %", "Variation Amount 50.0 %");
     }
 
     void testSampler()
@@ -613,6 +620,15 @@ namespace
         setParam (p, "decay", 700.0f);
         setParam (p, "velocity", 40.0f);
         setParam (p, "output", -3.0f);
+        setParam (p, "variationAmount", 70.0f);
+
+        const auto sourceIn = rig.home.root.getChildFile ("drop-in.wav");
+        juce::AudioBuffer<float> sourceAudio (1, 44100);
+        for (int i = 0; i < 44100; ++i) sourceAudio.setSample (0, i, 0.25f);
+        writeWav (sourceIn, sourceAudio, 44100.0);
+        juce::String sourceError;
+        check (p.loadSourceFile (sourceIn, sourceError), "loaded a source sample: " + str (sourceError));
+        check (p.getSourceSample() != nullptr && p.wasSourceTrimmed() == false, "source present, not trimmed");
 
         juce::MemoryBlock state;
         p.getStateInformation (state);
@@ -634,6 +650,19 @@ namespace
                "current sample restored from the history (with its prompt and seed)");
         check (restored != nullptr && std::abs (restored->sampleRate - 32000.0) < 1e-9 && restored->audio.getNumSamples() == 2000,
                "restored audio matches the file");
+        check (q.getSourceSample() != nullptr && q.getSourceName() == "drop-in.wav"
+               && q.getSourceSample()->audio.getNumChannels() == 2
+               && q.getSourceSample()->audio.getNumSamples() == 44100,
+               "source sample restored (stereo copy, original name)");
+
+        Processor blank (rig.home.paths());
+        juce::MemoryBlock blankState;
+        blank.getStateInformation (blankState);
+        q.setStateInformation (blankState.getData(), (int) blankState.getSize());
+        check (q.getSourceSample() == nullptr, "state without a source clears a previously loaded source");
+        q.setStateInformation (state.getData(), (int) state.getSize());
+        check (q.getSourceSample() != nullptr && q.getSourceName() == "drop-in.wav",
+               "source restores again after a blank state");
 
         // Not in this machine's history any more: falls back to the WAV path.
         rig.home.paths().historyIndex().deleteFile();
@@ -647,6 +676,7 @@ namespace
         Processor s (rig.home.paths());
         s.setStateInformation (state.getData(), (int) state.getSize());
         check (s.getCurrentSample() == nullptr && s.getPrompt() == "ragtime piano note", "missing WAV: settings restore, no sample");
+        check (s.getSourceSample() != nullptr, "source copy in the working folder survives the history WAV going missing");
 
         // Garbage is ignored.
         const char junk[] = "not a state";
@@ -753,6 +783,146 @@ namespace
         check (service.waitUntilIdle (3000), "cancelled download ends quickly");
         check (service.jobStatus().result == gen::JobStatus::Result::cancelled, "download cancelled");
         check (! service.startDownload (gen::ModelCatalog::testBackend), "nothing to download for the test backend");
+    }
+
+    void testSourceSample()
+    {
+        TempHome home;
+
+        // Mono 22.05 kHz -> stereo 44.1 kHz, same duration.
+        juce::AudioBuffer<float> mono (1, 22050);
+        for (int i = 0; i < 22050; ++i) mono.setSample (0, i, 0.4f);
+        juce::AudioBuffer<float> converted;
+        bool trimmed = true;
+        check (gen::SourceAudio::convertToModelInput (mono, 22050.0, converted, trimmed), "converted mono 22.05 kHz");
+        check (converted.getNumChannels() == 2, "mono becomes stereo");
+        check (std::abs (converted.getNumSamples() - 44100) <= 1, "1 s at 22.05 kHz becomes 1 s at 44.1 kHz, got "
+               + std::to_string (converted.getNumSamples()));
+        check (! trimmed, "1 s is not trimmed");
+        check (std::abs (converted.getSample (0, 100) - 0.4f) < 1e-4f
+               && std::abs (converted.getSample (1, 100) - converted.getSample (0, 100)) < 1e-6f,
+               "both stereo channels match the mono source");
+
+        // Already 44.1 stereo: identity besides a possible copy.
+        juce::AudioBuffer<float> stereo (2, 44100);
+        for (int i = 0; i < 44100; ++i) { stereo.setSample (0, i, 0.2f); stereo.setSample (1, i, -0.1f); }
+        check (gen::SourceAudio::convertToModelInput (stereo, 44100.0, converted, trimmed), "converted 44.1 stereo");
+        check (converted.getNumChannels() == 2 && converted.getNumSamples() == 44100 && ! trimmed, "44.1 stereo kept");
+        check (std::abs (converted.getSample (1, 10) + 0.1f) < 1e-6f, "right channel preserved");
+
+        // Longer than 11 s is trimmed.
+        juce::AudioBuffer<float> longMono (1, (int) std::llround (15.0 * 48000.0));
+        longMono.clear();
+        longMono.setSample (0, 0, 1.0f);
+        check (gen::SourceAudio::convertToModelInput (longMono, 48000.0, converted, trimmed), "converted 15 s");
+        check (trimmed, "15 s is trimmed");
+        check (std::abs (converted.getNumSamples() / gen::SourceAudio::targetRate - gen::SourceAudio::maxSeconds) < 0.02,
+               "trimmed length is 11 s at 44.1 kHz, got " + std::to_string (converted.getNumSamples() / 44100.0));
+
+        juce::String error;
+        check (gen::SourceAudio::resolveDroppedFile (home.root.getChildFile ("missing.wav"), error) == juce::File()
+               && error.contains ("not found"), "missing file is rejected");
+
+        const auto txt = home.root.getChildFile ("notes.txt");
+        txt.replaceWithText ("hello", false, false, "\n");
+        error = {};
+        check (gen::SourceAudio::resolveDroppedFile (txt, error) == juce::File()
+               && error.contains ("Not a readable audio file"), "non-audio is rejected: " + str (error));
+
+        const auto wav = home.root.getChildFile ("kick.wav");
+        check (writeWav (wav, mono, 22050.0), "wrote a mono wav");
+        const auto dest = home.paths().source().getChildFile ("copy.wav");
+        auto stored = gen::SourceAudio::loadAndStore (wav, dest, error);
+        check (stored != nullptr, "loadAndStore: " + str (error));
+        check (stored != nullptr && stored->file == dest && dest.existsAsFile(), "wrote a working copy");
+        check (stored != nullptr && stored->originalName == "kick.wav" && stored->audio.getNumChannels() == 2
+               && std::abs (stored->sampleRate - 44100.0) < 0.5 && ! stored->trimmed,
+               "stored copy is 44.1 stereo under the original name");
+
+        // Ableton .alc: only accepted when it names a real audio file.
+        const auto alcBad = home.root.getChildFile ("clip.alc");
+        alcBad.replaceWithText ("<?xml version=\"1.0\"?><Ableton><SampleRef><FileRef>"
+                                "<Path Value=\"/no/such/file.wav\"/></FileRef></SampleRef></Ableton>", false, false, "\n");
+        error = {};
+        check (gen::SourceAudio::resolveDroppedFile (alcBad, error) == juce::File()
+               && error.containsIgnoreCase ("Ableton"), "unresolvable .alc is rejected: " + str (error));
+
+        const auto alcOk = home.root.getChildFile ("good.alc");
+        alcOk.replaceWithText ("<?xml version=\"1.0\"?><Ableton><SampleRef><FileRef><Path Value=\""
+                               + wav.getFullPathName() + "\"/></FileRef></SampleRef></Ableton>", false, false, "\n");
+        error = {};
+        check (gen::SourceAudio::resolveDroppedFile (alcOk, error) == wav, "resolvable .alc points at the audio file: " + str (error));
+
+        TestRig rig;
+        auto& p = *rig.processor;
+        juce::String loadError;
+        check (p.loadSourceFile (wav, loadError), "processor loads a dropped wav: " + str (loadError));
+        check (p.getSourceSample() != nullptr && p.getSourceName() == "kick.wav", "source name is the dropped file");
+        check (p.getSourceSample()->file.getParentDirectory() == rig.home.paths().source(), "copy lives in the working folder");
+        check (p.getSourceMessage().contains ("Loaded"), "status says Loaded");
+
+        p.setPrompt ({});
+        check (p.generate (true), "Variation with a source does not need a prompt");
+        check (p.getService().waitUntilIdle (20000), "source variation job ends");
+        check (p.getService().jobStatus().result == gen::JobStatus::Result::succeeded, "source variation succeeded");
+        const auto calls = rig.home.root.getChildFile ("stub-calls").loadFileAsString();
+        check (calls.contains ("init=" + p.getSourceSample()->file.getFullPathName()),
+               "worker received --init-audio: " + str (calls));
+        check (calls.contains ("noise=0.500"), "worker received default Variation Amount as init noise 0.5: " + str (calls));
+
+        setParam (p, "variationAmount", 25.0f);
+        p.setPrompt ("bright clap");
+        check (p.generate (true) && p.getService().waitUntilIdle (20000), "variation with amount 25 %");
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString().contains ("noise=0.250"),
+               "25 % maps to init_noise 0.25");
+
+        const auto callsBefore = rig.home.root.getChildFile ("stub-calls").loadFileAsString();
+        p.setModel (gen::ModelCatalog::audioLdm);
+        check (! p.generate (true), "AudioLDM refuses source variation");
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString() == callsBefore,
+               "AudioLDM source variation started no worker");
+
+        gen::GenerateRequest blocked { "x", gen::ModelCatalog::audioLdm, 1, 1.0, 0, p.getSourceSample()->file, 0.5f };
+        check (p.getService().startGenerate (blocked) && p.getService().waitUntilIdle (5000), "queued AudioLDM+init fails");
+        check (p.getService().jobStatus().result == gen::JobStatus::Result::failed
+               && p.getService().jobStatus().error.contains ("no audio-to-audio"),
+               "AudioLDM + init audio: copyable refusal");
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString() == callsBefore,
+               "the refusal did not start a worker");
+
+        p.setModel (gen::ModelCatalog::testBackend);
+        p.clearSource();
+        p.setPrompt ({});
+        check (p.getSourceSample() == nullptr, "clear removes the source");
+        check (! p.generate (true), "Variation without a source still needs a prompt");
+        p.setPrompt ("x");
+        check (p.generate (true) && p.getService().waitUntilIdle (20000), "Variation without a source still generates");
+        {
+            const auto last = rig.home.root.getChildFile ("stub-calls").loadFileAsString().trim()
+                                  .fromLastOccurrenceOf ("\n", false, false);
+            check (last.contains ("init= noise=") && ! last.contains ("init=/"),
+                   "Variation without a source does not pass --init-audio: " + str (last));
+        }
+
+        wav.deleteFile();
+        check (dest.existsAsFile(), "the working copy survives the original file being deleted");
+        juce::String fromCopy;
+        check (p.loadSourceFile (dest, fromCopy), "the working copy still loads after the original is gone: " + str (fromCopy));
+
+        // Source preview plays through the sampler without replacing the current sample.
+        juce::AudioBuffer<float> current (2, 4800);
+        for (int i = 0; i < 4800; ++i) { current.setSample (0, i, 0.5f); current.setSample (1, i, 0.5f); }
+        const auto currentWav = rig.home.root.getChildFile ("current.wav");
+        writeWav (currentWav, current, 48000.0);
+        juce::String ignore;
+        check (p.loadFile (currentWav, ignore), "loaded a current sample");
+        check (p.loadSourceFile (dest.existsAsFile() ? dest : currentWav, ignore), "reloaded source");
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer midi;
+        p.requestSourcePreview();
+        p.processBlock (buf, midi);
+        check (buf.getMagnitude (0, 512) > 0.01f, "source Play auditions the source");
+        check (p.getCurrentSample() != nullptr && p.getCurrentSample()->file == currentWav, "current sample is unchanged");
     }
 
     void testWorkerScript()
@@ -906,7 +1076,9 @@ namespace
         {
             // Like a host's audio thread: the highest QoS class (an ordinary thread can be
             // descheduled for milliseconds, which says nothing about the plug-in).
+           #if JUCE_MAC
             pthread_set_qos_class_self_np (QOS_CLASS_USER_INTERACTIVE, 0);
+           #endif
             onAudioThread = true;
             juce::AudioBuffer<float> buf (2, 256);
             juce::MidiBuffer midi;
@@ -970,7 +1142,7 @@ namespace
                 { "prompt", &editor->getPromptEditor() }, { "seed", &editor->getSeedEditor() }, { "length", &editor->getLengthSlider() },
                 { "generate", &editor->getGenerateButton() }, { "variation", &editor->getVariationButton() },
                 { "waveform", &editor->getWaveform() }, { "play", &editor->getPlayButton() }, { "drag", &editor->getDragButton() },
-                { "history", &editor->getHistoryList() }, { "playback", &editor->getPlaybackPanel() },
+                { "source", &editor->getSourceDropZone() }, { "history", &editor->getHistoryList() }, { "playback", &editor->getPlaybackPanel() },
                 { "model box", &editor->getModelBox() }, { "status", &editor->getStatusLabel() },
                 { "download", &editor->getDownloadButton() }, { "token", &editor->getTokenButton() },
                 { "folder", &editor->getFolderButton() }, { "copy", &editor->getCopyButton() }, { "details", &editor->getDetails() } };
@@ -988,6 +1160,12 @@ namespace
 
             check (editor->getPromptEditor().getWidth() >= 300, label + ": prompt at least 300 px wide");
             check (editor->getWaveform().getHeight() >= 150, label + ": waveform at least 150 px tall (" + std::to_string (editor->getWaveform().getHeight()) + ")");
+            check (editor->getSourceDropZone().getWidth() >= 160 && editor->getSourceDropZone().getHeight() >= 150,
+                   label + ": source drop zone size " + std::to_string (editor->getSourceDropZone().getWidth()) + "x"
+                   + std::to_string (editor->getSourceDropZone().getHeight()));
+            check (editor->getSourceDropZone().getEmptyLabel().isVisible()
+                   && editor->getSourceDropZone().getEmptyLabel().getText() == "Drop sample",
+                   label + ": empty drop zone shows Drop sample");
             check (editor->getHistoryList().getHeight() >= 120, label + ": history at least 120 px tall");
             check (editor->getGenerateButton().getWidth() >= 100 && editor->getGenerateButton().getHeight() >= 26, label + ": Generate button size");
             check (editor->getDetails().getHeight() >= 30, label + ": details box at least 30 px tall");
@@ -995,6 +1173,8 @@ namespace
             auto& panel = editor->getPlaybackPanel();
             for (const auto& id : params::allIds())
             {
+                if (id == params::id::variationAmount)
+                    continue;
                 auto* c = panel.findControl (id);
                 check (c != nullptr && c->isVisible() && panel.getLocalBounds().contains (c->getBounds()), label + ": knob " + str (id) + " inside PLAYBACK");
             }
@@ -1063,6 +1243,63 @@ namespace
         check (editor->getHistoryList().getNumEntries() == 1, "history list shows the generation");
         check (editor->getPlayButton().isEnabled() && editor->getDragButton().isEnabled(), "Play and Drag WAV enabled with a sample");
 
+        // Source drop zone: load, highlight, clear, Variation Amount, and worker --init-audio.
+        const auto dropWav = rig.home.root.getChildFile ("drop.wav");
+        juce::AudioBuffer<float> dropAudio (1, 22050);
+        for (int i = 0; i < 22050; ++i) dropAudio.setSample (0, i, 0.3f);
+        writeWav (dropWav, dropAudio, 22050.0);
+        auto& dropZone = editor->getSourceDropZone();
+        dropZone.fileDragEnter ({ dropWav.getFullPathName() }, 0, 0);
+        check (dropZone.isDragHighlighted(), "drop zone highlights on drag-over");
+        dropZone.filesDropped ({ dropWav.getFullPathName() }, 0, 0);
+        editor->refresh();
+        check (! dropZone.isDragHighlighted(), "highlight clears after drop");
+        check (p.getSourceSample() != nullptr && dropZone.getWaveform().hasSample(), "drop loads the source waveform");
+        check (dropZone.getNameLabel().getText().contains ("drop.wav") && dropZone.getNameLabel().getText().contains ("s"),
+               "drop zone shows the file name and length");
+        check (dropZone.getPlayButton().isVisible() && dropZone.getClearButton().isVisible() && dropZone.getAmountSlider().isVisible(),
+               "Play, clear and Amount are live once a source is loaded");
+        check (dropZone.getAmountSlider().isEnabled(), "Amount enabled for the test backend");
+        check (! dropZone.getEmptyLabel().isVisible(), "Drop sample label hides when loaded");
+
+        const auto junk = rig.home.root.getChildFile ("notes.txt");
+        junk.replaceWithText ("not audio", false, false, "\n");
+        dropZone.filesDropped ({ junk.getFullPathName() }, 0, 0);
+        editor->refresh();
+        check (p.getSourceSample() != nullptr, "a rejected drop leaves the current source");
+        check (dropZone.getStatusLabel().isVisible() && dropZone.getStatusLabel().getText().contains ("Not a readable audio file"),
+               "rejected drop shows a short status: " + str (dropZone.getStatusLabel().getText()));
+
+        type (editor->getPromptEditor(), {});
+        editor->refresh();
+        check (editor->getVariationButton().isEnabled(), "Variation stays enabled with a source and an empty prompt");
+        const auto callsBeforeDrop = rig.home.root.getChildFile ("stub-calls").loadFileAsString();
+        click (editor->getVariationButton());
+        check (p.getService().waitUntilIdle (20000), "UI source variation finishes");
+        editor->refresh();
+        const auto callsAfterDrop = rig.home.root.getChildFile ("stub-calls").loadFileAsString();
+        check (callsAfterDrop != callsBeforeDrop && callsAfterDrop.contains ("init=" + p.getSourceSample()->file.getFullPathName()),
+               "Variation with a source passes --init-audio");
+        type (editor->getPromptEditor(), "909 kick");
+        editor->refresh();
+
+        p.setModel (gen::ModelCatalog::audioLdm);
+        editor->refresh();
+        check (! editor->getVariationButton().isEnabled(), "Variation disabled for AudioLDM when a source is loaded");
+        check (! dropZone.getAmountSlider().isEnabled(), "Amount disabled for AudioLDM");
+        p.setModel (gen::ModelCatalog::testBackend);
+        editor->refresh();
+
+        juce::DragAndDropTarget::SourceDetails historyDrag (juce::var (editor->getHistoryList().fileForRow (0).getFullPathName()), nullptr, {});
+        check (dropZone.isInterestedInDragSource (historyDrag), "history rows can be dropped on the source zone");
+        dropZone.itemDropped (historyDrag);
+        editor->refresh();
+        check (p.getSourceSample() != nullptr, "internal history drag loads as a source");
+
+        click (dropZone.getClearButton());
+        editor->refresh();
+        check (p.getSourceSample() == nullptr && dropZone.getEmptyLabel().isVisible(), "clear empties the drop zone");
+
         // Drag-out: the history row and the editor hand the WAV path to the OS drag.
         const auto file = editor->getHistoryList().fileForRow (0);
         check (file.existsAsFile() && file.hasFileExtension ("wav"), "history row maps to its WAV");
@@ -1084,11 +1321,11 @@ namespace
         click (editor->getVariationButton());
         p.getService().waitUntilIdle (20000);
         editor->refresh();
-        check (editor->getHistoryList().getNumEntries() == 2, "two history rows");
+        check (editor->getHistoryList().getNumEntries() >= 2, "history has the original and the variation");
         if (editor->getHistoryList().getNumEntries() < 2)
             return;
-        const auto first = editor->getHistoryList().getEntries()[1];
-        editor->getHistoryList().getListBox().selectRow (1);
+        const auto first = editor->getHistoryList().getEntries().back();
+        editor->getHistoryList().getListBox().selectRow (editor->getHistoryList().getNumEntries() - 1);
         editor->getHistoryList().onChoose (first, false);
         editor->refresh();
         check (p.getCurrentSample() != nullptr && p.getCurrentSample()->historyId == first.id, "clicking a history row loads it");
@@ -1214,6 +1451,7 @@ int main()
         { "StateRoundTrip", testStateRoundTrip },
         { "ModelStatus", testModelStatus },
         { "WorkerScript", testWorkerScript },
+        { "SourceSample", testSourceSample },
         { "GenerationEndToEnd", testGenerationEndToEnd },
         { "AudioThreadDuringGeneration", testAudioThreadDuringGeneration },
         { "EditorLayout", testEditorLayout },
