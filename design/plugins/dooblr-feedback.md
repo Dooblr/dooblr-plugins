@@ -36,7 +36,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE effect VST3 (target `DooblrFeedback`, product "dooblr-feedback", code Dbfb)
 - Version: 0.1.3
-- Last source change: 2026-11-07
+- Last source change: 2026-11-06
 - Source tree: `f7bdf8420a6e` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-feedback`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-feedback/scripts/build.sh` (build dir `~/dooblr-build/dooblr-feedback`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
