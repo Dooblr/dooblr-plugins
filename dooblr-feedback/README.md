@@ -9,19 +9,22 @@ it came back, and can be locked or cleared. Rooms keep their own notes and prese
 last resort, a feedback-gated **Safety duck** pulls the whole output down when a howl gets
 past the notches.
 
-Version 0.1.1. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
+Version 0.1.3. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
 
 ## How it works
 
-- **Signal path.** Up to 24 bands. Each one is a parametric peaking EQ (Bell Q, the first
+- **Signal path.** An optional 12 dB/oct Butterworth **HPF** (off by default) sits first on
+  the mic path, then up to 24 bands. Each band is a parametric peaking EQ (Bell Q, the first
   12 dB of the cut) in series with a narrow notch (Notch Q, anything deeper, including a true
   infinite notch). Both are zero-delay-feedback state-variable filters, stereo, with depth,
   frequency and Q smoothed and coefficients updated every 16 samples. There is no lookahead
   and no FFT on the audio path, so the plug-in reports and adds no latency. Only live filters
-  are processed (an idle one costs nothing). Bypass and an empty bank pass the input bit-exact.
+  are processed (an idle one costs nothing). Bypass, HPF off, and an empty bank pass the input
+  bit-exact.
 - **Detection.** A 4096-point Hann FFT of the detector signal every 256 samples (5.3 ms at
-  48 kHz). The detector is the plug-in's own output, which is what reaches the speakers,
-  or the sidechain when **SC** is on and a key is connected. A candidate is a narrow peak
+  48 kHz). The detector is the plug-in's own output (after the HPF and the notches), which is
+  what reaches the speakers, or the sidechain when **SC** is on and a key is connected. The
+  HPF is not applied to the sidechain. A candidate is a narrow peak
   that stands well above its neighbourhood (prominence against the bins 4–12 bins away). It
   is tracked from hop to hop, and it becomes feedback when:
   - it keeps **growing** after the analysis window has filled with it (an onset filling
@@ -78,14 +81,20 @@ Version 0.1.1. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
   (locked). Push the gain up slowly, let it catch each ring, then turn Ring-out off and the
   fixed notches stay for the show.
 - **Auto** off pauses detection: the existing notches stay as they are and nothing new is added.
+- **HPF** (0.1.3). A 12 dB/oct Butterworth high-pass on the mic, 20–400 Hz (log), default
+  80 Hz, switch **off** so existing sessions sound the same. Off leaves the buffer untouched
+  (bit-identical). Switching on or off crossfades 5 ms; moving the frequency is smoothed
+  (20 ms, coefficients every 16 samples). The detector listens after the HPF, so rumble does
+  not seed notches. The curve is drawn on the graph as a shaded cutoff region while the
+  switch is on. No hint text.
 
 ## Layout and controls
 
 | Area | Controls |
 | --- | --- |
-| Left column | Name and version, Bypass, Safe / Aggressive, the large **HOLD** button, Auto, Ring-out, SC (sidechain), the big **Sensitivity** knob, Max cut, latency and status |
+| Left column | Name and version, Bypass, Safe / Aggressive, the large **HOLD** button, Auto, Ring-out, SC (sidechain), **HPF** pill and Freq knob, the big **Sensitivity** knob, Max cut, latency and status |
 | Toolbar | Preset `<` list `>` and a `…` menu (Save room preset, Load room preset, Rename), Undo / Redo, A / B compare with a copy button (A→B / B→A), **Clear all** |
-| Graph | Input and output spectrum (Analyzer speed sets the drawn ballistics), the summed notch curve, and a marker per notch: a chip with frequency and note name, cut and Q, hits (×n), time since it was detected, and FIX / FLT. The chip has a padlock (lock = fixed) and × (clear). A dashed line runs down to a diamond handle at the notch's depth (accent = fixed, orange = floating). **Calm labels:** chips sit in stable lanes and are only re-laid out when a notch is added or cleared or the editor is resized, never because a level or cut changed; moves ease over 250 ms, values refresh at most 5 times a second, and a chip fades (300 ms) to a small numbered dot once its notch has been quiet for 4 s. Hovering a dot, its table row or the graph near it, or selecting it, expands it again. Chips never overlap: those that do not fit collapse to numbered dots. Hover reads out the notch, or the frequency, note and output level. Output meter at the right, with the Safety threshold tick |
+| Graph | Input and output spectrum (Analyzer speed sets the drawn ballistics), the summed notch curve, a shaded HPF cutoff region while the high-pass is on, and a marker per notch: a chip with frequency and note name, cut and Q, hits (×n), time since it was detected, and FIX / FLT. The chip has a padlock (lock = fixed) and × (clear). A dashed line runs down to a diamond handle at the notch's depth (accent = fixed, orange = floating). **Calm labels:** chips sit in stable lanes and are only re-laid out when a notch is added or cleared or the editor is resized, never because a level or cut changed; moves ease over 250 ms, values refresh at most 5 times a second, and a chip fades (300 ms) to a small numbered dot once its notch has been quiet for 4 s. Hovering a dot, its table row or the graph near it, or selecting it, expands it again. Chips never overlap: those that do not fit collapse to numbered dots. Hover reads out the notch, or the frequency, note and output level. Output meter at the right, with the Safety threshold tick |
 | Bottom, Notches view | The notch table: #, Frequency, Note, Cut, Needed (deepest cut it has needed), Q, Level, Detected, Hits, Type, Lock / Unlock, Clear |
 | Bottom, Notes view | Free-text room notes (UTF-8), saved with the session and in room presets |
 | Bottom, Advanced view | Notch Q, Bell Q, Recover after, Recover speed, Range low, Range high, Output, Analyzer speed; Safety duck, Duck when, Threshold, Depth, Recover |
@@ -239,7 +248,7 @@ write editor PNG snapshots.
 
 ## Tests
 
-The 24 console tests (553 checks; 555 when the editor snapshots are rendered) drive the real processor and editor:
+The console tests drive the real processor and editor:
 - **Metadata and latency:** metadata; 0 samples of latency (reported and measured) with a null when idle.
 - **Feedback simulation:**
   - the closed-loop simulation above at two loop gains;
@@ -280,6 +289,8 @@ The 24 console tests (553 checks; 555 when the editor snapshots are rendered) dr
   - the table's Lock and Clear buttons;
   - Clear all, preset `<` / `>`, A / B, Undo / Redo.
 - **Analyzer speed** setting.
+- **High-pass:** −3 dB at the cutoff and strong attenuation an octave or more below; off is
+  bit-identical; toggling is click-free; parameters round-trip through state save and restore.
 
 ## Notes and limits
 

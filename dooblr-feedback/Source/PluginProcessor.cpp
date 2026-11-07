@@ -26,11 +26,12 @@ namespace dooblrfeedback
             safety = get (id::safety); safetyTrigger = get (id::safetyTrigger); safetyThreshold = get (id::safetyThreshold);
             safetyDepth = get (id::safetyDepth); safetyRelease = get (id::safetyRelease);
             recoverSpeed = get (id::recoverSpeed);
+            hpf = get (id::hpf); hpfFreq = get (id::hpfFreq);
         }
 
         std::atomic<float>* detect, * ringOut, * mode, * sensitivity, * sidechain, * rangeLow, * rangeHigh, * maxCut, * notchQ,
             * liveNotches, * release, * output, * bypass, * safety, * safetyTrigger, * safetyThreshold, * safetyDepth, * safetyRelease, * recoverSpeed,
-            * bellQ;
+            * bellQ, * hpf, * hpfFreq;
     };
 
     DooblrFeedbackProcessor::DooblrFeedbackProcessor()
@@ -45,6 +46,7 @@ namespace dooblrfeedback
         state.state.setProperty ("stateVersion", stateVersion, nullptr);
         state.state.setProperty ("presetName", presets::factory().front().name, nullptr);
         engine.prepare (44100.0, maxChunk);
+        highPass.prepare (44100.0, maxChunk);
         setLatencySamples (0);
     }
 
@@ -96,6 +98,7 @@ namespace dooblrfeedback
     void DooblrFeedbackProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     {
         engine.prepare (sampleRate, std::min (samplesPerBlock, maxChunk));
+        highPass.prepare (sampleRate, std::min (samplesPerBlock, maxChunk));
         engine.setSettings (readSettings());
         dryBuffer.setSize (2, maxChunk, false, true, false);
         detectorBuffer.setSize (1, maxChunk, false, true, false);
@@ -155,6 +158,15 @@ namespace dooblrfeedback
                 }
                 detector = d;
             }
+
+            // HPF first on the main path so the detector (the processed output) sees post-HPF
+            // audio and low rumble does not seed notches. The sidechain reference is left
+            // as the host sent it. Off (mix 0) does not touch io.
+            const float* dryPtrs[2] {};
+            for (int ch = 0; ch < numChannels; ++ch)
+                dryPtrs[ch] = dryBuffer.getReadPointer (ch);
+            highPass.process (io, dryPtrs, numChannels, n,
+                              raw->hpf->load() > 0.5f, raw->hpfFreq->load());
 
             engine.process (io, numChannels, n, detector, ! bypassed);
 

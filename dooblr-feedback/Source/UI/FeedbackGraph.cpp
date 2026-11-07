@@ -2,6 +2,7 @@
 
 #include "../Parameters.h"
 #include "../PluginProcessor.h"
+#include "../DSP/HighPass.h"
 #include "DisplayBallistics.h"
 #include "Theme.h"
 
@@ -103,6 +104,16 @@ namespace dooblrfeedback::ui
             dirty = true;
         }
 
+        const auto hpfEnabled = processor.getState().getRawParameterValue (params::id::hpf)->load() > 0.5f;
+        const auto hpfFreq = processor.getState().getRawParameterValue (params::id::hpfFreq)->load();
+        if (hpfEnabled != hpfOn || std::abs (hpfFreq - hpfHz) > 0.05f)
+        {
+            hpfOn = hpfEnabled;
+            hpfHz = hpfFreq;
+            rebuildHpf();
+            dirty = true;
+        }
+
         if (updateLabels (nowMs)) layoutMarkers (nowMs, false);
         if (animateLabels (nowMs)) dirty = true;
         buildMarkers();
@@ -155,6 +166,7 @@ namespace dooblrfeedback::ui
         animateLabels (nowMs);
         buildMarkers();
         rebuildCurve();
+        rebuildHpf();
         repaint();
     }
 
@@ -283,6 +295,7 @@ namespace dooblrfeedback::ui
         animateLabels (nowMs);
         buildMarkers();
         rebuildCurve();
+        rebuildHpf();
         rebuildSpectrumPaths();
     }
 
@@ -634,6 +647,30 @@ namespace dooblrfeedback::ui
         curveFill.closeSubPath();
     }
 
+    void FeedbackGraph::rebuildHpf()
+    {
+        hpfFill.clear();
+        hpfEdge.clear();
+        hpfOn = processor.getState().getRawParameterValue (params::id::hpf)->load() > 0.5f;
+        hpfHz = processor.getState().getRawParameterValue (params::id::hpfFreq)->load();
+        if (! hpfOn || plot.isEmpty())
+            return;
+
+        const auto steps = std::max (2, (int) plot.getWidth() / 2);
+        const auto cutoff = juce::jlimit (dsp::HighPass::minHz, dsp::HighPass::maxHz, hpfHz);
+        for (int i = 0; i <= steps; ++i)
+        {
+            const auto x = plot.getX() + plot.getWidth() * (float) i / (float) steps;
+            const auto cut = -dsp::HighPass::analogResponseDb (frequencyForX (x), cutoff);
+            const auto y = yForCut (cut);
+            if (i == 0) { hpfEdge.startNewSubPath (x, y); hpfFill.startNewSubPath (x, y); }
+            else        { hpfEdge.lineTo (x, y); hpfFill.lineTo (x, y); }
+        }
+        hpfFill.lineTo (plot.getRight(), baselineY);
+        hpfFill.lineTo (plot.getX(), baselineY);
+        hpfFill.closeSubPath();
+    }
+
     void FeedbackGraph::drawBackground()
     {
         const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
@@ -699,6 +736,16 @@ namespace dooblrfeedback::ui
                 g.strokePath (inputPath, juce::PathStrokeType (1.0f));
                 g.setColour (Palette::textPrimary.withAlpha (0.45f));
                 g.strokePath (outputPath, juce::PathStrokeType (1.1f));
+            }
+            if (hpfOn)
+            {
+                const auto xCut = xForFrequency (hpfHz);
+                g.setColour (Palette::accent.withAlpha (0.10f));
+                g.fillRect (plot.getX(), plot.getY(), std::max (0.0f, xCut - plot.getX()), plot.getHeight());
+                g.setColour (Palette::accent.withAlpha (0.20f));
+                g.fillPath (hpfFill);
+                g.setColour (Palette::accent.withAlpha (0.80f));
+                g.strokePath (hpfEdge, juce::PathStrokeType (1.2f));
             }
             g.setColour (Palette::dynamic.withAlpha (0.24f));
             g.fillPath (curveFill);

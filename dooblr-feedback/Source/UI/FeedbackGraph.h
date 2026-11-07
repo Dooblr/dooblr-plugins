@@ -123,6 +123,7 @@ namespace dooblrfeedback::ui
         Label* labelFor (int notchId) noexcept;
         void rebuildSpectrumPaths();
         void rebuildCurve();
+        void rebuildHpf();
         bool easeDrawnNotches (double dtSeconds);
         void snapDrawnNotches() noexcept { drawnNotches = notches; }
         const dsp::Notch* drawnById (int notchId) const noexcept;
@@ -158,7 +159,9 @@ namespace dooblrfeedback::ui
         float backgroundScale = 0.0f;
 
         std::array<float, dsp::DisplayFrame::numPoints> drawnInput {}, drawnOutput {}, pointX {}, inputY {}, outputY {};
-        juce::Path inputPath, outputPath, curveFill, curveEdge;
+        juce::Path inputPath, outputPath, curveFill, curveEdge, hpfFill, hpfEdge;
+        bool hpfOn = false;
+        float hpfHz = 80.0f;
         juce::Path scratchLine, scratchDashed, scratchDiamond; // reused by paint (no per-frame allocation once grown)
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FeedbackGraph)
