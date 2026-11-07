@@ -49,9 +49,10 @@ namespace dooblrfeedback
         latencyLabel.setMinimumHorizontalScale (0.6f);
         styleLabel (sensitivityCaption, "SENSITIVITY", 13.0f, Palette::textPrimary, juce::Justification::centred, true);
         styleLabel (maxCutCaption, "MAX CUT", 11.0f, Palette::textMuted, juce::Justification::centred, true);
+        styleLabel (hpfFreqCaption, "FREQ", 11.0f, Palette::textMuted, juce::Justification::centred, true);
         styleLabel (bottomTitle, {}, 11.0f, Palette::textMuted, juce::Justification::centredLeft, true);
         bottomTitle.setComponentID ("bottomTitle");
-        for (auto* label : { &titleLabel, &subtitleLabel, &statusLabel, &latencyLabel, &sensitivityCaption, &maxCutCaption, &bottomTitle })
+        for (auto* label : { &titleLabel, &subtitleLabel, &statusLabel, &latencyLabel, &sensitivityCaption, &maxCutCaption, &hpfFreqCaption, &bottomTitle })
             addAndMakeVisible (label);
 
         const auto setupKnob = [this] (juce::Slider& knob, const juce::String& pid, juce::Colour colour)
@@ -68,10 +69,12 @@ namespace dooblrfeedback
         };
         setupKnob (sensitivityKnob, id::sensitivity, Palette::accent);
         setupKnob (maxCutKnob, id::maxCut, Palette::dynamic);
+        setupKnob (hpfFreqKnob, id::hpfFreq, Palette::accent);
         sensitivityKnob.setTooltip ("Sensitivity: higher catches quieter, shorter rings sooner; lower waits for clearer evidence "
                                     "(double-click resets, Shift-drag for fine moves)");
         maxCutKnob.setTooltip (juce::String (juce::CharPointer_UTF8 ("Max cut: the deepest any one notch may go; turned fully up it is \xe2\x88\x9e, a true notch "
                                                                      "that removes its frequency completely (double-click resets to 18 dB)")));
+        hpfFreqKnob.setTooltip ("HPF frequency: 20-400 Hz, 12 dB/oct Butterworth (double-click resets to 80 Hz, Shift-drag for fine moves)");
 
         safetyBadge.setComponentID ("safetyBadge");
         safetyBadge.setFont (juce::FontOptions (12.0f, juce::Font::bold));
@@ -90,12 +93,14 @@ namespace dooblrfeedback
         ringOutButton.setComponentID (id::ringOut);
         sidechainButton.setComponentID (id::sidechain);
         bypassButton.setComponentID (id::bypass);
+        hpfButton.setComponentID (id::hpf);
         holdButton.setTooltip ("Hold: keep every floating filter where it is. Off: each one slowly subsides once its frequency is quiet");
         autoButton.setTooltip ("Auto: detect feedback and add notches. Off: keep the current notches, add none");
         ringOutButton.setTooltip ("Ring-out: every notch found becomes fixed (stays until cleared). "
                                   "Use it while ringing out the room, then switch it off for the show");
         sidechainButton.setTooltip ("SC: detect on the sidechain input (a reference mic), notch the main input");
         bypassButton.setTooltip ("Bypass: the input unchanged");
+        hpfButton.setTooltip ("HPF: a 12 dB/oct high-pass on the mic path (default off). The detector listens after it, so rumble does not seed notches");
         for (auto* b : { &holdButton, &autoButton, &ringOutButton, &sidechainButton })
         {
             b->setClickingTogglesState (true);
@@ -107,6 +112,7 @@ namespace dooblrfeedback
         ringOutAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::ringOut, ringOutButton);
         sidechainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::sidechain, sidechainButton);
         bypassAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::bypass, bypassButton);
+        hpfAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::hpf, hpfButton);
 
         // Toolbar.
         undoButton.setComponentID ("undo");
@@ -155,7 +161,7 @@ namespace dooblrfeedback
         };
 
         for (juce::Component* c : { (juce::Component*) &modeToggle, (juce::Component*) &holdButton, (juce::Component*) &autoButton, (juce::Component*) &ringOutButton,
-                                    (juce::Component*) &sidechainButton, (juce::Component*) &bypassButton, (juce::Component*) &undoButton,
+                                    (juce::Component*) &sidechainButton, (juce::Component*) &bypassButton, (juce::Component*) &hpfButton, (juce::Component*) &undoButton,
                                     (juce::Component*) &redoButton, (juce::Component*) &presetPrev, (juce::Component*) &presetBox,
                                     (juce::Component*) &presetNext, (juce::Component*) &presetMenu, (juce::Component*) &compareA,
                                     (juce::Component*) &compareB, (juce::Component*) &compareCopy, (juce::Component*) &clearAllButton,
@@ -266,9 +272,9 @@ namespace dooblrfeedback
     {
         if (auto* c = advancedPanel->findControl (pid))
             return c;
-        for (auto* c : { (juce::Component*) &sensitivityKnob, (juce::Component*) &maxCutKnob, (juce::Component*) &modeToggle,
+        for (auto* c : { (juce::Component*) &sensitivityKnob, (juce::Component*) &maxCutKnob, (juce::Component*) &hpfFreqKnob, (juce::Component*) &modeToggle,
                          (juce::Component*) &holdButton, (juce::Component*) &autoButton, (juce::Component*) &ringOutButton, (juce::Component*) &sidechainButton,
-                         (juce::Component*) &bypassButton })
+                         (juce::Component*) &bypassButton, (juce::Component*) &hpfButton })
             if (c->getComponentID() == pid)
                 return const_cast<juce::Component*> (c);
         return nullptr;
@@ -310,6 +316,7 @@ namespace dooblrfeedback
 
         const auto connected = proc.isSidechainConnected();
         ui::setDimmed (sidechainButton, ! connected);
+        ui::setDimmed (hpfFreqKnob, ! valueOfBool (id::hpf));
         sidechainButton.setTooltip (connected ? "SC: detect on the sidechain input (a reference mic), notch the main input"
                                               : "SC: no sidechain input is routed in the host, so detection uses the main input");
         updateCompareButtons();
@@ -585,7 +592,7 @@ namespace dooblrfeedback
         g.setColour (Palette::accent);
         g.fillRect (columnArea.getX() + 12, titleLabel.getBottom() + 2, 28, 2);
         g.setColour (Palette::divider);
-        g.fillRect (columnArea.getX() + 12, autoButton.getBottom() + 10, columnArea.getWidth() - 24, 1);
+        g.fillRect (columnArea.getX() + 12, autoButton.getBottom() + 6, columnArea.getWidth() - 24, 1);
         g.fillRect (toolbarArea.getX(), toolbarArea.getBottom() + 3, toolbarArea.getWidth(), 1);
 
         g.setColour (Palette::panel);
@@ -620,7 +627,18 @@ namespace dooblrfeedback
             autoButton.setBounds (row.removeFromLeft (half));
             row.removeFromLeft (gap);
             ringOutButton.setBounds (row);
-            col.removeFromTop (20);
+            col.removeFromTop (8);
+            {
+                auto hpfRow = col.removeFromTop (52);
+                hpfButton.setBounds (hpfRow.removeFromLeft (76).withSizeKeepingCentre (76, 28));
+                hpfRow.removeFromLeft (6);
+                auto freqCol = hpfRow;
+                hpfFreqCaption.setBounds (freqCol.removeFromTop (14));
+                hpfFreqKnob.setTextBoxStyle (juce::Slider::TextBoxBelow, false, juce::jlimit (56, 88, freqCol.getWidth()), 16);
+                hpfFreqKnob.getProperties().set ("maxKnobDiameter", 36.0);
+                hpfFreqKnob.setBounds (freqCol);
+            }
+            col.removeFromTop (10);
 
             statusLabel.setBounds (col.removeFromBottom (16));
             latencyLabel.setBounds (col.removeFromBottom (16));

@@ -16,6 +16,7 @@
 #include "UI/NotchTable.h"
 #include "UI/Theme.h"
 #include "DSP/FeedbackEngine.h"
+#include "DSP/HighPass.h"
 
 #include <algorithm>
 #include <array>
@@ -1515,7 +1516,7 @@ namespace
                 }
             }
             check (controls > 15 && ok == controls, label + ": every control is hit-testable and works (" + std::to_string (ok) + " / " + std::to_string (controls) + ")");
-            for (auto pid : { id::detect, id::ringOut, id::mode, id::sensitivity, id::sidechain, id::rangeLow, id::rangeHigh, id::maxCut, id::notchQ, id::bellQ, id::liveNotches, id::release, id::recoverSpeed, id::output, id::bypass })
+            for (auto pid : { id::detect, id::ringOut, id::mode, id::sensitivity, id::sidechain, id::rangeLow, id::rangeHigh, id::maxCut, id::notchQ, id::bellQ, id::liveNotches, id::release, id::recoverSpeed, id::output, id::bypass, id::hpf, id::hpfFreq })
                 check (seen.count (juce::String (pid)) == 1, label + ": the " + std::string (pid) + " control was reached with the mouse");
 
             // Graph marker buttons.
@@ -2999,6 +3000,190 @@ namespace
         }
     }
 
+    void testHighPass()
+    {
+        const auto fc = 80.0f;
+        check (std::abs (dsp::HighPass::analogResponseDb (fc, fc) + 3.0103f) < 0.05f,
+               "-3 dB at the cutoff (" + fmt (dsp::HighPass::analogResponseDb (fc, fc), 3) + " dB)");
+        const auto oct = dsp::HighPass::analogResponseDb (fc * 0.5f, fc);
+        const auto twoOct = dsp::HighPass::analogResponseDb (fc * 0.25f, fc);
+        check (std::abs (oct + 12.3f) < 0.5f, "one octave below is ~12 dB down (" + db (oct) + ")");
+        check (twoOct < -23.0f, "two octaves below is strongly attenuated (" + db (twoOct) + ")");
+        check (dsp::HighPass::analogResponseDb (fc * 10.0f, fc) > -0.05f, "passband is flat");
+
+        auto levelDb = [] (bool on, double toneHz, float cutoff)
+        {
+            auto p = makeProcessor();
+            set (*p, id::detect, 0.0f);
+            set (*p, id::hpf, on ? 1.0f : 0.0f);
+            set (*p, id::hpfFreq, cutoff);
+            Stereo tone ((size_t) defaultRate);
+            addSine (tone.l, defaultRate, toneHz, 0.5f);
+            tone.r = tone.l;
+            const auto out = render (*p, tone);
+            return rmsDb (out.l, 24000, 24000) - rmsDb (tone.l, 24000, 24000);
+        };
+        const auto atCut = levelDb (true, fc, fc);
+        const auto octBelow = levelDb (true, fc * 0.5, fc);
+        const auto twoBelow = levelDb (true, fc * 0.25, fc);
+        const auto pass = levelDb (true, 800.0, fc);
+        note ("HPF 80 Hz through the plug-in: 80 Hz " + db (atCut) + ", 40 Hz " + db (octBelow)
+              + ", 20 Hz " + db (twoBelow) + ", 800 Hz " + db (pass));
+        check (std::abs (atCut + 3.0) < 1.0, "through the plug-in: -3 dB near the cutoff (" + db (atCut) + ")");
+        check (octBelow < -10.0, "through the plug-in: an octave below is strongly attenuated (" + db (octBelow) + ")");
+        check (twoBelow < -20.0, "through the plug-in: two octaves below is strongly attenuated (" + db (twoBelow) + ")");
+        check (std::abs (pass) < 0.2, "through the plug-in: 800 Hz passes (" + db (pass) + ")");
+
+        auto probe = makeProcessor();
+        check (get (*probe, id::hpf) < 0.5f && std::abs (get (*probe, id::hpfFreq) - hpfDefaultHz) < 0.01f, "HPF defaults: off, 80 Hz");
+        check (param (*probe, id::hpf)->isAutomatable() && param (*probe, id::hpfFreq)->isAutomatable(), "HPF parameters are automatable");
+
+        const auto src = mono (pink ((size_t) defaultRate / 2, -20.0, 71));
+        auto offA = makeProcessor();
+        auto offB = makeProcessor();
+        set (*offB, id::hpf, 0.0f);
+        set (*offB, id::hpfFreq, 320.0f);
+        const auto aOut = render (*offA, src), bOut = render (*offB, src);
+        check (maxDiff (aOut.l, bOut.l) == 0.0 && maxDiff (aOut.r, bOut.r) == 0.0
+               && maxDiff (aOut.l, src.l) == 0.0, "HPF off is bit-identical to the input (any stored frequency)");
+
+        auto toggled = makeProcessor();
+        set (*toggled, id::detect, 0.0f);
+        set (*toggled, id::hpf, 1.0f);
+        set (*toggled, id::hpfFreq, 200.0f);
+        render (*toggled, mono (pink ((size_t) (defaultRate * 0.1), -20.0, 72)));
+        set (*toggled, id::hpf, 0.0f);
+        render (*toggled, Stereo ((size_t) (defaultRate * 0.05)));
+        auto neverOn = makeProcessor();
+        const auto afterOff = render (*toggled, src), never = render (*neverOn, src);
+        check (maxDiff (afterOff.l, never.l) == 0.0 && maxDiff (afterOff.r, never.r) == 0.0, "after toggling off, output is bit-identical again");
+
+        auto click = makeProcessor();
+        set (*click, id::detect, 0.0f);
+        Stereo tone ((size_t) defaultRate);
+        addSine (tone.l, defaultRate, 200.0, 0.5f);
+        tone.r = tone.l;
+        const auto pre = (int) (defaultRate * 0.25);
+        Stereo first ((size_t) pre);
+        std::copy (tone.l.begin(), tone.l.begin() + pre, first.l.begin());
+        first.r = first.l;
+        render (*click, first);
+        set (*click, id::hpf, 1.0f);
+        set (*click, id::hpfFreq, 80.0f);
+        Stereo second ((size_t) pre);
+        std::copy (tone.l.begin() + pre, tone.l.begin() + 2 * pre, second.l.begin());
+        second.r = second.l;
+        const auto onOut = render (*click, second);
+        set (*click, id::hpf, 0.0f);
+        Stereo third ((size_t) pre);
+        std::copy (tone.l.begin() + 2 * pre, tone.l.begin() + 3 * pre, third.l.begin());
+        third.r = third.l;
+        const auto offOut = render (*click, third);
+        double jumpOn = 0.0, jumpOff = 0.0, d2On = 0.0, d2Off = 0.0;
+        const auto measure = [] (const std::vector<float>& y, const std::vector<float>& x, double& jump, double& d2)
+        {
+            for (size_t i = 1; i < y.size(); ++i)
+            {
+                jump = std::max (jump, (double) std::abs (y[i] - y[i - 1]));
+                if (i >= 2)
+                {
+                    const auto a = (y[i] - 2.0f * y[i - 1] + y[i - 2]) - (x[i] - 2.0f * x[i - 1] + x[i - 2]);
+                    d2 = std::max (d2, (double) std::abs (a));
+                }
+            }
+        };
+        measure (onOut.l, second.l, jumpOn, d2On);
+        measure (offOut.l, third.l, jumpOff, d2Off);
+        const auto sineStep = 0.5 * twoPi * 200.0 / defaultRate + 0.04;
+        note ("HPF toggle under a 200 Hz sine: on jump " + fmt (jumpOn, 4) + " d2 " + fmt (d2On, 5)
+              + ", off jump " + fmt (jumpOff, 4) + " d2 " + fmt (d2Off, 5));
+        check (jumpOn < sineStep && jumpOff < sineStep, "toggling the HPF is click-free (bounded sample deltas)");
+        check (d2On < 0.02 && d2Off < 0.02, "HPF on/off second-difference stays small");
+
+        auto sweep = makeProcessor();
+        set (*sweep, id::detect, 0.0f);
+        set (*sweep, id::hpf, 1.0f);
+        set (*sweep, id::hpfFreq, 80.0f);
+        Stereo hold ((size_t) 4800);
+        addSine (hold.l, defaultRate, 1000.0, 0.5f);
+        hold.r = hold.l;
+        render (*sweep, hold); // settle
+        Stereo moving ((size_t) (defaultRate / 2));
+        addSine (moving.l, defaultRate, 1000.0, 0.5f);
+        moving.r = moving.l;
+        double zip = 0.0;
+        juce::AudioBuffer<float> buffer (2, defaultBlock);
+        juce::MidiBuffer midi;
+        for (int pos = 0; pos + defaultBlock <= (int) moving.size(); pos += defaultBlock)
+        {
+            const auto t = (float) pos / (float) moving.size();
+            set (*sweep, id::hpfFreq, 20.0f + t * 380.0f);
+            buffer.copyFrom (0, 0, moving.l.data() + pos, defaultBlock);
+            buffer.copyFrom (1, 0, moving.l.data() + pos, defaultBlock);
+            sweep->processBlock (buffer, midi);
+            for (int i = 1; i < defaultBlock; ++i)
+                zip = std::max (zip, (double) std::abs (buffer.getSample (0, i) - buffer.getSample (0, i - 1)));
+        }
+        const auto zipLimit = 0.5 * twoPi * 1000.0 / defaultRate + 0.02;
+        note ("HPF frequency sweep under 1 kHz: largest step " + fmt (zip, 4));
+        check (zip < zipLimit, "moving the HPF frequency does not zipper");
+
+        auto saved = makeProcessor();
+        set (*saved, id::hpf, 1.0f);
+        set (*saved, id::hpfFreq, 160.0f);
+        juce::MemoryBlock block;
+        saved->getStateInformation (block);
+        auto loaded = makeProcessor();
+        loaded->setStateInformation (block.getData(), (int) block.getSize());
+        check (get (*loaded, id::hpf) > 0.5f && std::abs (get (*loaded, id::hpfFreq) - 160.0f) < 0.5f,
+               "HPF parameters round-trip through state save and restore");
+
+        auto legacy = makeProcessor();
+        juce::MemoryBlock fresh;
+        legacy->getStateInformation (fresh);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (fresh.getData(), (int) fresh.getSize());
+        if (xml != nullptr)
+        {
+            juce::Array<juce::XmlElement*> remove;
+            for (auto* e : xml->getChildWithTagNameIterator ("PARAM"))
+                if (e->getStringAttribute ("id") == id::hpf || e->getStringAttribute ("id") == id::hpfFreq)
+                    remove.add (e);
+            for (auto* e : remove) xml->removeChildElement (e, true);
+            juce::MemoryBlock old;
+            juce::AudioProcessor::copyXmlToBinary (*xml, old);
+            auto fromOld = makeProcessor();
+            fromOld->setStateInformation (old.getData(), (int) old.getSize());
+            check (get (*fromOld, id::hpf) < 0.5f && std::abs (get (*fromOld, id::hpfFreq) - hpfDefaultHz) < 1.0f,
+                   "a session without HPF params loads the defaults (off, 80 Hz)");
+        }
+        else
+            check (false, "saved state is XML");
+
+        EditorFixture f (false);
+        if (f.editor != nullptr)
+        {
+            auto* sw = f.editor->findControl (id::hpf);
+            auto* kn = f.editor->findControl (id::hpfFreq);
+            check (sw != nullptr && kn != nullptr, "HPF switch and frequency are real controls");
+            f.editor->setView (Editor::View::notches);
+            f.settle();
+            check (sw != nullptr && sw->isVisible() && kn != nullptr && kn->isVisible(), "HPF controls are visible in the editor");
+            check (f.editor->getLocalArea (sw, sw->getLocalBounds()).getX() < 400
+                   && f.editor->getLocalArea (kn, kn->getLocalBounds()).getX() < 400, "HPF sits in the left column");
+            check (f.editor->getAdvancedPanel().findControl (id::hpf) == nullptr
+                   && f.editor->getAdvancedPanel().findControl (id::hpfFreq) == nullptr, "HPF is not on the Advanced panel");
+            set (*f.processor, id::hpf, 1.0f);
+            set (*f.processor, id::hpfFreq, 120.0f);
+            f.editor->refresh();
+            f.editor->getGraph().poll();
+            f.editor->setSize (1080, 660);
+            f.settle();
+            saveSnapshot (*f.editor, "-1080x660-hpf");
+            const auto image = f.editor->createComponentSnapshot (f.editor->getLocalBounds());
+            check (image.isValid(), "the editor renders with the HPF on");
+        }
+    }
+
     struct TestCase { const char* name; void (*run)(); };
 }
 
@@ -3034,6 +3219,7 @@ int main()
         { "parametric bell plus narrow notch",               testParametricBell },
         { "auto-recover: staged return, re-onset, fixed untouched, no clicks", testAutoRecover },
         { "motion: gliding notch display, slow labels, paint time", testMotionAndPaint },
+        { "high-pass: magnitude, off is bit-identical, click-free toggle, state", testHighPass },
     };
     const auto filter = juce::SystemStats::getEnvironmentVariable ("DOOBLRFEEDBACK_TEST_FILTER", {});
 

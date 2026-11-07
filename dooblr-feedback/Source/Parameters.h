@@ -10,8 +10,9 @@ namespace dooblrfeedback::params
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
         IDs up to bypass were added in 0.1.0; the safety IDs in 0.1.1; recoverSpeed in 0.1.2;
-        bellQ with the parametric bell. liveNotches keeps its values: 0 releases, 1 holds.
-        The displayed name is Hold (Off / On); sessions and automation are unchanged. */
+        bellQ with the parametric bell; hpf / hpfFreq in 0.1.3. liveNotches keeps its values:
+        0 releases, 1 holds. The displayed name is Hold (Off / On); sessions and automation
+        are unchanged. */
     namespace id
     {
         // Detection
@@ -45,6 +46,11 @@ namespace dooblrfeedback::params
 
         // Parametric bell in front of each notch
         inline constexpr const char* bellQ          = "bellQ";
+
+        // High-pass (0.1.3): a rumble cut in front of the notches. Default off, so 0.1.2
+        // sessions stay bit-identical. IDs appended; no stateVersion bump.
+        inline constexpr const char* hpf            = "hpf";
+        inline constexpr const char* hpfFreq        = "hpfFreq";
     }
 
     /** Max cut: 3 - 30 dB, and the top of the knob (maxCutInfinite) is a full-depth notch. */
@@ -53,6 +59,8 @@ namespace dooblrfeedback::params
     inline constexpr float safetyDepthFinite = 48.0f, safetyDepthMute = 49.0f;
     /** The 0.1.0 default for Range high: a 0.1.0 session that still has it is moved to 20 kHz. */
     inline constexpr float legacyRangeHigh = 16000.0f, defaultRangeHigh = 20000.0f;
+    /** High-pass (0.1.3): 20-400 Hz, log, default 80 Hz. Off by default. */
+    inline constexpr float hpfMinHz = 20.0f, hpfMaxHz = 400.0f, hpfDefaultHz = 80.0f;
 
     bool isInfiniteCut (float maxCutValue);
     bool isMuteDepth (float safetyDepthValue);

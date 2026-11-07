@@ -5,6 +5,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "DSP/FeedbackEngine.h"
+#include "DSP/HighPass.h"
 #include "DSP/OutputPeakTap.h"
 #include "UndoHistory.h"
 #include "UI/DisplayBallistics.h"
@@ -14,7 +15,8 @@ namespace dooblrfeedback
     /**
         dooblr-feedback: a live feedback suppressor (see DSP/FeedbackEngine.h). Stereo or mono in
         / out, plus an optional stereo sidechain input for a reference mic that can drive the
-        detection. Zero latency: the notches are IIR filters in the signal path, the FFT
+        detection. An optional 12 dB/oct HPF sits in front of the notches (off by default).
+        Zero latency: the HPF and notches are IIR filters in the signal path, the FFT
         detection runs beside it.
 
         Room data (the notch bank and the notes) is saved with the session and in user presets;
@@ -97,6 +99,7 @@ namespace dooblrfeedback
         juce::AudioProcessorValueTreeState state;
         ParameterUndoHistory undoHistory;
         dsp::FeedbackEngine engine;
+        dsp::HighPass highPass;
         dsp::OutputPeakTap peakTap;
         std::unique_ptr<RawParameters> raw;
         juce::String notes;

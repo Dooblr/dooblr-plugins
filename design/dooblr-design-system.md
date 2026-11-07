@@ -23,7 +23,7 @@ Use this guide when you build a new dooblr plugin. Every hex code and number bel
 11. [dooblr-vocals (V)](#11-dooblr-vocals-v)
 12. [Reusable patterns (S)](#12-reusable-patterns-s)
 13. [dooblr-feedback (F)](#13-dooblr-feedback-f)
-   - 13.1 Layout · 13.2 Notch markers · 13.3 Calm labels · 13.4 Notch table · 13.5 IIR notch bank · 13.6 Room notes and presets · 13.7 Safety Duck badge · 13.8 Tokens
+   - 13.1 Layout · 13.2 Notch markers · 13.3 Calm labels · 13.4 Notch table · 13.5 IIR notch bank · 13.6 Room notes and presets · 13.7 Safety Duck badge · 13.8 Tokens · 13.9 High-pass
 14. [Changelog](#14-changelog)
 
 ---
@@ -1059,6 +1059,14 @@ Labels must not bounce while levels change.
 
 `components.eventMarker` (with `motion` and `dots`), `components.notchTable`, `components.safetyBadge`, `components.meterThresholdTick`, and `changelog` entries. All values reuse existing colours; no new colour or font.
 
+### 13.9 High-pass (added 2026-11-07, dooblr-feedback 0.1.3)
+
+Left column, under Auto / Ring-out / SC: an HPF pill toggle (76×28) and a Freq knob (20–400 Hz, log, default 80 Hz). Parameters `hpf` (default off) and `hpfFreq`. `F:Source/DSP/HighPass.{h,cpp}`, `F:PluginEditor.cpp` `resized`, `F:UI/FeedbackGraph.cpp`.
+- **12 dB/oct Butterworth** (one TPT SVF, Q = 1/√2), −3 dB at Freq. First on the mic path so the detector (processed output) sees post-HPF audio; the sidechain reference is not filtered.
+- **Off is bit-identical** (the filter is not in the path). Switching on or off crossfades 5 ms; frequency is smoothed 20 ms.
+- **Graph:** while on, a shaded cutoff region in `accent` (band to the cutoff, plus the HPF cut curve on the 0 dB scale). No hint text.
+- No new colour, font, radius or alpha token.
+
 ---
 
 ## 14. dooblr installer (I)
@@ -1077,6 +1085,7 @@ Read from **dooblr-installer 0.1.0–0.1.2** (`~/Dropbox/dooblr_plugins/dooblr-i
 
 ## 15. Changelog
 
+- **2026-11-07**: Added §13.9 dooblr-feedback high-pass (HPF pill + Freq 20–400 Hz in the left column, 12 dB/oct Butterworth, off by default, post-HPF detection, shaded cutoff on the graph). Additive only; existing tokens only; no existing rule, token name or value changed; §11 untouched; no JSON change.
 - **2026-11-06**: dooblr-distressor 0.1.0 added as a sibling VST3 effect (product `dooblr-distressor`, target `DooblrDistressor`, plugin code `Dbdt`). One-page hardware-style compressor board: ratio row + GR lamps, detector / audio modes, four main knobs, headroom / mix / I/O meters. Reuses the existing palette, ControlPanel (SegmentedToggle), undo history; no new colour, font, radius or alpha tokens. Additive only; no existing rule, token name or value changed; §11 untouched; no JSON change.
 - **2026-11-03**: dooblr-bass 0.1.0 added as a sibling VST3 instrument (product `dooblr-bass`, target `DooblrBass`, plugin code `Dbbs`). One-page Mini-style board (no page column): header, compact graph strip, mode bar, then oscillator / mixer / filter / envelope / LFO panels in signal-flow order. Reuses the existing palette, ControlPanel, OutputMeter and undo history; no new colour, font, radius or alpha tokens. Additive only; no existing rule, token name or value changed; §11 (including §11.11) untouched; no JSON change.
 - **2026-11-02**: §14 installer 0.1.2: copyable error box with Copy details, GitHub sign-in panel (masked token field, Save and retry, token link) for the private repository. Additive only; existing tokens only; no existing rule, token name or value changed; §11 (including §11.11) untouched; no JSON change.

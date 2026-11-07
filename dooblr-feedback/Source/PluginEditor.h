@@ -45,10 +45,11 @@ namespace dooblrfeedback
 
     /**
         Left column: name, version, Bypass, the Safe / Aggressive switch, the large HOLD button,
-        Auto / Ring-out / SC, the big Sensitivity knob and Max cut, latency and status. Right of it the toolbar (preset
-        prev / list / next / menu, undo / redo, A / B compare and copy, Clear all), the graph with
-        the output meter, and a bottom section with three views: the notch table, the room notes
-        and the Advanced panel. Every parameter has exactly one control.
+        Auto / Ring-out / SC, the HPF pill and frequency knob, the big Sensitivity knob and Max cut,
+        latency and status. Right of it the toolbar (preset prev / list / next / menu, undo / redo,
+        A / B compare and copy, Clear all), the graph with the output meter, and a bottom section
+        with three views: the notch table, the room notes and the Advanced panel. Every parameter
+        has exactly one control.
     */
     class DooblrFeedbackEditor final : public juce::AudioProcessorEditor,
                                        private juce::Timer,
@@ -101,19 +102,20 @@ namespace dooblrfeedback
         juce::AudioProcessorValueTreeState& state;
         ui::DooblrLookAndFeel lookAndFeel;
 
-        juce::Label titleLabel, subtitleLabel, statusLabel, latencyLabel, sensitivityCaption, maxCutCaption, bottomTitle;
+        juce::Label titleLabel, subtitleLabel, statusLabel, latencyLabel, sensitivityCaption, maxCutCaption, hpfFreqCaption, bottomTitle;
         juce::Label safetyBadge; // "SAFETY -x dB" in the toolbar while the safety duck is pulling the level down
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, presetPrev { "<" }, presetNext { ">" }, presetMenu { "..." };
         juce::TextButton compareA { "A" }, compareB { "B" }, compareCopy { "A>B" }, clearAllButton { "Clear all" };
         juce::TextButton holdButton { "HOLD" }, autoButton { "AUTO" }, ringOutButton { "RING-OUT" }, sidechainButton { "SC" };
-        juce::ToggleButton bypassButton { "Bypass" };
-        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> holdAttachment, autoAttachment, ringOutAttachment, sidechainAttachment, bypassAttachment;
+        juce::ToggleButton bypassButton { "Bypass" }, hpfButton { "HPF" };
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> holdAttachment, autoAttachment, ringOutAttachment, sidechainAttachment, bypassAttachment, hpfAttachment;
         juce::ComboBox presetBox;
         ui::OutputMeter outputMeter;
         ui::SegmentedToggle modeToggle;
 
         juce::Slider sensitivityKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
         juce::Slider maxCutKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
+        juce::Slider hpfFreqKnob { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
         std::vector<std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment>> sliderAttachments;
 
         ui::FeedbackGraph graph;

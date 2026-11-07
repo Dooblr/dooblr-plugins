@@ -209,6 +209,8 @@ namespace dooblrfeedback::params
             q.setSkewForCentre (dsp::FeedbackEngine::defaultBellQ);
             layout.add (floatParam (id::bellQ, "Bell Q", q, dsp::FeedbackEngine::defaultBellQ, {}, 1));
         }
+        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::hpf, 1 }, "HPF", false));
+        layout.add (freqParam (id::hpfFreq, "HPF Freq", hpfMinHz, hpfMaxHz, hpfDefaultHz));
         return layout;
     }
 }
