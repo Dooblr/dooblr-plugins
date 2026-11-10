@@ -1083,8 +1083,25 @@ Read from **dooblr-installer 0.1.0–0.1.2** (`~/Dropbox/dooblr_plugins/dooblr-i
 - **Copyable errors (0.1.2)**: error text sits in a read-only, selectable multi-line box (`panel` fill, `textPrimary`); a raised secondary **Copy details** button bottom left copies version, OS, step, redacted address, HTTP status and message, and reads "Copied" for 1.6 s. Copy is also on the Install and Done pages.
 - **GitHub sign-in (0.1.2)**: when the release can't be read without a token, the Welcome status reads "Sign in to GitHub to get the plug-in list." (amber dot), followed by one short paragraph on what token to create, a masked token field (bullets) with a primary **Save and retry** button, and a "Create a token on github.com" link in `accent`. A refused saved token shows its note in the error colour. The token is never displayed.
 
-## 15. Changelog
+## 15. dooblr-throat (T)
 
+Read from **dooblr-throat 0.1.0** (`~/Dropbox/dooblr_plugins/dooblr-throat`, short form **T**). T is a monophonic / legato VST3 vocal *instrument* (MIDI in, audio out). It uses the K/Q dark palette, type, knobs, combo boxes, header and ControlPanel layout already in this guide. It adds no new colour or font tokens. Code wins.
+
+- **Identity**: product name `dooblr-throat`, manufacturer `Dblr`, plug-in code `Dbth`, bundle id `com.dooblr.throat`. Version 0.1.0. VST3 category Instrument Synth. It belongs on a MIDI track, not an audio track.
+- **Window**: one page, no nav column. Minimum 940×600, default 980×640, resizable to 2400×1400. 60 px header (title, version, Undo / Redo, factory and user presets, Save / Load, Output slider, stereo peak meter) and a single board below. Cmd-Z undoes; Cmd-Shift-Z / Cmd-Y redo; every other key goes to the host.
+- **Board**: left, a **Vowel** pad (close at the top, front on the left) with calibrated vowel dots and an accent marker; a Vowel panel (named vowel or Pad, Height, Back) and a Voice panel (Female, Child, Nasal) sit to its right. Below: Source (Breath, Tension, Bright, Fry, Rough, Pressure, Voiced), then Pitch (Vibrato, Vib Rate, Glide, Bend) and Envelope (ADSR) side by side. Status line at the bottom (Idle / Voice, or a transient preset message).
+- **Pad**: dragging sets Height and Back and switches the vowel choice to Pad (one undo gesture). While a named vowel is selected the marker follows that vowel's calibrated position; the dotted targets stay visible.
+- **Voice / formants**: Female and Child blend the body (tract scale). Those two knobs rebuild the airway off the audio thread. Nasal at zero leaves the vowel's velum; turning it up opens the nasal port.
+- **Presets**: Init, Close Front, Open Back, Soft Breath, Spoken, Choir Lead, Low Voice, Whisper. All original names; no third-party brand in the UI or preset list. User presets use the `.dthroat` extension under `~/Music/dooblr-throat/Presets`.
+- **Engineering**: one FDTD voice, legato with glide, no allocations on the audio thread, no added look-ahead latency. Built against JUCE 8.0.15, C++20, arm64.
+
+Additive only; no existing rule, token name or value changed; §11–§14 untouched; no JSON change.
+
+---
+
+## 16. Changelog
+
+- **2026-11-10**: Added §15 dooblr-throat (T, 0.1.0): one-page vocal instrument, 60 px header, vowel pad (close/front axes, calibrated dots), Voice / Source / Pitch / Envelope panels, original factory presets, MIDI-track instrument. Changelog renumbered to §16. Additive only; no existing rule, token name or value changed; §11–§14 untouched; no JSON change.
 - **2026-11-10**: dooblr-m 0.1.0 added as a sibling VST3 instrument (product `dooblr-m`, target `DooblrM`, plugin code `Dbmm`). One-page Model D-style board (no page column): header, voice strip, then wheels / controllers / oscillator bank / mixer / modifiers / output. Discrete rotary switches and vertical rockers reuse the existing palette; no new colour, font, radius or alpha tokens. Additive only; no existing rule, token name or value changed; §11 untouched; no JSON change.
 - **2026-11-07**: Added §13.9 dooblr-feedback high-pass (HPF pill + Freq 20–400 Hz in the left column, 12 dB/oct Butterworth, off by default, post-HPF detection, shaded cutoff on the graph). Additive only; existing tokens only; no existing rule, token name or value changed; §11 untouched; no JSON change.
 - **2026-11-06**: dooblr-distressor 0.1.0 added as a sibling VST3 effect (product `dooblr-distressor`, target `DooblrDistressor`, plugin code `Dbdt`). One-page hardware-style compressor board: ratio row + GR lamps, detector / audio modes, four main knobs, headroom / mix / I/O meters. Reuses the existing palette, ControlPanel (SegmentedToggle), undo history; no new colour, font, radius or alpha tokens. Additive only; no existing rule, token name or value changed; §11 untouched; no JSON change.

@@ -1,0 +1,34 @@
+#pragma once
+
+#include <atomic>
+#include <utility>
+
+namespace dooblrthroat::dsp
+{
+    /** The final output peak for the header meter. Audio thread raises a per-channel
+        maximum once per block; the editor takes and clears it on a timer. Lock free. */
+    class OutputPeakTap
+    {
+    public:
+        void push (float left, float right) noexcept
+        {
+            raise (peaks[0], left);
+            raise (peaks[1], right);
+        }
+
+        std::pair<float, float> take() noexcept { return { peaks[0].exchange (0.0f), peaks[1].exchange (0.0f) }; }
+
+    private:
+        static void raise (std::atomic<float>& peak, float value) noexcept
+        {
+            if (! (value == value))
+                return;
+
+            auto current = peak.load (std::memory_order_relaxed);
+            while (value > current && ! peak.compare_exchange_weak (current, value)) {}
+        }
+
+        std::atomic<float> peaks[2] { 0.0f, 0.0f };
+        static_assert (std::atomic<float>::is_always_lock_free, "the output meter hand-off must be lock free");
+    };
+}

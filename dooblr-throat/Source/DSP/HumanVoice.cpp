@@ -1,0 +1,174 @@
+#include "HumanVoice.h"
+#include "Physics.h"
+#include <algorithm>
+
+namespace dooblrthroat::dsp
+{
+    HumanVoice::HumanVoice (double fsOut, HumanBody body, size_t oversample)
+        : fs_out (fsOut), fs (fsOut * double (oversample)), m (oversample),
+          airway (fsOut * double (oversample), body),
+          glottis (fsOut * double (oversample)),
+          dec (oversample)
+    {
+        ctrl_every = int64_t (64 * m);
+        f0 = DEFAULT_SOURCE.f0;
+        dc_coef = exp ((-2.0 * PI * 25.0) / fs_out);
+        lim_hold_n = int64_t (js_round (0.025 * fs_out));
+        lim_release = exp (-1.0 / (0.2 * fs_out));
+        const auto x = artic.x;
+        airway.apply (x, 0.0);
+        airway.net.snap_to_targets();
+        const auto sc = airway.body.scale;
+        output_gain *= sc >= 1.0 ? 1.0 : sc <= 0.9 ? 0.55 : 0.55 + 0.45 * (sc - 0.9) / 0.1;
+        apply_source();
+    }
+
+
+    void HumanVoice::reset()
+    {
+        artic.x = artic.target;
+        for (auto& vi : artic.v) vi = 0.0;
+        if (artic.tip_free)
+        {
+            const auto tip = rest_tip (artic.x.jaw, artic.x.tb_x, artic.x.tb_y);
+            artic.x.tt_x = artic.target.tt_x = tip.x;
+            artic.x.tt_y = artic.target.tt_y = tip.y;
+        }
+        airway.apply (artic.x, 0.0);
+        airway.net.snap_to_targets();
+        airway.net.reset();
+        glottis.reset();
+        gate = 0.0;
+        gate_target = 0.0;
+        p_lung = p_lung_now = p_lung_step = 0.0;
+        dc_x = dc_y = 0.0;
+        lim_env = 0.0;
+        lim_hold = 0;
+        ctrl_counter = 0;
+        dec.value = 0.0;
+        dec.pos = 0;
+        dec.count = 0;
+        std::fill (dec.buf.begin(), dec.buf.end(), 0.0);
+    }
+
+    void HumanVoice::set_articulation (const ArticPatch& values, bool tip_free)
+    {
+        artic.tip_free = tip_free;
+        artic.set_target (values);
+    }
+
+    void HumanVoice::apply_source()
+    {
+        const auto s = source;
+        auto& g = glottis.params;
+        const auto k2 = airway.body.scale * airway.body.scale;
+        g.amplitude = 0.17 * k2 * (s.voiced ? 1.0 : 0.0);
+        g.abduction = (s.voiced ? 0.1 * s.breathiness * s.breathiness : 0.2 + 0.1 * s.breathiness) * k2;
+        base_abduction = g.abduction;
+        base_closure = 0.0;
+        g.chink = (0.008 + 0.03 * s.breathiness) * k2;
+        g.open_quotient = 0.78 - 0.36 * s.tension;
+        const auto bright = s.brightness - DEFAULT_SOURCE.brightness;
+        const auto by_tension = 0.4 * s.tension + 1.375 * js_max (0.0, s.tension - 0.6);
+        g.closure_sharpness = clamp (by_tension + 0.8 * bright, 0.0, 1.0);
+        g.skew = 0.56 + 0.16 * s.tension + 0.2 * bright;
+        g.fry = s.fry;
+        g.jitter = 0.0021 + 0.0245 * s.roughness;
+        g.shimmer = 0.02 + 0.22 * s.roughness;
+        g.diplophonia = s.roughness > 0.5 ? (s.roughness - 0.5) * 1.4 : 0.0;
+        g.vibrato_depth = s.vibrato_depth;
+        g.vibrato_rate = s.vibrato_rate;
+        g.drift = s.drift;
+        g.effort = clamp ((abs (s.pressure) - 3.0) / 10.0, 0.0, 1.0);
+    }
+
+    void HumanVoice::render (float* out, size_t n)
+    {
+        const auto lungs = airway.lungs;
+        const auto sub_node = airway.trachea.last_node();
+        const auto supra = airway.pharynx.first_node();
+        const auto gp = airway.glottis_port;
+        for (size_t o = 0; o < n; ++o)
+        {
+            for (size_t s = 0; s < m; ++s)
+            {
+                if (ctrl_counter <= 0) control();
+                --ctrl_counter;
+                auto& net = airway.net;
+                p_lung_now += p_lung_step;
+                net.set_fixed_pressure (lungs, p_lung_now);
+                const auto a = glottis.next (net.p[sub_node] - net.p[supra]);
+                net.set_port_area (gp, a);
+                const auto y = net.step();
+                if (dec.push (y))
+                {
+                    auto v = dec.value * output_gain;
+                    const auto hp = v - dc_x + dc_coef * dc_y;
+                    dc_x = v; dc_y = hp; v = hp;
+                    const auto av = abs (v);
+                    if (av >= lim_env) { lim_env = av; lim_hold = lim_hold_n; }
+                    else if (lim_hold > 0) --lim_hold;
+                    else lim_env *= lim_release;
+                    if (lim_env > 0.75) v *= 0.75 / lim_env;
+                    const auto al = abs (v);
+                    if (al > 0.85) v = js_sign (v) * (0.85 + 0.15 * tanh ((al - 0.85) / 0.15));
+                    out[o] = float (v);
+                }
+            }
+        }
+    }
+
+    void HumanVoice::control()
+    {
+        const auto dt = double (ctrl_every) / fs;
+        artic.step (dt);
+        glottis.params.abduction = base_abduction;
+        glottis.params.closure = base_closure;
+        const auto x = artic.x;
+        airway.apply (x, dt);
+        if (enforce_contacts())
+            airway.reapply (artic.x);
+        airway.net.begin_block (size_t (ctrl_every));
+        ctrl_counter = ctrl_every;
+        const auto gate_goal = gate_target;
+        const auto tau = gate_goal > gate ? 0.025 : 0.07;
+        gate += (gate_goal - gate) * (1.0 - exp (-dt / tau));
+        p_lung = source.pressure * CM_H2O * gate;
+        p_lung_step = (p_lung - p_lung_now) / double (ctrl_every);
+        glottis.params.effort = clamp ((abs (source.pressure * gate) - 3.0) / 10.0, 0.0, 1.0);
+        const auto g = js_max (0.002, source.glide);
+        const auto f0_target = source.f0;
+        if (f0 > 1e-6)
+            f0 *= pow (f0_target / f0, 1.0 - exp (-dt / g));
+        else
+            f0 = f0_target;
+        glottis.params.f0 = f0;
+    }
+
+    bool HumanVoice::enforce_contacts()
+    {
+        const auto& tr = airway.tract;
+        const auto k = tr.body_scale();
+        const auto lim = -max_penetration * k;
+        bool changed = false;
+        auto fix = [&] (double d, Vec2 n, ArticKey kx, ArticKey ky) {
+            if (! (d < lim)) return;
+            changed = true;
+            const auto depth = lim - d;
+            const auto sx = (artic.x.get (kx) > 0.5 ? 1.0 / 0.86 : 1.0) / k;
+            const auto sy = 1.0 / k;
+            artic.x.get_mut (kx) += n.x * depth * sx;
+            artic.x.get_mut (ky) += n.y * depth * sy;
+            const auto ix = artic_index (kx), iy = artic_index (ky);
+            const auto vn = artic.v[ix] * n.x / sx + artic.v[iy] * n.y / sy;
+            if (vn < 0.0)
+            {
+                artic.v[ix] -= vn * n.x * sx;
+                artic.v[iy] -= vn * n.y * sy;
+            }
+        };
+        fix (tr.contact_tip, tr.contact_tip_n, ArticKey::TtX, ArticKey::TtY);
+        fix (tr.contact_body, tr.contact_body_n, ArticKey::TbX, ArticKey::TbY);
+        return changed;
+    }
+}
