@@ -44,7 +44,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE instrument VST3 (target `DooblrM`, product "dooblr-m", code Dbmm)
 - Version: 0.1.0
-- Last source change: uncommitted
+- Last source change: 2026-11-10
 - Source tree: `7bc9075f09f2` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-m`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-m/scripts/build.sh` (build dir `~/dooblr-build/dooblr-m`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
