@@ -12,10 +12,13 @@ namespace dooblrm::ui
         void styleCaption (juce::Label& label, const juce::String& text)
         {
             label.setText (text, juce::dontSendNotification);
-            label.setFont (juce::FontOptions (12.0f));
+            label.setFont (juce::FontOptions (11.0f));
             label.setColour (juce::Label::textColourId, Palette::textMuted);
             label.setJustificationType (juce::Justification::centred);
             label.setInterceptsMouseClicks (false, false);
+            // JUCE's default 5 px side padding ellipsizes "Mod Mix" in a ~36 px cell.
+            label.setBorderSize ({ 0, 1, 0, 1 });
+            label.setMinimumHorizontalScale (1.0f);
         }
     }
 
@@ -88,33 +91,84 @@ namespace dooblrm::ui
         addAndMakeVisible (captionLabel);
     }
 
+    juce::Font RotarySwitch::tickFont() const
+    {
+        return juce::Font (juce::FontOptions (ticks.size() <= 2 ? 9.0f : 8.0f));
+    }
+
+    std::vector<RotarySwitch::TickLabel> RotarySwitch::makeTickLayout() const
+    {
+        std::vector<TickLabel> out;
+        const auto clip = getLocalBounds().withTrimmedBottom (captionHeight).toFloat().reduced (1.0f);
+        if (clip.getWidth() < 8.0f || clip.getHeight() < 8.0f || ticks.isEmpty())
+            return out;
+
+        const auto font = tickFont();
+        const auto centre = clip.getCentre();
+        const int n = ticks.size();
+
+        // Two positions (Priority Low/Last, noise White/Pink): sit at 9 o'clock / 3 o'clock
+        // so they cannot fall into the caption under the knob.
+        if (n == 2)
+        {
+            const auto h = 11.0f;
+            const auto y = centre.y - h * 0.5f;
+            for (int i = 0; i < 2; ++i)
+            {
+                const auto w = juce::jmax (8.0f, juce::GlyphArrangement::getStringWidth (font, ticks[i]) + 1.0f);
+                auto box = juce::Rectangle<float> (w, h);
+                if (i == 0)
+                    box.setPosition (clip.getX(), y);
+                else
+                    box.setPosition (clip.getRight() - w, y);
+                out.push_back ({ ticks[i], box.constrainedWithin (clip) });
+            }
+            return out;
+        }
+
+        const auto knobR = juce::jmin (clip.getWidth(), clip.getHeight()) * 0.28f;
+        const auto labelR = knobR + 9.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const auto t = n == 1 ? 0.5f : (float) i / (float) (n - 1);
+            const auto mathAngle = rotaryStart + t * (rotaryEnd - rotaryStart) - juce::MathConstants<float>::halfPi;
+            const auto p = centre + juce::Point<float> (std::cos (mathAngle), std::sin (mathAngle)) * labelR;
+            const auto w = juce::jmax (8.0f, juce::GlyphArrangement::getStringWidth (font, ticks[i]) + 1.0f);
+            auto box = juce::Rectangle<float> (w, 10.0f);
+            // Side ticks grow toward the knob so "Shk" / "2'" / "PW" stay inside the cell.
+            if (std::abs (p.x - centre.x) < 6.0f)
+                box.setCentre (p);
+            else if (p.x < centre.x)
+                box.setPosition (p.x, p.y - 5.0f);
+            else
+                box.setPosition (p.x - w, p.y - 5.0f);
+            out.push_back ({ ticks[i], box.constrainedWithin (clip) });
+        }
+        return out;
+    }
+
     void RotarySwitch::resized()
     {
         auto bounds = getLocalBounds();
-        captionLabel.setBounds (bounds.removeFromBottom (16));
-        slider.setBounds (bounds);
+        captionLabel.setBounds (bounds.removeFromBottom (captionHeight));
+        const auto insetX = ticks.size() <= 2 ? 20 : 10;
+        const auto insetY = ticks.size() <= 2 ? 2 : 8;
+        slider.setBounds (bounds.reduced (insetX, insetY));
+        const auto knobBox = slider.getBounds();
+        slider.getProperties().set ("maxKnobDiameter",
+            (double) juce::jmin (34, juce::jmin (knobBox.getWidth(), knobBox.getHeight()) - 2));
+        tickLayout = makeTickLayout();
     }
 
     void RotarySwitch::paint (juce::Graphics& g)
     {
-        // Tick labels around the knob, outside the LookAndFeel arc.
-        auto area = getLocalBounds().withTrimmedBottom (16).toFloat();
-        const auto centre = area.getCentre();
-        const auto radius = juce::jmin (area.getWidth(), area.getHeight()) * 0.42f;
-        const auto n = ticks.size();
-        if (n <= 0)
-            return;
+        if (tickLayout.empty())
+            tickLayout = makeTickLayout();
 
-        g.setFont (juce::FontOptions (8.5f));
+        g.setFont (tickFont());
         g.setColour (Palette::textMuted);
-        for (int i = 0; i < n; ++i)
-        {
-            const auto t = n == 1 ? 0.5f : (float) i / (float) (n - 1);
-            const auto angle = rotaryStart + t * (rotaryEnd - rotaryStart) - juce::MathConstants<float>::halfPi;
-            const auto p = centre + juce::Point<float> (std::cos (angle), std::sin (angle)) * (radius + 7.0f);
-            g.drawText (ticks[i], juce::Rectangle<float> (28.0f, 10.0f).withCentre (p),
-                        juce::Justification::centred, false);
-        }
+        for (const auto& tick : tickLayout)
+            g.drawText (tick.text, tick.bounds, juce::Justification::centred, false);
     }
 
     //==============================================================================

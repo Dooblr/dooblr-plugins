@@ -17,8 +17,14 @@ Read `design/INDEX.md` first. This file has two parts:
 - **What it is**: an all-purpose Model D-style monophonic synth. Independent architecture,
   not a circuit-level clone. No third-party name, logo, wood or panel artwork.
 - **Layout**: classic left-to-right panel (wheels, controllers, oscillator bank, mixer,
-  modifiers, output) plus a voice strip (priority, legato, velocity, bend) because a plugin
-  needs those and the original panel does not name them. Header is the suite 60 px strip.
+  modifiers, output) plus a compact voice cluster (priority, legato, velocity, bend) because a
+  plugin needs those and the original panel does not name them. The voice panel is only as
+  wide as those four extras and left-aligned so leftover width and height go to the oscillator
+  bank. Captions use 11 pt with 1 px side
+  padding (JUCE's 5 px default ellipsized "Mod Mix" / "Osc 3 Ctrl"). Rotary ticks are drawn
+  inside the switch: two-position labels at 9 / 3 o'clock so they cannot sit on the caption;
+  six-position labels grow toward the knob so "2'", "Shk" and "PW" are not clipped. Header is
+  the suite 60 px strip.
 - **DSP sources**:
   - Oscillators: Stilson/Smith BLIT (closed-form SincM) with leaky integration for saw / pulse /
     triangle. Shark = 0.65 saw + 0.35 triangle. polyBLEP is not used; the closed form is cheap
@@ -45,7 +51,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE instrument VST3 (target `DooblrM`, product "dooblr-m", code Dbmm)
 - Version: 0.1.0
 - Last source change: 2026-11-10
-- Source tree: `7bc9075f09f2` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-m`)
+- Source tree: `0478a37131e4` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-m`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-m/scripts/build.sh` (build dir `~/dooblr-build/dooblr-m`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrMTests` (Tests/CMakeLists.txt)
@@ -117,7 +123,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | `Source/PluginEditor.{h,cpp}` | One-page Model D-style board in the dooblr aesthetic (design/dooblr-design-system.md): 60 px header, a... [DooblrMEditor] |
 | `Source/PluginProcessor.{h,cpp}` | [DooblrMProcessor] |
 | `Source/Presets.{h,cpp}` | [Factory] |
-| `Source/UI/BoardControls.{h,cpp}` | Titled panel background used by every Model D column. [SectionPanel, Knob, RotarySwitch, BatToggle, ...] |
+| `Source/UI/BoardControls.{h,cpp}` | Titled panel background used by every Model D column. [SectionPanel, Knob, RotarySwitch, TickLabel, ...] |
 | `Source/UI/OutputMeter.{h,cpp}` | Feeds one frame's peaks (linear) at a time in ms: VBlank does this from the tap. [OutputMeter, Channel] |
 | `Source/UI/Theme.{h,cpp}` | Flat, understated look for knobs, buttons and combo boxes. [DooblrLookAndFeel] |
 | `Source/UndoHistory.{h,cpp}` | Undo/redo of the plug-in's own UI edits, built on juce::UndoManager. [ParameterUndoHistory, Change, Pending] |
@@ -141,7 +147,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - `FilterReadout` : Component (BoardControls.h)
 - `OutputMeter` : Component (OutputMeter.h)
 - `DooblrLookAndFeel` : LookAndFeel_V4 (Theme.h)
-- Size constants: titleHeight=20 (BoardControls.h)
+- Size constants: titleHeight=20 (BoardControls.h), captionHeight=16 (BoardControls.h)
 
 ### Tests
 

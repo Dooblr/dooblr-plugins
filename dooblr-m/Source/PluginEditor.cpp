@@ -3,6 +3,7 @@
 #include "Parameters.h"
 #include "Presets.h"
 
+#include <cmath>
 #include <functional>
 
 namespace dooblrm
@@ -20,10 +21,12 @@ namespace dooblrm
             label.setColour (juce::Label::textColourId, colour);
             label.setJustificationType (justification);
             label.setInterceptsMouseClicks (false, false);
+            label.setBorderSize ({ 0, 1, 0, 1 });
+            label.setMinimumHorizontalScale (1.0f);
         }
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
-        constexpr int headerHeight = 60, voiceBarHeight = 84, margin = 8, gap = 6;
+        constexpr int headerHeight = 60, voiceBarHeight = 72, margin = 8, gap = 6;
         constexpr int meterWidth = 34;
 
         float valueOf (juce::AudioProcessorValueTreeState& state, const char* pid)
@@ -486,33 +489,41 @@ namespace dooblrm
             c.setBounds (r);
         };
 
-        const auto voiceH = juce::jlimit (72, 96, voiceBarHeight);
-        voiceBarArea = area.removeFromTop (voiceH);
+        const auto voiceH = juce::jlimit (68, 78, voiceBarHeight);
+        auto voiceRow = area.removeFromTop (voiceH);
+        const auto voiceCell = juce::jlimit (72, 88, voiceRow.getWidth() / 8);
+        voiceBarArea = voiceRow.removeFromLeft (voiceCell * 4 + 12);
         place (voice, voiceBarArea);
         area.removeFromTop (gap);
 
-        auto body = area;
-        const auto col = [&] (float share, int minW) {
-            return juce::jmax (minW, (int) std::round ((float) body.getWidth() * share));
-        };
+        auto remain = area;
+        // Minimums keep captions and rotary ticks inside their cells at 940 px; leftover goes
+        // mostly to the oscillator bank.
+        const int minW[] { 70, 144, 270, 114, 188, 108 };
+        const float weight[] { 0.4f, 1.2f, 3.2f, 0.8f, 1.4f, 1.0f };
+        const int gaps = 5 * gap;
+        const int inner = juce::jmax (0, remain.getWidth() - gaps);
+        int minSum = 0;
+        float weightSum = 0.0f;
+        for (int i = 0; i < 6; ++i) { minSum += minW[i]; weightSum += weight[i]; }
+        const int extra = juce::jmax (0, inner - minSum);
+        int widths[6] {};
+        int assignedExtra = 0;
+        for (int i = 0; i < 5; ++i)
+        {
+            const auto add = (int) std::round ((float) extra * weight[i] / weightSum);
+            widths[i] = minW[i] + add;
+            assignedExtra += add;
+        }
+        widths[5] = minW[5] + (extra - assignedExtra);
 
-        auto remain = body;
-        const auto wW = col (0.08f, 64);
-        place (wheelsSec, remain.removeFromLeft (wW));
-        remain.removeFromLeft (gap);
-        const auto cW = col (0.13f, 110);
-        place (ctrl, remain.removeFromLeft (cW));
-        remain.removeFromLeft (gap);
-        const auto oW = col (0.27f, 220);
-        place (osc, remain.removeFromLeft (oW));
-        remain.removeFromLeft (gap);
-        const auto mW = col (0.15f, 120);
-        place (mix, remain.removeFromLeft (mW));
-        remain.removeFromLeft (gap);
-        const auto fW = col (0.24f, 200);
-        place (mod, remain.removeFromLeft (fW));
-        remain.removeFromLeft (gap);
-        place (out, remain);
+        juce::Component* cols[] { &wheelsSec, &ctrl, &osc, &mix, &mod, &out };
+        for (int i = 0; i < 6; ++i)
+        {
+            place (*cols[i], remain.removeFromLeft (widths[i]));
+            if (i < 5)
+                remain.removeFromLeft (gap);
+        }
 
         auto grid = [] (juce::Rectangle<int> box, int cols, int rows, int index, int colSpan = 1)
         {
@@ -530,7 +541,7 @@ namespace dooblrm
             wheels[1]->setBounds (box.reduced (2));
         }
 
-        // Voice strip: priority, legato, velocity, bend
+        // Voice strip: the panel is only as wide as the four extras (not a full-width empty bar).
         {
             auto box = voice.contentBounds();
             const auto cell = box.getWidth() / 4;
@@ -540,15 +551,16 @@ namespace dooblrm
             knobs[0]->setBounds (box.reduced (2));                          // bendRange
         }
 
-        // Controllers: 3 knobs + 3 toggles
+        // Controllers: knobs in the left column, switches in the right (2×3) so "Mod Mix"
+        // and "Osc 3 Ctrl" have a cell wider than three-across.
         {
             auto box = ctrl.contentBounds();
-            knobs[1]->setBounds (grid (box, 3, 2, 0)); // tune
-            knobs[2]->setBounds (grid (box, 3, 2, 1)); // glide
-            knobs[3]->setBounds (grid (box, 3, 2, 2)); // modMix
-            toggles[2]->setBounds (grid (box, 3, 2, 3));
-            toggles[3]->setBounds (grid (box, 3, 2, 4));
-            toggles[4]->setBounds (grid (box, 3, 2, 5));
+            knobs[1]->setBounds (grid (box, 2, 3, 0));    // tune
+            toggles[2]->setBounds (grid (box, 2, 3, 1));  // osc 3 ctrl
+            knobs[2]->setBounds (grid (box, 2, 3, 2));    // glide
+            toggles[3]->setBounds (grid (box, 2, 3, 3));  // osc mod
+            knobs[3]->setBounds (grid (box, 2, 3, 4));    // mod mix
+            toggles[4]->setBounds (grid (box, 2, 3, 5));  // filt mod
         }
 
         // Oscillator bank: 3 rows × range, freq, wave (osc 1 has no freq — range spans two cells)

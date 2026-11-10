@@ -36,6 +36,7 @@ namespace dooblrm::ui
               const juce::String& caption, juce::Colour fill = Palette::accent);
         void resized() override;
         juce::Slider& getSlider() noexcept { return slider; }
+        juce::Label& getCaption() noexcept { return captionLabel; }
 
     private:
         juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
@@ -47,16 +48,30 @@ namespace dooblrm::ui
     class RotarySwitch final : public juce::Component
     {
     public:
+        struct TickLabel
+        {
+            juce::String text;
+            juce::Rectangle<float> bounds;
+        };
+
         RotarySwitch (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
                       const juce::String& caption, const juce::StringArray& tickLabels);
         void paint (juce::Graphics& g) override;
         void resized() override;
         juce::Slider& getSlider() noexcept { return slider; }
+        juce::Label& getCaption() noexcept { return captionLabel; }
+        const std::vector<TickLabel>& getTickLabels() const noexcept { return tickLayout; }
+
+        static constexpr int captionHeight = 16;
 
     private:
+        juce::Font tickFont() const;
+        std::vector<TickLabel> makeTickLayout() const;
+
         juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
         juce::Label captionLabel;
         juce::StringArray ticks;
+        std::vector<TickLabel> tickLayout;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
@@ -69,6 +84,7 @@ namespace dooblrm::ui
         void paint (juce::Graphics& g) override;
         void resized() override;
         juce::ToggleButton& getButton() noexcept { return button; }
+        juce::Label& getCaption() noexcept { return captionLabel; }
 
     private:
         struct SilentToggle final : juce::ToggleButton
@@ -90,6 +106,7 @@ namespace dooblrm::ui
         void resized() override;
         void paint (juce::Graphics& g) override;
         juce::Slider& getSlider() noexcept { return slider; }
+        juce::Label& getCaption() noexcept { return captionLabel; }
 
     private:
         juce::Slider slider { juce::Slider::LinearVertical, juce::Slider::NoTextBox };

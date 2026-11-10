@@ -926,6 +926,51 @@ namespace
                     check (! editor->getSections()[i]->getBounds().intersects (editor->getSections()[j]->getBounds()),
                            sizeLabel + "sections do not overlap: " + editor->getSections()[i]->getTitle().toStdString()
                                + " / " + editor->getSections()[j]->getTitle().toStdString());
+
+            std::function<void (juce::Component&)> checkCaptions = [&] (juce::Component& root)
+            {
+                if (auto* label = dynamic_cast<juce::Label*> (&root))
+                {
+                    const auto text = label->getText();
+                    const bool skip = text.isEmpty()
+                                      || ! label->isVisible()
+                                      || label->getWidth() <= 0
+                                      || dynamic_cast<juce::Slider*> (label->getParentComponent()) != nullptr
+                                      || dynamic_cast<juce::ComboBox*> (label->getParentComponent()) != nullptr;
+                    if (! skip)
+                    {
+                        const auto inner = label->getLookAndFeel().getLabelBorderSize (*label)
+                                               .subtractedFrom (label->getLocalBounds());
+                        const auto textW = juce::GlyphArrangement::getStringWidth (label->getFont(), text);
+                        check (textW <= (float) inner.getWidth() + 1.0f,
+                               sizeLabel + "caption '" + text.toStdString() + "' fits ("
+                                   + fmt (textW, 1) + " px in " + std::to_string (inner.getWidth()) + " px)");
+                    }
+                }
+                for (int i = 0; i < root.getNumChildComponents(); ++i)
+                    checkCaptions (*root.getChildComponent (i));
+            };
+            checkCaptions (*editor);
+
+            for (auto& rotary : editor->getRotaries())
+            {
+                const auto clip = rotary->getLocalBounds().toFloat();
+                const auto caption = rotary->getCaption().getBounds().toFloat();
+                const auto font = juce::Font (juce::FontOptions (rotary->getTickLabels().size() <= 2 ? 9.0f : 8.0f));
+                for (const auto& tick : rotary->getTickLabels())
+                {
+                    const auto id = rotary->getComponentID().toStdString();
+                    check (clip.contains (tick.bounds.reduced (0.51f, 0.51f)) || clip.contains (tick.bounds),
+                           sizeLabel + id + " tick '" + tick.text.toStdString() + "' stays inside the switch");
+                    const auto textW = juce::GlyphArrangement::getStringWidth (font, tick.text);
+                    check (textW <= tick.bounds.getWidth() + 1.0f,
+                           sizeLabel + id + " tick '" + tick.text.toStdString() + "' fits its box ("
+                               + fmt (textW, 1) + " in " + fmt (tick.bounds.getWidth(), 1) + ")");
+                    check (! tick.bounds.reduced (0.5f, 0.5f).intersects (caption),
+                           sizeLabel + id + " tick '" + tick.text.toStdString()
+                               + "' does not overlap the caption");
+                }
+            }
         }
 
         editor->setSize (1080, 660);

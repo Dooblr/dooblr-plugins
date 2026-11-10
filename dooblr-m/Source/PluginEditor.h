@@ -34,6 +34,7 @@ namespace dooblrm
         ui::FilterReadout& getFilterReadout() noexcept { return filterReadout; }
         ui::ScopeView& getScope() noexcept { return scope; }
         const std::vector<std::unique_ptr<ui::SectionPanel>>& getSections() const { return sections; }
+        const std::vector<std::unique_ptr<ui::RotarySwitch>>& getRotaries() const { return rotaries; }
 
     private:
         void timerCallback() override;
