@@ -18,8 +18,8 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE app (target `DooblrInstaller`, product "dooblr installer")
 - Version: 0.1.4
-- Last source change: 2026-11-06
-- Source tree: `1f601fc40bc6` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-installer`)
+- Last source change: 2026-11-10
+- Source tree: `08f0da69060f` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-installer`)
 - Window: resize limits 720x520..1400x1000
 - Build/test: `dooblr-installer/scripts/build.sh`
 - Build/test: target `DooblrInstallerTests` (CMakeLists.txt)
