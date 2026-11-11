@@ -351,6 +351,15 @@ namespace
                                 id::decaySwitch, id::notePriority, id::legato, id::modWheel, id::output })
             check (ids.count (expected) == 1, std::string ("parameter id ") + expected);
         check (ids.count ("a440") == 0, "A-440 parameter is removed");
+
+        auto* resonance = param (*p, id::emphasis);
+        check (resonance != nullptr && resonance->paramID == "emphasis",
+               "resonance parameter ID stays emphasis");
+        check (resonance != nullptr && resonance->getName (64) == "Resonance",
+               "host/Ableton display name is Resonance (got "
+                   + (resonance != nullptr ? resonance->getName (64).toStdString() : "null") + ")");
+        check (resonance != nullptr && resonance->getName (64) != "Emphasis",
+               "host display name is no longer Emphasis");
     }
 
     void testSilence()
@@ -995,6 +1004,11 @@ namespace
 
             auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
             auto* attackKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::fAttack));
+            auto* resonanceKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::emphasis));
+            check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() == "Resonance",
+                   sizeLabel + "filter resonance knob caption is Resonance");
+            check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() != "Emphasis",
+                   sizeLabel + "filter knob is no longer labelled Emphasis");
             check (cutoffKnob != nullptr && cutoffKnob->isLarge(), sizeLabel + "cutoff knob is marked large");
             check (attackKnob != nullptr, sizeLabel + "filter attack knob exists");
             if (cutoffKnob != nullptr && attackKnob != nullptr)

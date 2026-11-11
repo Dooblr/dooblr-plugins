@@ -115,7 +115,7 @@ namespace dooblrm::params
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             pid (id::cutoff), "Cutoff", skewed (20.0f, 20000.0f, 800.0f), 1200.0f,
             Attributes().withLabel ("Hz").withStringFromValueFunction (formatHz)));
-        addPercent (layout, id::emphasis, "Emphasis", 0.15f);
+        addPercent (layout, id::emphasis, "Resonance", 0.15f);
         addPercent (layout, id::contourAmt, "Amount of Contour", 0.0f);
         addTime (layout, id::fAttack, "Filter Attack", 0.002f);
         addTime (layout, id::fDecay, "Filter Decay", 0.4f);

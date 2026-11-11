@@ -9,7 +9,7 @@ DSP follows the attached references: Stilson/Smith BLIT oscillators, Huovilainen
 non-linear ladder, Folkman's Model D service-manual contours and mixer, and the usual
 analog-synth voice (keyboard CV, glide, low-note priority) described in the MIT 6.101 report.
 
-Version 0.1.2.
+Version 0.1.3.
 
 ## Board
 
@@ -22,7 +22,7 @@ One page. No page column. Header, a voice strip, then the panel left to right.
 | **Controllers** | Tune (±2.5 st), Glide, Modulation Mix (Osc 3 ↔ Noise), Osc 3 Control, Oscillator Mod, Filter Mod. |
 | **Oscillator bank** | Osc 1–3: Range 32' / 16' / 8' / 4' / 2' / LO and six waveforms (triangle, shark / tri-saw, saw, square, wide pulse, narrow pulse). Osc 2 / 3 Frequency ±8 st. Oscillators are free-running. |
 | **Mixer** | Osc 1 / 2 / 3, Ext / Feedback, Noise, each with a level and an on switch. Noise colour is a White / Pink rocker. Ext is the classic output-into-external overdrive trick. |
-| **Modifiers** | Large filter cutoff (~1.6–2× the other knobs), emphasis, amount of contour; filter contour attack / decay / sustain; keyboard control 1 (1/3) and 2 (2/3); loudness contour attack / decay / sustain; Decay switch (release = decay when on). |
+| **Modifiers** | Large filter cutoff (~1.6–2× the other knobs), resonance, amount of contour; filter contour attack / decay / sustain; keyboard control 1 (1/3) and 2 (2/3); loudness contour attack / decay / sustain; Decay switch (release = decay when on). |
 | **Output** | Volume, a live scope and an interactive filter-envelope graph (static ADS from the contour settings, live playhead from the DSP, draggable Attack / Decay / Sustain / Amount handles). Header Output is extra makeup in dB. |
 
 Controls the current routing ignores are dimmed, never hidden. Dimmed controls stay
@@ -52,7 +52,7 @@ parameters only.
   free-running LFO usable as the modulation source.
 - Mixer: tanh saturation that gets hotter as more channels (and Ext/Feedback) are up.
 - Filter: Huovilainen 2004 4-pole tanh ladder, 2× oversampled, half-sample delay in the
-  feedback path. Self-oscillates at full emphasis from thermal noise. Keyboard tracking 0,
+  feedback path. Self-oscillates at full resonance from thermal noise. Keyboard tracking 0,
   1/3, 2/3 or 1 (both switches).
 - Contours: attack / decay / sustain. Decay switch makes release = decay; off, notes dump
   in a few milliseconds. Legato is single-trigger.

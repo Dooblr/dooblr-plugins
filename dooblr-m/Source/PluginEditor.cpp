@@ -235,7 +235,7 @@ namespace dooblrm
 
         auto& mod = addSection ("MODIFIERS", Palette::dynamic);
         addKnob (mod, id::cutoff, "Cutoff", Palette::dynamic, true);
-        addKnob (mod, id::emphasis, "Emphasis", Palette::dynamic);
+        addKnob (mod, id::emphasis, "Resonance", Palette::dynamic);
         addKnob (mod, id::contourAmt, "Contour");
         addKnob (mod, id::fAttack, "F Atk");
         addKnob (mod, id::fDecay, "F Dec");
@@ -619,7 +619,7 @@ namespace dooblrm
             placeId (id::noiseType, juce::Rectangle<int> (box.getX(), box.getY() + 5 * rowH, box.getWidth(), rowH).reduced (1));
         }
 
-        // Modifiers: taller first row so Cutoff is ~1.6–2× the other knobs; emphasis + contour
+        // Modifiers: taller first row so Cutoff is ~1.6–2× the other knobs; resonance + contour
         // stack on its right. Remaining rows stay three-across.
         {
             auto box = mod.contentBounds();

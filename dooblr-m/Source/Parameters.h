@@ -46,7 +46,7 @@ namespace dooblrm::params
 
         // Filter (modifiers)
         inline constexpr const char* cutoff       = "cutoff";
-        inline constexpr const char* emphasis     = "emphasis";
+        inline constexpr const char* emphasis     = "emphasis"; // host/UI name: Resonance (0.1.3)
         inline constexpr const char* contourAmt   = "contourAmt";
         inline constexpr const char* fAttack      = "fAttack";
         inline constexpr const char* fDecay       = "fDecay";
