@@ -20,7 +20,7 @@ namespace dooblr::installer
         /** Mac: ~/Library/Audio/Plug-Ins/VST3. Windows: %LOCALAPPDATA%\Programs\Common\VST3. */
         static juce::File userVst3Dir();
         /** Ableton's User Library (Mac ~/Music/..., Windows Documents\...) + "/Presets/MIDI Effects/Max MIDI Effect",
-            the same folder the dooblr-chords and dooblr-prophet build scripts install into. */
+            the same folder the dooblr-chords, dooblr-titan and dooblr-prophet build scripts install into. */
         static juce::File defaultM4LDir();
 
         /** Defaults (system VST3 folder, unless dooblr plug-ins are only in the user folder),

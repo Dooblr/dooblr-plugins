@@ -1,0 +1,16 @@
+{
+  "name": "dooblr-titan",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Max for Live MIDI effect that tightens MIDI clips and writes musical variations into Session View clip slots.",
+  "scripts": {
+    "test": "node --test",
+    "check:es5": "node scripts/check-es5.js",
+    "validate": "node scripts/validate-patcher.js",
+    "build": "node scripts/build.js",
+    "verify": "npm run check:es5 && npm run build && npm test && npm run validate -- --built"
+  },
+  "devDependencies": {
+    "acorn": "^8.12.1"
+  }
+}

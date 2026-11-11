@@ -33,16 +33,17 @@ in its own folder and has its own README.
 | [`dooblr-feedback/`](dooblr-feedback/) | dooblr-feedback | 0.1.3 | Automatic live feedback suppressor (VST3 effect, optional reference-mic sidechain): optional 12 dB/oct HPF, zero-latency notches (one per howl, up to 20 kHz, Max cut to ∞), calm markers on the spectrum with lock / clear, Safety duck, notch table, room notes and room presets | Early; its tests and LoadCheck pass, not yet tested live or in a DAW |
 | [`dooblr-distressor/`](dooblr-distressor/) | dooblr-distressor | 0.1.0 | EL8-style compressor (VST3 effect): eight ratio curves, Dist 2 / Dist 3, detector HP / band / link, audio HP, headroom, phase-aligned mix; independently designed approximation, not an emulation | New; its tests pass in this repo |
 | [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.3.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
+| [`dooblr-titan/`](dooblr-titan/) | dooblr-titan | 0.1.0 | MIDI clip tightener and variation writer (Max for Live MIDI effect, Live 11.3 / Max 8.5) | New; `npm test` suite |
 | [`dooblr-installer/`](dooblr-installer/) | dooblr installer | 0.1.4 | Installer / updater app for the whole suite (macOS dmg, Windows exe): picks what to install or update (All / None / Updates), one progress wheel with a summary at the end, sha256-checked downloads from the latest GitHub Release; while the repository is private, "Get access on GitHub" opens a pre-filled token page and the copied token is checked with GitHub before it is saved; errors can be selected and copied | New; Mac tests and a local end-to-end install pass; Windows built and tested in CI (not yet on a real PC) |
 | [`design/`](design/) | Design files | — | Shared visual design system for the suite, including reusable patterns (§12), dooblr-feedback (§13) and the installer (§14) | Updated 2026-11-01 |
 
-Versions come from each plug-in's `project(... VERSION ...)` in its `CMakeLists.txt` (dooblr-chords:
-its README / device). Status is as of the last commit; see each folder's README and ROADMAP.
+Versions come from each plug-in's `project(... VERSION ...)` in its `CMakeLists.txt` (dooblr-chords
+and dooblr-titan: `package.json` / device). Status is as of the last commit; see each folder's README and ROADMAP.
 
 ## Building
 
 VST3 plug-ins (each with `scripts/build.sh`): dooblr-q, dooblr-kick, dooblr-vocals,
-dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor, dooblr-generate. Max for Live devices: dooblr-chords (see its README) and the
+dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor, dooblr-generate. Max for Live devices: dooblr-chords and dooblr-titan (see their READMEs) and the
 dooblr-prophet panel 0.3.2 (`dooblr-prophet/m4l/`).
 
 Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
