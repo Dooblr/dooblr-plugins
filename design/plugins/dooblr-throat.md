@@ -17,9 +17,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrThroat`, product "dooblr-throat", code Dbth)
-- Version: 0.1.0
-- Last source change: 2026-11-10
-- Source tree: `4c6b1da72fd7` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-throat`)
+- Version: 0.1.1
+- Last source change: 2026-11-11
+- Source tree: `8027ce3c36d4` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-throat`)
 - Window: resize limits 940x600..2400x1400; default size 980x640
 - Build/test: `dooblr-throat/scripts/build.sh` (build dir `~/dooblr-build/dooblr-throat`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrThroatTests` (Tests/CMakeLists.txt)
@@ -73,7 +73,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | `Source/DSP/Math.h` | Deterministic helpers ported from CHIMERA (MIT, Copyright 2026 Jameson Hodge). [Rng, Smoother, Drift] |
 | `Source/DSP/OutputPeakTap.h` | The final output peak for the header meter. [OutputPeakTap] |
 | `Source/DSP/Physics.h` | CGS constants and wall parameters, ported from CHIMERA (MIT, Copyright 2026 Jameson Hodge). [WallParams] |
-| `Source/DSP/ThroatEngine.{h,cpp}` | Monophonic / legato instrument wrapper around HumanVoice. [ThroatSettings, ThroatEngine] |
+| `Source/DSP/ThroatEngine.{h,cpp}` | Monophonic / legato instrument wrapper around HumanVoice. [ThroatSettings, ThroatEngine, AudioCallbackScope] |
 | `Source/DSP/Vowels.{h,cpp}` | inverse-distance blend of the three nearest vowels [VowelDef] |
 | `Source/Parameters.{h,cpp}` | Choice 0 is the vowel pad; 1..N_VOWELS are the named vowels. |
 | `Source/PluginEditor.{h,cpp}` | One-page editor (design/dooblr-design-system.md): a 60 px header (title, version, undo / redo, presets,... [DooblrThroatEditor] |
@@ -104,5 +104,5 @@ Read `design/INDEX.md` first. This file has two parts:
 
 ### Tests
 
-- `Tests/ThroatTests.cpp` (8): Metadata, Silence, NoteSoundsAndPitch, HigherNotePitch, ReleaseToSilence, Presets, Editor, NoChimeraName
+- `Tests/ThroatTests.cpp` (11): Metadata, Silence, NoteSoundsAndPitch, HigherNotePitch, ReleaseToSilence, Presets, Editor, NoChimeraName, ParamExtremesAndMidi, SampleRatesAndBlockSizes, StressAutomationAndBodySwap
 <!-- END AUTO-GENERATED -->

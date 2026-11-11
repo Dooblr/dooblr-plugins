@@ -88,17 +88,22 @@ namespace dooblrthroat::dsp
         const auto sub_node = airway.trachea.last_node();
         const auto supra = airway.pharynx.first_node();
         const auto gp = airway.glottis_port;
+        const auto os = m == 0 ? size_t (1) : m;
         for (size_t o = 0; o < n; ++o)
         {
-            for (size_t s = 0; s < m; ++s)
+            out[o] = 0.0f;
+            for (size_t s = 0; s < os; ++s)
             {
                 if (ctrl_counter <= 0) control();
                 --ctrl_counter;
                 auto& net = airway.net;
+                if (sub_node >= net.p.size() || supra >= net.p.size())
+                    continue;
                 p_lung_now += p_lung_step;
+                if (! is_finite (p_lung_now)) p_lung_now = 0.0;
                 net.set_fixed_pressure (lungs, p_lung_now);
                 const auto a = glottis.next (net.p[sub_node] - net.p[supra]);
-                net.set_port_area (gp, a);
+                net.set_port_area (gp, is_finite (a) ? a : 0.0);
                 const auto y = net.step();
                 if (dec.push (y))
                 {
@@ -112,7 +117,7 @@ namespace dooblrthroat::dsp
                     if (lim_env > 0.75) v *= 0.75 / lim_env;
                     const auto al = abs (v);
                     if (al > 0.85) v = js_sign (v) * (0.85 + 0.15 * tanh ((al - 0.85) / 0.15));
-                    out[o] = float (v);
+                    out[o] = is_finite (v) ? float (v) : 0.0f;
                 }
             }
         }
@@ -136,13 +141,15 @@ namespace dooblrthroat::dsp
         p_lung = source.pressure * CM_H2O * gate;
         p_lung_step = (p_lung - p_lung_now) / double (ctrl_every);
         glottis.params.effort = clamp ((abs (source.pressure * gate) - 3.0) / 10.0, 0.0, 1.0);
-        const auto g = js_max (0.002, source.glide);
-        const auto f0_target = source.f0;
-        if (f0 > 1e-6)
+        const auto g = js_max (0.002, is_finite (source.glide) ? source.glide : 0.06);
+        auto f0_target = is_finite (source.f0) ? source.f0 : 110.0;
+        f0_target = clamp (f0_target, 1.0, 20000.0);
+        if (f0 > 1e-6 && is_finite (f0))
             f0 *= pow (f0_target / f0, 1.0 - exp (-dt / g));
         else
             f0 = f0_target;
-        glottis.params.f0 = f0;
+        if (! is_finite (f0)) f0 = f0_target;
+        glottis.params.f0 = clamp (f0, 1.0, 20000.0);
     }
 
     bool HumanVoice::enforce_contacts()

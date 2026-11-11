@@ -128,7 +128,9 @@ namespace dooblrthroat::dsp
         }
         const auto nr = rad_nodes.size();
         rad_ul = zf (nr); rad_l_prev = zf (nr); rad_u = zf (nr);
-        for (size_t r = 0; r < nr; ++r) rad_of[rad_nodes[r]] = int32_t (r);
+        for (size_t r = 0; r < nr; ++r)
+            if (rad_nodes[r] < rad_of.size())
+                rad_of[rad_nodes[r]] = int32_t (r);
         for (size_t k = 0; k < n; ++k)
         {
             const auto a = js_max (area[k], min_node_area);
@@ -164,19 +166,28 @@ namespace dooblrthroat::dsp
 
     void AirwayNetwork::set_node_area_target (size_t node, double a)
     {
+        if (node >= area_target.size() || node >= amin_target.size()) return;
         area_target[node] = amin_target[node] = js_max (0.0, a);
     }
 
-    void AirwayNetwork::set_port_target (size_t branch, double a) { port_area_target[branch] = js_max (0.0, a); }
+    void AirwayNetwork::set_port_target (size_t branch, double a)
+    {
+        if (branch < port_area_target.size())
+            port_area_target[branch] = js_max (0.0, a);
+    }
 
     void AirwayNetwork::set_port_area (size_t branch, double a) noexcept
     {
+        if (branch >= port_area.size()) return;
         port_area[branch] = a < 0.0 ? 0.0 : a;
-        port_area_target[branch] = port_area[branch];
-        port_area_step[branch] = 0.0;
+        if (branch < port_area_target.size()) port_area_target[branch] = port_area[branch];
+        if (branch < port_area_step.size()) port_area_step[branch] = 0.0;
     }
 
-    void AirwayNetwork::set_fixed_pressure (size_t node, double pv) noexcept { p[node] = pv; }
+    void AirwayNetwork::set_fixed_pressure (size_t node, double pv) noexcept
+    {
+        if (node < p.size()) p[node] = is_finite (pv) ? pv : 0.0;
+    }
 
     void AirwayNetwork::snap_to_targets()
     {
@@ -262,6 +273,7 @@ namespace dooblrthroat::dsp
         const auto sat = 12000.0 * 12000.0 - RE_CRIT * RE_CRIT;
         for (auto& s : noise)
         {
+            if (s.src >= branch_area.size() || s.src >= u.size()) continue;
             const auto a = branch_area[s.src];
             const auto uu = u[s.src];
             auto amp = 0.0;
@@ -282,17 +294,41 @@ namespace dooblrthroat::dsp
             s.level = amp;
             if (amp == 0.0) continue;
             const auto v = amp * s.lp2;
-            if (uu >= 0.0) psrc[s.fwd] += v;
-            else psrc[s.bwd] -= v;
+            if (uu >= 0.0)
+            {
+                if (s.fwd < psrc.size()) psrc[s.fwd] += v;
+            }
+            else if (s.bwd < psrc.size())
+                psrc[s.bwd] -= v;
         }
     }
 
     double AirwayNetwork::step()
     {
+        // Refuse to run if the graph arrays disagree — a torn rebuild or a
+        // missed finalize would otherwise turn a node index into a wild pointer.
+        if (p.size() < n_nodes || area.size() < n_nodes || area_step.size() < n_nodes
+            || amin.size() < n_nodes || amin_step.size() < n_nodes || amin_target.size() < n_nodes
+            || dx.size() < n_nodes || dx_step.size() < n_nodes || inv_a.size() < n_nodes
+            || inv_amin.size() < n_nodes || sqrt_a.size() < n_nodes || half_l.size() < n_nodes
+            || half_r.size() < n_nodes || wall_perim.size() < n_nodes || visc_f.size() < n_nodes
+            || vol.size() < n_nodes || inv_lsum.size() < n_nodes || flow_sum.size() < n_nodes
+            || ext_flow.size() < n_nodes || rad_of.size() < n_nodes || fixed.size() < n_nodes
+            || has_wall.size() < n_nodes || b_a.size() < n_branches || b_b.size() < n_branches
+            || b_kind.size() < n_branches || u.size() < n_branches || mom.size() < n_branches
+            || l_prev.size() < n_branches || psrc.size() < n_branches
+            || branch_area.size() < n_branches)
+            return 0.0;
+
         const auto n = n_nodes, nb = n_branches;
         const auto tt = t, invt = inv_t, min_a = min_node_area;
         const auto sq = squeeze_area;
         const auto vol_on = enable_volume_source;
+        const auto rad_slots = std::min ({ rad_ul.size(), rad_l_prev.size(), rad_u.size() });
+        auto valid_rad = [rad_slots] (int32_t r) noexcept -> int32_t
+        {
+            return (r >= 0 && size_t (r) < rad_slots) ? r : int32_t (-1);
+        };
         if (vol_on) std::fill (spill.begin(), spill.end(), 0.0);
 
         for (size_t k = 0; k < n; ++k)
@@ -320,11 +356,14 @@ namespace dooblrthroat::dsp
                     const auto keep = tu * tu * (3.0 - 2.0 * tu);
                     spill[k] += raw * keep;
                     const auto sp = raw * (1.0 - keep);
-                    const auto s0 = nbr_start[k], s1 = nbr_start[k + 1];
+                    const auto s0 = (k < nbr_start.size()) ? nbr_start[k] : 0;
+                    const auto s1raw = (k + 1 < nbr_start.size()) ? nbr_start[k + 1] : s0;
+                    const auto s1 = s1raw <= nbr_list.size() ? s1raw : nbr_list.size();
                     size_t n_open = 0;
                     for (auto e = s0; e < s1; ++e)
                     {
                         const auto m = nbr_list[e];
+                        if (m >= n) continue;
                         if (js_min (area[m], amin[m]) >= sq || amin_target[m] >= sq) ++n_open;
                     }
                     if (n_open > 0)
@@ -333,6 +372,7 @@ namespace dooblrthroat::dsp
                         for (auto e = s0; e < s1; ++e)
                         {
                             const auto m = nbr_list[e];
+                            if (m >= n) continue;
                             if (js_min (area[m], amin[m]) >= sq || amin_target[m] >= sq) spill[m] += share;
                         }
                     }
@@ -369,6 +409,7 @@ namespace dooblrthroat::dsp
         for (size_t j = 0; j < nb; ++j)
         {
             const auto a = b_a[j], b = b_b[j];
+            if (a >= n || b >= n) continue;
             double l, r, kf, kb, a_eff;
             if (b_kind[j] == KIND_SERIES)
             {
@@ -460,14 +501,18 @@ namespace dooblrthroat::dsp
             if (fixed[k]) continue;
             if (area[k] < cl || amin[k] < cl)
             {
-                const auto rr = rad_of[k];
+                const auto rr = valid_rad (rad_of[k]);
                 if (rr >= 0) p[k] *= 0.98;
                 else
                 {
                     auto sum = 0.0; size_t cnt = 0;
-                    for (auto e = nbr_start[k]; e < nbr_start[k + 1]; ++e)
+                    const auto s0 = (k < nbr_start.size()) ? nbr_start[k] : 0;
+                    const auto s1raw = (k + 1 < nbr_start.size()) ? nbr_start[k + 1] : s0;
+                    const auto s1 = s1raw <= nbr_list.size() ? s1raw : nbr_list.size();
+                    for (auto e = s0; e < s1; ++e)
                     {
                         const auto m = nbr_list[e];
+                        if (m >= n) continue;
                         if (area[m] >= cl && amin[m] >= cl) { sum += p[m]; ++cnt; }
                     }
                     if (cnt > 0) p[k] += 0.02 * (sum / double (cnt) - p[k]);
@@ -487,7 +532,7 @@ namespace dooblrthroat::dsp
                 const auto c_min = (t2 * inv_lsum[k]) / 2.4;
                 if (c < c_min) c = c_min;
             }
-            const auto r = rad_of[k];
+            const auto r = valid_rad (rad_of[k]);
             if (r < 0)
                 p[k] += (tt / c) * flow_sum[k];
             else

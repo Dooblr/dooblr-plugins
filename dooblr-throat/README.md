@@ -54,4 +54,4 @@ JUCE 8.0.15, C++20, arm64. From this directory:
 Default build directory: `~/dooblr-build/dooblr-throat`. JUCE is reused from
 `~/dooblr-build/_deps/juce-src` when present. After tests and LoadCheck pass,
 the bundle is installed to `/Library/Audio/Plug-Ins/VST3/dooblr-throat.vst3`
-(no sudo). Version 0.1.0.
+(no sudo). Version 0.1.1.

@@ -12,16 +12,22 @@ namespace dooblrthroat::dsp
         const auto dx_min = (C_SOUND / fs) / 0.93;
         const auto ph_min_len = 8.7 * k * (0.55 + 0.45 * body.pharynx) - 1.6 * k;
         const auto or_min_len = 8.3 * k - 1.0 * k;
-        n_ph = size_t (js_max (8.0, floor (ph_min_len / dx_min)));
-        n_or = size_t (js_max (8.0, floor (or_min_len / dx_min)));
+        auto sections = [] (double x, double lo) -> size_t
+        {
+            if (! is_finite (x) || x < lo) return size_t (lo);
+            if (x > 256.0) return 256;
+            return size_t (x);
+        };
+        n_ph = sections (js_max (8.0, floor (ph_min_len / js_max (dx_min, 1e-9))), 8.0);
+        n_or = sections (js_max (8.0, floor (or_min_len / js_max (dx_min, 1e-9))), 8.0);
 
         const auto tr_len = 12.0 * k;
-        trachea = net.add_tube (TubeSpec::make ("trachea", size_t (js_max (6.0, floor (tr_len / js_max (dx_min, 0.9 * k)))), tr_len,
+        trachea = net.add_tube (TubeSpec::make ("trachea", sections (js_max (6.0, floor (tr_len / js_max (dx_min, 0.9 * k))), 6.0), tr_len,
                                                 Area::Uniform (2.5 * k * k)).set_wall (WALL_TRACHEA));
         pharynx = net.add_tube (TubeSpec::make ("pharynx", n_ph, 8.8 * k, Area::Uniform (3.0 * k * k)).set_wall (WALL_SOFT).radiating (0.25).perimeter (1.25));
         oral = net.add_tube (TubeSpec::make ("oral", n_or, 8.3 * k, Area::Uniform (3.0 * k * k)).set_wall (WALL_SOFT).radiating (0.25).perimeter (1.5));
         const auto na_len = 11.4 * k;
-        const auto n_na = size_t (js_max (8.0, floor (na_len / js_max (dx_min, 0.5 * k))));
+        const auto n_na = sections (js_max (8.0, floor (na_len / js_max (dx_min, 0.5 * k))), 8.0);
         std::vector<double> na_areas (n_na);
         for (size_t i = 0; i < n_na; ++i)
         {
@@ -38,10 +44,10 @@ namespace dooblrthroat::dsp
         glottis_port = net.add_port (trachea.last_node(), pharynx.first_node(), PortSpec::make (0.0, 0.3 * k).kinetic (0.37, 1.0).slit (1.4 * k));
         net.connect (pharynx.last_node(), oral.first_node());
         velum_port = net.add_port (pharynx.last_node(), nasal.first_node(), PortSpec::make (0.0, 1.0 * k).kinetic (0.3, 0.8));
-        const auto fossa_node = pharynx.node (size_t (js_min (double (n_ph - 1), js_round ((2.6 / 8.8) * double (n_ph)))));
+        const auto fossa_node = pharynx.node (index_from_float (js_round ((2.6 / 8.8) * double (n_ph)), n_ph));
         net.connect (fossa_node, fossa.first_node());
         const auto sinus = net.add_cavity ("sinus", 14.0 * k * k * k, std::nullopt);
-        net.add_port (nasal.node (size_t (js_round (double (n_na) * 0.45))), sinus, PortSpec::make (0.12 * k * k, 0.5 * k).kinetic (0.0, 0.0).no_half_sections());
+        net.add_port (nasal.node (index_from_float (js_round (double (n_na) * 0.45), n_na)), sinus, PortSpec::make (0.12 * k * k, 0.5 * k).kinetic (0.0, 0.0).no_half_sections());
         rad_lips = net.add_radiation (oral.last_node());
         rad_nose = net.add_radiation (nasal.last_node());
         net.finalize();

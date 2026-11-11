@@ -157,7 +157,9 @@ namespace dooblrthroat
         else
         {
             transientStatus.clear();
-            text = synth.getEngine().isSounding() ? "Voice" : "Idle  ·  MIDI instrument";
+            text = synth.getEngine().isSounding()
+                       ? juce::String ("Voice")
+                       : juce::String::fromUTF8 ("Idle  \xc2\xb7  MIDI instrument");
         }
 
         if (statusLabel.getText() != text)

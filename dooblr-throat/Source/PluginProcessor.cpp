@@ -95,7 +95,7 @@ namespace dooblrthroat
 
     void DooblrThroatProcessor::applyBodyOnMessageThread()
     {
-        engine.setSettings (readSettings());
+        engine.rebuildVoiceOffAudioThread (readSettings());
     }
 
     void DooblrThroatProcessor::handleAsyncUpdate()
@@ -106,16 +106,17 @@ namespace dooblrthroat
     void DooblrThroatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
     {
         juce::ScopedNoDenormals noDenormals;
+        dsp::AudioCallbackScope audioScope (engine);
 
         auto settings = readSettings();
         bendRangeCached = juce::jlimit (0, 24, juce::roundToInt (raw->bendRange->load (std::memory_order_relaxed)));
 
-        const auto& applied = engine.settings();
-        const bool bodyChanged = std::abs (settings.body.female - applied.body.female) > 1.0e-6
-                              || std::abs (settings.body.child - applied.body.child) > 1.0e-6;
+        const bool bodyChanged = std::abs (settings.body.female - engine.appliedFemale()) > 1.0e-6f
+                              || std::abs (settings.body.child - engine.appliedChild()) > 1.0e-6f;
         if (bodyChanged)
         {
-            settings.body = applied.body;
+            settings.body.female = engine.appliedFemale();
+            settings.body.child = engine.appliedChild();
             engine.setSettings (settings);
             triggerAsyncUpdate();
         }

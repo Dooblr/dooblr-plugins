@@ -1085,9 +1085,9 @@ Read from **dooblr-installer 0.1.0–0.1.2** (`~/Dropbox/dooblr_plugins/dooblr-i
 
 ## 15. dooblr-throat (T)
 
-Read from **dooblr-throat 0.1.0** (`~/Dropbox/dooblr_plugins/dooblr-throat`, short form **T**). T is a monophonic / legato VST3 vocal *instrument* (MIDI in, audio out). It uses the K/Q dark palette, type, knobs, combo boxes, header and ControlPanel layout already in this guide. It adds no new colour or font tokens. Code wins.
+Read from **dooblr-throat 0.1.1** (`~/Dropbox/dooblr_plugins/dooblr-throat`, short form **T**). T is a monophonic / legato VST3 vocal *instrument* (MIDI in, audio out). It uses the K/Q dark palette, type, knobs, combo boxes, header and ControlPanel layout already in this guide. It adds no new colour or font tokens. Code wins.
 
-- **Identity**: product name `dooblr-throat`, manufacturer `Dblr`, plug-in code `Dbth`, bundle id `com.dooblr.throat`. Version 0.1.0. VST3 category Instrument Synth. It belongs on a MIDI track, not an audio track.
+- **Identity**: product name `dooblr-throat`, manufacturer `Dblr`, plug-in code `Dbth`, bundle id `com.dooblr.throat`. Version 0.1.1. VST3 category Instrument Synth. It belongs on a MIDI track, not an audio track.
 - **Window**: one page, no nav column. Minimum 940×600, default 980×640, resizable to 2400×1400. 60 px header (title, version, Undo / Redo, factory and user presets, Save / Load, Output slider, stereo peak meter) and a single board below. Cmd-Z undoes; Cmd-Shift-Z / Cmd-Y redo; every other key goes to the host.
 - **Board**: left, a **Vowel** pad (close at the top, front on the left) with calibrated vowel dots and an accent marker; a Vowel panel (named vowel or Pad, Height, Back) and a Voice panel (Female, Child, Nasal) sit to its right. Below: Source (Breath, Tension, Bright, Fry, Rough, Pressure, Voiced), then Pitch (Vibrato, Vib Rate, Glide, Bend) and Envelope (ADSR) side by side. Status line at the bottom (Idle / Voice, or a transient preset message).
 - **Pad**: dragging sets Height and Back and switches the vowel choice to Pad (one undo gesture). While a named vowel is selected the marker follows that vowel's calibrated position; the dotted targets stay visible.

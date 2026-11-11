@@ -31,7 +31,7 @@ outside the markers are never touched; keep them current with any behaviour chan
 | dooblr-prophet | 0.3.1 | JUCE instrument VST3; plus a Max for Live companion in `m4l/` | ~88 | 2026-10-31 | [design/plugins/dooblr-prophet.md](plugins/dooblr-prophet.md) |
 | dooblr-q | 0.9.5 | JUCE effect VST3 | 99 | 2026-10-28 | [design/plugins/dooblr-q.md](plugins/dooblr-q.md) |
 | dooblr-soothe | 0.1.3 | JUCE effect VST3 | 58 | 2026-10-31 | [design/plugins/dooblr-soothe.md](plugins/dooblr-soothe.md) |
-| dooblr-throat | 0.1.0 | JUCE instrument VST3 | 22 | 2026-11-10 | [design/plugins/dooblr-throat.md](plugins/dooblr-throat.md) |
+| dooblr-throat | 0.1.1 | JUCE instrument VST3 | 22 | 2026-11-11 | [design/plugins/dooblr-throat.md](plugins/dooblr-throat.md) |
 | dooblr-titan | 0.1.0 | Max for Live MIDI effect that tightens MIDI clips and writes musical variations into Session View clip slots. | 31 | 2026-11-11 | [design/plugins/dooblr-titan.md](plugins/dooblr-titan.md) |
 | dooblr-vocals | 0.2.0 | JUCE effect VST3, Standalone | ~133 | 2026-11-01 | [design/plugins/dooblr-vocals.md](plugins/dooblr-vocals.md) |
 <!-- END AUTO-GENERATED -->

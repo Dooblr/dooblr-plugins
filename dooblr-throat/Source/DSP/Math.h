@@ -3,6 +3,7 @@
 // Transcendentals use the host libm; we do not claim bit-identity with the Rust engine.
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 
 namespace dooblrthroat::dsp
@@ -72,10 +73,27 @@ namespace dooblrthroat::dsp
 
     inline double clamp (double x, double lo, double hi) noexcept
     {
+        if (! is_finite (x)) return lo;
         if (x < lo) return lo;
         if (x > hi) return hi;
         return x;
     }
+
+    inline size_t clamp_index (size_t i, size_t n) noexcept
+    {
+        return n == 0 ? 0 : (i >= n ? n - 1 : i);
+    }
+
+    /** Convert a float to a clamped index. NaN, inf, and negatives become 0. */
+    inline size_t index_from_float (double x, size_t n) noexcept
+    {
+        if (n == 0) return 0;
+        if (! is_finite (x) || x <= 0.0) return 0;
+        if (x >= double (n)) return n - 1;
+        return size_t (x);
+    }
+
+    inline bool index_in_range (size_t i, size_t n) noexcept { return i < n; }
 
     inline double lerp (double a, double b, double t) noexcept { return a + (b - a) * t; }
 

@@ -3,9 +3,10 @@
 
 #include "HumanVoice.h"
 #include "Vowels.h"
-#include <array>
+#include <atomic>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <vector>
 
 namespace dooblrthroat::dsp
@@ -30,8 +31,21 @@ namespace dooblrthroat::dsp
     public:
         void prepare (double sampleRate, int maxBlock);
         void reset();
-        void setSettings (const ThroatSettings& s); // may allocate if the body changes (call off the audio thread)
+
+        /** Apply parameter values. Never allocates or frees a voice — safe on the audio thread. */
+        void setSettings (const ThroatSettings& s);
         const ThroatSettings& settings() const { return settings_; }
+
+        /** Build or replace the airway. Message thread / tests only.
+            The previous voice is published with an atomic pointer swap and is freed
+            only after the audio callback is no longer using it. */
+        /** Build or replace the airway from a settings snapshot. Message thread / tests only.
+            Does not write settings_ (that stays audio-thread-only). The previous voice
+            is freed only after the audio callback is no longer using it. */
+        void rebuildVoiceOffAudioThread (const ThroatSettings& incoming, bool force = false);
+
+        float appliedFemale() const noexcept { return appliedFemale_.load (std::memory_order_acquire); }
+        float appliedChild() const noexcept { return appliedChild_.load (std::memory_order_acquire); }
 
         void noteOn (int midiNote, float velocity);
         void noteOff (int midiNote);
@@ -40,24 +54,45 @@ namespace dooblrthroat::dsp
 
         void process (float* left, float* right, int n);
 
+        /** Wrap a processBlock (or a test audio loop) so a concurrent rebuild cannot
+            free the live voice until the callback returns. */
+        void beginAudioCallback() noexcept;
+        void endAudioCallback() noexcept;
+
         float lastPeak() const { return lastPeak_; }
         bool isSounding() const { return gate_ > 1e-4f || ! held_.empty(); }
-        const HumanVoice* voice() const { return voice_.get(); }
+        const HumanVoice* voice() const { return live_.load (std::memory_order_acquire); }
 
     private:
-        void applySource();
-        void applyVowel();
-        void rebuildVoice();
+        void applySource (HumanVoice& voice, const ThroatSettings& s, bool useLiveNote = true);
+        void applyVowel (HumanVoice& voice, const ThroatSettings& s);
+        void publishVoice (std::unique_ptr<HumanVoice> next);
+        static void sanitizeSettings (ThroatSettings& s);
+        HumanVoice* live() const noexcept { return live_.load (std::memory_order_acquire); }
+        void applyToLive();
 
         double sampleRate_ = 48000.0;
-        ThroatSettings settings_, appliedBody_;
-        std::unique_ptr<HumanVoice> voice_;
+        ThroatSettings settings_;
+        std::atomic<float> appliedFemale_ { 0.0f };
+        std::atomic<float> appliedChild_ { 0.0f };
+        std::unique_ptr<HumanVoice> owned_;
+        std::atomic<HumanVoice*> live_ { nullptr };
+        std::atomic<uint32_t> audioBusy_ { 0 };
+        std::mutex swapMutex_;
         std::vector<int> held_;
         int currentNote_ = -1;
         float bendSemis_ = 0.0f, vel_ = 1.0f;
         float gate_ = 0.0f, env_ = 0.0f, lastPeak_ = 0.0f;
         enum class Stage { idle, attack, decay, sustain, release } stage_ = Stage::idle;
-        bool bodyDirty_ = false;
         std::vector<float> tmp_;
+    };
+
+    struct AudioCallbackScope
+    {
+        ThroatEngine& engine;
+        explicit AudioCallbackScope (ThroatEngine& e) noexcept : engine (e) { engine.beginAudioCallback(); }
+        ~AudioCallbackScope() noexcept { engine.endAudioCallback(); }
+        AudioCallbackScope (const AudioCallbackScope&) = delete;
+        AudioCallbackScope& operator= (const AudioCallbackScope&) = delete;
     };
 }

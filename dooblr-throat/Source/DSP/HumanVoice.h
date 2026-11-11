@@ -22,6 +22,8 @@ namespace dooblrthroat::dsp
 
     inline size_t oversample_for (double fs_out)
     {
+        if (! is_finite (fs_out) || fs_out < 1.0)
+            fs_out = 48000.0;
         return size_t (js_max (1.0, floor (60000.0 / fs_out) + 1.0));
     }
 

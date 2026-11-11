@@ -22,6 +22,10 @@
 #include <sstream>
 #include <string>
 #include <vector>
+#include <atomic>
+#include <chrono>
+#include <random>
+#include <thread>
 
 namespace
 {
@@ -301,6 +305,15 @@ namespace
         check (editor->getWidth() >= 940 && editor->getHeight() >= 600, "minimum editor size");
         check (editor->getPanels().size() == 5, "five control panels");
         check (editor->getVowelPad().isVisible(), "vowel pad is visible");
+        if (auto* status = dynamic_cast<juce::Label*> (editor->findChildWithID ("status")))
+        {
+            const auto text = status->getText();
+            check (! text.contains (juce::CharPointer_UTF8 ("\xc3\x82")), "status line has no mojibake (" + text.toStdString() + ")");
+            const auto idle = juce::String::fromUTF8 ("Idle  \xc2\xb7  MIDI instrument");
+            check (text == idle, "status uses a UTF-8 middle dot (" + text.toStdString() + ")");
+        }
+        else
+            check (false, "status label is present");
 
         const auto snapshotEnv = std::getenv ("DOOBLRTHROAT_EDITOR_SNAPSHOT");
         const juce::String path = snapshotEnv != nullptr ? juce::String (snapshotEnv) + ".png"
@@ -325,6 +338,259 @@ namespace
             check (! p->getProgramName (i).containsIgnoreCase ("chimera"),
                    "preset name is original: " + p->getProgramName (i).toStdString());
     }
+
+    int stressSeconds()
+    {
+        if (const char* env = std::getenv ("DOOBLRTHROAT_STRESS_SECONDS"))
+        {
+            const int s = std::atoi (env);
+            if (s > 0) return s;
+        }
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer)
+        return 60;
+#endif
+#endif
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+        return 60;
+#endif
+        return 120;
+    }
+
+    uint32_t nextU32 (uint32_t& rng)
+    {
+        rng = rng * 1664525u + 1013904223u;
+        return rng;
+    }
+
+    float unit (uint32_t& rng) { return float (nextU32 (rng) >> 8) / float (1u << 24); }
+
+    void testParamExtremesAndMidi()
+    {
+        auto p = makeProcessor (44100.0, 64);
+        const auto ids = { id::height, id::back, id::nasal, id::female, id::child,
+                           id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
+                           id::vibratoDepth, id::vibratoRate, id::glide, id::bendRange,
+                           id::attack, id::decay, id::sustain, id::release, id::output };
+        for (auto* pid : ids)
+        {
+            if (auto* r = param (*p, pid))
+                r->setValueNotifyingHost (0.0f);
+        }
+        p->applyBodyOnMessageThread();
+        auto lo = render (*p, 2048, { { 0, on (0) }, { 512, juce::MidiMessage::pitchWheel (1, 0) } }, 64);
+        check (lo.finite(), "all-min params stay finite (note 0, bend min)");
+
+        for (auto* pid : ids)
+        {
+            if (auto* r = param (*p, pid))
+                r->setValueNotifyingHost (1.0f);
+        }
+        p->applyBodyOnMessageThread();
+        auto hi = render (*p, 2048, { { 0, on (127) }, { 256, juce::MidiMessage::pitchWheel (1, 16383) } }, 64);
+        check (hi.finite(), "all-max params stay finite (note 127, bend max)");
+
+        // Rapid note-on/off, legato, then release/reset.
+        std::vector<Event> ev;
+        int t = 0;
+        for (int i = 0; i < 40; ++i)
+        {
+            ev.push_back ({ t, on (40 + (i % 24), 0.9f) });
+            t += 32;
+            if (i % 3 == 0)
+            {
+                ev.push_back ({ t, off (40 + (i % 24)) });
+                t += 16;
+            }
+        }
+        ev.push_back ({ t, off (40) });
+        auto leg = render (*p, t + 4096, ev, 128);
+        check (leg.finite(), "rapid legato / note-off stays finite");
+        p->setCurrentProgram (0);
+        p->releaseResources();
+        p->prepareToPlay (44100.0, 64);
+        const auto after = render (*p, 2048, {}, 64);
+        check (after.finite() && after.peak() < 1.0e-4f,
+               "silent after reset/releaseResources (peak " + fmt (after.peak(), 6) + ")");
+    }
+
+    void testSampleRatesAndBlockSizes()
+    {
+        for (double rate : { 44100.0, 48000.0, 96000.0 })
+        {
+            auto p = makeProcessor (rate, 256);
+            set (*p, id::vowel, 1.0f);
+            const auto r = render (*p, int (rate * 0.25), { { 0, on (60) } }, 256);
+            check (r.finite() && r.peak() > 0.01f,
+                   "note 60 sounds at " + fmt (rate, 0) + " Hz (peak " + fmt (r.peak(), 3) + ")");
+        }
+
+        auto p = makeProcessor (48000.0, 512);
+        set (*p, id::vowel, 1.0f);
+        auto a = render (*p, 4096, { { 0, on (69) } }, 512);
+        check (a.finite() && a.peak() > 0.01f, "pre rate-change audio is finite");
+        p->releaseResources();
+        p->setPlayConfigDetails (0, 2, 44100.0, 1024);
+        p->prepareToPlay (44100.0, 1024);
+        auto b = render (*p, 4096, { { 0, on (69) } }, 1024);
+        check (b.finite() && b.peak() > 0.01f, "audio is finite after mid-stream 48k->44.1k prepare");
+
+        // Variable block sizes from 1 to 4096, including larger than the prepared max (512).
+        p->releaseResources();
+        p->setPlayConfigDetails (0, 2, 48000.0, 512);
+        p->prepareToPlay (48000.0, 512);
+        set (*p, id::vowel, 1.0f);
+        juce::MidiBuffer midi;
+        midi.addEvent (on (60), 0);
+        uint32_t rng = 7;
+        bool finite = true;
+        float peak = 0.0f;
+        int produced = 0;
+        while (produced < 48000)
+        {
+            const int n = 1 + int (nextU32 (rng) % 4096);
+            juce::AudioBuffer<float> buffer (2, n);
+            buffer.clear();
+            p->processBlock (buffer, midi);
+            midi.clear();
+            for (int i = 0; i < n; ++i)
+            {
+                const auto l = buffer.getSample (0, i), r = buffer.getSample (1, i);
+                if (! std::isfinite (l) || ! std::isfinite (r)) finite = false;
+                peak = std::max ({ peak, std::abs (l), std::abs (r) });
+            }
+            produced += n;
+        }
+        check (finite && peak > 0.01f, "variable 1..4096 blocks (incl. > prepared max) stay finite, peak " + fmt (peak, 3));
+    }
+
+    void testStressAutomationAndBodySwap()
+    {
+        const int seconds = stressSeconds();
+        std::cout << "    (stress duration " << seconds << " s of simulated audio)\n";
+
+        // Processor-level: randomised automation, MIDI, and block sizes, with a
+        // second thread repeatedly toggling Female/Child and rebuilding the airway.
+        auto p = makeProcessor (48000.0, 256);
+        const auto pids = { id::height, id::back, id::nasal, id::female, id::child,
+                            id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
+                            id::vibratoDepth, id::vibratoRate, id::glide, id::bendRange,
+                            id::attack, id::decay, id::sustain, id::release, id::output };
+
+        std::atomic<bool> running { true };
+        std::atomic<int> faults { 0 };
+        std::atomic<uint64_t> samples { 0 };
+
+        std::thread body ([&] {
+            uint32_t rng = 99;
+            bool female = false, child = false;
+            while (running.load (std::memory_order_relaxed))
+            {
+                female = ! female;
+                if (! female) child = ! child;
+                if (auto* f = p->getState().getParameter (id::female))
+                    f->setValueNotifyingHost (female ? 1.0f : 0.0f);
+                if (auto* c = p->getState().getParameter (id::child))
+                    c->setValueNotifyingHost (child ? 1.0f : 0.0f);
+                p->applyBodyOnMessageThread();
+                std::this_thread::sleep_for (std::chrono::microseconds (200 + int (nextU32 (rng) % 800)));
+            }
+        });
+
+        uint32_t rng = 1;
+        juce::MidiBuffer midi;
+        int note = 60;
+        const auto target = uint64_t (48000) * uint64_t (seconds);
+        while (samples.load (std::memory_order_relaxed) < target)
+        {
+            const int n = 1 + int (nextU32 (rng) % 4096);
+            juce::AudioBuffer<float> buffer (2, n);
+            buffer.clear();
+            midi.clear();
+            if ((nextU32 (rng) & 7u) == 0)
+            {
+                midi.addEvent (off (note), 0);
+                note = int (nextU32 (rng) % 128);
+                midi.addEvent (on (note, 0.3f + 0.7f * unit (rng)), 0);
+            }
+            if ((nextU32 (rng) & 15u) == 0)
+                midi.addEvent (juce::MidiMessage::pitchWheel (1, int (nextU32 (rng) % 16384)), 0);
+            if ((nextU32 (rng) & 3u) == 0)
+            {
+                auto* pid = pids.begin()[int (nextU32 (rng) % pids.size())];
+                if (auto* r = p->getState().getParameter (pid))
+                    r->setValueNotifyingHost (unit (rng));
+            }
+            p->processBlock (buffer, midi);
+            for (int i = 0; i < n; ++i)
+                if (! std::isfinite (buffer.getSample (0, i)) || ! std::isfinite (buffer.getSample (1, i)))
+                    faults.fetch_add (1, std::memory_order_relaxed);
+            samples.fetch_add (uint64_t (n), std::memory_order_relaxed);
+        }
+
+        running = false;
+        body.join();
+        check (faults.load() == 0, "processor stress stayed finite (" + std::to_string (faults.load()) + " non-finite, "
+               + std::to_string (samples.load()) + " samples)");
+
+        // Engine-level race: the exact 0.1.0 crash class — rebuild the airway on a
+        // side thread while process() is running.
+        dsp::ThroatEngine engine;
+        dsp::ThroatSettings s;
+        engine.setSettings (s);
+        engine.prepare (48000.0, 512);
+        engine.noteOn (60, 0.8f);
+        running = true;
+        faults = 0;
+        std::atomic<uint64_t> blocks { 0 };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds (std::max (8, seconds / 4));
+
+        std::thread audio ([&] {
+            std::vector<float> L (4096), R (4096);
+            uint32_t r = 123;
+            while (running.load (std::memory_order_relaxed)
+                   && std::chrono::steady_clock::now() < deadline)
+            {
+                const int n = 1 + int (nextU32 (r) % 4096);
+                dsp::AudioCallbackScope scope (engine);
+                if ((nextU32 (r) & 7u) == 0)
+                {
+                    engine.noteOff (60);
+                    engine.noteOn (int (nextU32 (r) % 128), 0.9f);
+                }
+                if ((nextU32 (r) & 15u) == 0)
+                    engine.pitchBend (float (int (nextU32 (r) % 49) - 24));
+                engine.setSettings (s);
+                engine.process (L.data(), R.data(), n);
+                for (int i = 0; i < n; ++i)
+                    if (! std::isfinite (L[size_t (i)]) || ! std::isfinite (R[size_t (i)]))
+                        faults.fetch_add (1, std::memory_order_relaxed);
+                blocks.fetch_add (1, std::memory_order_relaxed);
+            }
+        });
+
+        std::thread swapper ([&] {
+            bool female = false, child = false;
+            while (running.load (std::memory_order_relaxed)
+                   && std::chrono::steady_clock::now() < deadline)
+            {
+                female = ! female;
+                if (! female) child = ! child;
+                dsp::ThroatSettings body = s;
+                body.body.female = female ? 1.0f : 0.0f;
+                body.body.child = child ? 1.0f : 0.0f;
+                engine.rebuildVoiceOffAudioThread (body);
+                std::this_thread::sleep_for (std::chrono::microseconds (150));
+            }
+        });
+
+        audio.join();
+        running = false;
+        swapper.join();
+        check (faults.load() == 0 && blocks.load() > 0,
+               "engine body-swap stress stayed finite (" + std::to_string (faults.load())
+               + " non-finite, " + std::to_string (blocks.load()) + " blocks)");
+    }
 }
 
 int main()
@@ -340,6 +606,9 @@ int main()
         { "factory and user presets",    testPresets },
         { "no third-party brand names",  testNoChimeraName },
         { "editor",                      testEditor },
+        { "param extremes and MIDI",     testParamExtremesAndMidi },
+        { "sample rates and block sizes", testSampleRatesAndBlockSizes },
+        { "stress automation and body swap", testStressAutomationAndBodySwap },
     };
 
     int failedTests = 0;
