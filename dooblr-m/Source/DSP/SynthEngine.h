@@ -9,6 +9,9 @@
 
 namespace dooblrm::dsp
 {
+    /** Amount of Contour = 1 opens the ladder by this many octaves. */
+    inline constexpr float contourOctaves = 5.0f;
+
     struct EnvSettings
     {
         float attack = 0.002f, decay = 0.5f, sustain = 1.0f;

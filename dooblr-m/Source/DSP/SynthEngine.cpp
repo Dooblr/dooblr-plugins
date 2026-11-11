@@ -274,7 +274,7 @@ namespace dooblrm::dsp
         const auto kybd = (settings.kybd1 ? 1.0f / 3.0f : 0.0f) + (settings.kybd2 ? 2.0f / 3.0f : 0.0f);
         auto cutoffHz = settings.cutoff;
         cutoffHz *= std::exp2 (kybd * (note - 60.0f) / 12.0f);
-        cutoffHz *= std::exp2 (settings.contourAmt * 5.0f * fEnv * vel);
+        cutoffHz *= std::exp2 (settings.contourAmt * contourOctaves * fEnv * vel);
         cutoffHz *= std::exp2 (filterModOct);
         lastCutoffHz = cutoffHz;
 

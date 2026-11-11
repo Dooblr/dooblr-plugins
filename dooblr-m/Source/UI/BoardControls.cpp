@@ -1,5 +1,6 @@
 #include "BoardControls.h"
 
+#include "../DSP/SynthEngine.h"
 #include "../Parameters.h"
 
 #include <cmath>
@@ -81,17 +82,230 @@ namespace dooblrm::ui
         addAndMakeVisible (captionLabel);
     }
 
-    void Knob::resized()
-    {
-        auto bounds = getLocalBounds();
-        captionLabel.setBounds (bounds.removeFromBottom (16));
-        slider.setBounds (bounds);
-        if (large)
+        void Knob::resized()
         {
-            const auto d = juce::jmin (bounds.getWidth(), bounds.getHeight());
-            slider.getProperties().set ("maxKnobDiameter", (double) juce::jlimit (74, 92, d));
+            auto bounds = getLocalBounds();
+            captionLabel.setBounds (bounds.removeFromBottom (16));
+            slider.setBounds (bounds);
+            if (large)
+            {
+                const auto d = juce::jmin (bounds.getWidth(), bounds.getHeight());
+                slider.getProperties().set ("maxKnobDiameter", (double) juce::jlimit (74, 92, d));
+            }
         }
-    }
+
+        //==============================================================================
+        namespace
+        {
+            struct KnobArc
+            {
+                juce::Point<float> centre;
+                float radius = 0, lineWidth = 0, arcRadius = 0;
+            };
+
+            KnobArc knobArcGeometry (const juce::Slider& slider, juce::Rectangle<float> bounds)
+            {
+                bounds = bounds.reduced (4.0f);
+                const auto maxDiameter = (float) (double) slider.getProperties().getWithDefault ("maxKnobDiameter", 1.0e6);
+                KnobArc g;
+                g.radius = juce::jmin (bounds.getWidth(), bounds.getHeight(), juce::jmax (8.0f, maxDiameter - 8.0f)) * 0.5f;
+                g.centre = bounds.getCentre();
+                g.lineWidth = juce::jmax (2.0f, g.radius * 0.12f);
+                g.arcRadius = g.radius - g.lineWidth * 0.5f;
+                return g;
+            }
+
+            static_assert ((int) CutoffContourIndicator::contourOctaves == 5
+                           && (int) dsp::contourOctaves == 5);
+        }
+
+        CutoffContourIndicator::CutoffContourIndicator()
+        {
+            setComponentID ("cutoffContour");
+            setInterceptsMouseClicks (false, false);
+            setOpaque (false);
+            setVisible (false);
+        }
+
+        CutoffContourIndicator::~CutoffContourIndicator()
+        {
+            stopTimer();
+            detachListeners();
+        }
+
+        void CutoffContourIndicator::detachListeners()
+        {
+            if (state == nullptr)
+                return;
+            state->removeParameterListener (params::id::cutoff, this);
+            state->removeParameterListener (params::id::contourAmt, this);
+            state = nullptr;
+        }
+
+        void CutoffContourIndicator::attach (juce::AudioProcessorValueTreeState& s,
+                                             juce::Slider& slider,
+                                             const std::atomic<float>& env)
+        {
+            detachListeners();
+            state = &s;
+            cutoffSlider = &slider;
+            envTap = &env;
+            state->addParameterListener (params::id::cutoff, this);
+            state->addParameterListener (params::id::contourAmt, this);
+            keyValid = false;
+            refresh();
+        }
+
+        void CutoffContourIndicator::parentHierarchyChanged() { parentSizeChanged(); }
+
+        void CutoffContourIndicator::parentSizeChanged()
+        {
+            if (getParentComponent() != nullptr && cutoffSlider != nullptr)
+                setBounds (cutoffSlider->getBounds());
+            refresh();
+        }
+
+        void CutoffContourIndicator::timerCallback() { refresh(); }
+
+        void CutoffContourIndicator::parameterChanged (const juce::String&, float)
+        {
+            keyValid = false;
+            refresh();
+        }
+
+        float CutoffContourIndicator::paramHz() const
+        {
+            if (state != nullptr)
+                if (auto* p = state->getParameter (params::id::cutoff))
+                    return p->convertFrom0to1 (p->getValue());
+            if (cutoffSlider != nullptr)
+                return (float) cutoffSlider->getValue();
+            return 1200.0f;
+        }
+
+        float CutoffContourIndicator::paramContour() const
+        {
+            if (state != nullptr)
+                if (auto* p = state->getParameter (params::id::contourAmt))
+                    return p->convertFrom0to1 (p->getValue());
+            return 0.0f;
+        }
+
+        float CutoffContourIndicator::angleForHz (float hz) const
+        {
+            if (cutoffSlider == nullptr)
+                return 0.0f;
+            const auto rotary = cutoffSlider->getRotaryParameters();
+            const auto clamped = juce::jlimit (cutoffSlider->getMinimum(), cutoffSlider->getMaximum(),
+                                               (double) (std::isfinite (hz) ? hz : paramHz()));
+            const auto proportion = (float) cutoffSlider->valueToProportionOfLength (clamped);
+            return rotary.startAngleRadians + proportion * (rotary.endAngleRadians - rotary.startAngleRadians);
+        }
+
+        CutoffContourIndicator::Picture CutoffContourIndicator::makePicture() const
+        {
+            Picture p;
+            p.width = getWidth();
+            p.height = getHeight();
+            p.contourAmt = juce::jlimit (0.0f, 1.0f, paramContour());
+            p.cutoffHz = paramHz();
+            p.liveEnv = envTap != nullptr ? envTap->load (std::memory_order_relaxed) : 0.0f;
+            if (! std::isfinite (p.liveEnv))
+                p.liveEnv = 0.0f;
+
+            const auto octaves = p.contourAmt * contourOctaves;
+            const auto lo = cutoffSlider != nullptr ? (float) cutoffSlider->getMinimum() : 20.0f;
+            const auto hi = cutoffSlider != nullptr ? (float) cutoffSlider->getMaximum() : 20000.0f;
+            p.rangeEndHz = juce::jlimit (lo, hi, p.cutoffHz * std::exp2 (octaves));
+            p.liveHz = juce::jlimit (lo, hi, p.cutoffHz * std::exp2 (octaves * juce::jlimit (0.0f, 1.3f, p.liveEnv)));
+            p.rangeVisible = p.contourAmt > 1.0e-4f;
+            p.liveVisible = p.rangeVisible && p.liveEnv > 1.0e-3f;
+
+            if (cutoffSlider == nullptr || p.width < 8 || p.height < 8)
+                return p;
+
+            const auto geo = knobArcGeometry (*cutoffSlider, getLocalBounds().toFloat());
+            p.centre = geo.centre;
+            p.ringRadius = geo.arcRadius + geo.lineWidth * 0.42f;
+            p.stroke = juce::jmax (1.0f, geo.lineWidth * 0.28f);
+            p.startAngle = angleForHz (p.cutoffHz);
+            p.endAngle = angleForHz (p.rangeEndHz);
+            p.liveAngle = angleForHz (p.liveHz);
+            p.livePos = p.centre.getPointOnCircumference (p.ringRadius, p.liveAngle);
+            return p;
+        }
+
+        CutoffContourIndicator::Key CutoffContourIndicator::makeKey (const Picture& p) const
+        {
+            return { juce::roundToInt (p.contourAmt * 1000.0f),
+                     juce::roundToInt (p.cutoffHz * 10.0f),
+                     juce::roundToInt (juce::jlimit (0.0f, 1.3f, p.liveEnv) * 256.0f),
+                     p.width, p.height };
+        }
+
+        void CutoffContourIndicator::refresh()
+        {
+            picture = makePicture();
+            const auto key = makeKey (picture);
+            const auto show = picture.rangeVisible;
+            if (isVisible() != show)
+                setVisible (show);
+
+            if (show && ! isTimerRunning())
+                startTimerHz (30);
+            else if (! show && isTimerRunning())
+                stopTimer();
+
+            if (keyValid && key == lastKey)
+                return;
+
+            lastKey = key;
+            keyValid = true;
+            lastRepaintBounds = getBounds();
+            ++repaintRequests;
+            repaint();
+        }
+
+        bool CutoffContourIndicator::isRangeVisible() const noexcept { return picture.rangeVisible; }
+        bool CutoffContourIndicator::isLiveMarkerVisible() const noexcept { return picture.liveVisible; }
+        float CutoffContourIndicator::getContourAmount() const noexcept { return picture.contourAmt; }
+        float CutoffContourIndicator::getRangeStartHz() const noexcept { return picture.cutoffHz; }
+        float CutoffContourIndicator::getRangeEndHz() const noexcept { return picture.rangeEndHz; }
+        float CutoffContourIndicator::getLiveHz() const noexcept { return picture.liveHz; }
+        float CutoffContourIndicator::getLiveEnvelope() const noexcept { return picture.liveEnv; }
+        float CutoffContourIndicator::getRangeStartAngle() const noexcept { return picture.startAngle; }
+        float CutoffContourIndicator::getRangeEndAngle() const noexcept { return picture.endAngle; }
+        float CutoffContourIndicator::getLiveAngle() const noexcept { return picture.liveAngle; }
+        juce::Point<float> CutoffContourIndicator::getCentre() const noexcept { return picture.centre; }
+        float CutoffContourIndicator::getRingRadius() const noexcept { return picture.ringRadius; }
+        juce::Point<float> CutoffContourIndicator::getLiveMarkerPosition() const noexcept { return picture.livePos; }
+
+        void CutoffContourIndicator::paint (juce::Graphics& g)
+        {
+            if (! picture.rangeVisible || cutoffSlider == nullptr)
+                return;
+
+            const auto from = picture.startAngle;
+            const auto to = picture.endAngle;
+            if (std::abs (to - from) > 0.004f)
+            {
+                juce::Path range;
+                range.addCentredArc (picture.centre.x, picture.centre.y, picture.ringRadius, picture.ringRadius,
+                                     0.0f, juce::jmin (from, to), juce::jmax (from, to), true);
+                g.setColour (Palette::dynamic.withAlpha (0.28f));
+                g.strokePath (range, juce::PathStrokeType (picture.stroke, juce::PathStrokeType::curved,
+                                                           juce::PathStrokeType::rounded));
+            }
+
+            if (! picture.liveVisible)
+                return;
+
+            const auto glow = juce::jmax (5.0f, picture.stroke * 3.4f);
+            g.setColour (Palette::dynamic.withAlpha (0.20f));
+            g.fillEllipse (juce::Rectangle<float> (glow, glow).withCentre (picture.livePos));
+            g.setColour (Palette::dynamic.withAlpha (0.72f));
+            g.fillEllipse (juce::Rectangle<float> (3.2f, 3.2f).withCentre (picture.livePos));
+        }
 
     //==============================================================================
     RotarySwitch::RotarySwitch (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,

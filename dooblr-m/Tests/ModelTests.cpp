@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdlib>
@@ -1005,6 +1006,21 @@ namespace
             auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
             auto* attackKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::fAttack));
             auto* resonanceKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::emphasis));
+            auto& contourIndicator = editor->getCutoffContourIndicator();
+            check (cutoffKnob != nullptr && contourIndicator.getParentComponent() == cutoffKnob,
+                   sizeLabel + "cutoff contour indicator is parented to the Cutoff knob");
+            if (cutoffKnob != nullptr)
+            {
+                check (contourIndicator.getWidth() > 20 && contourIndicator.getHeight() > 20,
+                       sizeLabel + "contour indicator covers the Cutoff slider");
+                check (cutoffKnob->getLocalBounds().contains (contourIndicator.getBounds()),
+                       sizeLabel + "contour indicator stays inside the Cutoff knob");
+                check (editor->getLocalBounds().contains (editor->getLocalArea (cutoffKnob, cutoffKnob->getLocalBounds())),
+                       sizeLabel + "cutoff knob stays inside the editor");
+                check (editor->getLocalBounds().contains (editor->getLocalArea (&contourIndicator,
+                                                                                contourIndicator.getLocalBounds())),
+                       sizeLabel + "contour indicator does not overflow the editor");
+            }
             check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() == "Resonance",
                    sizeLabel + "filter resonance knob caption is Resonance");
             check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() != "Emphasis",
@@ -1372,6 +1388,195 @@ namespace
                "live playhead lifts off the baseline during attack");
     }
 
+    int opaquePixels (juce::Component& c)
+    {
+        if (c.getWidth() <= 0 || c.getHeight() <= 0)
+            return 0;
+        juce::Image image (juce::Image::ARGB, c.getWidth(), c.getHeight(), true);
+        juce::Graphics g (image);
+        c.paint (g);
+        int n = 0;
+        for (int y = 0; y < image.getHeight(); ++y)
+            for (int x = 0; x < image.getWidth(); ++x)
+                if (image.getPixelAt (x, y).getAlpha() > 12)
+                    ++n;
+        return n;
+    }
+
+    void testCutoffContourIndicator()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrMEditor");
+        if (editor == nullptr)
+            return;
+
+        check (juce::approximatelyEqual (ui::CutoffContourIndicator::contourOctaves, dsp::contourOctaves),
+               "indicator octave span matches the DSP filter contour");
+
+        auto* cutoff = param (*p, id::cutoff);
+        auto* amount = param (*p, id::contourAmt);
+        auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
+        auto& indicator = editor->getCutoffContourIndicator();
+        if (cutoff == nullptr || amount == nullptr || cutoffKnob == nullptr)
+            return;
+
+        bool intercepts = true, interceptsChildren = true;
+        indicator.getInterceptsMouseClicks (intercepts, interceptsChildren);
+        check (! intercepts && ! interceptsChildren, "contour indicator does not intercept mouse clicks");
+        check (! indicator.hitTest (indicator.getWidth() / 2, indicator.getHeight() / 2),
+               "hitTest is false so the Cutoff knob still receives drags");
+        check (indicator.getNumChildComponents() == 0, "contour indicator has no child labels");
+
+        amount->setValueNotifyingHost (0.0f);
+        set (*p, id::cutoff, 400.0f);
+        indicator.refresh();
+        check (! indicator.isVisible() && ! indicator.isRangeVisible() && ! indicator.isLiveMarkerVisible(),
+               "indicator is hidden at contour amount 0");
+        check (opaquePixels (indicator) == 0, "paint draws nothing at contour amount 0");
+
+        const auto beforeDrag = cutoff->getValue();
+        auto& slider = cutoffKnob->getSlider();
+        const auto centre = slider.getLocalBounds().getCentre().toFloat();
+        simulateDrag (slider, centre, centre + juce::Point<float> (0.0f, -36.0f));
+        check (std::abs (cutoff->getValue() - beforeDrag) > 1.0e-5f,
+               "dragging Cutoff still changes the value with the overlay present");
+        cutoff->setValueNotifyingHost (cutoff->convertTo0to1 (400.0f));
+
+        amount->setValueNotifyingHost (0.30f);
+        indicator.refresh();
+        check (indicator.isVisible() && indicator.isRangeVisible(),
+               "indicator is visible when contour amount is non-zero");
+        check (! indicator.isLiveMarkerVisible(), "live marker stays hidden while the envelope is idle");
+        const auto oct30 = std::log2 (indicator.getRangeEndHz() / indicator.getRangeStartHz());
+        const auto span30 = std::abs (indicator.getRangeEndAngle() - indicator.getRangeStartAngle());
+        check (std::abs (oct30 / (0.30f * dsp::contourOctaves) - 1.0f) < 0.02f,
+               "range at 30% contour is 1.5 octaves (got " + fmt (oct30, 3) + ")");
+        check (opaquePixels (indicator) > 20, "visible range arc actually paints pixels");
+
+        amount->setValueNotifyingHost (0.60f);
+        indicator.refresh();
+        const auto oct60 = std::log2 (indicator.getRangeEndHz() / indicator.getRangeStartHz());
+        const auto span60 = std::abs (indicator.getRangeEndAngle() - indicator.getRangeStartAngle());
+        check (std::abs (oct60 / (0.60f * dsp::contourOctaves) - 1.0f) < 0.02f,
+               "range at 60% contour is 3 octaves (got " + fmt (oct60, 3) + ")");
+        check (std::abs (oct60 / oct30 - 2.0f) < 0.05f, "octave span doubles when contour amount doubles");
+        check (span60 > span30 * 1.5f, "angle span grows with contour amount ("
+               + fmt (span30, 3) + " -> " + fmt (span60, 3) + ")");
+
+        amount->setValueNotifyingHost (1.0f);
+        set (*p, id::cutoff, 10000.0f);
+        indicator.refresh();
+        check (std::abs (indicator.getRangeEndHz() - 20000.0f) < 0.5f,
+               "sweep clamps to the cutoff knob maximum");
+        set (*p, id::cutoff, 400.0f);
+
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor->setSize (size.x, size.y);
+            amount->setValueNotifyingHost (0.55f);
+            indicator.refresh();
+            const auto sizeLabel = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
+            check (cutoffKnob->getLocalBounds().contains (indicator.getBounds()),
+                   sizeLabel + "contour indicator stays inside the Cutoff knob");
+            check (editor->getLocalBounds().contains (editor->getLocalArea (&indicator, indicator.getLocalBounds())),
+                   sizeLabel + "contour indicator does not overflow the editor");
+            const auto ring = indicator.getRingRadius() + 1.6f;
+            const auto c = indicator.getCentre();
+            const auto box = indicator.getLocalBounds().toFloat().expanded (1.5f, 1.5f);
+            check (box.contains (juce::Point<float> (c.x - ring, c.y))
+                       && box.contains (juce::Point<float> (c.x + ring, c.y))
+                       && box.contains (juce::Point<float> (c.x, c.y - ring))
+                       && box.contains (juce::Point<float> (c.x, c.y + ring)),
+                   sizeLabel + "contour arc stays inside the knob cell");
+            ui::SectionPanel* modifiers = nullptr;
+            for (auto& sec : editor->getSections())
+                if (sec->getTitle() == "MODIFIERS")
+                    modifiers = sec.get();
+            check (modifiers != nullptr, sizeLabel + "modifiers section exists");
+            if (modifiers != nullptr)
+                check (modifiers->getLocalBounds().contains (modifiers->getLocalArea (&indicator, indicator.getLocalBounds())),
+                       sizeLabel + "contour indicator stays inside Modifiers");
+        }
+
+        editor->setSize (1080, 660);
+        amount->setValueNotifyingHost (0.85f);
+        set (*p, id::cutoff, 400.0f);
+        set (*p, id::fAttack, 0.08f);
+        set (*p, id::fDecay, 0.4f);
+        set (*p, id::fSustain, 0.65f);
+        set (*p, id::velocityOn, 0.0f);
+        set (*p, id::kybd1, 0.0f);
+        set (*p, id::kybd2, 0.0f);
+        set (*p, id::filterMod, 0.0f);
+        indicator.refresh();
+        const auto idleEnv = indicator.getLiveEnvelope();
+        check (idleEnv < 0.05f && ! indicator.isLiveMarkerVisible(), "live marker idle with no notes");
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent (on (60), 0);
+        for (int i = 0; i < 8; ++i)
+        {
+            buffer.clear();
+            p->processBlock (buffer, midi);
+            midi.clear();
+        }
+        indicator.refresh();
+        editor->getFilterReadout().refresh();
+        const auto env = indicator.getLiveEnvelope();
+        check (env > idleEnv + 0.2f, "live envelope rises while a note plays (env " + fmt (env, 3) + ")");
+        check (indicator.isLiveMarkerVisible(), "live marker is visible while the envelope moves");
+        check (std::abs (env - editor->getFilterReadout().getLiveEnvelope()) < 1.0e-5f,
+               "indicator reads the same lock-free envelope tap as the filter graph");
+        const auto expectedHz = 400.0f * std::exp2 (0.85f * dsp::contourOctaves * env);
+        check (std::abs (indicator.getLiveHz() / expectedHz - 1.0f) < 0.02f,
+               "live marker Hz follows cutoff * 2^(contour * 5 * env) (got "
+                   + fmt (indicator.getLiveHz(), 1) + ", expected " + fmt (expectedHz, 1) + ")");
+        check (indicator.getLiveAngle() > indicator.getRangeStartAngle() + 0.01f
+                   && indicator.getLiveAngle() <= indicator.getRangeEndAngle() + 0.02f,
+               "live marker sits on the sweep arc between the set cutoff and the contour extreme");
+        check (opaquePixels (indicator) > 20, "live marker and range arc paint while a note plays");
+
+        amount->setValueNotifyingHost (0.0f);
+        indicator.refresh();
+        check (! indicator.isVisible() && ! indicator.isRangeVisible() && ! indicator.isLiveMarkerVisible(),
+               "indicator hides again when contour amount returns to 0");
+        check (opaquePixels (indicator) == 0, "paint is empty again at contour amount 0");
+
+        amount->setValueNotifyingHost (0.5f);
+        indicator.refresh();
+        const auto requests = indicator.getRepaintRequests();
+        indicator.refresh();
+        indicator.refresh();
+        indicator.refresh();
+        check (indicator.getRepaintRequests() == requests, "unchanged refresh does not repaint the knob");
+        check (cutoffKnob->getLocalBounds().contains (indicator.getLastRepaintBounds()),
+               "repaint region is the Cutoff knob overlay, not the whole editor");
+        check (indicator.getWidth() * indicator.getHeight() < editor->getWidth() * editor->getHeight() / 8,
+               "overlay area is a small fraction of the editor");
+
+        {
+            juce::Image image (juce::Image::ARGB, juce::jmax (1, indicator.getWidth()),
+                               juce::jmax (1, indicator.getHeight()), true);
+            const auto paintOnce = [&]
+            {
+                juce::Graphics g (image);
+                indicator.paint (g);
+            };
+            paintOnce();
+            const auto start = std::chrono::steady_clock::now();
+            constexpr int runs = 40;
+            for (int i = 0; i < runs; ++i)
+                paintOnce();
+            const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count()
+                            / (double) runs;
+            note ("cutoff contour indicator paint: " + fmt (ms, 3) + " ms");
+            check (ms < 8.0, "indicator paint stays well under a 60 Hz frame (got " + fmt (ms, 3) + " ms)");
+        }
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -1404,6 +1609,7 @@ int main()
         { "switch drag",                               testSwitchDrag },
         { "priority and noise rockers",                testPriorityAndNoiseSwitches },
         { "filter envelope handles",                   testEnvelopeHandles },
+        { "cutoff contour indicator",                  testCutoffContourIndicator },
     };
 
     int failedTests = 0;

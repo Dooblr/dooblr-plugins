@@ -234,7 +234,9 @@ namespace dooblrm
         addChoiceControl (mix, id::noiseType, "Colour", params::noiseNames());
 
         auto& mod = addSection ("MODIFIERS", Palette::dynamic);
-        addKnob (mod, id::cutoff, "Cutoff", Palette::dynamic, true);
+        auto& cutoff = addKnob (mod, id::cutoff, "Cutoff", Palette::dynamic, true);
+        cutoffContour.attach (state, cutoff.getSlider(), synth.getEngine().getFilterEnvTap());
+        cutoff.addChildComponent (cutoffContour);
         addKnob (mod, id::emphasis, "Resonance", Palette::dynamic);
         addKnob (mod, id::contourAmt, "Contour");
         addKnob (mod, id::fAttack, "F Atk");
