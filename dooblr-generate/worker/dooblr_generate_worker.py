@@ -36,7 +36,7 @@ import time
 import traceback
 import wave
 
-WORKER_VERSION = "3"
+WORKER_VERSION = "4"
 
 MODELS = {
     "stable-audio-open-small": {
@@ -54,10 +54,10 @@ MODELS = {
         "required": ["model_index.json", "unet/diffusion_pytorch_model.safetensors",
                      "vae/diffusion_pytorch_model.safetensors", "vocoder/model.safetensors",
                      "text_encoder/model.safetensors"],
-        "max_seconds": 10.0,
+        "max_seconds": 30.0,
         "steps": 25,
     },
-    "test-backend": {"repo": None, "gated": False, "allow": [], "required": [], "max_seconds": 10.0, "steps": 1},
+    "test-backend": {"repo": None, "gated": False, "allow": [], "required": [], "max_seconds": 30.0, "steps": 1},
 }
 
 ACCESS_HELP = ("Stable Audio Open Small is gated on Hugging Face. Sign in at huggingface.co, open "

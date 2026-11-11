@@ -39,6 +39,8 @@ namespace dooblrgenerate::gen
         int steps = 0;                    // 0: the model's default
         juce::File initAudio;             // Variation from a dropped source; empty: text-to-audio
         float initNoiseLevel = 1.0f;      // 0 = closest to the source, 1 = furthest
+        bool alignToGrid = false;         // trim/pad the WAV to exact beat length
+        double bpm = 0;                   // > 0: embed in the filename and already in prompt
     };
 
     struct JobStatus

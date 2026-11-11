@@ -1,5 +1,8 @@
 #include "GenerationService.h"
 
+#include "BeatSync.h"
+#include "SourceAudio.h"
+#include "../Engine/Sample.h"
 #include "BinaryData.h"
 
 #include <cerrno>
@@ -552,7 +555,7 @@ namespace dooblrgenerate::gen
         {
             const auto& r = job.request;
             juce::String id;
-            outFile = history.newWavFile (r.prompt, r.seed, id);
+            outFile = history.newWavFile (r.prompt, r.seed, id, r.bpm > 0 ? juce::roundToInt (r.bpm) : 0);
             paths.history().createDirectory();
             entry.id = id;
             entry.prompt = r.prompt.trim();
@@ -672,6 +675,18 @@ namespace dooblrgenerate::gen
 
             if (! outFile.existsAsFile())
                 return finishFailed ("The worker reported success but wrote no file: " + outFile.getFullPathName(), "generate");
+
+            if (job.request.alignToGrid)
+            {
+                juce::String loadError;
+                if (auto sample = engine::Sample::load (outFile, loadError))
+                {
+                    const auto n = targetSamples (job.request.seconds, sample->sampleRate);
+                    trimPadWithFades (sample->audio, n, sample->sampleRate);
+                    if (! SourceAudio::writeWav (outFile, sample->audio, sample->sampleRate))
+                        return finishFailed ("Could not write the beat-aligned WAV: " + outFile.getFullPathName(), "generate");
+                }
+            }
 
             history.add (entry);
 

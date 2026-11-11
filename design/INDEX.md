@@ -24,7 +24,7 @@ outside the markers are never touched; keep them current with any behaviour chan
 | dooblr-chords | 0.5.0 | Max for Live MIDI effect that writes chord progressions into Session View clip slots. | 21 | 2026-11-11 | [design/plugins/dooblr-chords.md](plugins/dooblr-chords.md) |
 | dooblr-distressor | 0.1.0 | JUCE effect VST3 | 13 | 2026-11-06 | [design/plugins/dooblr-distressor.md](plugins/dooblr-distressor.md) |
 | dooblr-feedback | 0.1.3 | JUCE effect VST3 | 22 | 2026-11-06 | [design/plugins/dooblr-feedback.md](plugins/dooblr-feedback.md) |
-| dooblr-generate | 0.2.0 | JUCE instrument VST3 | 8 | 2026-11-06 | [design/plugins/dooblr-generate.md](plugins/dooblr-generate.md) |
+| dooblr-generate | 0.3.0 | JUCE instrument VST3 | 10 | 2026-11-11 | [design/plugins/dooblr-generate.md](plugins/dooblr-generate.md) |
 | dooblr-installer | 0.1.4 | JUCE app |  | 2026-11-11 | [design/plugins/dooblr-installer.md](plugins/dooblr-installer.md) |
 | dooblr-kick | 0.3.8 | JUCE instrument VST3 | ~143 | 2026-11-05 | [design/plugins/dooblr-kick.md](plugins/dooblr-kick.md) |
 | dooblr-m | 0.1.3 | JUCE instrument VST3 | 45 | 2026-11-11 | [design/plugins/dooblr-m.md](plugins/dooblr-m.md) |

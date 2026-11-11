@@ -2,6 +2,7 @@
 
 #include "Engine/Sample.h"
 #include "Engine/Sampler.h"
+#include "Generation/BeatSync.h"
 #include "Generation/GenerationService.h"
 #include "Generation/History.h"
 #include "Parameters.h"
@@ -63,6 +64,18 @@ public:
     void setSeed (juce::int64);
     void setSeconds (double);
     void setModel (const juce::String&);
+    bool isSyncOn() const;
+    float getTempoBpm() const;
+    double getEffectiveBpm() const;
+    bool isUsingHostTempo() const;
+    int getBeatsPerBar() const;
+    dooblrgenerate::gen::LengthUnit getLengthUnit();
+    void setLengthUnit (dooblrgenerate::gen::LengthUnit);
+    double getModelMaxSeconds();
+    dooblrgenerate::gen::BeatPlan getBeatPlan();
+    juce::String getAlignMessage() const { return alignMessage; }
+    /** Tests: inject a host tempo (bpm <= 0 clears it). */
+    void setHostTransportForTests (double bpm, int numerator = 4, int denominator = 4);
 
     /** Starts a generation with the current settings (a new random seed first if variation).
         With a source sample loaded, Variation is audio-to-audio of that source. */
@@ -122,6 +135,12 @@ private:
     std::atomic<float>* attack = nullptr;
     std::atomic<float>* decay = nullptr;
     std::atomic<float>* velocity = nullptr;
+    std::atomic<float>* sync = nullptr;
+    std::atomic<float>* tempo = nullptr;
+    std::atomic<double> hostBpm { 0.0 };
+    std::atomic<int> hostNumerator { 4 };
+    std::atomic<int> hostDenominator { 4 };
+    juce::String alignMessage;
 
     // Last: its thread may call onGenerated until it is destroyed, so it goes first.
     dooblrgenerate::gen::GenerationService service;

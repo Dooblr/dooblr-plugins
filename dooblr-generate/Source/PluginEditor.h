@@ -3,17 +3,15 @@
 #include "PluginProcessor.h"
 #include "UI/ControlPanel.h"
 #include "UI/HistoryList.h"
-#include "UI/SourceDropZone.h"
 #include "UI/Theme.h"
 #include "UI/WaveformView.h"
 
 #include <juce_gui_basics/juce_gui_basics.h>
 
 /**
-    One page: a prompt bar (prompt, seed, length, Generate, Variation) with the job's progress
-    under it; a SOURCE drop zone (dropped sample for Variation); the current sample's waveform
-    (drag it out to Ableton) with Play and its details; the history of generations on the right;
-    PLAYBACK knobs and the MODEL panel along the bottom.
+    One page: a prompt bar (prompt, seed, length, Sync, Generate, Variation) with the job's progress
+    under it; the current sample's waveform (drag it out to Ableton) with Play and its details;
+    the history of generations on the right; PLAYBACK knobs and the MODEL panel along the bottom.
 */
 class DooblrGenerateEditor final : public juce::AudioProcessorEditor,
                                    public juce::DragAndDropContainer,
@@ -40,6 +38,9 @@ public:
     juce::TextEditor& getPromptEditor() noexcept { return prompt; }
     juce::TextEditor& getSeedEditor() noexcept { return seed; }
     juce::Slider& getLengthSlider() noexcept { return length; }
+    juce::ComboBox& getLengthChoice() noexcept { return lengthChoice; }
+    juce::ToggleButton& getSyncButton() noexcept { return syncButton; }
+    juce::Label& getLengthCaption() noexcept { return lengthCaption; }
     juce::TextButton& getGenerateButton() noexcept { return generateButton; }
     juce::TextButton& getVariationButton() noexcept { return variationButton; }
     juce::TextButton& getPlayButton() noexcept { return playButton; }
@@ -56,7 +57,6 @@ public:
     juce::Label& getInfoLabel() noexcept { return infoLabel; }
     dooblrgenerate::ui::WaveformView& getWaveform() noexcept { return waveform; }
     dooblrgenerate::ui::HistoryList& getHistoryList() noexcept { return historyList; }
-    dooblrgenerate::ui::SourceDropZone& getSourceDropZone() noexcept { return sourceDropZone; }
     dooblrgenerate::ui::ControlPanel& getPlaybackPanel() noexcept { return *playbackPanel; }
     double getProgress() const noexcept { return progress; }
     juce::String getCopyText() const { return copyText; }
@@ -70,6 +70,7 @@ private:
     void refreshModel();
     void showTokenEntry (bool);
     void chooseFolder();
+    void refreshLengthUi();
     void paintPanel (juce::Graphics&, juce::Rectangle<int>, const juce::String& title, juce::Colour) const;
 
     DooblrGenerateProcessor& generator;
@@ -79,8 +80,11 @@ private:
     juce::ComboBox modelBox;
 
     juce::TextEditor prompt, seed;
-    juce::Label promptCaption, seedCaption, lengthCaption;
+    juce::Label promptCaption, seedCaption, lengthCaption, syncCaption;
     juce::Slider length;
+    juce::ComboBox lengthChoice;
+    juce::ToggleButton syncButton { "Sync" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> syncAttachment;
     juce::TextButton generateButton { "Generate" }, variationButton { "Variation" };
     juce::ProgressBar progressBar { progress };
     double progress = 0.0;
@@ -90,7 +94,6 @@ private:
     juce::TextButton playButton { "Play" }, dragButton { "Drag WAV" };
     juce::Label infoLabel;
 
-    dooblrgenerate::ui::SourceDropZone sourceDropZone;
     dooblrgenerate::ui::HistoryList historyList;
 
     std::unique_ptr<dooblrgenerate::ui::ControlPanel> playbackPanel;
@@ -102,7 +105,7 @@ private:
     bool tokenEntryShown = false, dragFromButtonStarted = false;
     std::unique_ptr<juce::FileChooser> chooser;
 
-    juce::Rectangle<int> headerArea, waveArea, sourceArea, historyArea, playbackArea, modelArea;
+    juce::Rectangle<int> headerArea, waveArea, historyArea, playbackArea, modelArea;
     int lastSampleSerial = -1, lastHistorySize = -1, lastJobSerial = -1;
     juce::String copyText;
     dooblrgenerate::gen::JobStatus::Result lastJobResult = dooblrgenerate::gen::JobStatus::Result::none;

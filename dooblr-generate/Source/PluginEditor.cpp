@@ -20,7 +20,7 @@ namespace
 }
 
 DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
-    : AudioProcessorEditor (p), generator (p), sourceDropZone (p)
+    : AudioProcessorEditor (p), generator (p)
 {
     setLookAndFeel (&lookAndFeel);
 
@@ -50,7 +50,8 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
     styleCaption (promptCaption, "Prompt");
     styleCaption (seedCaption, "Seed");
     styleCaption (lengthCaption, "Length");
-    for (auto* c : { &promptCaption, &seedCaption, &lengthCaption })
+    styleCaption (syncCaption, "Sync");
+    for (auto* c : { &promptCaption, &seedCaption, &lengthCaption, &syncCaption })
         addAndMakeVisible (*c);
 
     prompt.setFont (juce::FontOptions (15.0f));
@@ -69,7 +70,7 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
     addAndMakeVisible (seed);
 
     length.setSliderStyle (juce::Slider::LinearBar);
-    length.setRange (params::minSeconds, params::maxSeconds, 0.05);
+    length.setRange (params::minSeconds, generator.getModelMaxSeconds(), 0.05);
     length.setSkewFactorFromMidPoint (2.0);
     length.setTextValueSuffix (" s");
     length.setNumDecimalPlacesToDisplay (2);
@@ -78,6 +79,23 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
     length.setValue (generator.getSeconds(), juce::dontSendNotification);
     length.onValueChange = [this] { generator.setSeconds (length.getValue()); };
     addAndMakeVisible (length);
+
+    for (int i = 0; i < (int) gen::LengthUnit::nUnits; ++i)
+        lengthChoice.addItem (gen::unitName ((gen::LengthUnit) i), i + 1);
+    lengthChoice.setSelectedId ((int) generator.getLengthUnit() + 1, juce::dontSendNotification);
+    lengthChoice.onChange = [this]
+    {
+        generator.setLengthUnit (gen::lengthUnitFromInt (lengthChoice.getSelectedId() - 1));
+        refreshLengthUi();
+    };
+    addChildComponent (lengthChoice);
+
+    syncButton.setClickingTogglesState (true);
+    syncButton.setTooltip ("Length in bars/beats at the host tempo (or the Tempo knob)");
+    syncAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        generator.getState(), params::id::sync, syncButton);
+    syncButton.onClick = [this] { refreshLengthUi(); resized(); };
+    addAndMakeVisible (syncButton);
 
     generateButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
     generateButton.setColour (juce::TextButton::textColourOffId, Palette::background);
@@ -141,7 +159,6 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
         }
         refresh();
     };
-    addAndMakeVisible (sourceDropZone);
     addAndMakeVisible (historyList);
 
     // --- Playback --------------------------------------------------------------------
@@ -149,7 +166,8 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
     playbackPanel = std::make_unique<ControlPanel> (generator.getState(), "PLAYBACK", Palette::accent, std::vector<Spec> {
         { params::id::tune, "Tune" }, { params::id::fine, "Fine" }, { params::id::start, "Start" },
         { params::id::attack, "Attack" }, { params::id::decay, "Decay" }, { params::id::velocity, "Velocity" },
-        { params::id::output, "Output" } });
+        { params::id::output, "Output" }, { params::id::tempo, "Tempo" } });
+    playbackPanel->setShown (params::id::tempo, false);
     addAndMakeVisible (*playbackPanel);
 
     // --- Model ---------------------------------------------------------------------------
@@ -285,12 +303,50 @@ void DooblrGenerateEditor::chooseFolder()
 }
 
 //==============================================================================
+void DooblrGenerateEditor::refreshLengthUi()
+{
+    const auto syncOn = generator.isSyncOn();
+    const auto modelMax = generator.getModelMaxSeconds();
+    length.setRange (params::minSeconds, modelMax, 0.05);
+    if (length.getValue() > modelMax)
+        length.setValue (modelMax, juce::sendNotificationSync);
+
+    length.setVisible (! syncOn);
+    lengthChoice.setVisible (syncOn);
+    if (syncOn)
+        lengthChoice.setSelectedId ((int) generator.getLengthUnit() + 1, juce::dontSendNotification);
+
+    if (playbackPanel != nullptr)
+        playbackPanel->setShown (params::id::tempo, syncOn && ! generator.isUsingHostTempo());
+
+    if (syncOn)
+    {
+        const auto plan = generator.getBeatPlan();
+        juce::String caption = gen::unitName (plan.fitted);
+        caption << " · " << juce::String (plan.bpm, 1) << " BPM";
+        if (! plan.usingHostTempo)
+            caption << " (manual)";
+        if (plan.capped)
+            caption << " · capped";
+        lengthCaption.setText (caption, juce::dontSendNotification);
+        lengthChoice.setTooltip (plan.capped
+            ? juce::String (gen::unitName (plan.requested)) + " does not fit; using "
+              + gen::unitName (plan.fitted) + " (" + juce::String (modelMax, 1) + " s). No time-stretch."
+            : "Length in bars/beats. Output is trimmed or padded to the grid (no time-stretch).");
+    }
+    else
+    {
+        lengthCaption.setText ("Length", juce::dontSendNotification);
+        length.setTooltip ("Length in seconds, up to " + juce::String (modelMax, 1) + " s for this model");
+    }
+}
+
 void DooblrGenerateEditor::timerCallback()
 {
     refreshSample();
     refreshJob();
     refreshModel();
-    sourceDropZone.refresh();
+    refreshLengthUi();
 }
 
 void DooblrGenerateEditor::refreshSample()
@@ -315,6 +371,9 @@ void DooblrGenerateEditor::refreshSample()
             if (sample->model.isNotEmpty())
                 info << "  " << shortModelName (sample->model);
             info << "  " << sample->file.getFileName();
+            const auto align = generator.getAlignMessage();
+            if (align.isNotEmpty())
+                info << "  " << align;
             infoLabel.setText (info, juce::dontSendNotification);
             infoLabel.setColour (juce::Label::textColourId, sample->isTest ? Palette::dynamic : Palette::textMuted);
         }
@@ -344,15 +403,10 @@ void DooblrGenerateEditor::refreshJob()
     const auto generating = running && job.kind == gen::JobStatus::Kind::generate;
     const auto modelReady = service.modelStatus (generator.getModel()).state == gen::ModelState::ready;
 
-    const auto hasSource = generator.getSourceSample() != nullptr;
-    const auto canVarySource = hasSource && generator.currentModelSupportsSourceVariation();
     generateButton.setButtonText (generating ? "Cancel" : "Generate");
     generateButton.setEnabled (generating || (! running && modelReady && generator.getPrompt().trim().isNotEmpty()));
-    variationButton.setEnabled (! running && modelReady
-                                && (canVarySource || (! hasSource && generator.getPrompt().trim().isNotEmpty())));
-    variationButton.setTooltip (hasSource && ! generator.currentModelSupportsSourceVariation()
-                                    ? "AudioLDM has no audio-to-audio path; use Stable Audio Open Small"
-                                    : "New seed, then generate (uses the dropped source when one is loaded)");
+    variationButton.setEnabled (! running && modelReady && generator.getPrompt().trim().isNotEmpty());
+    variationButton.setTooltip ("New seed, then generate");
 
     juce::String text;
     if (job.kind == gen::JobStatus::Kind::generate)
@@ -469,7 +523,6 @@ void DooblrGenerateEditor::paint (juce::Graphics& g)
     g.setColour (Palette::divider);
     g.drawHorizontalLine (headerArea.getBottom() - 1, 0.0f, (float) getWidth());
 
-    paintPanel (g, sourceArea, "SOURCE", Palette::textMuted);
     paintPanel (g, historyArea, "HISTORY", Palette::textMuted);
     paintPanel (g, modelArea, "MODEL", Palette::textMuted);
 }
@@ -502,6 +555,8 @@ void DooblrGenerateEditor::resized()
         bar.removeFromRight (8);
         auto generateArea = bar.removeFromRight (buttonWidth);
         bar.removeFromRight (16);
+        auto syncArea = bar.removeFromRight (56);
+        bar.removeFromRight (8);
         auto lengthArea = bar.removeFromRight (juce::jlimit (130, 260, getWidth() / 7));
         bar.removeFromRight (10);
         auto seedArea = bar.removeFromRight (juce::jlimit (96, 160, getWidth() / 10));
@@ -510,11 +565,14 @@ void DooblrGenerateEditor::resized()
         prompt.setBounds (bar);
         seed.setBounds (seedArea);
         length.setBounds (lengthArea);
+        lengthChoice.setBounds (lengthArea);
+        syncButton.setBounds (syncArea);
         generateButton.setBounds (generateArea);
         variationButton.setBounds (variationArea);
         promptCaption.setBounds (captions.withX (bar.getX()).withWidth (bar.getWidth()));
         seedCaption.setBounds (captions.withX (seedArea.getX()).withWidth (seedArea.getWidth()));
         lengthCaption.setBounds (captions.withX (lengthArea.getX()).withWidth (lengthArea.getWidth()));
+        syncCaption.setBounds (captions.withX (syncArea.getX()).withWidth (syncArea.getWidth()));
 
         area.removeFromTop (6);
         auto progressRow = area.removeFromTop (18);
@@ -566,14 +624,10 @@ void DooblrGenerateEditor::resized()
         details.setBounds (m);
     }
 
-    // Middle: source drop zone, waveform, history.
+    // Middle: waveform and history.
     historyArea = area.removeFromRight (sideWidth);
     historyList.setBounds (historyArea.reduced (8, 6).withTrimmedTop (20));
     area.removeFromRight (12);
-    const auto sourceWidth = juce::jlimit (176, 260, area.getWidth() * 28 / 100);
-    sourceArea = area.removeFromLeft (sourceWidth);
-    sourceDropZone.setBounds (sourceArea.reduced (8, 6).withTrimmedTop (20));
-    area.removeFromLeft (12);
     waveArea = area;
 
     auto under = area.removeFromBottom (30);

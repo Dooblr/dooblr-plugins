@@ -14,10 +14,10 @@ namespace dooblrgenerate::gen::ModelCatalog
                 { audioLdm, "AudioLDM S v2 (non-commercial)", "cvssp/audioldm-s-full-v2",
                   "CC BY-NC-SA 4.0 (non-commercial use only)",
                   "https://huggingface.co/cvssp/audioldm-s-full-v2",
-                  false, false, false, 10.0,
+                  false, false, false, 30.0,
                   { "model_index.json", "unet/diffusion_pytorch_model.safetensors", "vae/diffusion_pytorch_model.safetensors",
                     "vocoder/model.safetensors", "text_encoder/model.safetensors" } },
-                { testBackend, "Test backend (not AI)", "", "dooblr test signal", "", false, true, true, 10.0, {} },
+                { testBackend, "Test backend (not AI)", "", "dooblr test signal", "", false, true, true, 30.0, {} },
             };
             return list;
         }

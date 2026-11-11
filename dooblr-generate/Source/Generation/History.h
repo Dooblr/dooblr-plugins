@@ -41,8 +41,8 @@ namespace dooblrgenerate::gen
         int size() const;
         bool find (const juce::String& id, HistoryEntry& out) const;
 
-        /** A new WAV path in the history folder for a prompt and seed. */
-        juce::File newWavFile (const juce::String& prompt, juce::int64 seed, juce::String& idOut) const;
+        /** A new WAV path in the history folder for a prompt and seed. bpm > 0 appends e.g. -120bpm. */
+        juce::File newWavFile (const juce::String& prompt, juce::int64 seed, juce::String& idOut, int bpm = 0) const;
 
         static constexpr int maxEntries = 500;
 
