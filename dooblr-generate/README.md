@@ -5,7 +5,7 @@ and a text-to-audio model running on your own Mac makes a one-shot sample. The p
 it as a sampler from MIDI, and you can drag the WAV straight into Ableton. Every generation is kept
 in a history you can go back to.
 
-- VST3 instrument (MIDI in, stereo out), version **0.3.0**, plug-in code `Dbgn`, bundle
+- VST3 instrument (MIDI in, stereo out), version **0.3.1**, plug-in code `Dbgn`, bundle
   `com.dooblr.dooblrgenerate`.
 - Generation is **offline**: press Generate, wait a few seconds, then play. It never runs on, or
   waits for, the audio thread.
@@ -140,7 +140,8 @@ generation end to end, worker crash / error / hang / cancel, a partial model, so
 (mono→stereo, sample-rate conversion, trim, non-audio / unresolved .alc rejection, worker
 `--init-audio` / `--init-noise` via the processor API), beat-sync math and aligned WAV length, the 30 s clamp (including
 legacy state), the audio thread
-during generation (no allocation, timing) and the editor at 940x600, 1080x660 and 2400x1400 (no source column).
+during generation (no allocation, timing) and the editor at 940x600, 1080x660 and 2400x1400 (no source column;
+Sync label width >= text width; bars/beats selector and Tempo fit with Sync on).
 **The tests never start Python**: a stub shell script stands in for the worker. Set
 `DOOBLRGENERATE_EDITOR_SNAPSHOT=/path/prefix` to write editor PNGs, and
 `DOOBLRGENERATE_LIVE_PROMPTS="a|b"` to generate with the real model (not counted as a test).

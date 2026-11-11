@@ -40,6 +40,7 @@ public:
     juce::Slider& getLengthSlider() noexcept { return length; }
     juce::ComboBox& getLengthChoice() noexcept { return lengthChoice; }
     juce::ToggleButton& getSyncButton() noexcept { return syncButton; }
+    juce::Label& getSyncCaption() noexcept { return syncCaption; }
     juce::Label& getLengthCaption() noexcept { return lengthCaption; }
     juce::TextButton& getGenerateButton() noexcept { return generateButton; }
     juce::TextButton& getVariationButton() noexcept { return variationButton; }

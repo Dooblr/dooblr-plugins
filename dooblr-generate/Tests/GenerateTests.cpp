@@ -1333,6 +1333,23 @@ namespace
             check (editor->getGenerateButton().getWidth() >= 100 && editor->getGenerateButton().getHeight() >= 26, label + ": Generate button size");
             check (editor->getDetails().getHeight() >= 30, label + ": details box at least 30 px tall");
 
+            {
+                auto& cap = editor->getSyncCaption();
+                const auto capInner = cap.getLookAndFeel().getLabelBorderSize (cap).subtractedFrom (cap.getLocalBounds());
+                const auto capTextW = juce::GlyphArrangement::getStringWidth (cap.getFont(), cap.getText());
+                check (cap.getText() == "Sync" && capTextW <= (float) capInner.getWidth() + 1.0f,
+                       label + ": Sync caption not truncated (" + std::to_string (capTextW) + " px text in "
+                           + std::to_string (capInner.getWidth()) + " px)");
+
+                auto& sync = editor->getSyncButton();
+                const auto syncTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                               sync.getButtonText());
+                const auto syncTextArea = sync.getLocalBounds().reduced (1).withTrimmedLeft (30).reduced (6, 0);
+                check (sync.getButtonText() == "Sync" && (float) syncTextArea.getWidth() + 1.0f >= syncTextW,
+                       label + ": Sync label not truncated (" + std::to_string (syncTextW) + " px text in "
+                           + std::to_string (syncTextArea.getWidth()) + " px)");
+            }
+
             auto& panel = editor->getPlaybackPanel();
             for (const auto& id : params::allIds())
             {
@@ -1347,9 +1364,39 @@ namespace
             check (insideAndVisible (editor->getLengthChoice(), *editor), label + ": bars/beats choice visible when Sync is on");
             check (! editor->getLengthSlider().isVisible(), label + ": seconds slider hidden when Sync is on");
             check (editor->getPromptEditor().getWidth() >= 300, label + ": prompt still 300 px with Sync on");
+            {
+                auto& cap = editor->getSyncCaption();
+                const auto capInner = cap.getLookAndFeel().getLabelBorderSize (cap).subtractedFrom (cap.getLocalBounds());
+                const auto capTextW = juce::GlyphArrangement::getStringWidth (cap.getFont(), cap.getText());
+                check (capTextW <= (float) capInner.getWidth() + 1.0f,
+                       label + ": Sync caption not truncated with Sync on");
+                auto& sync = editor->getSyncButton();
+                const auto syncTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                               sync.getButtonText());
+                const auto syncTextArea = sync.getLocalBounds().reduced (1).withTrimmedLeft (30).reduced (6, 0);
+                check ((float) syncTextArea.getWidth() + 1.0f >= syncTextW,
+                       label + ": Sync label not truncated with Sync on");
+
+                auto& box = editor->getLengthChoice();
+                const auto comboFont = box.getLookAndFeel().getComboBoxFont (box);
+                float longest = 0.0f;
+                for (int i = 0; i < box.getNumItems(); ++i)
+                    longest = juce::jmax (longest, juce::GlyphArrangement::getStringWidth (comboFont, box.getItemText (i)));
+                check ((float) box.getWidth() >= longest + 24.0f,
+                       label + ": bars/beats selector fits its labels (" + std::to_string (box.getWidth())
+                           + " px for " + std::to_string (longest) + " px of text)");
+            }
             auto* tempoKnob = panel.findControl (params::id::tempo);
             check (tempoKnob != nullptr && tempoKnob->isVisible() && panel.getLocalBounds().contains (tempoKnob->getBounds()),
                    label + ": Tempo knob inside PLAYBACK when Sync is on");
+            for (const auto& id : params::allIds())
+            {
+                if (id == params::id::variationAmount || id == params::id::sync || id == params::id::tempo)
+                    continue;
+                auto* c = panel.findControl (id);
+                check (c != nullptr && c->isVisible() && ! c->getBounds().intersects (tempoKnob->getBounds()),
+                       label + ": Tempo does not overlap " + str (id));
+            }
             editor->getSyncButton().setToggleState (false, juce::sendNotificationSync);
             editor->refresh();
         }

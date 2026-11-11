@@ -1,5 +1,7 @@
 #include "PluginEditor.h"
 
+#include <cmath>
+
 using namespace dooblrgenerate;
 using namespace dooblrgenerate::ui;
 
@@ -555,9 +557,18 @@ void DooblrGenerateEditor::resized()
         bar.removeFromRight (8);
         auto generateArea = bar.removeFromRight (buttonWidth);
         bar.removeFromRight (16);
-        auto syncArea = bar.removeFromRight (56);
+        // Pill is 30 px (see DooblrLookAndFeel::drawToggleButton); rest is the "Sync" label.
+        const auto syncTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                       syncButton.getButtonText());
+        const auto syncWidth = juce::jmax (72, (int) std::ceil (syncTextW) + 30 + 12 + 6);
+        auto syncArea = bar.removeFromRight (syncWidth);
         bar.removeFromRight (8);
-        auto lengthArea = bar.removeFromRight (juce::jlimit (130, 260, getWidth() / 7));
+        auto comboFont = lengthChoice.getLookAndFeel().getComboBoxFont (lengthChoice);
+        float longestUnit = 0.0f;
+        for (int i = 0; i < lengthChoice.getNumItems(); ++i)
+            longestUnit = juce::jmax (longestUnit, juce::GlyphArrangement::getStringWidth (comboFont, lengthChoice.getItemText (i)));
+        const auto lengthWidth = juce::jlimit (130, 260, juce::jmax (getWidth() / 7, (int) std::ceil (longestUnit) + 28));
+        auto lengthArea = bar.removeFromRight (lengthWidth);
         bar.removeFromRight (10);
         auto seedArea = bar.removeFromRight (juce::jlimit (96, 160, getWidth() / 10));
         bar.removeFromRight (10);

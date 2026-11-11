@@ -70,6 +70,10 @@ Read `design/INDEX.md` first. This file has two parts:
   to the exact sample count with 8 ms fades (no time-stretch in this runtime — JUCE has none
   we'd trust without a new dependency) and put the BPM in the filename. Tempo knob is hidden
   unless Sync is on and there is no host tempo (no dead control).
+- **Sync label (0.3.1)**: the prompt-bar Sync toggle is sized from its "Sync" text (pill 30 px +
+  label), same formula as ControlPanel toggles, so the word is not truncated to "S..." at
+  940x600 / 1080x660 / 2400x1400. With Sync on, the bars/beats combo is at least as wide as its
+  longest item plus the arrow, and Tempo sits in PLAYBACK without overlapping the other knobs.
 - **Tests never start Python**: a `/bin/sh` stub speaks the protocol (ok / error / hang / SIGKILL
   crash) and the tests check no process is left behind. The audio-timing test runs its audio
   thread at QOS_CLASS_USER_INTERACTIVE like a host.
@@ -82,9 +86,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrGenerate`, product "dooblr-generate", code Dbgn)
-- Version: 0.3.0
+- Version: 0.3.1
 - Last source change: 2026-11-11
-- Source tree: `294efb2ca40d` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
+- Source tree: `f03239b5bcbe` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-generate/scripts/build.sh` (build dir `~/dooblr-build/dooblr-generate`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrGenerateTests` (Tests/CMakeLists.txt)
