@@ -138,6 +138,7 @@ namespace dooblrm::ui
         juce::Slider& getSlider() noexcept { return slider; }
         juce::Label& getCaption() noexcept { return captionLabel; }
         const std::vector<TickLabel>& getTickLabels() const noexcept { return tickLayout; }
+        void setTickTexts (const juce::StringArray& labels);
 
         static constexpr int captionHeight = 16;
 
@@ -279,5 +280,32 @@ namespace dooblrm::ui
         Handle dragHandle = Handle::none;
         juce::Point<float> grabOffset;
         bool gestureOpen = false;
+    };
+
+    /** Tiny pulse lamp on the LFO Rate knob. No text. Does not intercept mouse. */
+    class LfoPulse final : public juce::Component, private juce::Timer
+    {
+    public:
+        LfoPulse();
+        ~LfoPulse() override;
+
+        void attach (juce::AudioProcessorValueTreeState& state, const std::atomic<float>& tap);
+        void paint (juce::Graphics& g) override;
+        void parentSizeChanged() override;
+        void parentHierarchyChanged() override;
+        bool hitTest (int, int) override { return false; }
+        void refresh();
+        float getLevel() const noexcept { return level; }
+        int getRepaintRequests() const noexcept { return repaintRequests; }
+
+    private:
+        void timerCallback() override { refresh(); }
+
+        juce::AudioProcessorValueTreeState* state = nullptr;
+        const std::atomic<float>* tap = nullptr;
+        float level = 0;
+        int lastQ = -1;
+        int repaintRequests = 0;
+        bool active = false;
     };
 }

@@ -348,6 +348,7 @@ namespace
                 ids.insert (ranged->paramID);
         check ((int) ids.size() == params::parameterCount, "parameter IDs are unique");
         for (auto* expected : { id::tune, id::glide, id::osc1Range, id::osc1Wave, id::osc2Freq, id::osc3Control,
+                                id::osc3Lfo, id::lfoRate, id::lfoSync, id::lfoDivision, id::lfoRetrigger,
                                 id::mixOsc1, id::mixExt, id::cutoff, id::emphasis, id::fAttack, id::aSustain,
                                 id::decaySwitch, id::notePriority, id::legato, id::modWheel, id::output })
             check (ids.count (expected) == 1, std::string ("parameter id ") + expected);
@@ -603,6 +604,157 @@ namespace
                + fmt (hz, 3) + " Hz)");
     }
 
+    void testOsc3DedicatedLfo()
+    {
+        auto settle = [] (Processor& p, int samples = 9600)
+        {
+            render (p, samples, { { 0, on (60) } });
+        };
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::osc3Lfo, 1.0f);
+            set (*p, id::lfoSync, 0.0f);
+            set (*p, id::lfoRate, 2.0f);
+            settle (*p);
+            check (std::abs (p->getEngine().getLfoHz() - 2.0f) < 0.08f,
+                   "free-run LFO rate is 2 Hz (got " + fmt (p->getEngine().getLfoHz(), 3) + ")");
+        }
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::osc3Lfo, 1.0f);
+            set (*p, id::lfoSync, 1.0f);
+            set (*p, id::lfoDivision, 2.0f); // 1/4
+            settle (*p);
+            check (std::abs (p->getEngine().getLfoHz() - 2.0f) < 0.08f,
+                   "1/4-note sync at 120 BPM is 2 Hz (got " + fmt (p->getEngine().getLfoHz(), 3) + ")");
+        }
+
+        {
+            auto low = makeProcessor(), high = makeProcessor();
+            for (auto* p : { low.get(), high.get() })
+            {
+                set (*p, id::osc3Lfo, 1.0f);
+                set (*p, id::lfoRate, 3.0f);
+                set (*p, id::lfoSync, 0.0f);
+                set (*p, id::osc3Control, 1.0f);
+                set (*p, id::pitchBend, 1.0f);
+                set (*p, id::bendRange, 12.0f);
+            }
+            render (*low, 9600, { { 0, on (36) } });
+            render (*high, 9600, { { 0, on (84) } });
+            check (std::abs (low->getEngine().getLfoHz() - high->getEngine().getLfoHz()) < 0.02f,
+                   "LFO rate ignores note pitch (" + fmt (low->getEngine().getLfoHz(), 3)
+                       + " vs " + fmt (high->getEngine().getLfoHz(), 3) + ")");
+            check (std::abs (low->getEngine().getLfoHz() - 3.0f) < 0.1f, "LFO rate ignores pitch wheel");
+        }
+
+        {
+            auto a = makeProcessor(), b = makeProcessor();
+            openFilter (*a);
+            openFilter (*b);
+            set (*b, id::lfoRate, 27.0f);
+            set (*b, id::lfoSync, 1.0f);
+            set (*b, id::lfoDivision, 5.0f);
+            set (*b, id::lfoRetrigger, 1.0f);
+            check (get (*b, id::osc3Lfo) < 0.5f, "audio-mode comparison leaves Osc 3 LFO off");
+            const auto ra = render (*a, 24000, { { 0, on (60) } });
+            const auto rb = render (*b, 24000, { { 0, on (60) } });
+            check (ra.left == rb.left && ra.right == rb.right,
+                   "LFO params do not change Osc 3 audio-mode output");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::mixOsc1On, 0.0f);
+            set (*p, id::mixOsc3On, 1.0f);
+            set (*p, id::mixOsc3, 0.9f);
+            set (*p, id::osc3Lfo, 1.0f);
+            const auto r = render (*p, 24000, { { 0, on (60) } });
+            float tail = 0.0f;
+            for (size_t i = 2000; i < r.left.size(); ++i)
+                tail = std::max (tail, std::abs (r.left[i]));
+            check (tail < 1.0e-3f, "mixer Osc 3 is faded out in LFO mode (tail "
+                   + fmt (tail, 6) + ")");
+        }
+
+        {
+            auto quiet = makeProcessor(), modulated = makeProcessor();
+            for (auto* p : { quiet.get(), modulated.get() })
+            {
+                openFilter (*p);
+                set (*p, id::osc3Lfo, 1.0f);
+                set (*p, id::lfoRate, 5.0f);
+                set (*p, id::modWheel, 1.0f);
+                set (*p, id::emphasis, 0.25f);
+            }
+            set (*modulated, id::filterMod, 1.0f);
+            const auto a = render (*quiet, 24000, { { 0, on (48) } });
+            const auto b = render (*modulated, 24000, { { 0, on (48) } });
+            double diff = 0.0;
+            for (size_t i = 0; i < a.left.size(); ++i)
+                diff += std::pow ((double) a.left[i] - b.left[i], 2.0);
+            diff = std::sqrt (diff / (double) a.left.size());
+            check (b.peak() > 0.02f && diff > 0.01 * std::max (a.rms(), b.rms()),
+                   "Osc 3 LFO reaches the filter through Filter Mod");
+        }
+
+        {
+            auto quiet = makeProcessor(), modulated = makeProcessor();
+            for (auto* p : { quiet.get(), modulated.get() })
+            {
+                openFilter (*p);
+                set (*p, id::osc3Lfo, 1.0f);
+                set (*p, id::lfoRate, 4.0f);
+                set (*p, id::modWheel, 1.0f);
+            }
+            set (*modulated, id::oscMod, 1.0f);
+            const auto a = render (*quiet, 24000, { { 0, on (48) } });
+            const auto b = render (*modulated, 24000, { { 0, on (48) } });
+            double diff = 0.0;
+            for (size_t i = 0; i < a.left.size(); ++i)
+                diff += std::pow ((double) a.left[i] - b.left[i], 2.0);
+            diff = std::sqrt (diff / (double) a.left.size());
+            check (b.peak() > 0.02f && diff > 0.01 * std::max (a.rms(), b.rms()),
+                   "Osc 3 LFO reaches oscillator pitch through Osc Mod");
+        }
+
+        {
+            auto p = makeProcessor();
+            juce::XmlElement loaded ("DooblrM");
+            loaded.setAttribute ("stateVersion", 2);
+            loaded.setAttribute ("presetName", "PreLfo");
+            auto addParam = [&loaded] (const juce::String& pid, double value)
+            {
+                auto* child = loaded.createNewChildElement ("PARAM");
+                child->setAttribute ("id", pid);
+                child->setAttribute ("value", value);
+            };
+            addParam (id::cutoff, 640.0);
+            addParam (id::volume, 0.55);
+            juce::MemoryBlock blob;
+            juce::AudioProcessor::copyXmlToBinary (loaded, blob);
+            p->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (get (*p, id::osc3Lfo) < 0.5f, "old state defaults Osc 3 LFO off");
+            check (std::abs (get (*p, id::lfoRate) - 1.0f) < 0.02f, "old state defaults LFO Rate to 1 Hz");
+            check (get (*p, id::lfoSync) < 0.5f, "old state defaults LFO Sync off");
+            check (std::abs (get (*p, id::lfoDivision) - 2.0f) < 0.01f, "old state defaults LFO Division to 1/4");
+            check (get (*p, id::lfoRetrigger) < 0.5f, "old state defaults LFO Retrigger off");
+            check (std::abs (get (*p, id::cutoff) - 640.0f) < 0.5f, "old state still restores cutoff");
+        }
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::osc3Lfo, 1.0f);
+            set (*p, id::lfoRetrigger, 1.0f);
+            p->getEngine().setSettings (p->readSettings());
+            p->getEngine().noteOn (48, 0.8f);
+            check (p->getEngine().getLfoPhase() < 1.0e-4f, "key retrigger resets LFO phase");
+        }
+    }
+
     void testA440Removed()
     {
         auto p = makeProcessor();
@@ -755,6 +907,11 @@ namespace
             { id::osc3Range, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f } } },
             { id::osc3Wave, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f } } },
             { id::osc3Control, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f }, { id::osc3Range, 5.0f } } },
+            { id::osc3Lfo, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f } } },
+            { id::lfoRate, { { id::osc3Lfo, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f }, { id::emphasis, 0.35f } } },
+            { id::lfoSync, { { id::osc3Lfo, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f }, { id::lfoRate, 0.3f } } },
+            { id::lfoDivision, { { id::osc3Lfo, 1.0f }, { id::lfoSync, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f } } },
+            { id::lfoRetrigger, { { id::osc3Lfo, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f }, { id::lfoRate, 4.0f } } },
             { id::mixOsc2, { { id::mixOsc2On, 1.0f } } },
             { id::mixOsc2On, { { id::mixOsc2, 0.8f } } },
             { id::mixOsc3, { { id::mixOsc3On, 1.0f } } },
@@ -1002,6 +1159,31 @@ namespace
                    sizeLabel + "noise colour is a 2-position rocker");
             check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc1Range)) != nullptr,
                    sizeLabel + "osc 1 range stays a multi-position switch");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::osc3Lfo)) != nullptr,
+                   sizeLabel + "Osc 3 LFO is a rocker");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::lfoSync)) != nullptr,
+                   sizeLabel + "LFO Sync is a rocker");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::lfoRetrigger)) != nullptr,
+                   sizeLabel + "LFO Retrigger is a rocker");
+            check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::lfoDivision)) != nullptr,
+                   sizeLabel + "LFO Division is a multi-position switch");
+            check (dynamic_cast<ui::Knob*> (editor->findControl (id::lfoRate)) != nullptr,
+                   sizeLabel + "LFO Rate is a knob");
+
+            auto* rateKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::lfoRate));
+            auto& pulse = editor->getLfoPulse();
+            check (rateKnob != nullptr && pulse.getParentComponent() == rateKnob,
+                   sizeLabel + "LFO pulse is parented to the Rate knob");
+            if (rateKnob != nullptr)
+            {
+                check (rateKnob->getLocalBounds().contains (pulse.getBounds()),
+                       sizeLabel + "LFO pulse stays inside the Rate knob");
+                bool intercepts = true, interceptsChildren = true;
+                pulse.getInterceptsMouseClicks (intercepts, interceptsChildren);
+                check (! intercepts && ! interceptsChildren, sizeLabel + "LFO pulse does not intercept mouse");
+                check (! pulse.hitTest (pulse.getWidth() / 2, pulse.getHeight() / 2),
+                       sizeLabel + "LFO pulse hitTest is false");
+            }
 
             auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
             auto* attackKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::fAttack));
@@ -1026,6 +1208,30 @@ namespace
             check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() != "Emphasis",
                    sizeLabel + "filter knob is no longer labelled Emphasis");
             check (cutoffKnob != nullptr && cutoffKnob->isLarge(), sizeLabel + "cutoff knob is marked large");
+
+            set (*p, id::osc3Lfo, 1.0f);
+            editor->resized();
+            auto* osc3Wave = dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc3Wave));
+            check (osc3Wave != nullptr && osc3Wave->getTickLabels().size() == 6,
+                   sizeLabel + "Osc 3 LFO-mode wave has six ticks");
+            if (osc3Wave != nullptr)
+            {
+                const auto& ticks = osc3Wave->getTickLabels();
+                check (ticks[1].text == "Dn" && ticks[4].text == "S/H" && ticks[5].text == "Rnd",
+                       sizeLabel + "Osc 3 wave ticks switch to LFO names");
+                const auto clip = osc3Wave->getLocalBounds().toFloat();
+                const auto font = juce::Font (juce::FontOptions (8.0f));
+                for (const auto& tick : ticks)
+                {
+                    check (clip.contains (tick.bounds.reduced (0.51f, 0.51f)) || clip.contains (tick.bounds),
+                           sizeLabel + "LFO wave tick '" + tick.text.toStdString() + "' stays inside the switch");
+                    const auto textW = juce::GlyphArrangement::getStringWidth (font, tick.text);
+                    check (textW <= tick.bounds.getWidth() + 1.0f,
+                           sizeLabel + "LFO wave tick '" + tick.text.toStdString() + "' fits its box");
+                }
+            }
+            set (*p, id::osc3Lfo, 0.0f);
+            editor->resized();
             check (attackKnob != nullptr, sizeLabel + "filter attack knob exists");
             if (cutoffKnob != nullptr && attackKnob != nullptr)
             {
@@ -1595,6 +1801,7 @@ int main()
         { "envelope timing and Decay switch",          testEnvelopeTiming },
         { "note priority and glide",                   testNotePriorityAndGlide },
         { "osc 3 LO free-running LFO",                 testOsc3LfoMode },
+        { "osc 3 dedicated LFO mode",                  testOsc3DedicatedLfo },
         { "A-440 removed, old state still loads",      testA440Removed },
         { "oscillator aliasing sanity",                testAliasing },
         { "44.1k / 48k / 96k pitch",                   testSampleRates },

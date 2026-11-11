@@ -45,11 +45,30 @@ namespace dooblrm
                 ids.add (id::osc2Range);
                 ids.add (id::osc2Wave);
             }
-            if (valueOf (state, id::mixOsc3On) < 0.5f && valueOf (state, id::oscMod) < 0.5f
-                && valueOf (state, id::filterMod) < 0.5f)
+            const auto lfoOn = valueOf (state, id::osc3Lfo) >= 0.5f;
+            if ((valueOf (state, id::mixOsc3On) < 0.5f && valueOf (state, id::oscMod) < 0.5f
+                 && valueOf (state, id::filterMod) < 0.5f) || lfoOn)
             {
                 ids.add (id::mixOsc3);
             }
+            if (lfoOn)
+            {
+                ids.add (id::mixOsc3On);
+                ids.add (id::osc3Range);
+                ids.add (id::osc3Freq);
+                ids.add (id::osc3Control);
+            }
+            else
+            {
+                ids.add (id::lfoRate);
+                ids.add (id::lfoSync);
+                ids.add (id::lfoDivision);
+                ids.add (id::lfoRetrigger);
+            }
+            if (lfoOn && valueOf (state, id::lfoSync) >= 0.5f)
+                ids.add (id::lfoRate);
+            if (lfoOn && valueOf (state, id::lfoSync) < 0.5f)
+                ids.add (id::lfoDivision);
             if (valueOf (state, id::mixOsc1On) < 0.5f)
                 ids.add (id::mixOsc1);
             if (valueOf (state, id::mixExtOn) < 0.5f)
@@ -209,6 +228,8 @@ namespace dooblrm
         addToggle (ctrl, id::osc3Control, "Osc 3 Ctrl");
         addToggle (ctrl, id::oscMod, "Osc Mod");
         addToggle (ctrl, id::filterMod, "Filt Mod");
+        addToggle (ctrl, id::osc3Lfo, "LFO");
+        addToggle (ctrl, id::lfoRetrigger, "Retrig");
 
         auto& osc = addSection ("OSCILLATOR BANK", ui::bandColour (0));
         addSwitch (osc, id::osc1Range, "Osc 1 Range", params::rangeNames());
@@ -218,7 +239,12 @@ namespace dooblrm
         addSwitch (osc, id::osc2Wave, "Osc 2 Wave", juce::StringArray { "Tri", "Shk", "Saw", "Sqr", "PW", "PN" });
         addSwitch (osc, id::osc3Range, "Osc 3 Range", params::rangeNames());
         addKnob (osc, id::osc3Freq, "Osc 3 Freq", ui::bandColour (2));
-        addSwitch (osc, id::osc3Wave, "Osc 3 Wave", juce::StringArray { "Tri", "Shk", "Saw", "Sqr", "PW", "PN" });
+        addSwitch (osc, id::osc3Wave, "Osc 3 Wave", params::osc3WaveNames());
+        auto& rate = addKnob (osc, id::lfoRate, "Rate", Palette::dynamic);
+        lfoPulse.attach (state, synth.getEngine().getLfoTap());
+        rate.addChildComponent (lfoPulse);
+        addToggle (osc, id::lfoSync, "Sync");
+        addSwitch (osc, id::lfoDivision, "Div", params::lfoDivisionNames());
 
         auto& mix = addSection ("MIXER", ui::bandColour (3));
         addKnob (mix, id::mixOsc1, "Osc 1");
@@ -275,6 +301,7 @@ namespace dooblrm
         updateUndoButtons();
         updateStatus();
         updateEnablement();
+        lfoPulse.refresh();
         scope.refresh();
         filterReadout.refresh();
 
@@ -300,6 +327,11 @@ namespace dooblrm
         for (auto& r : rotaries) apply (r->getSlider());
         for (auto& t : toggles) apply (t->getButton());
         for (auto& w : wheels) apply (w->getSlider());
+
+        const auto lfoOn = valueOf (state, id::osc3Lfo) >= 0.5f;
+        for (auto& r : rotaries)
+            if (r->getComponentID() == id::osc3Wave)
+                r->setTickTexts (lfoOn ? params::osc3LfoWaveNames() : params::osc3WaveNames());
     }
 
     void DooblrMEditor::refreshPresetBox()
@@ -572,35 +604,50 @@ namespace dooblrm
             placeId (id::bendRange, box.reduced (2));
         }
 
-        // Controllers: knobs in the left column, switches in the right (2×3) so "Mod Mix"
-        // and "Osc 3 Ctrl" have a cell wider than three-across.
+        // Controllers: knobs in the left column, switches in the right (2×4) so "Mod Mix"
+        // and "Osc 3 Ctrl" have a cell wider than three-across. LFO / Retrig sit under Filt Mod.
         {
             auto box = ctrl.contentBounds();
-            placeId (id::tune, grid (box, 2, 3, 0));
-            placeId (id::osc3Control, grid (box, 2, 3, 1));
-            placeId (id::glide, grid (box, 2, 3, 2));
-            placeId (id::oscMod, grid (box, 2, 3, 3));
-            placeId (id::modMix, grid (box, 2, 3, 4));
-            placeId (id::filterMod, grid (box, 2, 3, 5));
+            placeId (id::tune, grid (box, 2, 4, 0));
+            placeId (id::osc3Control, grid (box, 2, 4, 1));
+            placeId (id::glide, grid (box, 2, 4, 2));
+            placeId (id::oscMod, grid (box, 2, 4, 3));
+            placeId (id::modMix, grid (box, 2, 4, 4));
+            placeId (id::filterMod, grid (box, 2, 4, 5));
+            placeId (id::osc3Lfo, grid (box, 2, 4, 6));
+            placeId (id::lfoRetrigger, grid (box, 2, 4, 7));
         }
 
-        // Oscillator bank: 3 rows × range, freq, wave (osc 1 has no freq — range spans two cells)
+        // Oscillator bank: Osc 1 / 2 keep a row each; Osc 3 is double-height so Range/Freq/Wave
+        // stay three-across at 940 px and Rate / Sync / Div sit on the row below.
         {
             auto box = osc.contentBounds();
-            const auto rowH = box.getHeight() / 3;
-            auto row1 = box.removeFromTop (rowH);
+            const auto unit = box.getHeight() / 4;
+            auto row1 = box.removeFromTop (unit);
             placeId (id::osc1Range, row1.removeFromLeft (row1.getWidth() / 2).reduced (2));
             placeId (id::osc1Wave, row1.reduced (2));
-            auto row2 = box.removeFromTop (rowH);
+            auto row2 = box.removeFromTop (unit);
             const auto c2 = row2.getWidth() / 3;
             placeId (id::osc2Range, row2.removeFromLeft (c2).reduced (2));
             placeId (id::osc2Freq, row2.removeFromLeft (c2).reduced (2));
             placeId (id::osc2Wave, row2.reduced (2));
-            auto row3 = box;
+            auto row3 = box.removeFromTop (unit);
             const auto c3 = row3.getWidth() / 3;
             placeId (id::osc3Range, row3.removeFromLeft (c3).reduced (2));
             placeId (id::osc3Freq, row3.removeFromLeft (c3).reduced (2));
             placeId (id::osc3Wave, row3.reduced (2));
+            auto row4 = box;
+            const auto c4 = row4.getWidth() / 3;
+            placeId (id::lfoRate, row4.removeFromLeft (c4).reduced (2));
+            placeId (id::lfoSync, row4.removeFromLeft (c4).reduced (2));
+            placeId (id::lfoDivision, row4.reduced (2));
+        }
+
+        {
+            const auto lfoOn = valueOf (state, id::osc3Lfo) >= 0.5f;
+            for (auto& r : rotaries)
+                if (r->getComponentID() == id::osc3Wave)
+                    r->setTickTexts (lfoOn ? params::osc3LfoWaveNames() : params::osc3WaveNames());
         }
 
         // Mixer: 5 rows of knob+toggle, noise colour rocker at the bottom

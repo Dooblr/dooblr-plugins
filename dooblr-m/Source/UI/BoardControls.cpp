@@ -326,6 +326,15 @@ namespace dooblrm::ui
         addAndMakeVisible (captionLabel);
     }
 
+    void RotarySwitch::setTickTexts (const juce::StringArray& labels)
+    {
+        if (ticks == labels)
+            return;
+        ticks = labels;
+        tickLayout = makeTickLayout();
+        repaint();
+    }
+
     juce::Font RotarySwitch::tickFont() const
     {
         return juce::Font (juce::FontOptions (ticks.size() <= 2 ? 9.0f : 8.0f));
@@ -965,5 +974,73 @@ namespace dooblrm::ui
         drawHandle (getHandlePosition (Handle::decay), Palette::spectrum);
         drawHandle (getHandlePosition (Handle::sustain), Palette::accent);
         drawHandle (getHandlePosition (Handle::amount), Palette::dynamic);
+    }
+
+    //==============================================================================
+    LfoPulse::LfoPulse()
+    {
+        setComponentID ("lfoPulse");
+        setInterceptsMouseClicks (false, false);
+        setOpaque (false);
+        setVisible (false);
+    }
+
+    LfoPulse::~LfoPulse()
+    {
+        stopTimer();
+    }
+
+    void LfoPulse::attach (juce::AudioProcessorValueTreeState& s, const std::atomic<float>& t)
+    {
+        state = &s;
+        tap = &t;
+        refresh();
+    }
+
+    void LfoPulse::parentHierarchyChanged() { parentSizeChanged(); }
+
+    void LfoPulse::parentSizeChanged()
+    {
+        if (auto* parent = getParentComponent())
+        {
+            auto cap = parent->getLocalBounds().removeFromBottom (16);
+            setBounds (cap.removeFromRight (12).reduced (2, 3));
+        }
+    }
+
+    void LfoPulse::refresh()
+    {
+        const bool on = state != nullptr && state->getParameter (params::id::osc3Lfo) != nullptr
+                        && state->getParameter (params::id::osc3Lfo)->getValue() >= 0.5f;
+        if (on != active)
+        {
+            active = on;
+            if (on)
+                startTimerHz (24);
+            else
+                stopTimer();
+            setVisible (on);
+        }
+
+        const auto raw = (tap != nullptr && on) ? tap->load (std::memory_order_relaxed) : 0.0f;
+        const auto next = on ? juce::jlimit (0.0f, 1.0f, 0.5f + 0.5f * raw) : 0.0f;
+        const auto q = (int) std::round (next * 20.0f);
+        if (q == lastQ && isVisible() == on)
+            return;
+        lastQ = q;
+        level = next;
+        ++repaintRequests;
+        repaint();
+    }
+
+    void LfoPulse::paint (juce::Graphics& g)
+    {
+        if (! isVisible() || getWidth() < 2 || getHeight() < 2)
+            return;
+        auto bounds = getLocalBounds().toFloat();
+        g.setColour (Palette::dynamic.withAlpha (0.18f + 0.72f * level));
+        g.fillEllipse (bounds);
+        g.setColour (Palette::dynamic.withAlpha (0.55f));
+        g.drawEllipse (bounds.reduced (0.5f), 1.0f);
     }
 }

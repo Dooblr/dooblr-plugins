@@ -28,6 +28,11 @@ namespace dooblrm::params
                                 : juce::String (hz / 1000.0f, 2) + " kHz";
         }
 
+        juce::String formatLfoRate (float hz, int)
+        {
+            return juce::String (hz, hz < 10.0f ? 2 : 1) + " Hz";
+        }
+
         juce::String formatPercent (float v, int) { return juce::String (juce::roundToInt (v * 100.0f)) + "%"; }
 
         juce::String formatSemitones (float v, int)
@@ -99,6 +104,13 @@ namespace dooblrm::params
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             pid (id::osc3Freq), "Osc 3 Frequency", juce::NormalisableRange<float> (-8.0f, 8.0f), 0.0f,
             Attributes().withLabel ("st").withStringFromValueFunction (formatSemitones)));
+        addBool (layout, id::osc3Lfo, "Osc 3 LFO", false);
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            pid (id::lfoRate), "LFO Rate", skewed (0.05f, 30.0f, 1.0f), 1.0f,
+            Attributes().withLabel ("Hz").withStringFromValueFunction (formatLfoRate)));
+        addBool (layout, id::lfoSync, "LFO Sync", false);
+        addChoice (layout, id::lfoDivision, "LFO Division", lfoDivisionNames(), 2); // 1/4
+        addBool (layout, id::lfoRetrigger, "LFO Retrigger", false);
 
         addPercent (layout, id::mixOsc1, "Osc 1", 0.8f);
         addBool (layout, id::mixOsc1On, "Osc 1 On", true);

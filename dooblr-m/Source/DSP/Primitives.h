@@ -175,6 +175,69 @@ namespace dooblrm::dsp
     };
 
     /**
+        Dedicated Osc 3 LFO: naive bipolar copies of the Osc 3 waves (aliasing is irrelevant
+        below 30 Hz). Frequency is one-pole smoothed so rate changes do not click. Phase is
+        free-running unless retrigger() is called. Pulse-wide / pulse-narrow become
+        sample-and-hold and bipolar random (PWM is not a useful LFO shape).
+    */
+    struct LfoOsc
+    {
+        float phase = 0.0f;
+        float hzSmoothed = 1.0f;
+        float last = 0.0f;
+        float held = 0.0f;
+        bool heldValid = false;
+        Rng rng { 0x51F00Du };
+
+        void retrigger() noexcept { phase = 0.0f; heldValid = false; }
+
+        float process (float targetHz, float sampleRate, int wave) noexcept
+        {
+            targetHz = juce::jlimit (0.01f, sampleRate * 0.25f, targetHz);
+            const auto coeff = 1.0f - std::exp (-1.0f / (0.02f * (float) sampleRate));
+            hzSmoothed += (targetHz - hzSmoothed) * coeff;
+            hzSmoothed = juce::jlimit (0.01f, sampleRate * 0.25f, hzSmoothed);
+
+            const auto inc = hzSmoothed / (float) sampleRate;
+            phase += inc;
+            bool wrapped = false;
+            if (phase >= 1.0f)
+            {
+                phase -= std::floor (phase);
+                wrapped = true;
+            }
+
+            last = shape (phase, wave, wrapped);
+            return last;
+        }
+
+        float shape (float p, int wave, bool wrapped) noexcept
+        {
+            const auto tri = p < 0.5f ? 4.0f * p - 1.0f : 3.0f - 4.0f * p;
+            const auto sawUp = 2.0f * p - 1.0f;
+            const auto sawDown = 1.0f - 2.0f * p;
+            const auto square = p < 0.5f ? 1.0f : -1.0f;
+
+            switch (wave)
+            {
+                case 0: return tri;
+                case 1: return sawDown; // shark slot → falling saw
+                case 2: return sawUp;
+                case 3: return square;
+                case 4: // wide-pulse slot → sample & hold
+                    if (wrapped || ! heldValid)
+                    {
+                        held = rng.bipolar();
+                        heldValid = true;
+                    }
+                    return held;
+                case 5: return rng.bipolar(); // narrow-pulse slot → random
+                default: return tri;
+            }
+        }
+    };
+
+    /**
         Huovilainen 2004 non-linear Moog ladder (DAFx-04): four Euler stages with embedded
         tanh, resonance feedback, half-sample delay compensation by averaging, 2× oversampling.
         Resonance r is scaled so emphasis = 1 sits just past self-oscillation (loop gain > 4).
