@@ -32,6 +32,7 @@ SUITE = [
     ('dooblr-feedback', 'dooblr-feedback', 'Automatic live feedback suppressor',                    'vst3', 'dooblr-feedback.vst3', 'dooblr-feedback', None),
     ('dooblr-distressor', 'dooblr-distressor', 'EL8-style compressor',                              'vst3', 'dooblr-distressor.vst3', 'dooblr-distressor', None),
     ('dooblr-0coast',   'dooblr-0coast',   'No-coast monophonic synth (instrument)',              'vst3', 'dooblr-0coast.vst3',   'dooblr-0coast',   None),
+    ('dooblr-sub',       'dooblr-sub',       'Sub-harmonic generator, tone shift and system check', 'vst3', 'dooblr-sub.vst3',       'dooblr-sub',       None),
     ('dooblr-chords',   'dooblr-chords',   'Chord progression generator (Max for Live MIDI effect, Ableton Live only)',
                                                                                                     'm4l',  'dooblr-chords',        'dooblr-chords',   None),
     ('dooblr-titan',    'dooblr-titan',    'MIDI clip tightener and variation writer (Max for Live MIDI effect, Ableton Live only)',

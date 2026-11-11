@@ -33,6 +33,7 @@ env:
     dooblr-feedback:DOOBLRFEEDBACK:DooblrFeedback
     dooblr-distressor:DOOBLRDISTRESSOR:DooblrDistressor
     dooblr-0coast:DOOBLR0COAST:Dooblr0Coast
+    dooblr-sub:DOOBLRSUB:DooblrSub
 
 jobs:
   mac:
