@@ -4,11 +4,13 @@
 
 namespace dooblrm::params
 {
-    /** State-tree version written with every saved state (bump when a migration is needed). */
-    inline constexpr int stateVersion = 1;
+    /** State-tree version written with every saved state (bump when a migration is needed).
+        1: 0.1.0–0.1.1. 2: 0.1.2 dropped the A-440 parameter (old sessions that still store
+        it load; the extra PARAM is ignored). */
+    inline constexpr int stateVersion = 2;
 
-    /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
-        Every ID below was added in 0.1.0. */
+    /** Parameter IDs. Never rename. a440 was removed in 0.1.2 (old states/presets that still
+        contain it load; remaining IDs keep their meaning). */
     namespace id
     {
         // Controllers
@@ -44,7 +46,7 @@ namespace dooblrm::params
 
         // Filter (modifiers)
         inline constexpr const char* cutoff       = "cutoff";
-        inline constexpr const char* emphasis     = "emphasis";
+        inline constexpr const char* emphasis     = "emphasis"; // host/UI name: Resonance (0.1.3)
         inline constexpr const char* contourAmt   = "contourAmt";
         inline constexpr const char* fAttack      = "fAttack";
         inline constexpr const char* fDecay       = "fDecay";
@@ -60,7 +62,6 @@ namespace dooblrm::params
 
         // Output
         inline constexpr const char* volume       = "volume";
-        inline constexpr const char* a440         = "a440";
 
         // Voice (plugin extras that the original panel does not name)
         inline constexpr const char* notePriority = "notePriority";
@@ -74,7 +75,7 @@ namespace dooblrm::params
         inline constexpr const char* pitchBend    = "pitchBend";
     }
 
-    inline constexpr int parameterCount = 46;
+    inline constexpr int parameterCount = 45;
 
     enum class Wave
     {

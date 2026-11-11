@@ -84,6 +84,50 @@ namespace
         return s.str();
     }
 
+    juce::MouseEvent makeMouseEvent (juce::Component& component, juce::Point<float> position,
+                                     juce::Point<float> downPosition, int clicks, bool dragged)
+    {
+        using Source = juce::MouseInputSource;
+        const auto now = juce::Time::getCurrentTime();
+        return { juce::Desktop::getInstance().getMainMouseSource(), position,
+                 juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier),
+                 Source::defaultPressure, Source::defaultOrientation, Source::defaultRotation,
+                 Source::defaultTiltX, Source::defaultTiltY,
+                 &component, &component, now, downPosition, now, clicks, dragged };
+    }
+
+    void simulateDrag (juce::Component& component, juce::Point<float> from, juce::Point<float> to)
+    {
+        component.mouseDown (makeMouseEvent (component, from, from, 1, false));
+        constexpr int steps = 12;
+        for (int i = 1; i <= steps; ++i)
+            component.mouseDrag (makeMouseEvent (component, from + (to - from) * ((float) i / (float) steps),
+                                                 from, 1, true));
+        component.mouseUp (makeMouseEvent (component, to, from, 1, true));
+    }
+
+    void simulateClick (juce::Component& component)
+    {
+        const auto c = component.getLocalBounds().getCentre().toFloat();
+        component.mouseDown (makeMouseEvent (component, c, c, 1, false));
+        component.mouseUp (makeMouseEvent (component, c, c, 1, false));
+    }
+
+    void simulateDoubleClick (juce::Component& component, juce::Point<float> position)
+    {
+        component.mouseDown (makeMouseEvent (component, position, position, 1, false));
+        component.mouseUp (makeMouseEvent (component, position, position, 1, false));
+        component.mouseDoubleClick (makeMouseEvent (component, position, position, 2, false));
+    }
+
+    int bubbleCount (juce::Component& root)
+    {
+        int n = dynamic_cast<juce::BubbleComponent*> (&root) != nullptr ? 1 : 0;
+        for (int i = 0; i < root.getNumChildComponents(); ++i)
+            n += bubbleCount (*root.getChildComponent (i));
+        return n;
+    }
+
     constexpr double defaultRate = 48000.0;
     constexpr int blockSize = 512;
 
@@ -133,7 +177,6 @@ namespace
         set (p, id::mixOsc3On, 0.0f);
         set (p, id::mixNoiseOn, 0.0f);
         set (p, id::mixExtOn, 0.0f);
-        set (p, id::a440, 0.0f);
         set (p, id::glide, 0.0f);
         set (p, id::volume, 0.8f);
         set (p, id::output, 0.0f);
@@ -305,8 +348,18 @@ namespace
         check ((int) ids.size() == params::parameterCount, "parameter IDs are unique");
         for (auto* expected : { id::tune, id::glide, id::osc1Range, id::osc1Wave, id::osc2Freq, id::osc3Control,
                                 id::mixOsc1, id::mixExt, id::cutoff, id::emphasis, id::fAttack, id::aSustain,
-                                id::decaySwitch, id::notePriority, id::legato, id::a440, id::modWheel, id::output })
+                                id::decaySwitch, id::notePriority, id::legato, id::modWheel, id::output })
             check (ids.count (expected) == 1, std::string ("parameter id ") + expected);
+        check (ids.count ("a440") == 0, "A-440 parameter is removed");
+
+        auto* resonance = param (*p, id::emphasis);
+        check (resonance != nullptr && resonance->paramID == "emphasis",
+               "resonance parameter ID stays emphasis");
+        check (resonance != nullptr && resonance->getName (64) == "Resonance",
+               "host/Ableton display name is Resonance (got "
+                   + (resonance != nullptr ? resonance->getName (64).toStdString() : "null") + ")");
+        check (resonance != nullptr && resonance->getName (64) != "Emphasis",
+               "host display name is no longer Emphasis");
     }
 
     void testSilence()
@@ -549,15 +602,43 @@ namespace
                + fmt (hz, 3) + " Hz)");
     }
 
-    void testA440()
+    void testA440Removed()
     {
         auto p = makeProcessor();
-        set (*p, id::a440, 1.0f);
+        check (p->getState().getParameter ("a440") == nullptr, "a440 is not a host parameter");
+        check ((int) p->getParameters().size() == params::parameterCount,
+               "host parameter count is " + std::to_string (params::parameterCount)
+                   + " (got " + std::to_string (p->getParameters().size()) + ")");
+
         set (*p, id::mixOsc1On, 0.0f);
-        const auto r = render (*p, 48000);
-        const auto hz = measureHz (r.left, defaultRate, 4000);
-        check (r.peak() > 0.05f, "A-440 is audible with no keys down");
-        check (std::abs (hz - 440.0) / 440.0 < 0.01, "A-440 tone is 440 Hz (got " + fmt (hz, 2) + ")");
+        const auto silent = render (*p, 24000);
+        check (silent.peak() < 1.0e-3f, "no reference tone with no keys down (peak " + fmt (silent.peak(), 6) + ")");
+
+        juce::XmlElement loaded ("DooblrM");
+        loaded.setAttribute ("stateVersion", 1);
+        loaded.setAttribute ("presetName", "LegacyA440");
+        auto addParam = [&loaded] (const juce::String& pid, double value)
+        {
+            auto* child = loaded.createNewChildElement ("PARAM");
+            child->setAttribute ("id", pid);
+            child->setAttribute ("value", value);
+        };
+        addParam (id::cutoff, 333.0);
+        addParam ("a440", 1.0);
+        addParam (id::volume, 0.4);
+
+        juce::MemoryBlock blob;
+        juce::AudioProcessor::copyXmlToBinary (loaded, blob);
+        p->setStateInformation (blob.getData(), (int) blob.getSize());
+        check (p->getState().getParameter ("a440") == nullptr, "a440 stays absent after loading old state");
+        check (std::abs (get (*p, id::cutoff) - 333.0f) < 0.5f, "old state restores cutoff beside the leftover a440 PARAM");
+        check (std::abs (get (*p, id::volume) - 0.4f) < 0.01f, "old state restores volume");
+        check (p->getPresetName() == "LegacyA440", "old state restores the preset name");
+        check ((int) p->getState().state.getProperty ("stateVersion") == params::stateVersion,
+               "loading old state writes the current stateVersion");
+
+        const auto after = render (*p, 12000);
+        check (after.finite(), "processor stays finite after loading state that still contains a440");
     }
 
     void testAliasing()
@@ -692,7 +773,6 @@ namespace
             { id::kybd1, { { id::emphasis, 0.8f }, { id::cutoff, 300.0f } } },
             { id::kybd2, { { id::emphasis, 0.8f }, { id::cutoff, 300.0f } } },
             { id::velocityOn, {} },
-            { id::a440, { { id::mixOsc1On, 0.0f } } },
             { id::pitchBend, { { id::bendRange, 12.0f } } },
             { id::bendRange, {} },
             { id::contourAmt, { { id::fSustain, 1.0f } } },
@@ -912,6 +992,38 @@ namespace
             check (editor->getScope().isVisible(), sizeLabel + "scope visible");
             check (editor->getFilterReadout().isVisible(), sizeLabel + "filter readout visible");
             check (editor->getFilterReadout().getHeight() >= 40, sizeLabel + "filter readout has height");
+            check (editor->findControl ("a440") == nullptr, sizeLabel + "A-440 control is gone");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::notePriority)) != nullptr,
+                   sizeLabel + "note priority is a 2-position rocker");
+            check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::notePriority)) == nullptr,
+                   sizeLabel + "note priority is not a rotary");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::noiseType)) != nullptr,
+                   sizeLabel + "noise colour is a 2-position rocker");
+            check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc1Range)) != nullptr,
+                   sizeLabel + "osc 1 range stays a multi-position switch");
+
+            auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
+            auto* attackKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::fAttack));
+            auto* resonanceKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::emphasis));
+            check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() == "Resonance",
+                   sizeLabel + "filter resonance knob caption is Resonance");
+            check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() != "Emphasis",
+                   sizeLabel + "filter knob is no longer labelled Emphasis");
+            check (cutoffKnob != nullptr && cutoffKnob->isLarge(), sizeLabel + "cutoff knob is marked large");
+            check (attackKnob != nullptr, sizeLabel + "filter attack knob exists");
+            if (cutoffKnob != nullptr && attackKnob != nullptr)
+            {
+                const auto cutoffD = juce::jmin (cutoffKnob->getSlider().getWidth(), cutoffKnob->getSlider().getHeight());
+                const auto otherD = juce::jmin (attackKnob->getSlider().getWidth(), attackKnob->getSlider().getHeight());
+                check (cutoffD >= juce::roundToInt ((float) otherD * 1.55f),
+                       sizeLabel + "cutoff knob cell is at least 1.6× a standard knob ("
+                           + std::to_string (cutoffD) + " vs " + std::to_string (otherD) + ")");
+                const auto drawn = (float) (double) cutoffKnob->getSlider().getProperties()
+                                       .getWithDefault ("maxKnobDiameter", 0.0);
+                check (drawn >= 74.0f && drawn <= 92.0f,
+                       sizeLabel + "cutoff drawn diameter cap is 1.6–2× (got " + fmt (drawn, 1) + ")");
+            }
+
             check ((int) editor->getSections().size() == 7, sizeLabel + "seven board sections");
 
             for (size_t i = 0; i < editor->getSections().size(); ++i)
@@ -981,6 +1093,285 @@ namespace
         snapshot (*editor, "-wide");
     }
 
+    void testKnobOverlay()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrMEditor");
+        if (editor == nullptr)
+            return;
+
+        editor->setSize (1080, 660);
+
+        int knobs = 0;
+        std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
+        {
+            if (dynamic_cast<ui::Knob*> (&c) != nullptr)
+                ++knobs;
+            for (int i = 0; i < c.getNumChildComponents(); ++i)
+                walk (*c.getChildComponent (i));
+        };
+        walk (*editor);
+        check (knobs > 0, "found rotary knobs (" + std::to_string (knobs) + ")");
+
+        {
+            juce::Slider probe { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
+            editor->addAndMakeVisible (probe);
+            probe.setBounds (0, 0, 48, 48);
+            probe.setPopupDisplayEnabled (true, false, editor);
+            const auto c = probe.getLocalBounds().getCentre().toFloat();
+            probe.mouseDown (makeMouseEvent (probe, c, c, 1, false));
+            probe.mouseDrag (makeMouseEvent (probe, c + juce::Point<float> (0.0f, -10.0f), c, 1, true));
+            check (probe.getCurrentPopupDisplay() != nullptr,
+                   "control: JUCE shows a popup overlay when setPopupDisplayEnabled (true) is used");
+            probe.mouseUp (makeMouseEvent (probe, c, c, 1, true));
+            editor->removeChildComponent (&probe);
+        }
+
+        auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
+        check (cutoffKnob != nullptr, "cutoff knob exists");
+        if (cutoffKnob == nullptr)
+            return;
+
+        auto& slider = cutoffKnob->getSlider();
+        auto* cutoff = param (*p, id::cutoff);
+        const auto before = cutoff->getValue();
+        const auto centre = slider.getLocalBounds().getCentre().toFloat();
+        const auto draggedTo = centre + juce::Point<float> (0.0f, -40.0f);
+        slider.mouseDown (makeMouseEvent (slider, centre, centre, 1, false));
+        slider.mouseDrag (makeMouseEvent (slider, draggedTo, centre, 1, true));
+        check (slider.getCurrentPopupDisplay() == nullptr, "getCurrentPopupDisplay is null while the knob is dragging");
+        check (bubbleCount (*editor) == 0, "no BubbleComponent overlay is shown while dragging a knob");
+        check (bubbleCount (*cutoffKnob) == 0, "the knob itself has no popup child while dragging");
+        slider.mouseUp (makeMouseEvent (slider, draggedTo, centre, 1, true));
+        check (std::abs (cutoff->getValue() - before) > 1.0e-5f, "dragging a knob still changes its value");
+        check (p->getUndoHistory().canUndo(), "knob drag is one undo gesture");
+
+        const auto dragged = cutoff->convertFrom0to1 (cutoff->getValue());
+        simulateDoubleClick (slider, centre);
+        const auto reset = cutoff->convertFrom0to1 (cutoff->getValue());
+        check (std::abs (reset - 1200.0f) < 1.0f,
+               "double-click resets the knob (was " + fmt (dragged, 1) + " Hz, now " + fmt (reset, 1) + " Hz)");
+    }
+
+    void testSwitchDrag()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrMEditor");
+        if (editor == nullptr)
+            return;
+
+        editor->setSize (1080, 660);
+        auto& history = p->getUndoHistory();
+
+        auto* decay = dynamic_cast<ui::BatToggle*> (editor->findControl (id::decaySwitch));
+        check (decay != nullptr, "Decay rocker exists");
+        if (decay != nullptr)
+        {
+            check (param (*p, id::decaySwitch)->getValue() >= 0.5f, "Decay starts on");
+            simulateClick (*decay);
+            check (param (*p, id::decaySwitch)->getValue() < 0.5f, "click still toggles the rocker off");
+            check (history.canUndo(), "click toggle is one undo gesture");
+            history.undo();
+            check (param (*p, id::decaySwitch)->getValue() >= 0.5f, "undo restores the click toggle");
+        }
+
+        auto* osc1 = dynamic_cast<ui::BatToggle*> (editor->findControl (id::mixOsc1On));
+        auto* osc2 = dynamic_cast<ui::BatToggle*> (editor->findControl (id::mixOsc2On));
+        check (osc1 != nullptr && osc2 != nullptr, "mixer Osc 1 / Osc 2 rockers exist");
+        if (osc1 != nullptr && osc2 != nullptr)
+        {
+            param (*p, id::mixOsc1On)->setValueNotifyingHost (1.0f);
+            param (*p, id::mixOsc2On)->setValueNotifyingHost (1.0f);
+            history.clear();
+
+            const auto from = osc1->getLocalBounds().getCentre().toFloat();
+            const auto to = osc1->getLocalPoint (osc2, osc2->getLocalBounds().getCentre()).toFloat();
+            check (to.y > from.y + 8.0f, "mixer Osc 2 rocker sits below Osc 1 (for a downward rake)");
+            simulateDrag (*osc1, from, to);
+            check (param (*p, id::mixOsc1On)->getValue() < 0.5f, "dragging down the Osc 1 rocker turns it off");
+            check (param (*p, id::mixOsc2On)->getValue() < 0.5f, "the same downward rake turns Osc 2 off");
+            check (history.getNumUndoableSteps() == 1, "raking two rockers is one undo step (got "
+                   + std::to_string (history.getNumUndoableSteps()) + ")");
+            history.undo();
+            check (param (*p, id::mixOsc1On)->getValue() >= 0.5f
+                       && param (*p, id::mixOsc2On)->getValue() >= 0.5f,
+                   "one undo restores both rockers");
+
+            param (*p, id::mixOsc1On)->setValueNotifyingHost (0.0f);
+            history.clear();
+            const auto upFrom = osc1->getLocalBounds().getCentre().toFloat();
+            simulateDrag (*osc1, upFrom, upFrom + juce::Point<float> (0.0f, -20.0f));
+            check (param (*p, id::mixOsc1On)->getValue() >= 0.5f, "dragging the rocker up turns it on");
+        }
+
+        auto* range = dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc1Range));
+        check (range != nullptr, "Osc 1 Range rotary switch exists");
+        if (range != nullptr)
+        {
+            history.clear();
+            auto& slider = range->getSlider();
+            const auto before = slider.getValue();
+            const auto centre = slider.getLocalBounds().getCentre().toFloat();
+            simulateDrag (slider, centre, centre + juce::Point<float> (30.0f, 80.0f));
+            const auto after = slider.getValue();
+            check (std::abs (after - before) > 0.5, "dragging a multi-position switch steps it (was "
+                   + fmt (before, 2) + ", now " + fmt (after, 2) + ")");
+            check (std::abs (after - std::round (after)) < 1.0e-3, "the switch lands on a discrete position");
+            check (history.canUndo(), "rotary-switch drag is one undo gesture");
+            history.undo();
+            check (std::abs (slider.getValue() - before) < 1.0e-3, "undo restores the rotary switch");
+        }
+    }
+
+    void testPriorityAndNoiseSwitches()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrMEditor");
+        if (editor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+
+        auto* priority = dynamic_cast<ui::BatToggle*> (editor->findControl (id::notePriority));
+        auto* noise = dynamic_cast<ui::BatToggle*> (editor->findControl (id::noiseType));
+        check (priority != nullptr, "note priority is a BatToggle rocker");
+        check (noise != nullptr, "noise colour is a BatToggle rocker");
+        check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc1Wave)) != nullptr,
+               "a >2-choice parameter stays a multi-position rotary switch");
+
+        auto* priorityParam = param (*p, id::notePriority);
+        auto* noiseParam = param (*p, id::noiseType);
+        if (priority == nullptr || noise == nullptr || priorityParam == nullptr || noiseParam == nullptr)
+            return;
+
+        check (priorityParam->getValue() < 0.5f, "priority starts at Low");
+        simulateClick (*priority);
+        check (priorityParam->getValue() >= 0.5f, "clicking the priority rocker selects Last");
+        check (p->getUndoHistory().canUndo(), "priority click is one undo gesture");
+        p->getUndoHistory().undo();
+        check (priorityParam->getValue() < 0.5f, "undo restores Low");
+
+        p->getUndoHistory().clear();
+        const auto from = priority->getLocalBounds().getCentre().toFloat();
+        simulateDrag (*priority, from, from + juce::Point<float> (0.0f, -20.0f));
+        check (priorityParam->getValue() >= 0.5f, "dragging the priority rocker up selects Last");
+
+        check (noiseParam->getValue() < 0.5f, "noise starts at White");
+        simulateClick (*noise);
+        check (noiseParam->getValue() >= 0.5f, "clicking the noise rocker selects Pink");
+        check (p->readSettings().noiseType == 1, "Pink maps to DSP noiseType 1");
+        p->getUndoHistory().undo();
+        check (noiseParam->getValue() < 0.5f, "undo restores White");
+    }
+
+    void testEnvelopeHandles()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrMEditor");
+        if (editor == nullptr)
+            return;
+        editor->setSize (1080, 660);
+
+        auto& graph = editor->getFilterReadout();
+        using Handle = ui::FilterReadout::Handle;
+
+        auto* attack = param (*p, id::fAttack);
+        auto* decay = param (*p, id::fDecay);
+        auto* sustain = param (*p, id::fSustain);
+        auto* amount = param (*p, id::contourAmt);
+        auto* attackKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::fAttack));
+        if (attack == nullptr || decay == nullptr || sustain == nullptr || amount == nullptr)
+            return;
+
+        attack->setValueNotifyingHost (attack->convertTo0to1 (0.4f));
+        decay->setValueNotifyingHost (decay->convertTo0to1 (0.5f));
+        sustain->setValueNotifyingHost (0.45f);
+        amount->setValueNotifyingHost (0.8f);
+        graph.refresh();
+
+        const auto plot = graph.getPlotArea();
+        check (plot.getWidth() > 20.0f && plot.getHeight() > 20.0f, "envelope plot has area");
+
+        const auto aPos = graph.getHandlePosition (Handle::attack);
+        const auto dPos = graph.getHandlePosition (Handle::decay);
+        const auto sPos = graph.getHandlePosition (Handle::sustain);
+        const auto mPos = graph.getHandlePosition (Handle::amount);
+        check (graph.handleAt (aPos) == Handle::attack, "attack handle maps to fAttack");
+        check (graph.handleAt (dPos) == Handle::decay, "decay handle maps to fDecay");
+        check (graph.handleAt (sPos) == Handle::sustain, "sustain handle maps to fSustain");
+        check (graph.handleAt (mPos) == Handle::amount, "amount handle maps to contourAmt");
+        check (aPos.getDistanceFrom (dPos) > 8.0f && aPos.getDistanceFrom (mPos) > 8.0f
+                   && dPos.getDistanceFrom (sPos) > 8.0f,
+               "the four envelope handles are distinct");
+        check (plot.expanded (2.0f, 2.0f).contains (aPos) && plot.expanded (2.0f, 2.0f).contains (mPos),
+               "handles sit on the envelope plot");
+
+        auto& history = p->getUndoHistory();
+        history.clear();
+        const auto attackBefore = attack->getValue();
+        simulateDrag (graph, aPos, aPos + juce::Point<float> (36.0f, 0.0f));
+        check (attack->getValue() > attackBefore + 0.02f, "dragging Attack handle increases fAttack");
+        if (attackKnob != nullptr)
+            check (std::abs ((float) attackKnob->getSlider().getValue() - attack->convertFrom0to1 (attack->getValue())) < 1.0e-3f,
+                   "Attack handle stays in sync with the Attack knob");
+        check (history.getNumUndoableSteps() == 1, "handle drag is one undo gesture");
+        history.undo();
+        check (std::abs (attack->getValue() - attackBefore) < 1.0e-4f, "undo restores Attack");
+
+        history.clear();
+        const auto decayBefore = decay->getValue();
+        simulateDrag (graph, graph.getHandlePosition (Handle::decay),
+                      graph.getHandlePosition (Handle::decay) + juce::Point<float> (28.0f, 0.0f));
+        check (decay->getValue() > decayBefore + 0.02f, "dragging Decay handle increases fDecay");
+
+        history.clear();
+        const auto sustainBefore = sustain->getValue();
+        simulateDrag (graph, graph.getHandlePosition (Handle::sustain),
+                      graph.getHandlePosition (Handle::sustain) + juce::Point<float> (0.0f, -24.0f));
+        check (sustain->getValue() > sustainBefore + 0.02f, "dragging Sustain handle raises sustain level");
+
+        history.clear();
+        const auto amountBefore = amount->getValue();
+        simulateDrag (graph, graph.getHandlePosition (Handle::amount),
+                      graph.getHandlePosition (Handle::amount) + juce::Point<float> (0.0f, 30.0f));
+        check (amount->getValue() < amountBefore - 0.02f, "dragging Amount handle down lowers contourAmt");
+
+        simulateDoubleClick (graph, graph.getHandlePosition (Handle::amount));
+        check (std::abs (amount->getValue() - amount->getDefaultValue()) < 1.0e-4f,
+               "double-clicking Amount resets contourAmt");
+
+        amount->setValueNotifyingHost (0.85f);
+        set (*p, id::fAttack, 0.08f);
+        set (*p, id::fDecay, 0.4f);
+        set (*p, id::fSustain, 0.5f);
+        graph.refresh();
+        const auto idleEnv = graph.getLiveEnvelope();
+        check (idleEnv < 0.05f, "live envelope is idle with no notes");
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent (on (60), 0);
+        for (int i = 0; i < 8; ++i)
+        {
+            buffer.clear();
+            p->processBlock (buffer, midi);
+            midi.clear();
+        }
+        graph.refresh();
+        check (graph.getLiveEnvelope() > idleEnv + 0.2f,
+               "playhead tracks DSP filter envelope while a note plays (env "
+                   + fmt (graph.getLiveEnvelope(), 3) + ")");
+        check (graph.getPlayheadPosition().y < graph.getHandlePosition (Handle::attack).y - 2.0f,
+               "live playhead lifts off the baseline during attack");
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -999,7 +1390,7 @@ int main()
         { "envelope timing and Decay switch",          testEnvelopeTiming },
         { "note priority and glide",                   testNotePriorityAndGlide },
         { "osc 3 LO free-running LFO",                 testOsc3LfoMode },
-        { "A-440 tone",                                testA440 },
+        { "A-440 removed, old state still loads",      testA440Removed },
         { "oscillator aliasing sanity",                testAliasing },
         { "44.1k / 48k / 96k pitch",                   testSampleRates },
         { "finite output under extreme settings",      testExtremeFinite },
@@ -1009,6 +1400,10 @@ int main()
         { "undo history",                              testUndoHistory },
         { "real-time safety and CPU",                  testRealtimeAndCpu },
         { "editor",                                    testEditor },
+        { "knob overlay",                              testKnobOverlay },
+        { "switch drag",                               testSwitchDrag },
+        { "priority and noise rockers",                testPriorityAndNoiseSwitches },
+        { "filter envelope handles",                   testEnvelopeHandles },
     };
 
     int failedTests = 0;

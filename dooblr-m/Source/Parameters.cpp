@@ -115,7 +115,7 @@ namespace dooblrm::params
         layout.add (std::make_unique<juce::AudioParameterFloat> (
             pid (id::cutoff), "Cutoff", skewed (20.0f, 20000.0f, 800.0f), 1200.0f,
             Attributes().withLabel ("Hz").withStringFromValueFunction (formatHz)));
-        addPercent (layout, id::emphasis, "Emphasis", 0.15f);
+        addPercent (layout, id::emphasis, "Resonance", 0.15f);
         addPercent (layout, id::contourAmt, "Amount of Contour", 0.0f);
         addTime (layout, id::fAttack, "Filter Attack", 0.002f);
         addTime (layout, id::fDecay, "Filter Decay", 0.4f);
@@ -129,7 +129,6 @@ namespace dooblrm::params
         addBool (layout, id::decaySwitch, "Decay", true);
 
         addPercent (layout, id::volume, "Volume", 0.7f);
-        addBool (layout, id::a440, "A-440", false);
 
         addChoice (layout, id::notePriority, "Note Priority", priorityNames(), 0); // low, like the original
         addBool (layout, id::legato, "Legato", true);

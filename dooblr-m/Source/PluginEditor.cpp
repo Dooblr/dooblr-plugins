@@ -26,7 +26,7 @@ namespace dooblrm
         }
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
-        constexpr int headerHeight = 60, voiceBarHeight = 72, margin = 8, gap = 6;
+        constexpr int headerHeight = 60, voiceBarHeight = 84, margin = 8, gap = 6;
         constexpr int meterWidth = 34;
 
         float valueOf (juce::AudioProcessorValueTreeState& state, const char* pid)
@@ -73,7 +73,8 @@ namespace dooblrm
           synth (p),
           state (p.getState()),
           outputMeter (&p.getPeakTap()),
-          scope (&p.getEngine().getScopeTap())
+          scope (&p.getEngine().getScopeTap()),
+          filterReadout (p.getState(), p.getEngine().getFilterEnvTap(), p.getEngine().getFilterEnvStageTap())
     {
         setLookAndFeel (&lookAndFeel);
         setWantsKeyboardFocus (true);
@@ -145,9 +146,9 @@ namespace dooblrm
     }
 
     ui::Knob& DooblrMEditor::addKnob (juce::Component& parent, const juce::String& pid, const juce::String& caption,
-                                      juce::Colour fill)
+                                      juce::Colour fill, bool large)
     {
-        knobs.push_back (std::make_unique<ui::Knob> (state, pid, caption, fill));
+        knobs.push_back (std::make_unique<ui::Knob> (state, pid, caption, fill, large));
         parent.addAndMakeVisible (*knobs.back());
         return *knobs.back();
     }
@@ -160,11 +161,26 @@ namespace dooblrm
         return *rotaries.back();
     }
 
-    ui::BatToggle& DooblrMEditor::addToggle (juce::Component& parent, const juce::String& pid, const juce::String& caption)
+    ui::BatToggle& DooblrMEditor::addToggle (juce::Component& parent, const juce::String& pid, const juce::String& caption,
+                                             const juce::String& downLabel, const juce::String& upLabel)
     {
-        toggles.push_back (std::make_unique<ui::BatToggle> (state, pid, caption));
+        toggles.push_back (std::make_unique<ui::BatToggle> (state, pid, caption, downLabel, upLabel));
         parent.addAndMakeVisible (*toggles.back());
         return *toggles.back();
+    }
+
+    void DooblrMEditor::addChoiceControl (juce::Component& parent, const juce::String& pid, const juce::String& caption,
+                                          const juce::StringArray& ticks)
+    {
+        auto* choice = dynamic_cast<juce::AudioParameterChoice*> (state.getParameter (pid));
+        if (choice != nullptr && choice->choices.size() == 2)
+        {
+            const auto down = ticks.size() > 0 ? ticks[0] : choice->choices[0];
+            const auto up = ticks.size() > 1 ? ticks[1] : choice->choices[1];
+            addToggle (parent, pid, caption, down, up);
+            return;
+        }
+        addSwitch (parent, pid, caption, ticks);
     }
 
     ui::Wheel& DooblrMEditor::addWheel (juce::Component& parent, const juce::String& pid, const juce::String& caption, bool spring)
@@ -181,7 +197,7 @@ namespace dooblrm
         addWheel (wheelsSec, id::modWheel, "Mod", false);
 
         auto& voice = addSection ("VOICE", Palette::master);
-        addSwitch (voice, id::notePriority, "Priority", juce::StringArray { "Low", "Last" });
+        addChoiceControl (voice, id::notePriority, "Priority", juce::StringArray { "Low", "Last" });
         addToggle (voice, id::legato, "Legato");
         addToggle (voice, id::velocityOn, "Velocity");
         addKnob (voice, id::bendRange, "Bend", Palette::master);
@@ -215,11 +231,11 @@ namespace dooblrm
         addToggle (mix, id::mixExtOn, "Ext");
         addKnob (mix, id::mixNoise, "Noise");
         addToggle (mix, id::mixNoiseOn, "Noise");
-        addSwitch (mix, id::noiseType, "Noise", params::noiseNames());
+        addChoiceControl (mix, id::noiseType, "Colour", params::noiseNames());
 
         auto& mod = addSection ("MODIFIERS", Palette::dynamic);
-        addKnob (mod, id::cutoff, "Cutoff", Palette::dynamic);
-        addKnob (mod, id::emphasis, "Emphasis", Palette::dynamic);
+        addKnob (mod, id::cutoff, "Cutoff", Palette::dynamic, true);
+        addKnob (mod, id::emphasis, "Resonance", Palette::dynamic);
         addKnob (mod, id::contourAmt, "Contour");
         addKnob (mod, id::fAttack, "F Atk");
         addKnob (mod, id::fDecay, "F Dec");
@@ -233,7 +249,6 @@ namespace dooblrm
 
         auto& out = addSection ("OUTPUT", Palette::accent);
         addKnob (out, id::volume, "Volume");
-        addToggle (out, id::a440, "A-440");
         out.addAndMakeVisible (scope);
         out.addAndMakeVisible (filterReadout);
     }
@@ -259,9 +274,7 @@ namespace dooblrm
         updateStatus();
         updateEnablement();
         scope.refresh();
-        if (auto* p = state.getParameter (id::cutoff))
-            if (auto* e = state.getParameter (id::emphasis))
-                filterReadout.set (p->convertFrom0to1 (p->getValue()), e->convertFrom0to1 (e->getValue()));
+        filterReadout.refresh();
 
         if (synth.getPresetName() != shownPresetName && ! presetBox.isPopupActive())
             refreshPresetBox();
@@ -489,7 +502,7 @@ namespace dooblrm
             c.setBounds (r);
         };
 
-        const auto voiceH = juce::jlimit (68, 78, voiceBarHeight);
+        const auto voiceH = juce::jlimit (78, 90, voiceBarHeight);
         auto voiceRow = area.removeFromTop (voiceH);
         const auto voiceCell = juce::jlimit (72, 88, voiceRow.getWidth() / 8);
         voiceBarArea = voiceRow.removeFromLeft (voiceCell * 4 + 12);
@@ -498,9 +511,9 @@ namespace dooblrm
 
         auto remain = area;
         // Minimums keep captions and rotary ticks inside their cells at 940 px; leftover goes
-        // mostly to the oscillator bank.
-        const int minW[] { 70, 144, 270, 114, 188, 108 };
-        const float weight[] { 0.4f, 1.2f, 3.2f, 0.8f, 1.4f, 1.0f };
+        // mostly to the oscillator bank. Modifiers get a little extra so the large cutoff fits.
+        const int minW[] { 70, 144, 254, 114, 204, 108 };
+        const float weight[] { 0.4f, 1.2f, 3.0f, 0.8f, 1.6f, 1.0f };
         const int gaps = 5 * gap;
         const int inner = juce::jmax (0, remain.getWidth() - gaps);
         int minSum = 0;
@@ -541,103 +554,107 @@ namespace dooblrm
             wheels[1]->setBounds (box.reduced (2));
         }
 
+        const auto placeId = [this] (const juce::String& pid, juce::Rectangle<int> r)
+        {
+            if (auto* c = findControl (pid))
+                c->setBounds (r);
+        };
+
         // Voice strip: the panel is only as wide as the four extras (not a full-width empty bar).
         {
             auto box = voice.contentBounds();
             const auto cell = box.getWidth() / 4;
-            rotaries[0]->setBounds (box.removeFromLeft (cell).reduced (2)); // notePriority
-            toggles[0]->setBounds (box.removeFromLeft (cell).reduced (2));  // legato
-            toggles[1]->setBounds (box.removeFromLeft (cell).reduced (2));  // velocity
-            knobs[0]->setBounds (box.reduced (2));                          // bendRange
+            placeId (id::notePriority, box.removeFromLeft (cell).reduced (2));
+            placeId (id::legato, box.removeFromLeft (cell).reduced (2));
+            placeId (id::velocityOn, box.removeFromLeft (cell).reduced (2));
+            placeId (id::bendRange, box.reduced (2));
         }
 
         // Controllers: knobs in the left column, switches in the right (2×3) so "Mod Mix"
         // and "Osc 3 Ctrl" have a cell wider than three-across.
         {
             auto box = ctrl.contentBounds();
-            knobs[1]->setBounds (grid (box, 2, 3, 0));    // tune
-            toggles[2]->setBounds (grid (box, 2, 3, 1));  // osc 3 ctrl
-            knobs[2]->setBounds (grid (box, 2, 3, 2));    // glide
-            toggles[3]->setBounds (grid (box, 2, 3, 3));  // osc mod
-            knobs[3]->setBounds (grid (box, 2, 3, 4));    // mod mix
-            toggles[4]->setBounds (grid (box, 2, 3, 5));  // filt mod
+            placeId (id::tune, grid (box, 2, 3, 0));
+            placeId (id::osc3Control, grid (box, 2, 3, 1));
+            placeId (id::glide, grid (box, 2, 3, 2));
+            placeId (id::oscMod, grid (box, 2, 3, 3));
+            placeId (id::modMix, grid (box, 2, 3, 4));
+            placeId (id::filterMod, grid (box, 2, 3, 5));
         }
 
         // Oscillator bank: 3 rows × range, freq, wave (osc 1 has no freq — range spans two cells)
         {
             auto box = osc.contentBounds();
-            // rotaries: [0]=priority already used. osc starts at rotaries[1]
-            // osc1Range, osc1Wave, osc2Range, osc2Wave, osc3Range, osc3Wave  => rotaries 1..6
-            // osc2Freq, osc3Freq => knobs 4, 5  (0=bend, 1=tune, 2=glide, 3=modMix)
             const auto rowH = box.getHeight() / 3;
             auto row1 = box.removeFromTop (rowH);
-            rotaries[1]->setBounds (row1.removeFromLeft (row1.getWidth() / 2).reduced (2)); // osc1Range
-            rotaries[2]->setBounds (row1.reduced (2)); // osc1Wave
+            placeId (id::osc1Range, row1.removeFromLeft (row1.getWidth() / 2).reduced (2));
+            placeId (id::osc1Wave, row1.reduced (2));
             auto row2 = box.removeFromTop (rowH);
             const auto c2 = row2.getWidth() / 3;
-            rotaries[3]->setBounds (row2.removeFromLeft (c2).reduced (2));
-            knobs[4]->setBounds (row2.removeFromLeft (c2).reduced (2));
-            rotaries[4]->setBounds (row2.reduced (2));
+            placeId (id::osc2Range, row2.removeFromLeft (c2).reduced (2));
+            placeId (id::osc2Freq, row2.removeFromLeft (c2).reduced (2));
+            placeId (id::osc2Wave, row2.reduced (2));
             auto row3 = box;
             const auto c3 = row3.getWidth() / 3;
-            rotaries[5]->setBounds (row3.removeFromLeft (c3).reduced (2));
-            knobs[5]->setBounds (row3.removeFromLeft (c3).reduced (2));
-            rotaries[6]->setBounds (row3.reduced (2));
+            placeId (id::osc3Range, row3.removeFromLeft (c3).reduced (2));
+            placeId (id::osc3Freq, row3.removeFromLeft (c3).reduced (2));
+            placeId (id::osc3Wave, row3.reduced (2));
         }
 
-        // Mixer: 5 rows of knob+toggle, noise type at the bottom
+        // Mixer: 5 rows of knob+toggle, noise colour rocker at the bottom
         {
             auto box = mix.contentBounds();
             const auto rowH = box.getHeight() / 6;
-            const auto row = [&] (int i, ui::Knob& k, ui::BatToggle& t)
+            const auto row = [&] (int i, const char* knobId, const char* toggleId)
             {
                 auto r = juce::Rectangle<int> (box.getX(), box.getY() + i * rowH, box.getWidth(), rowH);
-                t.setBounds (r.removeFromLeft (juce::jmin (48, r.getWidth() / 3)).reduced (1));
-                k.setBounds (r.reduced (1));
+                placeId (toggleId, r.removeFromLeft (juce::jmin (48, r.getWidth() / 3)).reduced (1));
+                placeId (knobId, r.reduced (1));
             };
-            // knobs 6..10 mixOsc1,2,3,ext,noise; toggles 5..9 corresponding ons
-            row (0, *knobs[6], *toggles[5]);
-            row (1, *knobs[7], *toggles[6]);
-            row (2, *knobs[8], *toggles[7]);
-            row (3, *knobs[9], *toggles[8]);
-            row (4, *knobs[10], *toggles[9]);
-            rotaries[7]->setBounds (juce::Rectangle<int> (box.getX(), box.getY() + 5 * rowH, box.getWidth(), rowH).reduced (1));
+            row (0, id::mixOsc1, id::mixOsc1On);
+            row (1, id::mixOsc2, id::mixOsc2On);
+            row (2, id::mixOsc3, id::mixOsc3On);
+            row (3, id::mixExt, id::mixExtOn);
+            row (4, id::mixNoise, id::mixNoiseOn);
+            placeId (id::noiseType, juce::Rectangle<int> (box.getX(), box.getY() + 5 * rowH, box.getWidth(), rowH).reduced (1));
         }
 
-        // Modifiers: 3+3 knobs, 2 kybd, 3 loudness, decay
+        // Modifiers: taller first row so Cutoff is ~1.6–2× the other knobs; resonance + contour
+        // stack on its right. Remaining rows stay three-across.
         {
             auto box = mod.contentBounds();
-            const auto rowH = box.getHeight() / 4;
-            auto r0 = box.removeFromTop (rowH);
-            const auto w0 = r0.getWidth() / 3;
-            knobs[11]->setBounds (r0.removeFromLeft (w0).reduced (2)); // cutoff
-            knobs[12]->setBounds (r0.removeFromLeft (w0).reduced (2)); // emphasis
-            knobs[13]->setBounds (r0.reduced (2));                     // contour
-            auto r1 = box.removeFromTop (rowH);
+            const auto topH = juce::jmax (box.getHeight() * 38 / 100, 92);
+            auto r0 = box.removeFromTop (topH);
+            const auto cutW = r0.getWidth() * 3 / 5;
+            placeId (id::cutoff, r0.removeFromLeft (cutW).reduced (2));
+            auto side = r0;
+            const auto sideH = side.getHeight() / 2;
+            placeId (id::emphasis, side.removeFromTop (sideH).reduced (2));
+            placeId (id::contourAmt, side.reduced (2));
+            auto r1 = box.removeFromTop (box.getHeight() / 3);
             const auto w1 = r1.getWidth() / 3;
-            knobs[14]->setBounds (r1.removeFromLeft (w1).reduced (2));
-            knobs[15]->setBounds (r1.removeFromLeft (w1).reduced (2));
-            knobs[16]->setBounds (r1.reduced (2));
-            auto r2 = box.removeFromTop (rowH);
-            toggles[10]->setBounds (r2.removeFromLeft (r2.getWidth() / 4).reduced (2));
-            toggles[11]->setBounds (r2.removeFromLeft (r2.getWidth() / 3).reduced (2));
-            toggles[12]->setBounds (r2.reduced (2)); // decay
+            placeId (id::fAttack, r1.removeFromLeft (w1).reduced (2));
+            placeId (id::fDecay, r1.removeFromLeft (w1).reduced (2));
+            placeId (id::fSustain, r1.reduced (2));
+            auto r2 = box.removeFromTop (box.getHeight() / 2);
+            placeId (id::kybd1, r2.removeFromLeft (r2.getWidth() / 3).reduced (2));
+            placeId (id::kybd2, r2.removeFromLeft (r2.getWidth() / 2).reduced (2));
+            placeId (id::decaySwitch, r2.reduced (2));
             auto r3 = box;
             const auto w3 = r3.getWidth() / 3;
-            knobs[17]->setBounds (r3.removeFromLeft (w3).reduced (2));
-            knobs[18]->setBounds (r3.removeFromLeft (w3).reduced (2));
-            knobs[19]->setBounds (r3.reduced (2));
+            placeId (id::aAttack, r3.removeFromLeft (w3).reduced (2));
+            placeId (id::aDecay, r3.removeFromLeft (w3).reduced (2));
+            placeId (id::aSustain, r3.reduced (2));
         }
 
-        // Output: volume + a440 on top, scope and filter stacked
+        // Output: volume full width, then scope and the interactive filter envelope stacked
         {
             auto box = out.contentBounds();
-            auto top = box.removeFromTop (juce::jlimit (72, 110, box.getHeight() / 3));
-            knobs[20]->setBounds (top.removeFromLeft (top.getWidth() / 2).reduced (2));
-            toggles[13]->setBounds (top.reduced (2));
-            auto half = box.getHeight() / 2;
-            scope.setBounds (box.removeFromTop (half).reduced (2));
-            filterReadout.setBounds (box.reduced (2));
+            auto top = box.removeFromTop (juce::jlimit (64, 96, box.getHeight() / 4));
+            placeId (id::volume, top.reduced (2));
+            const auto envH = juce::jmax (box.getHeight() / 2, 56);
+            filterReadout.setBounds (box.removeFromBottom (envH).reduced (2));
+            scope.setBounds (box.reduced (2));
         }
     }
 }

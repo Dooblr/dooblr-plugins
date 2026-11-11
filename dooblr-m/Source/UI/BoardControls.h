@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <functional>
 #include <memory>
 #include <vector>
@@ -33,14 +34,16 @@ namespace dooblrm::ui
     {
     public:
         Knob (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
-              const juce::String& caption, juce::Colour fill = Palette::accent);
+              const juce::String& caption, juce::Colour fill = Palette::accent, bool large = false);
         void resized() override;
         juce::Slider& getSlider() noexcept { return slider; }
         juce::Label& getCaption() noexcept { return captionLabel; }
+        bool isLarge() const noexcept { return large; }
 
     private:
         juce::Slider slider { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::NoTextBox };
         juce::Label captionLabel;
+        bool large = false;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
@@ -75,14 +78,19 @@ namespace dooblrm::ui
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
-    /** Vertical rocker, dooblr-flat (no wood, no chrome). */
+    /** Vertical rocker, dooblr-flat (no wood, no chrome). Click toggles; drag the lever
+        (up = on, down = off) or rake across neighbouring rockers in one undo gesture. */
     class BatToggle final : public juce::Component
     {
     public:
         BatToggle (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
-                   const juce::String& caption);
+                   const juce::String& caption,
+                   const juce::String& downLabel = {}, const juce::String& upLabel = {});
         void paint (juce::Graphics& g) override;
         void resized() override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
         juce::ToggleButton& getButton() noexcept { return button; }
         juce::Label& getCaption() noexcept { return captionLabel; }
 
@@ -92,9 +100,17 @@ namespace dooblrm::ui
             void paint (juce::Graphics&) override {}
         };
 
+        void setOnFromSlide (bool on);
+        void endSlideGesture();
+        void applySlideTo (BatToggle* other);
+
         SilentToggle button;
         juce::Label captionLabel;
+        juce::String downLabel, upLabel;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+        juce::RangedAudioParameter* parameter = nullptr;
+        std::vector<BatToggle*> slideGroup;
+        bool sliding = false, slideOn = false, stateAtDown = false, gestureOpen = false;
     };
 
     /** Pitch or mod wheel. Pitch springs back to centre on mouse-up. */
@@ -133,24 +149,61 @@ namespace dooblrm::ui
         float lastHash = 0;
     };
 
-    /** Ladder magnitude sketch: cutoff marker, emphasis peak. No hint text. */
-    class FilterReadout final : public juce::Component
+    /** Filter contour: static ADS shape from Attack / Decay / Sustain / Amount, live playhead
+        from the DSP envelope (lock-free atomic). Four draggable handles; no hint text. */
+    class FilterReadout final : public juce::Component,
+                                private juce::Timer,
+                                private juce::AudioProcessorValueTreeState::Listener
     {
     public:
-        FilterReadout();
-        void set (float cutoffHz, float emphasis);
+        enum class Handle { none = -1, attack = 0, decay, sustain, amount };
+
+        FilterReadout (juce::AudioProcessorValueTreeState& state,
+                       const std::atomic<float>& envTap,
+                       const std::atomic<int>& stageTap);
+        ~FilterReadout() override;
+
         void paint (juce::Graphics& g) override;
         void resized() override;
-        juce::Point<float> getHandlePosition() const noexcept { return handle; }
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void mouseDoubleClick (const juce::MouseEvent&) override;
+
+        void refresh();
+        juce::Point<float> getHandlePosition (Handle) const;
+        Handle handleAt (juce::Point<float>) const;
+        juce::Point<float> getPlayheadPosition() const noexcept { return playhead; }
+        float getLiveEnvelope() const noexcept { return liveEnv; }
         juce::Rectangle<float> getPlotArea() const noexcept { return plot; }
 
     private:
-        void rebuild();
+        struct Geometry
+        {
+            juce::Rectangle<float> plot;
+            float x0 = 0, xPeak = 0, xSus = 0, xEnd = 0;
+            float y0 = 0, yPeak = 0, ySus = 0, yTop = 0;
+        };
 
-        float cutoff = 1200.0f, emphasis = 0.15f;
-        juce::Image background;
-        juce::Path curve;
-        juce::Point<float> handle;
+        void timerCallback() override;
+        void parameterChanged (const juce::String&, float) override;
+        Geometry makeGeometry() const;
+        juce::RangedAudioParameter* paramFor (Handle) const;
+        float paramNorm (const char* id) const;
+        void setHandleFromPoint (Handle, juce::Point<float>);
+        void beginHandleGesture (Handle);
+        void endHandleGesture();
+
+        juce::AudioProcessorValueTreeState& state;
+        const std::atomic<float>& envTap;
+        const std::atomic<int>& stageTap;
+        juce::Point<float> playhead;
         juce::Rectangle<float> plot;
+        std::vector<juce::Point<float>> trail;
+        float liveEnv = 0;
+        int liveStage = 0;
+        Handle dragHandle = Handle::none;
+        juce::Point<float> grabOffset;
+        bool gestureOpen = false;
     };
 }

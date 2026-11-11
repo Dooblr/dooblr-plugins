@@ -46,7 +46,6 @@ namespace dooblrm::dsp
         EnvSettings ampEnv;
 
         float volume = 0.7f;
-        bool a440 = false;
 
         int notePriority = 0; // 0 low, 1 last
         bool legato = true;
@@ -83,7 +82,10 @@ namespace dooblrm::dsp
         int getCurrentNote() const noexcept { return currentNote; }
         bool isGated() const noexcept { return gate; }
         float getAmpEnv() const noexcept { return amp.value; }
-        float getFilterEnv() const noexcept { return filt.value; }
+        float getFilterEnv() const noexcept { return filterEnvTap.load (std::memory_order_relaxed); }
+        int getFilterEnvStage() const noexcept { return filterEnvStageTap.load (std::memory_order_relaxed); }
+        const std::atomic<float>& getFilterEnvTap() const noexcept { return filterEnvTap; }
+        const std::atomic<int>& getFilterEnvStageTap() const noexcept { return filterEnvStageTap; }
         float getGlidePitch() const noexcept { return glide.current; }
         float getLastCutoffHz() const noexcept { return lastCutoffHz; }
         float getLastSample() const noexcept { return lastSample; }
@@ -126,11 +128,12 @@ namespace dooblrm::dsp
 
         std::atomic<float> midiPitchBend { 0.0f };
         std::atomic<float> midiModWheel { 0.0f };
+        std::atomic<float> filterEnvTap { 0.0f };
+        std::atomic<int> filterEnvStageTap { 0 };
 
         float feedbackSample = 0.0f;
         float lastSample = 0.0f;
         float lastCutoffHz = 1200.0f;
-        float a440Phase = 0.0f;
         float outputSmoothed = 1.0f;
         int scopeDecim = 0;
         Rng thermal;

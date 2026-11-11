@@ -1,6 +1,9 @@
 #include "BoardControls.h"
 
+#include "../Parameters.h"
+
 #include <cmath>
+#include <functional>
 
 namespace dooblrm::ui
 {
@@ -8,6 +11,19 @@ namespace dooblrm::ui
     {
         constexpr float rotaryStart = juce::MathConstants<float>::pi * 1.15f;
         constexpr float rotaryEnd   = juce::MathConstants<float>::pi * 2.85f;
+        constexpr int slideThreshold = 4;
+
+        void forEachBatToggle (juce::Component& root, const std::function<void (BatToggle&)>& fn)
+        {
+            std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
+            {
+                if (auto* t = dynamic_cast<BatToggle*> (&c))
+                    fn (*t);
+                for (int i = 0; i < c.getNumChildComponents(); ++i)
+                    walk (*c.getChildComponent (i));
+            };
+            walk (root);
+        }
 
         void styleCaption (juce::Label& label, const juce::String& text)
         {
@@ -49,16 +65,16 @@ namespace dooblrm::ui
 
     //==============================================================================
     Knob::Knob (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
-                const juce::String& caption, juce::Colour fill)
+                const juce::String& caption, juce::Colour fill, bool largeToUse)
+        : large (largeToUse)
     {
         setComponentID (parameterId);
         slider.setComponentID (parameterId);
         slider.setRotaryParameters (rotaryStart, rotaryEnd, true);
-        slider.getProperties().set ("maxKnobDiameter", 46.0);
+        slider.getProperties().set ("maxKnobDiameter", large ? 84.0 : 46.0);
         slider.setColour (juce::Slider::rotarySliderFillColourId, fill);
         if (auto* p = state.getParameter (parameterId))
             slider.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
-        slider.setPopupDisplayEnabled (true, false, this);
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, parameterId, slider);
         styleCaption (captionLabel, caption);
         addAndMakeVisible (slider);
@@ -70,6 +86,11 @@ namespace dooblrm::ui
         auto bounds = getLocalBounds();
         captionLabel.setBounds (bounds.removeFromBottom (16));
         slider.setBounds (bounds);
+        if (large)
+        {
+            const auto d = juce::jmin (bounds.getWidth(), bounds.getHeight());
+            slider.getProperties().set ("maxKnobDiameter", (double) juce::jlimit (74, 92, d));
+        }
     }
 
     //==============================================================================
@@ -173,12 +194,17 @@ namespace dooblrm::ui
 
     //==============================================================================
     BatToggle::BatToggle (juce::AudioProcessorValueTreeState& state, const juce::String& parameterId,
-                          const juce::String& caption)
+                          const juce::String& caption,
+                          const juce::String& downLabelToUse, const juce::String& upLabelToUse)
+        : downLabel (downLabelToUse), upLabel (upLabelToUse)
     {
         setComponentID (parameterId);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        parameter = state.getParameter (parameterId);
         button.setComponentID (parameterId);
         button.setButtonText ({});
         button.setClickingTogglesState (true);
+        button.setInterceptsMouseClicks (false, false);
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, parameterId, button);
         button.onStateChange = [this] { repaint(); };
         styleCaption (captionLabel, caption);
@@ -196,9 +222,120 @@ namespace dooblrm::ui
         button.setBounds (bounds);
     }
 
+    void BatToggle::setOnFromSlide (bool on)
+    {
+        if (parameter == nullptr)
+            return;
+        const auto target = on ? 1.0f : 0.0f;
+        if (std::abs (parameter->getValue() - target) < 1.0e-6f)
+            return;
+        if (! gestureOpen)
+        {
+            parameter->beginChangeGesture();
+            gestureOpen = true;
+        }
+        parameter->setValueNotifyingHost (target);
+        repaint();
+    }
+
+    void BatToggle::endSlideGesture()
+    {
+        if (! gestureOpen || parameter == nullptr)
+            return;
+        parameter->endChangeGesture();
+        gestureOpen = false;
+    }
+
+    void BatToggle::applySlideTo (BatToggle* other)
+    {
+        if (other == nullptr)
+            return;
+        other->setOnFromSlide (slideOn);
+        if (! other->gestureOpen)
+            return;
+        for (auto* existing : slideGroup)
+            if (existing == other)
+                return;
+        slideGroup.push_back (other);
+    }
+
+    void BatToggle::mouseDown (const juce::MouseEvent&)
+    {
+        sliding = false;
+        slideGroup.clear();
+        stateAtDown = parameter != nullptr && parameter->getValue() >= 0.5f;
+    }
+
+    void BatToggle::mouseDrag (const juce::MouseEvent& e)
+    {
+        const auto dx = (float) e.getDistanceFromDragStartX();
+        const auto dy = (float) e.getDistanceFromDragStartY();
+        if (! sliding)
+        {
+            if (std::abs (dx) < (float) slideThreshold && std::abs (dy) < (float) slideThreshold)
+                return;
+            sliding = true;
+            if (std::abs (dy) >= std::abs (dx))
+                slideOn = dy < 0.0f;
+            else
+                slideOn = ! stateAtDown;
+        }
+
+        auto* root = getTopLevelComponent();
+        if (root == nullptr)
+        {
+            applySlideTo (this);
+            return;
+        }
+
+        const auto cur = root->getLocalPoint (this, e.position);
+        const auto down = root->getLocalPoint (this, e.getMouseDownPosition().toFloat());
+        const juce::Line<float> stroke (down, cur);
+        forEachBatToggle (*root, [this, root, cur, stroke] (BatToggle& t)
+        {
+            const auto bounds = root->getLocalArea (&t, t.getLocalBounds().toFloat());
+            if (bounds.contains (cur) || bounds.intersects (stroke))
+                applySlideTo (&t);
+        });
+    }
+
+    void BatToggle::mouseUp (const juce::MouseEvent& e)
+    {
+        if (! sliding)
+        {
+            if (parameter != nullptr && getLocalBounds().contains (e.getPosition()) && ! e.mods.isPopupMenu())
+            {
+                parameter->beginChangeGesture();
+                parameter->setValueNotifyingHost (parameter->getValue() >= 0.5f ? 0.0f : 1.0f);
+                parameter->endChangeGesture();
+                repaint();
+            }
+        }
+        else
+        {
+            for (auto* t : slideGroup)
+                t->endSlideGesture();
+            endSlideGesture();
+        }
+
+        slideGroup.clear();
+        sliding = false;
+    }
+
     void BatToggle::paint (juce::Graphics& g)
     {
         auto area = getLocalBounds().withTrimmedBottom (16).toFloat().reduced (4.0f);
+        const auto labelled = downLabel.isNotEmpty() || upLabel.isNotEmpty();
+        if (labelled && area.getHeight() > 36.0f)
+        {
+            g.setFont (juce::FontOptions (8.0f));
+            g.setColour (Palette::textMuted);
+            if (upLabel.isNotEmpty())
+                g.drawText (upLabel, area.removeFromTop (11.0f), juce::Justification::centred, false);
+            if (downLabel.isNotEmpty())
+                g.drawText (downLabel, area.removeFromBottom (11.0f), juce::Justification::centred, false);
+        }
+
         const auto track = area.withSizeKeepingCentre (juce::jmin (18.0f, area.getWidth()),
                                                        juce::jmin (36.0f, area.getHeight()));
         g.setColour (Palette::divider);
@@ -324,83 +461,295 @@ namespace dooblrm::ui
     }
 
     //==============================================================================
-    FilterReadout::FilterReadout()
+    FilterReadout::FilterReadout (juce::AudioProcessorValueTreeState& s,
+                                  const std::atomic<float>& env,
+                                  const std::atomic<int>& stage)
+        : state (s), envTap (env), stageTap (stage)
     {
         setOpaque (true);
         setComponentID ("filterReadout");
+        trail.reserve (48);
+        for (auto* id : { params::id::fAttack, params::id::fDecay, params::id::fSustain, params::id::contourAmt })
+            state.addParameterListener (id, this);
+        startTimerHz (30);
     }
 
-    void FilterReadout::set (float cutoffHz, float emphasisAmount)
+    FilterReadout::~FilterReadout()
     {
-        if (std::abs (cutoffHz - cutoff) < 0.5f && std::abs (emphasisAmount - emphasis) < 0.002f)
-            return;
-        cutoff = cutoffHz;
-        emphasis = emphasisAmount;
-        rebuild();
-        repaint();
+        stopTimer();
+        for (auto* id : { params::id::fAttack, params::id::fDecay, params::id::fSustain, params::id::contourAmt })
+            state.removeParameterListener (id, this);
     }
 
-    void FilterReadout::resized() { rebuild(); }
-
-    void FilterReadout::rebuild()
+    float FilterReadout::paramNorm (const char* id) const
     {
-        plot = getLocalBounds().toFloat().reduced (4.0f);
-        if (plot.getWidth() < 8.0f || plot.getHeight() < 8.0f)
-            return;
+        if (auto* p = state.getParameter (id))
+            return p->getValue();
+        return 0.0f;
+    }
 
-        const auto* display = juce::Desktop::getInstance().getDisplays().getDisplayForRect (getScreenBounds());
-        const auto sx = juce::jmax (1, display != nullptr ? (int) display->scale : 1);
-        background = juce::Image (juce::Image::RGB, (int) plot.getWidth() * sx, (int) plot.getHeight() * sx, true);
-        juce::Graphics bg (background);
-        bg.addTransform (juce::AffineTransform::scale ((float) sx));
-        bg.fillAll (Palette::background);
-        bg.setColour (Palette::grid);
-        for (auto hz : { 50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0, 5000.0, 10000.0 })
+    juce::RangedAudioParameter* FilterReadout::paramFor (Handle handle) const
+    {
+        const char* id = nullptr;
+        switch (handle)
         {
-            const auto x = (float) (std::log (hz / 20.0) / std::log (20000.0 / 20.0) * (plot.getWidth()));
-            bg.fillRect (x, 0.0f, 1.0f, plot.getHeight());
+            case Handle::attack:  id = params::id::fAttack; break;
+            case Handle::decay:   id = params::id::fDecay; break;
+            case Handle::sustain: id = params::id::fSustain; break;
+            case Handle::amount:  id = params::id::contourAmt; break;
+            case Handle::none:    break;
         }
+        return id != nullptr ? state.getParameter (id) : nullptr;
+    }
 
-        // Magnitude of a 4-pole ladder H(s) = 1 / ((1 + s/wc)^4 + k), k = 4.15 * emphasis.
-        curve.clear();
-        const auto k = 4.15f * juce::jlimit (0.0f, 1.0f, emphasis);
-            const auto wc = dooblrm::dsp::twoPi * juce::jmax (10.0f, cutoff);
-        float peakDb = -120.0f, peakX = 0, peakY = 0;
-        const int n = juce::jmax (2, (int) plot.getWidth());
-        for (int i = 0; i < n; ++i)
+    FilterReadout::Geometry FilterReadout::makeGeometry() const
+    {
+        Geometry g;
+        g.plot = getLocalBounds().toFloat().reduced (6.0f, 8.0f);
+        const auto w = juce::jmax (1.0f, g.plot.getWidth());
+        const auto attackN = paramNorm (params::id::fAttack);
+        const auto decayN = paramNorm (params::id::fDecay);
+        const auto sustainN = paramNorm (params::id::fSustain);
+        const auto amountN = paramNorm (params::id::contourAmt);
+
+        g.x0 = g.plot.getX();
+        g.xEnd = g.plot.getRight();
+        g.y0 = g.plot.getBottom();
+        g.yTop = g.plot.getY();
+        const auto rise = g.y0 - g.yTop;
+        g.xPeak = g.x0 + 0.06f * w + attackN * 0.34f * w;
+        g.xSus = g.xPeak + 0.08f * w + decayN * 0.28f * w;
+        g.xSus = juce::jmin (g.xSus, g.xEnd - 0.18f * w);
+        g.yPeak = g.y0 - amountN * rise;
+        g.ySus = g.y0 - amountN * sustainN * rise;
+        return g;
+    }
+
+    juce::Point<float> FilterReadout::getHandlePosition (Handle handle) const
+    {
+        const auto g = makeGeometry();
+        switch (handle)
         {
-            const auto t = (float) i / (float) (n - 1);
-            const auto hz = 20.0 * std::pow (20000.0 / 20.0, (double) t);
-            const auto w = dooblrm::dsp::twoPi * (float) hz;
-            const auto sOver = w / wc;
-            // |1+j r|^4 = (1+r^2)^2
-            const auto pole = 1.0f + sOver * sOver;
-            const auto magLin = 1.0f / std::sqrt (pole * pole * pole * pole + k * k);
-            const auto db = juce::jlimit (-36.0f, 24.0f, 20.0f * std::log10 (juce::jmax (1.0e-6f, magLin)));
-            const auto x = plot.getX() + t * plot.getWidth();
-            const auto y = plot.getY() + juce::jmap (db, -36.0f, 24.0f, plot.getHeight(), 0.0f);
-            if (i == 0)
-                curve.startNewSubPath (x, y);
-            else
-                curve.lineTo (x, y);
-            if (db > peakDb)
+            case Handle::attack:  return { g.xPeak, g.y0 };
+            case Handle::decay:   return { g.xSus, g.y0 };
+            case Handle::sustain: return { g.xSus + 0.28f * (g.xEnd - g.xSus), g.ySus };
+            case Handle::amount:  return { g.xPeak, g.yPeak };
+            case Handle::none:    break;
+        }
+        return {};
+    }
+
+    FilterReadout::Handle FilterReadout::handleAt (juce::Point<float> p) const
+    {
+        auto best = Handle::none;
+        auto bestDistance = 14.0f;
+        for (auto h : { Handle::attack, Handle::decay, Handle::sustain, Handle::amount })
+        {
+            const auto d = getHandlePosition (h).getDistanceFrom (p);
+            if (d < bestDistance)
             {
-                peakDb = db;
-                peakX = x;
-                peakY = y;
+                bestDistance = d;
+                best = h;
             }
         }
-        handle = { peakX, peakY };
+        return best;
+    }
+
+    void FilterReadout::setHandleFromPoint (Handle handle, juce::Point<float> p)
+    {
+        auto* param = paramFor (handle);
+        if (param == nullptr)
+            return;
+
+        const auto g = makeGeometry();
+        const auto w = juce::jmax (1.0f, g.plot.getWidth());
+        const auto rise = juce::jmax (1.0f, g.y0 - g.yTop);
+        float norm = param->getValue();
+
+        switch (handle)
+        {
+            case Handle::attack:
+                norm = (p.x - g.x0 - 0.06f * w) / (0.34f * w);
+                break;
+            case Handle::decay:
+                norm = (p.x - g.xPeak - 0.08f * w) / (0.28f * w);
+                break;
+            case Handle::sustain:
+            {
+                const auto amountN = paramNorm (params::id::contourAmt);
+                if (amountN < 1.0e-4f)
+                    return;
+                norm = (g.y0 - p.y) / (amountN * rise);
+                break;
+            }
+            case Handle::amount:
+                norm = (g.y0 - p.y) / rise;
+                break;
+            case Handle::none:
+                return;
+        }
+
+        param->setValueNotifyingHost (juce::jlimit (0.0f, 1.0f, norm));
+    }
+
+    void FilterReadout::beginHandleGesture (Handle handle)
+    {
+        if (gestureOpen)
+            return;
+        if (auto* param = paramFor (handle))
+        {
+            param->beginChangeGesture();
+            gestureOpen = true;
+        }
+    }
+
+    void FilterReadout::endHandleGesture()
+    {
+        if (! gestureOpen)
+            return;
+        if (auto* param = paramFor (dragHandle))
+            param->endChangeGesture();
+        gestureOpen = false;
+    }
+
+    void FilterReadout::mouseDown (const juce::MouseEvent& e)
+    {
+        if (e.getNumberOfClicks() >= 2)
+            return;
+        dragHandle = handleAt (e.position);
+        if (dragHandle == Handle::none)
+            return;
+        grabOffset = getHandlePosition (dragHandle) - e.position;
+        beginHandleGesture (dragHandle);
+    }
+
+    void FilterReadout::mouseDrag (const juce::MouseEvent& e)
+    {
+        if (dragHandle == Handle::none)
+            return;
+        setHandleFromPoint (dragHandle, e.position + grabOffset);
+        refresh();
+    }
+
+    void FilterReadout::mouseUp (const juce::MouseEvent&)
+    {
+        endHandleGesture();
+        dragHandle = Handle::none;
+    }
+
+    void FilterReadout::mouseDoubleClick (const juce::MouseEvent& e)
+    {
+        const auto handle = handleAt (e.position);
+        auto* param = paramFor (handle);
+        if (param == nullptr)
+            return;
+        endHandleGesture();
+        dragHandle = Handle::none;
+        param->beginChangeGesture();
+        param->setValueNotifyingHost (param->getDefaultValue());
+        param->endChangeGesture();
+        refresh();
+    }
+
+    void FilterReadout::parameterChanged (const juce::String&, float)
+    {
+        refresh();
+    }
+
+    void FilterReadout::timerCallback() { refresh(); }
+
+    void FilterReadout::resized() { refresh(); }
+
+    void FilterReadout::refresh()
+    {
+        liveEnv = envTap.load (std::memory_order_relaxed);
+        liveStage = stageTap.load (std::memory_order_relaxed);
+
+        const auto g = makeGeometry();
+        plot = g.plot;
+
+        const auto rise = juce::jmax (1.0f, g.y0 - g.yTop);
+        const auto amountN = paramNorm (params::id::contourAmt);
+        const auto sustainN = paramNorm (params::id::fSustain);
+        const auto env = juce::jlimit (0.0f, 1.3f, liveEnv);
+        float x = g.x0;
+        switch (liveStage)
+        {
+            case 1: // attack
+                x = g.x0 + juce::jlimit (0.0f, 1.0f, env) * (g.xPeak - g.x0);
+                break;
+            case 2: // decay
+            {
+                const auto span = juce::jmax (1.0e-4f, 1.0f - sustainN);
+                const auto t = juce::jlimit (0.0f, 1.0f, (1.0f - env) / span);
+                x = g.xPeak + t * (g.xSus - g.xPeak);
+                break;
+            }
+            case 3: // sustain
+                x = g.xSus + 0.35f * (g.xEnd - g.xSus);
+                break;
+            case 4: // release
+                x = g.xSus + 0.55f * (g.xEnd - g.xSus);
+                break;
+            default:
+                x = g.x0;
+                break;
+        }
+        const auto y = g.y0 - env * juce::jmax (amountN, 0.15f) * rise;
+        playhead = { x, y };
+        trail.push_back (playhead);
+        if (trail.size() > 48)
+            trail.erase (trail.begin());
+        if (liveStage == 0 && env <= 1.0e-4f)
+            trail.clear();
+
+        repaint();
     }
 
     void FilterReadout::paint (juce::Graphics& g)
     {
         g.fillAll (Palette::background);
-        if (background.isValid())
-            g.drawImage (background, plot, juce::RectanglePlacement::stretchToFit);
+        const auto geo = makeGeometry();
+        plot = geo.plot;
+
+        g.setColour (Palette::grid);
+        g.drawHorizontalLine ((int) geo.y0, geo.x0, geo.xEnd);
+        g.drawVerticalLine ((int) geo.x0, geo.yTop, geo.y0);
+
+        if (trail.size() > 1)
+        {
+            juce::Path motion;
+            motion.startNewSubPath (trail.front());
+            for (size_t i = 1; i < trail.size(); ++i)
+                motion.lineTo (trail[i]);
+            g.setColour (Palette::dynamic.withAlpha (0.45f));
+            g.strokePath (motion, juce::PathStrokeType (1.2f));
+        }
+
+        juce::Path shape;
+        shape.startNewSubPath (geo.x0, geo.y0);
+        shape.lineTo (geo.xPeak, geo.yPeak);
+        shape.lineTo (geo.xSus, geo.ySus);
+        shape.lineTo (geo.xEnd, geo.ySus);
+        shape.lineTo (geo.xEnd, geo.y0);
         g.setColour (Palette::accent);
-        g.strokePath (curve, juce::PathStrokeType (1.4f));
-        g.setColour (Palette::textPrimary);
-        g.fillEllipse (juce::Rectangle<float> (6.0f, 6.0f).withCentre (handle));
+        g.strokePath (shape, juce::PathStrokeType (1.6f));
+
+        g.setColour (Palette::dynamic);
+        g.fillEllipse (juce::Rectangle<float> (7.0f, 7.0f).withCentre (playhead));
+        g.setColour (Palette::dynamic.withAlpha (0.35f));
+        g.drawHorizontalLine ((int) playhead.y, geo.x0, geo.xEnd);
+
+        const auto drawHandle = [&g] (juce::Point<float> p, juce::Colour colour)
+        {
+            g.setColour (colour);
+            g.fillEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (p));
+            g.setColour (Palette::textPrimary.withAlpha (0.9f));
+            g.drawEllipse (juce::Rectangle<float> (8.0f, 8.0f).withCentre (p), 1.0f);
+        };
+        drawHandle (getHandlePosition (Handle::attack), Palette::spectrum);
+        drawHandle (getHandlePosition (Handle::decay), Palette::spectrum);
+        drawHandle (getHandlePosition (Handle::sustain), Palette::accent);
+        drawHandle (getHandlePosition (Handle::amount), Palette::dynamic);
     }
 }

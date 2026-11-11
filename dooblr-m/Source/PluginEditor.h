@@ -41,10 +41,13 @@ namespace dooblrm
         void changeListenerCallback (juce::ChangeBroadcaster*) override;
         void buildBoard();
         ui::Knob& addKnob (juce::Component& parent, const juce::String& id, const juce::String& caption,
-                           juce::Colour fill = ui::Palette::accent);
+                           juce::Colour fill = ui::Palette::accent, bool large = false);
         ui::RotarySwitch& addSwitch (juce::Component& parent, const juce::String& id, const juce::String& caption,
                                      const juce::StringArray& ticks);
-        ui::BatToggle& addToggle (juce::Component& parent, const juce::String& id, const juce::String& caption);
+        ui::BatToggle& addToggle (juce::Component& parent, const juce::String& id, const juce::String& caption,
+                                  const juce::String& downLabel = {}, const juce::String& upLabel = {});
+        void addChoiceControl (juce::Component& parent, const juce::String& id, const juce::String& caption,
+                               const juce::StringArray& ticks);
         ui::Wheel& addWheel (juce::Component& parent, const juce::String& id, const juce::String& caption, bool spring);
         ui::SectionPanel& addSection (const juce::String& title, juce::Colour colour);
         void refreshPresetBox();
