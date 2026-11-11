@@ -97,7 +97,10 @@ namespace
         o->setProperty ("bundle", bundle);
         o->setProperty ("kind", kind);
         if (parent.isNotEmpty()) { o->setProperty ("parent", parent); o->setProperty ("optional", true); }
-        o->setProperty (kind == "m4l" ? "any" : platformKey (currentPlatform()), asset);
+        const auto key = kind == "m4l" ? "any"
+            : currentPlatform() == Platform::other ? "mac"
+            : platformKey (currentPlatform());
+        o->setProperty (key, asset);
         return juce::var (o);
     }
 

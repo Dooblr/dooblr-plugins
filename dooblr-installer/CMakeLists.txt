@@ -51,12 +51,20 @@ else()
     list(APPEND DOOBLRINSTALLER_CORE_SOURCES Source/Core/Clipboard.cpp)
 endif()
 
+# Mac uses NSURL, Windows uses WinHTTP. Linux has no other HTTP backend, so the
+# tests (local mock GitHub server) and a Linux build need libcurl.
+if(UNIX AND NOT APPLE)
+    set(DOOBLRINSTALLER_USE_CURL 1)
+else()
+    set(DOOBLRINSTALLER_USE_CURL 0)
+endif()
+
 function(dooblr_installer_setup target)
     target_sources(${target} PRIVATE ${DOOBLRINSTALLER_CORE_SOURCES})
     target_include_directories(${target} PRIVATE Source)
     target_compile_definitions(${target} PRIVATE
         JUCE_WEB_BROWSER=0
-        JUCE_USE_CURL=0
+        JUCE_USE_CURL=${DOOBLRINSTALLER_USE_CURL}
         JUCE_DISPLAY_SPLASH_SCREEN=0
         DOOBLRINSTALLER_VERSION="${PROJECT_VERSION}"
         DOOBLRINSTALLER_MANIFEST_URL="${DOOBLRINSTALLER_MANIFEST_URL}")
@@ -73,6 +81,8 @@ function(dooblr_installer_setup target)
         target_link_libraries(${target} PRIVATE shell32 advapi32)   # advapi32: Credential Manager (saved GitHub token)
     elseif(APPLE)
         target_link_libraries(${target} PRIVATE "-framework Security")   # Keychain (saved GitHub token)
+    elseif(UNIX)
+        target_link_libraries(${target} PRIVATE curl)
     endif()
 endfunction()
 

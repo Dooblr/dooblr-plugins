@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 
 namespace dooblrkick::dsp
 {
@@ -29,15 +30,15 @@ namespace dooblrkick::dsp
         int numNodes = 2;
 
         void sanitise() noexcept;
-        float getEndTimeMs() const noexcept { return nodes[(size_t) (numNodes - 1)].timeMs; }
-        float getEndValue() const noexcept { return nodes[(size_t) (numNodes - 1)].value; }
+        float getEndTimeMs() const noexcept { return nodes[(std::size_t) (numNodes - 1)].timeMs; }
+        float getEndValue() const noexcept { return nodes[(std::size_t) (numNodes - 1)].value; }
         float evaluate (float timeMs) const noexcept;
 
         /** True when every active node sits at this value (the envelope is a constant). */
         bool isFlatAt (float value) const noexcept
         {
             for (int i = 0; i < numNodes; ++i)
-                if (nodes[(size_t) i].value < value || nodes[(size_t) i].value > value)
+                if (nodes[(std::size_t) i].value < value || nodes[(std::size_t) i].value > value)
                     return false;
             return true;
         }
