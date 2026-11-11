@@ -242,8 +242,10 @@ namespace dooblrdistressor::dsp
         displayedGrDb = 0.0f;
         thdBallistics = 0.0f;
         clipLatch = false;
-        meterGr = meterThd = 0.0f;
+        meterGr = meterThd = meterMatchDb = 0.0f;
         meterLed1 = meterLed3 = false;
+        dryMs = procMs = 0.0f;
+        matchDb = matchTargetDb = 0.0f;
         updateCoefficients();
     }
 
@@ -288,10 +290,16 @@ namespace dooblrdistressor::dsp
         const auto atkSec = attackSeconds (s.attackKnob, ratio);
         auto relSec = releaseSeconds (s.releaseKnob, ratio);
         const auto inGain = dbToGain (inputGainDb (s.inputKnob) + headroomDriveDb (s.headroomDb));
-        const auto outGain = dbToGain (outputGainDb (s.outputKnob) - headroomDriveDb (s.headroomDb) + curve.makeupDb);
+        const auto processMakeupDb = -headroomDriveDb (s.headroomDb) + curve.makeupDb;
+        const auto outTrimDb = outputGainDb (s.outputKnob);
+        const auto outGain = dbToGain (outTrimDb + processMakeupDb);
+        const auto processMakeup = dbToGain (processMakeupDb);
         const auto mix = juce::jlimit (0.0f, 1.0f, s.mix);
         const auto dt = 1.0f / (float) sampleRate;
         const auto atkCoef = 1.0f - std::exp (-dt / juce::jmax (1.0e-7f, atkSec));
+        const auto rmsCoef = 1.0f - std::exp (-dt / matchWindowSec);
+        const auto matchCoef = 1.0f - std::exp (-dt / matchSmoothSec);
+        constexpr float silenceMs = 1.0e-6f; // −60 dBFS mean-square
 
         const auto thresholdShift = (s.inputKnob - 5.0f) * 1.2f; // input also drives into the threshold
 
@@ -326,6 +334,9 @@ namespace dooblrdistressor::dsp
                 else
                     detLinked = 0.5f * (std::abs (det[0]) + std::abs (det[1]));
             }
+
+            float processed[maxChannels] {};
+            float drySq = 0.0f, procSq = 0.0f;
 
             for (int ch = 0; ch < numChannels; ++ch)
             {
@@ -370,7 +381,36 @@ namespace dooblrdistressor::dsp
 
                 auto y = driven[ch] * dbToGain (env);
                 y = waveshape (y, s.dist, thdAcc, thdRef);
-                y *= outGain;
+                processed[ch] = y;
+                drySq += dry[ch] * dry[ch];
+                const auto afterProcess = y * processMakeup;
+                procSq += afterProcess * afterProcess;
+            }
+
+            drySq /= (float) numChannels;
+            procSq /= (float) numChannels;
+            dryMs += (drySq - dryMs) * rmsCoef;
+            procMs += (procSq - procMs) * rmsCoef;
+
+            if (! s.gainMatch)
+                matchTargetDb = 0.0f;
+            else if (dryMs > silenceMs && procMs > silenceMs)
+                matchTargetDb = juce::jlimit (-matchMaxDb, matchMaxDb, 10.0f * std::log10 (dryMs / procMs));
+
+            matchDb += (matchTargetDb - matchDb) * matchCoef;
+            if (! s.gainMatch && std::abs (matchDb) < 1.0e-5f)
+                matchDb = 0.0f;
+
+            // Off is the original `y *= outGain` path (bit-identical). On (or while
+            // smoothing back to 0 dB) the compensation is a second multiply; at the
+            // instant of the toggle matchDb is 0 so matchGain is 1 and there is no spike.
+            const auto applyMatch = s.gainMatch || std::abs (matchDb) > 1.0e-5f;
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                auto y = processed[ch] * outGain;
+                if (applyMatch)
+                    y *= dbToGain (matchDb);
                 if (std::abs (y) > 0.99f)
                     clipped = true;
 
@@ -392,6 +432,7 @@ namespace dooblrdistressor::dsp
 
         meterGr = displayedGrDb;
         meterThd = thdBallistics;
+        meterMatchDb = matchDb;
         meterLed1 = thdBallistics >= thdLed1;
         meterLed3 = thdBallistics >= thdLed3 || clipLatch;
     }
@@ -405,6 +446,7 @@ namespace dooblrdistressor::dsp
         m.outputPeakL = outPeak[0];
         m.outputPeakR = outPeak[1];
         m.thd = meterThd;
+        m.matchDb = meterMatchDb;
         m.led1pct = meterLed1;
         m.led3pct = meterLed3;
         inPeak[0] = inPeak[1] = 0.0f;

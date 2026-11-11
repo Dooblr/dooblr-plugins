@@ -23,6 +23,7 @@ namespace dooblrdistressor::params
         inline constexpr const char* headroom   = "headroom";
         inline constexpr const char* mix        = "mix";
         inline constexpr const char* bypass     = "bypass";
+        inline constexpr const char* gainMatch  = "gainMatch";
     }
 
     inline constexpr float knobMin = 0.0f, knobMax = 10.5f, knobDefault = 5.0f;

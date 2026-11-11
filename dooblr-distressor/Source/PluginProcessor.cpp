@@ -31,10 +31,11 @@ namespace dooblrdistressor
             headroom = get (id::headroom);
             mix = get (id::mix);
             bypass = get (id::bypass);
+            gainMatch = get (id::gainMatch);
         }
 
         std::atomic<float> *input, *attack, *release, *output, *ratio, *audioHp, *distMode,
-            *detHp, *detBand, *stereoLink, *headroom, *mix, *bypass;
+            *detHp, *detBand, *stereoLink, *headroom, *mix, *bypass, *gainMatch;
     };
 
     DooblrDistressorProcessor::DooblrDistressorProcessor()
@@ -75,6 +76,7 @@ namespace dooblrdistressor
         s.headroomDb = (float) headroomDbForIndex ((int) std::lround (raw->headroom->load()));
         s.mix = raw->mix->load() * 0.01f;
         s.bypass = raw->bypass->load() > 0.5f;
+        s.gainMatch = raw->gainMatch->load() > 0.5f;
         return s;
     }
 
