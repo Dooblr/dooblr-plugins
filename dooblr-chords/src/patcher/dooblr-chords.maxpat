@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.4.0",
+					"text": "v0.5.0",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -248,7 +248,7 @@
 					"text": "Generate",
 					"texton": "Generate",
 					"fontname": "Arial Bold",
-					"fontsize": 14,
+					"fontsize": 13,
 					"activebgcolor": [
 						0.373,
 						0.702,
@@ -334,9 +334,9 @@
 					"presentation": 1,
 					"presentation_rect": [
 						10,
-						46,
+						42,
 						104,
-						54
+						36
 					]
 				}
 			},
@@ -441,9 +441,9 @@
 					"presentation": 1,
 					"presentation_rect": [
 						10,
-						108,
+						118,
 						104,
-						26
+						22
 					]
 				}
 			},
@@ -515,7 +515,8 @@
 						4,
 						50,
 						14
-					]
+					],
+					"varname": "key_label"
 				}
 			},
 			{
@@ -744,7 +745,8 @@
 						52,
 						52,
 						14
-					]
+					],
+					"varname": "length_label"
 				}
 			},
 			{
@@ -1056,7 +1058,8 @@
 						99,
 						496,
 						66
-					]
+					],
+					"varname": "blocks"
 				}
 			},
 			{
@@ -1486,7 +1489,7 @@
 			{
 				"box": {
 					"maxclass": "comment",
-					"text": "Controls send \"param <name> <value>\" to the js. The drop zone sends \"dropfile <path>\"; USE CLIP and CLEAR send \"useclip\" and \"clearsource\". ADVANCED … and SOURCE … send \"openpanel <name> <0|1>\"; the close buttons send \"closepanel\". The js hides overlay objects with the hidden attribute, sends \"setstate\" to the display and \"set <seed>\" back to the Seed box, and sets srcinfo, srcbadge, root, mode and length by varname.",
+					"text": "Controls send \"param <name> <value>\" to the js. The drop zone sends \"dropfile <path>\"; USE CLIP and CLEAR send \"useclip\" and \"clearsource\". ADVANCED \u2026 and SOURCE \u2026 send \"openpanel <name> <0|1>\"; the close buttons send \"closepanel\". The js parks overlay objects (and the main-view controls they cover) off-screen with presentation_rect, sends \"setstate\" to the display and \"set <seed>\" back to the Seed box, and sets srcinfo, srcbadge, root, mode and length by varname.",
 					"numinlets": 1,
 					"numoutlets": 0,
 					"fontsize": 10,
@@ -1720,6 +1723,172 @@
 			},
 			{
 				"box": {
+					"maxclass": "newobj",
+					"text": "thispatcher",
+					"varname": "thispatcher",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-88",
+					"patching_rect": [
+						800,
+						500,
+						90,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "lead",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 1,
+					"text": "LEAD",
+					"texton": "LEAD",
+					"fontname": "Arial Bold",
+					"fontsize": 14,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.851,
+						0.639,
+						0.357,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.851,
+						0.639,
+						0.357,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.851,
+						0.639,
+						0.357,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Lead",
+							"parameter_shortname": "Lead",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Lead",
+					"annotation": "LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.",
+					"id": "obj-89",
+					"patching_rect": [
+						10,
+						320,
+						104,
+						24
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						80,
+						104,
+						36
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param lead",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-91",
+					"patching_rect": [
+						1550,
+						150,
+						140,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param density",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-92",
+					"patching_rect": [
+						1550,
+						180,
+						150,
+						22
+					]
+				}
+			},
+			{
+				"box": {
 					"maxclass": "panel",
 					"numinlets": 1,
 					"numoutlets": 0,
@@ -1750,13 +1919,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						128,
+						2000,
 						0,
 						512,
 						169
 					],
-					"varname": "adv_bg",
-					"hidden": 1
+					"varname": "adv_bg"
 				}
 			},
 			{
@@ -1791,13 +1959,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						128,
+						2000,
 						0,
 						512,
 						169
 					],
-					"varname": "src_bg",
-					"hidden": 1
+					"varname": "src_bg"
 				}
 			},
 			{
@@ -1900,12 +2067,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						404,
+						2000,
 						50,
 						64,
 						24
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -1933,13 +2099,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						304,
+						2000,
 						36,
 						40,
 						14
 					],
-					"varname": "adv_seed_label",
-					"hidden": 1
+					"varname": "adv_seed_label"
 				}
 			},
 			{
@@ -2017,12 +2182,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						304,
+						2000,
 						50,
 						88,
 						24
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2050,13 +2214,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						36,
 						100,
 						14
 					],
-					"varname": "adv_bars_label",
-					"hidden": 1
+					"varname": "adv_bars_label"
 				}
 			},
 			{
@@ -2164,12 +2327,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						50,
 						148,
 						24
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2197,13 +2359,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						8,
 						200,
 						16
 					],
-					"varname": "adv_title",
-					"hidden": 1
+					"varname": "adv_title"
 				}
 			},
 			{
@@ -2256,7 +2417,7 @@
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 10,
+					"fontsize": 9,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Register",
@@ -2283,12 +2444,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						84,
-						64,
+						56,
 						72
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2341,7 +2501,7 @@
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 10,
+					"fontsize": 9,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Spread",
@@ -2368,12 +2528,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						212,
+						2000,
 						84,
-						64,
+						56,
 						72
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2401,13 +2560,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						432,
+						2000,
 						84,
 						48,
 						14
 					],
-					"varname": "bass_label",
-					"hidden": 1
+					"varname": "bass_label"
 				}
 			},
 			{
@@ -2514,12 +2672,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						432,
+						2000,
 						100,
 						48,
 						22
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2572,7 +2729,7 @@
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 10,
+					"fontsize": 9,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Velocity",
@@ -2599,12 +2756,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						284,
+						2000,
 						84,
-						64,
+						56,
 						72
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2657,7 +2813,7 @@
 						1
 					],
 					"fontname": "Arial",
-					"fontsize": 10,
+					"fontsize": 9,
 					"saved_attribute_attributes": {
 						"valueof": {
 							"parameter_longname": "Humanize",
@@ -2684,12 +2840,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						356,
+						2000,
 						84,
-						64,
+						56,
 						72
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2717,13 +2872,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						8,
 						200,
 						16
 					],
-					"varname": "src_title",
-					"hidden": 1
+					"varname": "src_title"
 				}
 			},
 			{
@@ -2782,12 +2936,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						40,
 						248,
 						52
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2890,12 +3043,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						400,
+						2000,
 						40,
 						92,
 						24
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -2998,12 +3150,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						500,
+						2000,
 						40,
 						52,
 						24
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -3110,12 +3261,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						140,
+						2000,
 						100,
 						248,
 						28
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -3143,13 +3293,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						400,
+						2000,
 						72,
 						200,
 						80
 					],
-					"varname": "srcinfo",
-					"hidden": 1
+					"varname": "srcinfo"
 				}
 			},
 			{
@@ -3164,8 +3313,8 @@
 					],
 					"parameter_enable": 0,
 					"mode": 0,
-					"text": "×",
-					"texton": "×",
+					"text": "\u00d7",
+					"texton": "\u00d7",
 					"fontname": "Arial Bold",
 					"fontsize": 14,
 					"activebgcolor": [
@@ -3239,12 +3388,11 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						456,
+						2000,
 						6,
 						22,
 						22
-					],
-					"hidden": 1
+					]
 				}
 			},
 			{
@@ -3259,8 +3407,8 @@
 					],
 					"parameter_enable": 0,
 					"mode": 0,
-					"text": "×",
-					"texton": "×",
+					"text": "\u00d7",
+					"texton": "\u00d7",
 					"fontname": "Arial Bold",
 					"fontsize": 14,
 					"activebgcolor": [
@@ -3334,12 +3482,95 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						456,
+						2000,
 						6,
 						22,
 						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "density",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
 					],
-					"hidden": 1
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"needlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activeneedlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 9,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Density",
+							"parameter_shortname": "Density",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								50
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Density",
+					"annotation": "Density sets how busy the lead line is: higher values use shorter notes and fewer rests. It only applies when Lead is on.",
+					"id": "obj-90",
+					"patching_rect": [
+						700,
+						20,
+						56,
+						72
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						2000,
+						84,
+						56,
+						72
+					]
 				}
 			},
 			{
@@ -3367,13 +3598,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						8,
-						140,
+						2000,
+						142,
 						108,
 						22
 					],
-					"varname": "srcbadge",
-					"hidden": 1
+					"varname": "srcbadge"
 				}
 			},
 			{
@@ -3388,8 +3618,8 @@
 					],
 					"parameter_enable": 0,
 					"mode": 1,
-					"text": "ADVANCED …",
-					"texton": "ADVANCED …",
+					"text": "ADVANCED \u2026",
+					"texton": "ADVANCED \u2026",
 					"fontname": "Arial",
 					"fontsize": 8.5,
 					"activebgcolor": [
@@ -3482,8 +3712,8 @@
 					],
 					"parameter_enable": 0,
 					"mode": 1,
-					"text": "SOURCE …",
-					"texton": "SOURCE …",
+					"text": "SOURCE \u2026",
+					"texton": "SOURCE \u2026",
 					"fontname": "Arial",
 					"fontsize": 8.5,
 					"activebgcolor": [
@@ -4314,6 +4544,54 @@
 				"patchline": {
 					"source": [
 						"obj-87",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-89",
+						0
+					],
+					"destination": [
+						"obj-91",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-91",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-90",
+						0
+					],
+					"destination": [
+						"obj-92",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-92",
 						0
 					],
 					"destination": [

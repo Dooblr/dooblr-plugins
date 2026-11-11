@@ -133,7 +133,10 @@ def draw_box(c, b, state):
             bg = b['bgoncolor'] if val else b['bgcolor']
             tc = b['textoncolor'] if val else b['textcolor']
         c.rect(r, fill=rgba(bg), outline=rgba(b.get('bordercolor', bg)), radius=2)
-        c.text(b.get('texton') if val else b.get('text', ''), x + w / 2, y + h / 2, pt, rgba(tc), bold, 'mm')
+        label = b.get('texton') if val else b.get('text', '')
+        if b.get('varname') == 'generate' and state.get('values', {}).get('lead'):
+            label = 'Generate Lead'
+        c.text(label, x + w / 2, y + h / 2, pt, rgba(tc), bold, 'mm')
     elif cls in ('live.menu', 'live.numbox'):
         val = initial(b, state['values'])
         if b.get('varname') == 'seed':

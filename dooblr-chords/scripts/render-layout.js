@@ -57,28 +57,38 @@ const STATES = [
   {
     title: 'Main view: no source, one chord locked',
     panel: null,
-    inactive: [],
-    values: { open_advanced: 0, open_source: 0 },
+    inactive: ['density'],
+    values: { open_advanced: 0, open_source: 0, lead: 0 },
     badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',
     blocks: { heading: 'PROGRESSION', status: 'Wrote A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
       chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
   },
   {
-    title: 'ADVANCED panel open',
-    panel: 'advanced',
+    title: 'Main view: Lead on',
+    panel: null,
     inactive: [],
-    values: { open_advanced: 1, open_source: 0, seed: 48213 },
+    values: { open_advanced: 0, open_source: 0, lead: 1 },
     badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',
-    blocks: { heading: 'PROGRESSION', status: 'Wrote A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
+    blocks: { heading: 'LEAD', status: 'Wrote Lead \u00B7 A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
+      chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
+  },
+  {
+    title: 'ADVANCED panel open, Lead on (Density available)',
+    panel: 'advanced',
+    inactive: [],
+    values: { open_advanced: 1, open_source: 0, lead: 1, seed: 48213, density: 50 },
+    badge: '',
+    srcinfo: 'Drop a .mid file or press USE CLIP.',
+    blocks: { heading: 'LEAD', status: 'Wrote Lead \u00B7 A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
       chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
   },
   {
     title: 'SOURCE panel open, a clip loaded as VAR',
     panel: 'source',
-    inactive: ['reroll'],
-    values: { open_advanced: 0, open_source: 1, kind: 0 },
+    inactive: ['reroll', 'density'],
+    values: { open_advanced: 0, open_source: 1, kind: 0, lead: 0 },
     badge: 'VAR \u00B7 my riff',
     dropped: 'my riff.mid',
     srcinfo: 'my riff \u00B7 A Natural Minor \u00B7 4 chords, 4 bars',
@@ -106,9 +116,30 @@ const memberOf = {};
 const panels = parsePanels();
 Object.keys(panels).forEach((name) => (panels[name] || []).forEach((vn) => { memberOf[vn] = name; }));
 
+function parseRectMap(src, name) {
+  const map = {};
+  const block = new RegExp('var ' + name + ' = \\{([\\s\\S]*?)\\};').exec(src);
+  if (!block) { return map; }
+  const re = /([A-Za-z0-9_]+):\s*\[([^\]]+)\]/g;
+  let m;
+  while ((m = re.exec(block[1]))) {
+    map[m[1]] = m[2].split(',').map((n) => Number(n.trim()));
+  }
+  return map;
+}
+function parseNamedRect(src, name) {
+  const m = new RegExp('var ' + name + ' = \\[([^\\]]+)\\];').exec(src);
+  return m ? m[1].split(',').map((n) => Number(n.trim())) : null;
+}
+const MAIN_JS = fs.readFileSync(path.join(ROOT, 'src/max/main.js'), 'utf8');
+const openRects = Object.assign({}, parseRectMap(MAIN_JS, 'COVERED_RECTS'), parseRectMap(MAIN_JS, 'PANEL_RECTS'));
+const badgeRect = parseNamedRect(MAIN_JS, 'BADGE_RECT');
+if (badgeRect) { openRects.srcbadge = badgeRect; }
+
 const boxes = patcher.boxes.map((w) => w.box).filter((b) => b.presentation).map((b) => {
   const v = b.saved_attribute_attributes && b.saved_attribute_attributes.valueof;
-  return Object.assign({}, b, { param: v || null, panel: (b.varname && memberOf[b.varname]) || null });
+  const rect = (b.varname && openRects[b.varname]) || b.presentation_rect;
+  return Object.assign({}, b, { param: v || null, panel: (b.varname && memberOf[b.varname]) || null, presentation_rect: rect });
 });
 const jsui = boxes.find((b) => b.maxclass === 'jsui');
 

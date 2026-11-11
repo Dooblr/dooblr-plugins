@@ -108,10 +108,30 @@ function loadController(opts) {
   ctx.post = (s) => out.posts.push(String(s));
   ctx.outlet = function () { out.outlets.push(Array.prototype.slice.call(arguments)); };
   ctx.setinletassist = ctx.setoutletassist = () => {};
-  ctx.patcher = { getnamed: (n) => {
-    if (!out.named[n]) { out.named[n] = { msgs: [], message: function () { this.msgs.push(Array.prototype.slice.call(arguments)); } }; }
-    return out.named[n];
-  } };
+  ctx.patcher = {
+    bringtofront: function () {},
+    sendtoback: function () {},
+    getnamed: (n) => {
+      if (!out.named[n]) {
+        out.named[n] = {
+          msgs: [],
+          rect: null,
+          message: function () {
+            const args = Array.prototype.slice.call(arguments);
+            this.msgs.push(args);
+            if (args[0] === 'presentation_rect') {
+              this.rect = [args[1], args[2], args[3], args[4]];
+            }
+            // live.text often outputs the value when it receives set.
+            if (args[0] === 'set' && (n === 'open_advanced' || n === 'open_source') && ctx.openpanel) {
+              ctx.openpanel(n === 'open_advanced' ? 'advanced' : 'source', args[1]);
+            }
+          }
+        };
+      }
+      return out.named[n];
+    }
+  };
   const mock = makeLive(ctx, opts);
   ctx.LiveAPI = mock.LiveAPI;
   const files = opts.files || {};
@@ -299,7 +319,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.deepStrictEqual(t.lastMsg('length', 'set'), ['set', 4]);
   assert.match(t.lastMsg('srcinfo', 'set')[1], /my riff .* A Natural Minor .* 4 chords, 4 bars/);
   assert.strictEqual(t.lastMsg('srcbadge', 'set')[1], 'VAR \u00B7 my riff');
-  assert.strictEqual(t.out.named.srcbadge.hidden, 0);
+  assert.ok(t.out.named.srcbadge.rect[0] < 2000, 'badge is on screen when a source is loaded');
   assert.strictEqual(t.lastActive('kind'), 1);
   assert.strictEqual(t.lastActive('clearsource'), 1);
   assert.strictEqual(t.live.calls.length, 0, 'loading a source writes nothing');
@@ -326,7 +346,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.strictEqual(t.lastState().heading, 'PROGRESSION');
   assert.ok(t.lastMsg('srcdrop', 'clear'));
   assert.strictEqual(t.lastActive('kind'), 0);
-  assert.strictEqual(t.out.named.srcbadge.hidden, 1);
+  assert.ok(t.out.named.srcbadge.rect[0] >= 2000, 'badge is parked when the source is cleared');
 });
 
 test('dropped files that are not usable MIDI report a warning and keep the old source', () => {
@@ -491,50 +511,114 @@ test('display shows the source strip, the VARIATION heading and changed chords',
 
 test('overlay panels start closed, toggle from js, and reset on init', () => {
   const t = loadController();
-  const hiddenOf = (name) => t.out.named[name] && t.out.named[name].hidden;
+  const rectOf = (name) => t.out.named[name] && t.out.named[name].rect;
+  const parked = (name) => { const r = rectOf(name); assert.ok(r && r[0] >= 2000, name + ' should be parked, got ' + r); };
+  const shown = (name, expected) => {
+    const r = rectOf(name);
+    assert.ok(r && r[0] < 2000, name + ' should be on screen, got ' + r);
+    if (expected) { assert.deepStrictEqual(r, expected); }
+  };
   t.ctx.loadbang();
   ['adv_bg', 'adv_title', 'adv_close', 'duration', 'seed', 'write', 'register', 'spread',
     'velocity', 'humanize', 'bass', 'src_bg', 'src_title', 'src_close', 'srcdrop',
-    'useclip', 'clearsource', 'kind', 'srcinfo'].forEach((n) => {
-    assert.strictEqual(hiddenOf(n), 1, n + ' should be hidden after loadbang');
-  });
+    'useclip', 'clearsource', 'kind', 'srcinfo'].forEach(parked);
+  ['root', 'mode', 'length', 'color', 'chromatic', 'blocks', 'key_label'].forEach((n) => shown(n));
   assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
   assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
 
   t.ctx.openpanel('advanced', 1);
-  assert.strictEqual(hiddenOf('adv_bg'), 0);
-  assert.strictEqual(hiddenOf('duration'), 0);
-  assert.strictEqual(hiddenOf('write'), 0);
-  assert.strictEqual(hiddenOf('register'), 0);
-  assert.strictEqual(hiddenOf('src_bg'), 1);
-  assert.strictEqual(hiddenOf('srcdrop'), 1);
+  shown('adv_bg', [128, 0, 512, 169]);
+  shown('duration');
+  shown('write');
+  shown('register');
+  parked('src_bg');
+  parked('srcdrop');
+  parked('root');
+  parked('blocks');
+  parked('color');
   assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 1]);
   assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
+  assert.ok(t.out.posts.some((p) => /panel open advanced/.test(p)));
+
+  // A repeated 1 is ignored (idempotent); the set-echo from the opener must not close it.
+  const rectsBefore = t.out.named.adv_bg.msgs.filter((m) => m[0] === 'presentation_rect').length;
+  t.ctx.openpanel('advanced', 1);
+  assert.strictEqual(t.out.named.adv_bg.msgs.filter((m) => m[0] === 'presentation_rect').length, rectsBefore);
+  shown('adv_bg', [128, 0, 512, 169]);
 
   t.ctx.openpanel('source', 1);
-  assert.strictEqual(hiddenOf('src_bg'), 0);
-  assert.strictEqual(hiddenOf('srcdrop'), 0);
-  assert.strictEqual(hiddenOf('kind'), 0);
-  assert.strictEqual(hiddenOf('adv_bg'), 1);
-  assert.strictEqual(hiddenOf('write'), 1);
+  shown('src_bg', [128, 0, 512, 169]);
+  shown('srcdrop');
+  shown('kind');
+  parked('adv_bg');
+  parked('write');
+  parked('root');
   assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
   assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 1]);
+  assert.ok(t.out.posts.some((p) => /panel open source/.test(p)));
 
   t.ctx.openpanel('source', 0);
-  assert.strictEqual(hiddenOf('src_bg'), 1);
-  assert.strictEqual(hiddenOf('adv_bg'), 1);
+  parked('src_bg');
+  parked('adv_bg');
+  shown('root');
+  shown('blocks');
   assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
+  assert.ok(t.out.posts.some((p) => /panel closed/.test(p)));
 
   t.ctx.openpanel('advanced', 1);
   t.ctx.init();
-  assert.strictEqual(hiddenOf('adv_bg'), 1, 'init closes the panel');
-  assert.strictEqual(hiddenOf('src_bg'), 1);
+  parked('adv_bg');
+  parked('src_bg');
+  shown('blocks');
   assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
 
   t.ctx.openpanel('advanced');
-  assert.strictEqual(hiddenOf('adv_bg'), 0, 'a bang toggles the panel open');
+  shown('adv_bg', [128, 0, 512, 169]);
   t.ctx.openpanel('advanced');
-  assert.strictEqual(hiddenOf('adv_bg'), 1, 'a second bang toggles it closed');
+  parked('adv_bg');
   t.ctx.closepanel();
-  assert.strictEqual(hiddenOf('adv_bg'), 1);
+  parked('adv_bg');
+  shown('root');
+});
+
+test('Lead toggle writes a monophonic lead clip and relabels Generate', () => {
+  const t = loadController({ slots: [0, 0, 0] });
+  t.ctx.init();
+  assert.strictEqual(t.lastActive('density'), 0, 'Density is dimmed while Lead is off');
+  t.ctx.generate();
+  assert.strictEqual(t.live.slots[0].clip.name, 'C min \u00B7 4 \u00B7 Col35 Chr10');
+
+  t.ctx.param('lead', 1);
+  assert.strictEqual(t.lastActive('density'), 1);
+  assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'Generate Lead']);
+  assert.deepStrictEqual(t.lastMsg('generate', 'texton'), ['texton', 'Generate Lead']);
+  assert.strictEqual(t.lastState().heading, 'LEAD');
+
+  t.ctx.generate();
+  const clip = t.live.slots[1].clip;
+  assert.ok(clip);
+  assert.match(clip.name, /^Lead \u00B7 C min \u00B7 4 \u00B7 Col/);
+  const notes = clip.notes.slice().sort((a, b) => a.start_time - b.start_time);
+  assert.ok(notes.length > 0);
+  for (let i = 1; i < notes.length; i++) {
+    assert.ok(notes[i - 1].start_time + notes[i - 1].duration <= notes[i].start_time + 1e-6);
+  }
+  assert.strictEqual(t.lastState().heading, 'LEAD');
+
+  t.ctx.param('lead', 0);
+  assert.strictEqual(t.lastActive('density'), 0);
+  assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'Generate']);
+  assert.strictEqual(t.lastState().heading, 'PROGRESSION');
+});
+
+test('Lead over a source names the clip Lead · <name> · VAR and keeps the source chords', () => {
+  const t = loadController({ files: { [RIFF]: buildSmf(chordNotes(AM_F_C_G, 4)) }, slots: [0, 0] });
+  t.ctx.init();
+  t.ctx.dropfile(RIFF);
+  t.ctx.param('lead', 1);
+  assert.match(t.lastState().heading, /^LEAD/);
+  t.ctx.generate();
+  assert.match(t.live.slots[0].clip.name, /^Lead \u00B7 my riff \u00B7 VAR \u00B7 A min/);
+  assert.deepStrictEqual(t.lastState().source.chords, ['Am', 'F', 'C', 'G']);
+  assert.match(t.lastState().heading, /LEAD \u00B7 VARIATION/);
 });

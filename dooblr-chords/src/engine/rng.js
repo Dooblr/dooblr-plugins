@@ -76,6 +76,8 @@ DC.rng = (function () {
     // Stream purposes. Add new ones at the end; never renumber.
     P_DEGREE: 1, P_CHROMATIC: 2, P_COLOR: 3, P_INVERSION: 4, P_HUMANIZE: 5, P_START: 6, P_ENDING: 7,
     // Variation / B section (derive.js)
-    P_VARPICK: 8, P_VARSUB: 9, P_BRHYTHM: 10, P_BREGION: 11, P_BWALK: 12, P_BEND: 13, P_BCHROM: 14
+    P_VARPICK: 8, P_VARSUB: 9, P_BRHYTHM: 10, P_BREGION: 11, P_BWALK: 12, P_BEND: 13, P_BCHROM: 14,
+    // Lead line
+    P_LEAD_RHYTHM: 15, P_LEAD_PITCH: 16
   };
 })();

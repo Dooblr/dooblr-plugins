@@ -3,9 +3,9 @@ var DC = (typeof DC !== 'undefined') ? DC : {};
 
 DC.engine = (function () {
   var T = DC.theory, C = DC.chords, G = DC.generator, V = DC.voicing, RN = DC.render;
-  var A = DC.analysis, DV = DC.derive, MF = DC.midifile;
+  var A = DC.analysis, DV = DC.derive, MF = DC.midifile, L = DC.lead;
 
-  var VERSION = '0.4.0';
+  var VERSION = '0.5.0';
   var KINDS = [{ id: 'var', label: 'VAR', long: 'Variation' }, { id: 'b', label: 'B', long: 'B section' }];
   var DURATIONS = [
     { label: '1/2', beats: 2 },
@@ -16,7 +16,8 @@ DC.engine = (function () {
 
   var DEFAULTS = {
     root: 0, mode: 1, length: 4, duration: 1, color: 35, chromatic: 10,
-    register: 60, spread: 25, bass: 1, velocity: 100, humanize: 0, seed: 1, kind: 0
+    register: 60, spread: 25, bass: 1, velocity: 100, humanize: 0, seed: 1, kind: 0,
+    lead: 0, density: 50
   };
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -37,14 +38,17 @@ DC.engine = (function () {
     o.humanize = clamp(o.humanize, 0, 100);
     o.seed = clamp(Math.round(o.seed), 1, SEED_MAX);
     o.kind = clamp(Math.round(o.kind), 0, KINDS.length - 1);
+    o.lead = o.lead ? 1 : 0;
+    o.density = clamp(Math.round(o.density), 0, 100);
     return o;
   }
 
   // "C min · 4 · Col35 Chr10"  (ASCII key name; the dot is U+00B7)
   function clipName(s) {
     var o = normalize(s);
-    return T.keyNameAscii(o.root, o.mode) + ' ' + T.MODES[o.mode].short + ' \u00B7 ' + o.length +
+    var name = T.keyNameAscii(o.root, o.mode) + ' ' + T.MODES[o.mode].short + ' \u00B7 ' + o.length +
       ' \u00B7 Col' + o.color + ' Chr' + o.chromatic;
+    return o.lead ? ('Lead \u00B7 ' + name) : name;
   }
 
   function newSeed(u) { return 1 + Math.floor(u * SEED_MAX); }
@@ -55,8 +59,9 @@ DC.engine = (function () {
     var nm = String((source && source.name) || 'Clip');
     if (nm.length > 18) { nm = nm.substring(0, 17) + '\u2026'; }
     var kind = KINDS[o.kind].label + (o.kind === 1 && region ? ' ' + region.id.replace(/\u266D/g, 'b') : '');
-    return nm + ' \u00B7 ' + kind + ' \u00B7 ' + T.keyNameAscii(o.root, o.mode) + ' ' + T.MODES[o.mode].short +
+    var name = nm + ' \u00B7 ' + kind + ' \u00B7 ' + T.keyNameAscii(o.root, o.mode) + ' ' + T.MODES[o.mode].short +
       ' \u00B7 Col' + o.color + ' Chr' + o.chromatic;
+    return o.lead ? ('Lead \u00B7 ' + name) : name;
   }
 
   // Read a Standard MIDI File (array of byte values) into a source analysis.
@@ -103,7 +108,9 @@ DC.engine = (function () {
       chords = prog.chords; ending = prog.ending; lengthBeats = beats * o.length;
     }
     var voicings = V.voiceAll(chords, o.root, vopts);
-    var notes = RN.notes(voicings, { chordBeats: beats, velocity: o.velocity, humanize: o.humanize, seed: o.seed, slots: slots });
+    var notes = o.lead
+      ? L.notes(chords, o, { chordBeats: beats, slots: slots, lengthBeats: lengthBeats })
+      : RN.notes(voicings, { chordBeats: beats, velocity: o.velocity, humanize: o.humanize, seed: o.seed, slots: slots });
     var display = [];
     for (i = 0; i < chords.length; i++) {
       var ch = chords[i];
@@ -117,7 +124,7 @@ DC.engine = (function () {
     var out = {
       settings: o, chords: chords, display: display, voicings: voicings, notes: notes,
       ending: ending, lengthBeats: lengthBeats, clipName: clipName(o), keyName: keyName,
-      derived: null, rhythm: rhythm
+      derived: null, rhythm: rhythm, heading: o.lead ? 'LEAD' : 'PROGRESSION'
     };
     if (source && source.analysis) {
       var regionText = '';
@@ -125,9 +132,11 @@ DC.engine = (function () {
         regionText = 'in ' + T.simpleName(T.mod12(region.root), T.keyUsesFlats(o.root, o.mode)) + (region.minor ? ' minor' : ' major') +
           ' (' + region.id.replace(/^b/, T.accidental(-1)) + ')';
       }
+      var derHead = KINDS[o.kind].long.toUpperCase();
       out.derived = { kind: KINDS[o.kind].id, label: KINDS[o.kind].long + (regionText ? ' ' + regionText : ''),
-        heading: KINDS[o.kind].long.toUpperCase(), regionText: regionText, region: region ? region.id : null, rhythm: rhythm,
+        heading: o.lead ? ('LEAD \u00B7 ' + derHead) : derHead, regionText: regionText, region: region ? region.id : null, rhythm: rhythm,
         source: sourceDisplay(source.analysis, o.root, o.mode) };
+      out.heading = out.derived.heading;
       out.clipName = derivedClipName(o, source.analysis, region);
     }
     return out;

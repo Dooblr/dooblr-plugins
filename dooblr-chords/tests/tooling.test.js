@@ -65,20 +65,18 @@ test('validator: catches duplicate ids, dangling lines and bad indices', () => {
 
   p = clone();
   const register = p.patcher.boxes.find((w) => w.box.varname === 'register').box;
-  // A small rect over the blocks, clear of the other Advanced controls.
-  register.presentation_rect = [560, 110, 40, 40];
-  assert.ok(validate(p, 'x', MAIN).every((e) => !/overlap/.test(e)), 'a panel may cover the chord display');
+  register.presentation_rect = [140, 84, 64, 72]; // on-screen, not parked
+  assert.ok(validate(p, 'x', MAIN).some((e) => /not parked off-screen/.test(e)));
 
   p = clone();
-  const spread = p.patcher.boxes.find((w) => w.box.varname === 'spread').box;
-  const velocity = p.patcher.boxes.find((w) => w.box.varname === 'velocity').box;
-  spread.presentation_rect = velocity.presentation_rect.slice();
-  assert.ok(validate(p, 'x', MAIN).some((e) => /overlap inside the advanced panel/.test(e)));
+  assert.ok(validate(p, 'x', MAIN.replace(/register: \[[^\]]+\]/, 'register: [700, 150, 46, 58]'))
+    .some((e) => /outside 640x169/.test(e)));
 
   p = clone();
-  const srcdrop = p.patcher.boxes.find((w) => w.box.varname === 'srcdrop').box;
-  const seed = p.patcher.boxes.find((w) => w.box.varname === 'seed').box;
-  srcdrop.presentation_rect = seed.presentation_rect.slice();
+  assert.ok(validate(p, 'x', MAIN.replace(/spread: \[[^\]]+\]/, 'spread: [284, 84, 64, 72]'))
+    .some((e) => /overlap inside the advanced panel/.test(e)));
+
+  p = clone();
   assert.ok(validate(p, 'x', MAIN).every((e) => !/overlap/.test(e)), 'two mutually exclusive panels may occupy the same space');
 
   p = clone();

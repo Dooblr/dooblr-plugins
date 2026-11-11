@@ -4,7 +4,7 @@
 // Checks: unique box ids, patchlines reference existing boxes with valid
 // inlet/outlet indices, known objects have the expected inlet/outlet counts,
 // presentation boxes fit the device, parameter names and varnames are unique,
-// overlay-panel membership (from PANELS in main.js), and the patcher and src/max/main.js agree on message and parameter names.
+// overlay-panel membership and parked presentation_rects (from PANELS / PANEL_RECTS in main.js), and the patcher and src/max/main.js agree on message and parameter names.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -20,7 +20,7 @@ const IO = {
   'live.dial': [1, 2], 'live.numbox': [1, 2], 'live.menu': [1, 3], 'live.tab': [1, 3], 'live.text': [1, 2], 'live.drop': [1, 2],
   message: [2, 1], comment: [1, 0], panel: [1, 0], jsui: [1, 1],
   'newobj:live.thisdevice': [1, 3], 'newobj:midiin': [1, 1], 'newobj:midiout': [1, 0], 'newobj:prepend': [1, 1],
-  'newobj:js': [1, 2], 'newobj:route': [2, -1]
+  'newobj:js': [1, 2], 'newobj:route': [2, -1], 'newobj:thispatcher': [1, 1]
 };
 
 function ioKey(b) {
@@ -57,7 +57,9 @@ function validate(patcher, label, mainSource) {
     if (b.presentation) {
       const r = b.presentation_rect;
       if (!Array.isArray(r) || r.length !== 4) { err(b.id + ' presentation_rect missing'); }
-      else if (r[0] < 0 || r[1] < 0 || r[0] + r[2] > width || r[1] + r[3] > DEVICE_HEIGHT) {
+      else if (r[0] >= parseParkX(mainSource)) {
+        // Parked off-screen; membership is checked after PANELS are parsed.
+      } else if (r[0] < 0 || r[1] < 0 || r[0] + r[2] > width || r[1] + r[3] > DEVICE_HEIGHT) {
         err(b.id + ' presentation_rect ' + JSON.stringify(r) + ' is outside ' + width + 'x' + DEVICE_HEIGHT);
       }
     }
@@ -76,11 +78,16 @@ function validate(patcher, label, mainSource) {
     }
   });
 
-  // Overlay panels from main.js: members may cover the main view and each
-  // other (only one panel is shown at a time), but two members of the same
-  // panel must not overlap, and two main-view controls must not overlap.
-  // Backdrops (maxclass panel) are excluded, as before.
+  // Overlay panels from main.js: members are parked off-screen in the saved
+  // patcher. Overlap uses the open rects (PANEL_RECTS). Members may cover the
+  // main view and each other (only one panel is shown at a time), but two
+  // members of the same panel must not overlap, and two main-view controls
+  // must not overlap. Backdrops (maxclass panel) are excluded, as before.
+  const parkX = parseParkX(mainSource);
   const panels = parsePanels(mainSource);
+  const panelRects = parseRectMap(mainSource, 'PANEL_RECTS');
+  const coveredRects = parseRectMap(mainSource, 'COVERED_RECTS');
+  const badgeRect = parseNamedRect(mainSource, 'BADGE_RECT');
   const memberOf = {};
   Object.keys(panels).forEach((name) => {
     (panels[name] || []).forEach((vn) => {
@@ -90,14 +97,49 @@ function validate(patcher, label, mainSource) {
     (panels[name] || []).forEach((vn) => {
       const b = Object.keys(byId).map((k) => byId[k]).filter((x) => x.varname === vn)[0];
       if (!b) { err('panel ' + name + ' member ' + vn + ' has no box'); }
-      else if (b.presentation && b.hidden !== 1) { err(b.id + ' (' + vn + ') is a panel member but is not hidden in the patcher'); }
+      else if (!b.presentation) { err(b.id + ' (' + vn + ') is a panel member but is not in presentation'); }
+      else if (!Array.isArray(b.presentation_rect) || b.presentation_rect[0] < parkX) {
+        err(b.id + ' (' + vn + ') is a panel member but is not parked off-screen');
+      }
+      if (!panelRects[vn]) { err('PANEL_RECTS is missing ' + vn); }
     });
   });
+  Object.keys(panelRects).forEach((vn) => {
+    if (!memberOf[vn]) { err('PANEL_RECTS.' + vn + ' is not a panel member'); }
+    const r = panelRects[vn];
+    if (!insideDevice(r, width)) {
+      err('PANEL_RECTS.' + vn + ' ' + JSON.stringify(r) + ' is outside ' + width + 'x' + DEVICE_HEIGHT);
+    }
+  });
+  Object.keys(coveredRects).forEach((vn) => {
+    const b = Object.keys(byId).map((k) => byId[k]).filter((x) => x.varname === vn)[0];
+    if (!b) { err('COVERED_RECTS.' + vn + ' has no box'); }
+    else if (memberOf[vn]) { err(vn + ' cannot be both a panel member and a covered main-view control'); }
+    else if (!rectsEqual(b.presentation_rect, coveredRects[vn])) {
+      err(b.id + ' (' + vn + ') presentation_rect ' + JSON.stringify(b.presentation_rect) +
+        ' does not match COVERED_RECTS');
+    }
+    if (!insideDevice(coveredRects[vn], width)) {
+      err('COVERED_RECTS.' + vn + ' ' + JSON.stringify(coveredRects[vn]) + ' is outside ' + width + 'x' + DEVICE_HEIGHT);
+    }
+  });
+  if (badgeRect && !insideDevice(badgeRect, width)) {
+    err('BADGE_RECT ' + JSON.stringify(badgeRect) + ' is outside ' + width + 'x' + DEVICE_HEIGHT);
+  }
+  const srcbadge = Object.keys(byId).map((k) => byId[k]).filter((x) => x.varname === 'srcbadge')[0];
+  if (srcbadge && srcbadge.presentation && srcbadge.presentation_rect && srcbadge.presentation_rect[0] < parkX) {
+    err(srcbadge.id + ' (srcbadge) should be parked off-screen in the patcher');
+  }
 
   const shown = p.boxes.map((w) => w.box).filter((b) => b && b.presentation && b.maxclass !== 'panel' &&
     Array.isArray(b.presentation_rect) && b.presentation_rect.length === 4);
+  const effectiveRect = (b) => {
+    if (b.varname && panelRects[b.varname]) { return panelRects[b.varname]; }
+    if (b.varname === 'srcbadge' && badgeRect) { return badgeRect; }
+    return b.presentation_rect;
+  };
   const overlaps = (a, b) => {
-    const r = a.presentation_rect, q = b.presentation_rect;
+    const r = effectiveRect(a), q = effectiveRect(b);
     return r[0] < q[0] + q[2] && q[0] < r[0] + r[2] && r[1] < q[1] + q[3] && q[1] < r[1] + r[3];
   };
   const panelOf = (b) => (b.varname && memberOf[b.varname]) || null;
@@ -172,6 +214,40 @@ function main() {
   console.log('patcher ok: ' + p.boxes.length + ' boxes, ' + p.lines.length + ' lines' + (process.argv.indexOf('--built') >= 0 ? ' (source and built amxd)' : ''));
 }
 
+function parseParkX(mainSource) {
+  const m = /var PARK_X = (\d+);/.exec(mainSource || '');
+  return m ? Number(m[1]) : 2000;
+}
+
+function parseNamedRect(mainSource, name) {
+  const m = new RegExp('var ' + name + ' = \\[([^\\]]+)\\];').exec(mainSource || '');
+  if (!m) { return null; }
+  return m[1].split(',').map((n) => Number(n.trim()));
+}
+
+function parseRectMap(src, name) {
+  const map = {};
+  if (!src) { return map; }
+  const block = new RegExp('var ' + name + ' = \\{([\\s\\S]*?)\\};').exec(src);
+  if (!block) { return map; }
+  const re = /([A-Za-z0-9_]+):\s*\[([^\]]+)\]/g;
+  let m;
+  while ((m = re.exec(block[1]))) {
+    map[m[1]] = m[2].split(',').map((n) => Number(n.trim()));
+  }
+  return map;
+}
+
+function insideDevice(r, width) {
+  return Array.isArray(r) && r.length === 4 && r[0] >= 0 && r[1] >= 0 &&
+    r[0] + r[2] <= width && r[1] + r[3] <= DEVICE_HEIGHT;
+}
+
+function rectsEqual(a, b) {
+  return Array.isArray(a) && Array.isArray(b) && a.length === 4 && b.length === 4 &&
+    a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
+
 function parsePanels(mainSource) {
   const panels = {};
   if (!mainSource) { return panels; }
@@ -187,4 +263,4 @@ function parsePanels(mainSource) {
 }
 
 if (require.main === module) { main(); }
-module.exports = { validate, parsePanels };
+module.exports = { validate, parsePanels, parseRectMap, parseParkX };

@@ -33,7 +33,7 @@ var self = this;
 var E = DC.engine;
 
 var PARAM_NAMES = ['root', 'mode', 'length', 'duration', 'color', 'chromatic',
-  'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind'];
+  'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind', 'lead', 'density'];
 
 var settings = E.normalize(E.DEFAULTS);
 var locks = [];
@@ -51,19 +51,63 @@ var BUTTON_HINTS = {
   write: 'Write puts the progression shown below into the next empty clip slot without changing it.',
   useclip: 'USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.',
   clearsource: 'CLEAR forgets the source, so Generate makes fresh progressions again.',
-  kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.'
+  kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.',
+  lead: 'LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.'
 };
 
-// Overlay panels. Members start hidden in the patcher; js toggles the hidden
-// attribute so they cover the chord display without being saved parameters.
-// The first name in each list is the backdrop.
+// Overlay panels. Members are parked off-screen in the saved patcher (x = PARK_X).
+// js shows a panel by sending presentation_rect to the stored open position,
+// and parks it again to close. Covered main-view controls are parked the same
+// way so nothing under the overlay stays clickable. Open/closed is not a
+// saved parameter. The first name in each list is the backdrop.
 var PANELS = {
   advanced: ['adv_bg', 'adv_title', 'adv_close', 'adv_bars_label', 'adv_seed_label', 'bass_label',
-    'duration', 'seed', 'write', 'register', 'spread', 'velocity', 'humanize', 'bass'],
+    'duration', 'seed', 'write', 'register', 'spread', 'velocity', 'humanize', 'density', 'bass'],
   source: ['src_bg', 'src_title', 'src_close', 'srcdrop', 'useclip', 'clearsource', 'kind', 'srcinfo']
 };
 var PANEL_NAMES = ['advanced', 'source'];
+var PARK_X = 2000;
+var BADGE_RECT = [8, 142, 108, 22];
+var COVERED_RECTS = {
+  key_label: [136, 4, 50, 14],
+  root: [136, 22, 52, 24],
+  mode: [196, 22, 120, 24],
+  length_label: [136, 52, 52, 14],
+  length: [136, 66, 52, 24],
+  color_label: [326, 4, 70, 14],
+  color: [326, 18, 70, 76],
+  spice_label: [404, 4, 70, 14],
+  chromatic: [404, 18, 70, 76],
+  blocks: [136, 99, 496, 66]
+};
+var PANEL_RECTS = {
+  adv_bg: [128, 0, 512, 169],
+  adv_title: [140, 8, 200, 16],
+  adv_close: [456, 6, 22, 22],
+  adv_bars_label: [140, 36, 100, 14],
+  adv_seed_label: [304, 36, 40, 14],
+  bass_label: [460, 84, 48, 14],
+  duration: [140, 50, 148, 24],
+  seed: [304, 50, 88, 24],
+  write: [404, 50, 64, 24],
+  register: [140, 84, 56, 72],
+  spread: [204, 84, 56, 72],
+  velocity: [268, 84, 56, 72],
+  humanize: [332, 84, 56, 72],
+  density: [396, 84, 56, 72],
+  bass: [460, 100, 48, 22],
+  src_bg: [128, 0, 512, 169],
+  src_title: [140, 8, 200, 16],
+  src_close: [456, 6, 22, 22],
+  srcdrop: [140, 40, 248, 52],
+  useclip: [400, 40, 92, 24],
+  clearsource: [500, 40, 52, 24],
+  kind: [140, 100, 248, 28],
+  srcinfo: [400, 72, 200, 80]
+};
 var openPanel = null;
+var applyingPanel = false;
+var badgeOn = false;
 
 // ---- messages -------------------------------------------------------------
 
@@ -257,23 +301,35 @@ function readFileBytes(path) {
 function errText(e) { return (e && e.message) ? e.message : String(e); }
 
 function openpanel(name, value) {
+  // Ignore outlet echo from our own "set" on the opener buttons.
+  if (applyingPanel) { return; }
   var key = String(name || '');
   if (key !== 'advanced' && key !== 'source') { return; }
   // live.text in toggle mode sends 1 when turned on and 0 when turned off.
   // A bang (no value) toggles. Opening one panel closes the other.
+  var next = openPanel;
   if (value === 0 || value === '0') {
-    if (openPanel === key) { openPanel = null; }
+    if (openPanel === key) { next = null; }
   } else if (value === undefined || value === 'bang') {
-    openPanel = (openPanel === key) ? null : key;
+    next = (openPanel === key) ? null : key;
   } else {
-    openPanel = key;
+    next = key;
   }
+  if (next === openPanel) { return; }
+  openPanel = next;
   applyPanelVisibility();
+  post('dooblr-chords: panel ' + (openPanel ? 'open ' + openPanel : 'closed') + '\n');
 }
 
 function closepanel() {
+  if (applyingPanel) { return; }
+  if (openPanel === null) {
+    applyPanelVisibility();
+    return;
+  }
   openPanel = null;
   applyPanelVisibility();
+  post('dooblr-chords: panel closed\n');
 }
 
 function anything() {
@@ -374,51 +430,109 @@ function updateSourceInfo() {
 // Small chip on the main view so a loaded source is not hidden inside the panel.
 function updateSourceBadge() {
   var text = '';
-  var hide = true;
+  badgeOn = false;
   if (source) {
     var d = E.sourceDisplay(source, settings.root, settings.mode);
     var kind = (settings.kind === 1) ? 'B' : 'VAR';
     text = kind + ' \u00B7 ' + d.name;
-    hide = false;
+    badgeOn = true;
   }
   try {
     var obj = self.patcher.getnamed('srcbadge');
-    if (!obj) { return; }
-    obj.message('set', text);
-    obj.hidden = hide ? 1 : 0;
+    if (obj) { obj.message('set', text); }
   } catch (e) {
     post('dooblr-chords: could not update srcbadge: ' + e + '\n');
   }
+  placeRect('srcbadge', BADGE_RECT, badgeOn);
 }
 
-function setHidden(varname, hide) {
+function parkedRect(rect) {
+  return [PARK_X, rect[1], rect[2], rect[3]];
+}
+
+function setRect(varname, rect) {
   try {
     var obj = self.patcher.getnamed(varname);
-    if (!obj) { return; }
-    obj.hidden = hide ? 1 : 0;
+    if (obj) { obj.message('presentation_rect', rect[0], rect[1], rect[2], rect[3]); }
   } catch (e) {
-    post('dooblr-chords: could not hide ' + varname + ': ' + e + '\n');
+    post('dooblr-chords: could not move ' + varname + ': ' + e + '\n');
   }
+  try {
+    var tp = self.patcher.getnamed('thispatcher');
+    if (tp) { tp.message('script', 'sendbox', varname, 'presentation_rect', rect[0], rect[1], rect[2], rect[3]); }
+  } catch (e2) {}
+}
+
+function placeRect(varname, rect, on) {
+  if (!rect) { return; }
+  setRect(varname, on ? rect : parkedRect(rect));
+}
+
+function sendBack(varname) {
+  try {
+    var obj = self.patcher.getnamed(varname);
+    if (obj && self.patcher.sendtoback) { self.patcher.sendtoback(obj); }
+  } catch (e) {}
+  try {
+    var tp = self.patcher.getnamed('thispatcher');
+    if (tp) { tp.message('script', 'sendtoback', varname); }
+  } catch (e2) {}
+}
+
+function sendFront(varname) {
+  try {
+    var obj = self.patcher.getnamed(varname);
+    if (obj && self.patcher.bringtofront) { self.patcher.bringtofront(obj); }
+  } catch (e) {}
+  try {
+    var tp = self.patcher.getnamed('thispatcher');
+    if (tp) { tp.message('script', 'bringtofront', varname); }
+  } catch (e2) {}
+}
+
+function raisePanel(name) {
+  var members = PANELS[name], j;
+  sendBack(members[0]);
+  for (j = 1; j < members.length; j++) { sendFront(members[j]); }
+  sendFront('open_advanced');
+  sendFront('open_source');
 }
 
 function applyPanelVisibility() {
-  var i, j, name, members, show;
-  for (i = 0; i < PANEL_NAMES.length; i++) {
-    name = PANEL_NAMES[i];
-    members = PANELS[name];
-    show = openPanel === name;
-    for (j = 0; j < members.length; j++) { setHidden(members[j], !show); }
+  var i, j, name, members, show, vn, wasApplying;
+  wasApplying = applyingPanel;
+  applyingPanel = true;
+  try {
+    if (openPanel) {
+      for (vn in COVERED_RECTS) {
+        if (COVERED_RECTS.hasOwnProperty(vn)) { placeRect(vn, COVERED_RECTS[vn], false); }
+      }
+    }
+    for (i = 0; i < PANEL_NAMES.length; i++) {
+      name = PANEL_NAMES[i];
+      members = PANELS[name];
+      show = openPanel === name;
+      for (j = 0; j < members.length; j++) { placeRect(members[j], PANEL_RECTS[members[j]], show); }
+      if (show) { raisePanel(name); }
+    }
+    if (!openPanel) {
+      for (vn in COVERED_RECTS) {
+        if (COVERED_RECTS.hasOwnProperty(vn)) { placeRect(vn, COVERED_RECTS[vn], true); }
+      }
+    }
+    placeRect('srcbadge', BADGE_RECT, badgeOn);
+    setControl('open_advanced', openPanel === 'advanced' ? 1 : 0);
+    setControl('open_source', openPanel === 'source' ? 1 : 0);
+  } finally {
+    applyingPanel = wasApplying;
   }
-  // Keep the opener buttons in sync (they are visible on the main view).
-  setControl('open_advanced', openPanel === 'advanced' ? 1 : 0);
-  setControl('open_source', openPanel === 'source' ? 1 : 0);
 }
 
 function sendState() {
   if (!current) { return; }
   var state = {
     chords: current.display,
-    heading: current.derived ? current.derived.heading : 'PROGRESSION',
+    heading: current.heading || (current.derived ? current.derived.heading : 'PROGRESSION'),
     key: current.keyName + (current.derived && current.derived.regionText ? ' \u00B7 ' + current.derived.regionText : ''),
     // The Root and Mode menus already show the key, so the display only
     // draws the region a B section moves to.
@@ -477,6 +591,23 @@ function updateButtons() {
   setActive('kind', !!source, BUTTON_HINTS.kind + (source ? '' : ' It is dimmed because no source is loaded: drop a .mid file or press USE CLIP first.'));
   setPartlyIgnored('seed', allLocked, SEED_HINT +
     (allLocked ? ' Every chord is locked, so the seed only changes Humanize. Unlock a chord to use it fully.' : ''), TEXT_MUTED);
+  var leadOn = !!settings.lead;
+  setActive('density', ready && leadOn, leadOn
+    ? 'Density sets how busy the lead line is: higher values use shorter notes and fewer rests.'
+    : 'Density sets how busy the lead line is. It is dimmed because Lead is off: turn Lead on to use it.');
+  setGenerateLabel(leadOn);
+}
+
+function setGenerateLabel(leadOn) {
+  var label = leadOn ? 'Generate Lead' : 'Generate';
+  try {
+    var obj = self.patcher.getnamed('generate');
+    if (!obj) { return; }
+    obj.message('text', label);
+    obj.message('texton', label);
+  } catch (e) {
+    post('dooblr-chords: could not update the Generate label: ' + e + '\n');
+  }
 }
 
 // ---- Live API ---------------------------------------------------------------

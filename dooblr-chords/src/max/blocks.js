@@ -98,7 +98,8 @@ function paint() {
   // Header line: section heading, the B-section region (if any), status
   // right aligned. The key itself is on the Root and Mode menus.
   var heading = model.heading || 'PROGRESSION';
-  drawText(heading, 2, 11, FONT_BOLD, 9, model.source ? PALETTE.accent : PALETTE.textMuted);
+  var headColor = /^LEAD/.test(heading) ? PALETTE.dynamic : (model.source ? PALETTE.accent : PALETTE.textMuted);
+  drawText(heading, 2, 11, FONT_BOLD, 9, headColor);
   mgraphics.select_font_face(FONT_BOLD);
   mgraphics.set_font_size(9);
   var statusLeft = 2 + textWidth(heading) + 8;

@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.4.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.4.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -63,10 +63,14 @@ inside the device (not separate Max windows).
 3. Press **Generate**. A clip is written to the next empty slot, and the
    chords appear in the blocks.
 4. Click a block to lock it, then press **Reroll** to change the others.
-5. Press **ADVANCED …** for Bars per Chord, voicing, velocity, humanize,
-   Seed and Write. Press **SOURCE …** to drop a `.mid` file, use a clip as
-   the source, or pick a variation or B section. Each panel has a title and
-   a close (×) button; they close again when the device is reloaded.
+5. Press **LEAD** (the large gold toggle under Generate) and Generate again
+   for a melody over those chords. The blocks stay, with a LEAD header, so
+   you can see what the line follows.
+6. Press **ADVANCED …** for Bars per Chord, voicing, velocity, humanize,
+   Density, Seed and Write. Density is dimmed unless Lead is on. Press
+   **SOURCE …** to drop a `.mid` file, use a clip as the source, or pick a
+   variation or B section. Each panel has a title and a close (×) button;
+   they close again when the device is reloaded.
 
 ## Controls
 
@@ -74,7 +78,8 @@ The device is 640 × 169 px. The left rail holds Generate and Reroll. The
 main pane shows the key, length, Color, Spice and the chord blocks, with
 **ADVANCED …** and **SOURCE …** in the corner. Those buttons open an overlay
 that covers the chord display (and the rest of the main pane) until you
-close it.
+close it. The js moves the panel on-screen and parks the controls underneath
+off-screen, so they cannot be clicked through the overlay.
 
 | Section | Control | What it does |
 |---|---|---|
@@ -151,6 +156,7 @@ src/engine/      pure ES5 music engine (no Max APIs); manifest.json sets the loa
   midifile.js    Standard MIDI File reader (format 0/1, running status)
   analysis.js    chord segmentation, chord naming and key detection for a source
   derive.js      VAR (variation) and B (B section) from an analysed source
+  lead.js        monophonic melody over a progression
   engine.js      the facade used by Max and the tests
 src/max/main.js  Max glue: parameters, buttons, locks, source loading, Live API clip reading/writing
 src/max/blocks.js  jsui chord display
@@ -198,49 +204,57 @@ the files in `device/`, because they are generated.
 8. Click a block. It gets a coloured outline and a padlock, and Reroll
    lights up. Press **Reroll**. Locked chords stay, the others change, and a
    new clip is written.
-9. Type a Seed you saw earlier, then press **Write**. It writes the identical
+9. Press **LEAD**. It lights up gold and Generate reads **Generate Lead**.
+   Press Generate: the clip is named `Lead · …`, it is monophonic, and the
+   blocks still show the underlying chords under a LEAD header. Open
+   ADVANCED: Density is available. Turn Lead off: Density dims and Generate
+   writes chords again.
+10. Type a Seed you saw earlier, then press **Write**. It writes the identical
    progression.
-10. Fill every slot on the track and press Generate. The status reads "Every
+11. Fill every slot on the track and press Generate. The status reads "Every
     clip slot on this track is full…" and nothing else happens.
-11. Put the device in a MIDI Effect Rack and press Generate. It still writes
+12. Put the device in a MIDI Effect Rack and press Generate. It still writes
     to the track's slots.
-12. Save the Set, reopen it and check that the controls are restored. Locks
+13. Save the Set, reopen it and check that the controls are restored. Locks
     are not restored.
-13. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
+14. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
     send the js the message `ascii 1`.
-14. The device is 640 px wide. The main view shows the left rail (Generate,
+15. The device is 640 px wide. The main view shows the left rail (Generate, LEAD,
     Reroll), Key, Length, Color, Spice and the chord blocks, with ADVANCED …
     and SOURCE … in the top-right. The Advanced and Source controls are not
     on the main view. Press ADVANCED …: a panel covers the chord display,
-    with a title and a close (×). Bars per Chord, the voicing and output
-    dials, Bass, Seed and Write are all inside it and none overlap. Close it
-    with × or by pressing ADVANCED … again. Press SOURCE …: the drop zone,
-    USE CLIP, CLEAR, VAR/B and the info line are in that panel. VAR/B and
-    CLEAR are dimmed. Close it, reload the Set: both panels start closed.
-    Hover over the blocks: the hint ends with the full status text.
-15. Drag a `.mid` file with block chords (for example Am F C G, one bar each)
+    with a title and a close (×). The Max window posts "dooblr-chords: panel
+    open advanced". Bars per Chord, the voicing and output dials, Bass, Seed
+    and Write are all inside it and none overlap. The key, tension knobs and
+    chord blocks underneath are gone (moved off-screen), not just covered.
+    Close it with × or by pressing ADVANCED … again; the Max window posts
+    "dooblr-chords: panel closed". Press SOURCE …: the drop zone, USE CLIP,
+    CLEAR, VAR/B and the info line are in that panel. VAR/B and CLEAR are
+    dimmed. Close it, reload the Set: both panels start closed. Hover over
+    the blocks: the hint ends with the full status text.
+16. Drag a `.mid` file with block chords (for example Am F C G, one bar each)
     from Finder onto the drop zone. The status reads "Loaded <name>: A Natural
     Minor, 4 chords…", Root/Mode/Length change to A, Natural Minor and 4, the
     SOURCE strip shows `Am F C G`, the heading reads VARIATION, and no clip is
     written. Drop a `.wav` and a damaged `.mid`: each gives a readable warning
     and the old source stays.
-16. Press **Generate**. The clip is named `<name> · VAR · A min · …`, has the
+17. Press **Generate**. The clip is named `<name> · VAR · A min · …`, has the
     source's length and rhythm, starts on Am and ends on G. Changed chords
     have an orange dot. Generate a few times: different inner chords.
-17. Switch to **B** and press Generate. The heading reads B SECTION with a key
+18. Switch to **B** and press Generate. The heading reads B SECTION with a key
     area such as "in C major (III)", the chords differ from the source, and
     playing the B clip then the source clip sounds like a return home.
-18. In B, lock a chord and press Reroll several times. The locked chord and
+19. In B, lock a chord and press Reroll several times. The locked chord and
     the chord count stay the same.
-19. Select a MIDI clip in Session View (Detail View showing its notes),
+20. Select a MIDI clip in Session View (Detail View showing its notes),
     including one with a loop that does not start at 1.1.1, and press **USE
     CLIP**. The source is the looped part. Select an audio clip: the status
     says so. Deselect all clips: "No clip is selected…".
-20. Press **CLEAR**. The heading returns to PROGRESSION and VAR/B dims.
-21. Load a file, save the Set, reopen it. The file source comes back (if the
+21. Press **CLEAR**. The heading returns to PROGRESSION and VAR/B dims.
+22. Load a file, save the Set, reopen it. The file source comes back (if the
     file still exists) and the saved Root/Mode/Length are kept. A USE CLIP
     source is not saved.
-22. Try a source with arpeggios or a melody on top of the chords, and one in
+23. Try a source with arpeggios or a melody on top of the chords, and one in
     3/4. Check the detected chords make sense; fix the key with Root/Mode if
     not (detection reads relative major/minor wrongly in about 1 in 5 plain
     diatonic loops).
@@ -291,11 +305,15 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
-* The 0.4.0 layout in Live: toggling the `hidden` attribute from js on
-  presentation objects (`this.patcher.getnamed(...).hidden`) so an overlay
-  covers the jsui, the drawing order of non-background panels above the
-  chord display, whether hidden objects still eat clicks or drops, `live.drop`
-  only while the Source panel is open, `live.text` buttons with
+* The 0.5.0 Lead toggle in Live: the large gold on-state, the Generate label
+  changing to "Generate Lead", Density dimming when Lead is off, and the
+  monophonic lead clip sounding over the shown chords.
+* The 0.4.1 overlays in Live: moving objects with `presentation_rect` from
+  js (`obj.message("presentation_rect", …)` and `thispatcher script sendbox`)
+  so a panel comes on-screen and the main-view controls it covers go to x=2000,
+  `patcher.bringtofront` / `sendtoback` for the backdrop versus its members,
+  `live.text` mode-1 openers (`set` may echo; the js ignores repeats),
+  `live.drop` only while the Source panel is open, `live.text` buttons with
   `parameter_enable` 0, the × and ellipsis glyphs, Color/Spice captions with
   `showname` off, 8.5 pt button labels, and how the 640 px device sits in
   Live's device chain. `scripts/render-layout.py` only approximates Live's
