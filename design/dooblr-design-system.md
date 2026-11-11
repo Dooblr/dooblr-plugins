@@ -1101,6 +1101,7 @@ Additive only; no existing rule, token name or value changed; §11–§14 untouc
 
 ## 16. Changelog
 
+- **2026-11-11**: dooblr-sub 0.1.0 added as a sibling VST3 effect (product `dooblr-sub`, target `DooblrSub`, plugin code `Dbsb`). One page: header, spectrum / sub-band meters and verdict, then Sub / Tone Shift / System Check panels. Existing palette, ControlPanel, OutputMeter and undo history; no new colour, font, radius or alpha tokens. Additive only; no existing rule, token name or value changed; §11 untouched; no JSON change.
 - **2026-11-10**: Added §15 dooblr-throat (T, 0.1.0): one-page vocal instrument, 60 px header, vowel pad (close/front axes, calibrated dots), Voice / Source / Pitch / Envelope panels, original factory presets, MIDI-track instrument. Changelog renumbered to §16. Additive only; no existing rule, token name or value changed; §11–§14 untouched; no JSON change.
 - **2026-11-11**: dooblr-m 0.1.3: filter Emphasis control renamed Resonance in the UI and host parameter name; parameter ID `emphasis` unchanged. Additive; no suite token change; other plug-ins unchanged.
 - **2026-11-11**: dooblr-m 0.1.2: Note Priority and noise colour are 2-position rockers; filter cutoff is a large knob; the output graph is an interactive filter envelope (static ADS + live DSP playhead, four handles); A-440 is removed (old state still loads). Additive; no suite token change; other plug-ins unchanged.

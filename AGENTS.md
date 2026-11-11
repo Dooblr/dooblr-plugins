@@ -2,7 +2,8 @@
 
 Read the design maps before you read code; they exist so you do not have to crawl the repo.
 
-1. Read `design/INDEX.md` first, then `design/plugins/<plugin>.md` for the plugin you are working on.
+1. Read `design/INDEX.md` first, then `design/plugins/<plugin>.md` for the plugin you are working on
+   (including dooblr-sub).
    The generated map there lists the version, every parameter (id, range, default), each source
    file with a one-line role, UI components and sizes, the tests, and the build/install commands.
 2. Open only the source files the map points you to. Widen the search only if the map does not
