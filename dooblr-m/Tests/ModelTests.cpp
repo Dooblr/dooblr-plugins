@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cfloat>
+#include <chrono>
 #include <cmath>
 #include <complex>
 #include <cstdlib>
@@ -347,6 +348,7 @@ namespace
                 ids.insert (ranged->paramID);
         check ((int) ids.size() == params::parameterCount, "parameter IDs are unique");
         for (auto* expected : { id::tune, id::glide, id::osc1Range, id::osc1Wave, id::osc2Freq, id::osc3Control,
+                                id::osc3Lfo, id::lfoRate, id::lfoSync, id::lfoDivision, id::lfoRetrigger,
                                 id::mixOsc1, id::mixExt, id::cutoff, id::emphasis, id::fAttack, id::aSustain,
                                 id::decaySwitch, id::notePriority, id::legato, id::modWheel, id::output })
             check (ids.count (expected) == 1, std::string ("parameter id ") + expected);
@@ -602,6 +604,157 @@ namespace
                + fmt (hz, 3) + " Hz)");
     }
 
+    void testOsc3DedicatedLfo()
+    {
+        auto settle = [] (Processor& p, int samples = 9600)
+        {
+            render (p, samples, { { 0, on (60) } });
+        };
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::osc3Lfo, 1.0f);
+            set (*p, id::lfoSync, 0.0f);
+            set (*p, id::lfoRate, 2.0f);
+            settle (*p);
+            check (std::abs (p->getEngine().getLfoHz() - 2.0f) < 0.08f,
+                   "free-run LFO rate is 2 Hz (got " + fmt (p->getEngine().getLfoHz(), 3) + ")");
+        }
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::osc3Lfo, 1.0f);
+            set (*p, id::lfoSync, 1.0f);
+            set (*p, id::lfoDivision, 2.0f); // 1/4
+            settle (*p);
+            check (std::abs (p->getEngine().getLfoHz() - 2.0f) < 0.08f,
+                   "1/4-note sync at 120 BPM is 2 Hz (got " + fmt (p->getEngine().getLfoHz(), 3) + ")");
+        }
+
+        {
+            auto low = makeProcessor(), high = makeProcessor();
+            for (auto* p : { low.get(), high.get() })
+            {
+                set (*p, id::osc3Lfo, 1.0f);
+                set (*p, id::lfoRate, 3.0f);
+                set (*p, id::lfoSync, 0.0f);
+                set (*p, id::osc3Control, 1.0f);
+                set (*p, id::pitchBend, 1.0f);
+                set (*p, id::bendRange, 12.0f);
+            }
+            render (*low, 9600, { { 0, on (36) } });
+            render (*high, 9600, { { 0, on (84) } });
+            check (std::abs (low->getEngine().getLfoHz() - high->getEngine().getLfoHz()) < 0.02f,
+                   "LFO rate ignores note pitch (" + fmt (low->getEngine().getLfoHz(), 3)
+                       + " vs " + fmt (high->getEngine().getLfoHz(), 3) + ")");
+            check (std::abs (low->getEngine().getLfoHz() - 3.0f) < 0.1f, "LFO rate ignores pitch wheel");
+        }
+
+        {
+            auto a = makeProcessor(), b = makeProcessor();
+            openFilter (*a);
+            openFilter (*b);
+            set (*b, id::lfoRate, 27.0f);
+            set (*b, id::lfoSync, 1.0f);
+            set (*b, id::lfoDivision, 5.0f);
+            set (*b, id::lfoRetrigger, 1.0f);
+            check (get (*b, id::osc3Lfo) < 0.5f, "audio-mode comparison leaves Osc 3 LFO off");
+            const auto ra = render (*a, 24000, { { 0, on (60) } });
+            const auto rb = render (*b, 24000, { { 0, on (60) } });
+            check (ra.left == rb.left && ra.right == rb.right,
+                   "LFO params do not change Osc 3 audio-mode output");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::mixOsc1On, 0.0f);
+            set (*p, id::mixOsc3On, 1.0f);
+            set (*p, id::mixOsc3, 0.9f);
+            set (*p, id::osc3Lfo, 1.0f);
+            const auto r = render (*p, 24000, { { 0, on (60) } });
+            float tail = 0.0f;
+            for (size_t i = 2000; i < r.left.size(); ++i)
+                tail = std::max (tail, std::abs (r.left[i]));
+            check (tail < 1.0e-3f, "mixer Osc 3 is faded out in LFO mode (tail "
+                   + fmt (tail, 6) + ")");
+        }
+
+        {
+            auto quiet = makeProcessor(), modulated = makeProcessor();
+            for (auto* p : { quiet.get(), modulated.get() })
+            {
+                openFilter (*p);
+                set (*p, id::osc3Lfo, 1.0f);
+                set (*p, id::lfoRate, 5.0f);
+                set (*p, id::modWheel, 1.0f);
+                set (*p, id::emphasis, 0.25f);
+            }
+            set (*modulated, id::filterMod, 1.0f);
+            const auto a = render (*quiet, 24000, { { 0, on (48) } });
+            const auto b = render (*modulated, 24000, { { 0, on (48) } });
+            double diff = 0.0;
+            for (size_t i = 0; i < a.left.size(); ++i)
+                diff += std::pow ((double) a.left[i] - b.left[i], 2.0);
+            diff = std::sqrt (diff / (double) a.left.size());
+            check (b.peak() > 0.02f && diff > 0.01 * std::max (a.rms(), b.rms()),
+                   "Osc 3 LFO reaches the filter through Filter Mod");
+        }
+
+        {
+            auto quiet = makeProcessor(), modulated = makeProcessor();
+            for (auto* p : { quiet.get(), modulated.get() })
+            {
+                openFilter (*p);
+                set (*p, id::osc3Lfo, 1.0f);
+                set (*p, id::lfoRate, 4.0f);
+                set (*p, id::modWheel, 1.0f);
+            }
+            set (*modulated, id::oscMod, 1.0f);
+            const auto a = render (*quiet, 24000, { { 0, on (48) } });
+            const auto b = render (*modulated, 24000, { { 0, on (48) } });
+            double diff = 0.0;
+            for (size_t i = 0; i < a.left.size(); ++i)
+                diff += std::pow ((double) a.left[i] - b.left[i], 2.0);
+            diff = std::sqrt (diff / (double) a.left.size());
+            check (b.peak() > 0.02f && diff > 0.01 * std::max (a.rms(), b.rms()),
+                   "Osc 3 LFO reaches oscillator pitch through Osc Mod");
+        }
+
+        {
+            auto p = makeProcessor();
+            juce::XmlElement loaded ("DooblrM");
+            loaded.setAttribute ("stateVersion", 2);
+            loaded.setAttribute ("presetName", "PreLfo");
+            auto addParam = [&loaded] (const juce::String& pid, double value)
+            {
+                auto* child = loaded.createNewChildElement ("PARAM");
+                child->setAttribute ("id", pid);
+                child->setAttribute ("value", value);
+            };
+            addParam (id::cutoff, 640.0);
+            addParam (id::volume, 0.55);
+            juce::MemoryBlock blob;
+            juce::AudioProcessor::copyXmlToBinary (loaded, blob);
+            p->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (get (*p, id::osc3Lfo) < 0.5f, "old state defaults Osc 3 LFO off");
+            check (std::abs (get (*p, id::lfoRate) - 1.0f) < 0.02f, "old state defaults LFO Rate to 1 Hz");
+            check (get (*p, id::lfoSync) < 0.5f, "old state defaults LFO Sync off");
+            check (std::abs (get (*p, id::lfoDivision) - 2.0f) < 0.01f, "old state defaults LFO Division to 1/4");
+            check (get (*p, id::lfoRetrigger) < 0.5f, "old state defaults LFO Retrigger off");
+            check (std::abs (get (*p, id::cutoff) - 640.0f) < 0.5f, "old state still restores cutoff");
+        }
+
+        {
+            auto p = makeProcessor();
+            set (*p, id::osc3Lfo, 1.0f);
+            set (*p, id::lfoRetrigger, 1.0f);
+            p->getEngine().setSettings (p->readSettings());
+            p->getEngine().noteOn (48, 0.8f);
+            check (p->getEngine().getLfoPhase() < 1.0e-4f, "key retrigger resets LFO phase");
+        }
+    }
+
     void testA440Removed()
     {
         auto p = makeProcessor();
@@ -754,6 +907,11 @@ namespace
             { id::osc3Range, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f } } },
             { id::osc3Wave, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f } } },
             { id::osc3Control, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f }, { id::osc3Range, 5.0f } } },
+            { id::osc3Lfo, { { id::mixOsc1On, 0.0f }, { id::mixOsc3On, 1.0f }, { id::mixOsc3, 0.8f } } },
+            { id::lfoRate, { { id::osc3Lfo, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f }, { id::emphasis, 0.35f } } },
+            { id::lfoSync, { { id::osc3Lfo, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f }, { id::lfoRate, 0.3f } } },
+            { id::lfoDivision, { { id::osc3Lfo, 1.0f }, { id::lfoSync, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f } } },
+            { id::lfoRetrigger, { { id::osc3Lfo, 1.0f }, { id::filterMod, 1.0f }, { id::modWheel, 1.0f }, { id::lfoRate, 4.0f } } },
             { id::mixOsc2, { { id::mixOsc2On, 1.0f } } },
             { id::mixOsc2On, { { id::mixOsc2, 0.8f } } },
             { id::mixOsc3, { { id::mixOsc3On, 1.0f } } },
@@ -1001,15 +1159,79 @@ namespace
                    sizeLabel + "noise colour is a 2-position rocker");
             check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc1Range)) != nullptr,
                    sizeLabel + "osc 1 range stays a multi-position switch");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::osc3Lfo)) != nullptr,
+                   sizeLabel + "Osc 3 LFO is a rocker");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::lfoSync)) != nullptr,
+                   sizeLabel + "LFO Sync is a rocker");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::lfoRetrigger)) != nullptr,
+                   sizeLabel + "LFO Retrigger is a rocker");
+            check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::lfoDivision)) != nullptr,
+                   sizeLabel + "LFO Division is a multi-position switch");
+            check (dynamic_cast<ui::Knob*> (editor->findControl (id::lfoRate)) != nullptr,
+                   sizeLabel + "LFO Rate is a knob");
+
+            auto* rateKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::lfoRate));
+            auto& pulse = editor->getLfoPulse();
+            check (rateKnob != nullptr && pulse.getParentComponent() == rateKnob,
+                   sizeLabel + "LFO pulse is parented to the Rate knob");
+            if (rateKnob != nullptr)
+            {
+                check (rateKnob->getLocalBounds().contains (pulse.getBounds()),
+                       sizeLabel + "LFO pulse stays inside the Rate knob");
+                bool intercepts = true, interceptsChildren = true;
+                pulse.getInterceptsMouseClicks (intercepts, interceptsChildren);
+                check (! intercepts && ! interceptsChildren, sizeLabel + "LFO pulse does not intercept mouse");
+                check (! pulse.hitTest (pulse.getWidth() / 2, pulse.getHeight() / 2),
+                       sizeLabel + "LFO pulse hitTest is false");
+            }
 
             auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
             auto* attackKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::fAttack));
             auto* resonanceKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::emphasis));
+            auto& contourIndicator = editor->getCutoffContourIndicator();
+            check (cutoffKnob != nullptr && contourIndicator.getParentComponent() == cutoffKnob,
+                   sizeLabel + "cutoff contour indicator is parented to the Cutoff knob");
+            if (cutoffKnob != nullptr)
+            {
+                check (contourIndicator.getWidth() > 20 && contourIndicator.getHeight() > 20,
+                       sizeLabel + "contour indicator covers the Cutoff slider");
+                check (cutoffKnob->getLocalBounds().contains (contourIndicator.getBounds()),
+                       sizeLabel + "contour indicator stays inside the Cutoff knob");
+                check (editor->getLocalBounds().contains (editor->getLocalArea (cutoffKnob, cutoffKnob->getLocalBounds())),
+                       sizeLabel + "cutoff knob stays inside the editor");
+                check (editor->getLocalBounds().contains (editor->getLocalArea (&contourIndicator,
+                                                                                contourIndicator.getLocalBounds())),
+                       sizeLabel + "contour indicator does not overflow the editor");
+            }
             check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() == "Resonance",
                    sizeLabel + "filter resonance knob caption is Resonance");
             check (resonanceKnob != nullptr && resonanceKnob->getCaption().getText() != "Emphasis",
                    sizeLabel + "filter knob is no longer labelled Emphasis");
             check (cutoffKnob != nullptr && cutoffKnob->isLarge(), sizeLabel + "cutoff knob is marked large");
+
+            set (*p, id::osc3Lfo, 1.0f);
+            editor->resized();
+            auto* osc3Wave = dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::osc3Wave));
+            check (osc3Wave != nullptr && osc3Wave->getTickLabels().size() == 6,
+                   sizeLabel + "Osc 3 LFO-mode wave has six ticks");
+            if (osc3Wave != nullptr)
+            {
+                const auto& ticks = osc3Wave->getTickLabels();
+                check (ticks[1].text == "Dn" && ticks[4].text == "S/H" && ticks[5].text == "Rnd",
+                       sizeLabel + "Osc 3 wave ticks switch to LFO names");
+                const auto clip = osc3Wave->getLocalBounds().toFloat();
+                const auto font = juce::Font (juce::FontOptions (8.0f));
+                for (const auto& tick : ticks)
+                {
+                    check (clip.contains (tick.bounds.reduced (0.51f, 0.51f)) || clip.contains (tick.bounds),
+                           sizeLabel + "LFO wave tick '" + tick.text.toStdString() + "' stays inside the switch");
+                    const auto textW = juce::GlyphArrangement::getStringWidth (font, tick.text);
+                    check (textW <= tick.bounds.getWidth() + 1.0f,
+                           sizeLabel + "LFO wave tick '" + tick.text.toStdString() + "' fits its box");
+                }
+            }
+            set (*p, id::osc3Lfo, 0.0f);
+            editor->resized();
             check (attackKnob != nullptr, sizeLabel + "filter attack knob exists");
             if (cutoffKnob != nullptr && attackKnob != nullptr)
             {
@@ -1372,6 +1594,195 @@ namespace
                "live playhead lifts off the baseline during attack");
     }
 
+    int opaquePixels (juce::Component& c)
+    {
+        if (c.getWidth() <= 0 || c.getHeight() <= 0)
+            return 0;
+        juce::Image image (juce::Image::ARGB, c.getWidth(), c.getHeight(), true);
+        juce::Graphics g (image);
+        c.paint (g);
+        int n = 0;
+        for (int y = 0; y < image.getHeight(); ++y)
+            for (int x = 0; x < image.getWidth(); ++x)
+                if (image.getPixelAt (x, y).getAlpha() > 12)
+                    ++n;
+        return n;
+    }
+
+    void testCutoffContourIndicator()
+    {
+        auto p = makeProcessor();
+        std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "the editor is a DooblrMEditor");
+        if (editor == nullptr)
+            return;
+
+        check (juce::approximatelyEqual (ui::CutoffContourIndicator::contourOctaves, dsp::contourOctaves),
+               "indicator octave span matches the DSP filter contour");
+
+        auto* cutoff = param (*p, id::cutoff);
+        auto* amount = param (*p, id::contourAmt);
+        auto* cutoffKnob = dynamic_cast<ui::Knob*> (editor->findControl (id::cutoff));
+        auto& indicator = editor->getCutoffContourIndicator();
+        if (cutoff == nullptr || amount == nullptr || cutoffKnob == nullptr)
+            return;
+
+        bool intercepts = true, interceptsChildren = true;
+        indicator.getInterceptsMouseClicks (intercepts, interceptsChildren);
+        check (! intercepts && ! interceptsChildren, "contour indicator does not intercept mouse clicks");
+        check (! indicator.hitTest (indicator.getWidth() / 2, indicator.getHeight() / 2),
+               "hitTest is false so the Cutoff knob still receives drags");
+        check (indicator.getNumChildComponents() == 0, "contour indicator has no child labels");
+
+        amount->setValueNotifyingHost (0.0f);
+        set (*p, id::cutoff, 400.0f);
+        indicator.refresh();
+        check (! indicator.isVisible() && ! indicator.isRangeVisible() && ! indicator.isLiveMarkerVisible(),
+               "indicator is hidden at contour amount 0");
+        check (opaquePixels (indicator) == 0, "paint draws nothing at contour amount 0");
+
+        const auto beforeDrag = cutoff->getValue();
+        auto& slider = cutoffKnob->getSlider();
+        const auto centre = slider.getLocalBounds().getCentre().toFloat();
+        simulateDrag (slider, centre, centre + juce::Point<float> (0.0f, -36.0f));
+        check (std::abs (cutoff->getValue() - beforeDrag) > 1.0e-5f,
+               "dragging Cutoff still changes the value with the overlay present");
+        cutoff->setValueNotifyingHost (cutoff->convertTo0to1 (400.0f));
+
+        amount->setValueNotifyingHost (0.30f);
+        indicator.refresh();
+        check (indicator.isVisible() && indicator.isRangeVisible(),
+               "indicator is visible when contour amount is non-zero");
+        check (! indicator.isLiveMarkerVisible(), "live marker stays hidden while the envelope is idle");
+        const auto oct30 = std::log2 (indicator.getRangeEndHz() / indicator.getRangeStartHz());
+        const auto span30 = std::abs (indicator.getRangeEndAngle() - indicator.getRangeStartAngle());
+        check (std::abs (oct30 / (0.30f * dsp::contourOctaves) - 1.0f) < 0.02f,
+               "range at 30% contour is 1.5 octaves (got " + fmt (oct30, 3) + ")");
+        check (opaquePixels (indicator) > 20, "visible range arc actually paints pixels");
+
+        amount->setValueNotifyingHost (0.60f);
+        indicator.refresh();
+        const auto oct60 = std::log2 (indicator.getRangeEndHz() / indicator.getRangeStartHz());
+        const auto span60 = std::abs (indicator.getRangeEndAngle() - indicator.getRangeStartAngle());
+        check (std::abs (oct60 / (0.60f * dsp::contourOctaves) - 1.0f) < 0.02f,
+               "range at 60% contour is 3 octaves (got " + fmt (oct60, 3) + ")");
+        check (std::abs (oct60 / oct30 - 2.0f) < 0.05f, "octave span doubles when contour amount doubles");
+        check (span60 > span30 * 1.5f, "angle span grows with contour amount ("
+               + fmt (span30, 3) + " -> " + fmt (span60, 3) + ")");
+
+        amount->setValueNotifyingHost (1.0f);
+        set (*p, id::cutoff, 10000.0f);
+        indicator.refresh();
+        check (std::abs (indicator.getRangeEndHz() - 20000.0f) < 0.5f,
+               "sweep clamps to the cutoff knob maximum");
+        set (*p, id::cutoff, 400.0f);
+
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor->setSize (size.x, size.y);
+            amount->setValueNotifyingHost (0.55f);
+            indicator.refresh();
+            const auto sizeLabel = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
+            check (cutoffKnob->getLocalBounds().contains (indicator.getBounds()),
+                   sizeLabel + "contour indicator stays inside the Cutoff knob");
+            check (editor->getLocalBounds().contains (editor->getLocalArea (&indicator, indicator.getLocalBounds())),
+                   sizeLabel + "contour indicator does not overflow the editor");
+            const auto ring = indicator.getRingRadius() + 1.6f;
+            const auto c = indicator.getCentre();
+            const auto box = indicator.getLocalBounds().toFloat().expanded (1.5f, 1.5f);
+            check (box.contains (juce::Point<float> (c.x - ring, c.y))
+                       && box.contains (juce::Point<float> (c.x + ring, c.y))
+                       && box.contains (juce::Point<float> (c.x, c.y - ring))
+                       && box.contains (juce::Point<float> (c.x, c.y + ring)),
+                   sizeLabel + "contour arc stays inside the knob cell");
+            ui::SectionPanel* modifiers = nullptr;
+            for (auto& sec : editor->getSections())
+                if (sec->getTitle() == "MODIFIERS")
+                    modifiers = sec.get();
+            check (modifiers != nullptr, sizeLabel + "modifiers section exists");
+            if (modifiers != nullptr)
+                check (modifiers->getLocalBounds().contains (modifiers->getLocalArea (&indicator, indicator.getLocalBounds())),
+                       sizeLabel + "contour indicator stays inside Modifiers");
+        }
+
+        editor->setSize (1080, 660);
+        amount->setValueNotifyingHost (0.85f);
+        set (*p, id::cutoff, 400.0f);
+        set (*p, id::fAttack, 0.08f);
+        set (*p, id::fDecay, 0.4f);
+        set (*p, id::fSustain, 0.65f);
+        set (*p, id::velocityOn, 0.0f);
+        set (*p, id::kybd1, 0.0f);
+        set (*p, id::kybd2, 0.0f);
+        set (*p, id::filterMod, 0.0f);
+        indicator.refresh();
+        const auto idleEnv = indicator.getLiveEnvelope();
+        check (idleEnv < 0.05f && ! indicator.isLiveMarkerVisible(), "live marker idle with no notes");
+
+        juce::AudioBuffer<float> buffer (2, 512);
+        juce::MidiBuffer midi;
+        midi.addEvent (on (60), 0);
+        for (int i = 0; i < 8; ++i)
+        {
+            buffer.clear();
+            p->processBlock (buffer, midi);
+            midi.clear();
+        }
+        indicator.refresh();
+        editor->getFilterReadout().refresh();
+        const auto env = indicator.getLiveEnvelope();
+        check (env > idleEnv + 0.2f, "live envelope rises while a note plays (env " + fmt (env, 3) + ")");
+        check (indicator.isLiveMarkerVisible(), "live marker is visible while the envelope moves");
+        check (std::abs (env - editor->getFilterReadout().getLiveEnvelope()) < 1.0e-5f,
+               "indicator reads the same lock-free envelope tap as the filter graph");
+        const auto expectedHz = 400.0f * std::exp2 (0.85f * dsp::contourOctaves * env);
+        check (std::abs (indicator.getLiveHz() / expectedHz - 1.0f) < 0.02f,
+               "live marker Hz follows cutoff * 2^(contour * 5 * env) (got "
+                   + fmt (indicator.getLiveHz(), 1) + ", expected " + fmt (expectedHz, 1) + ")");
+        check (indicator.getLiveAngle() > indicator.getRangeStartAngle() + 0.01f
+                   && indicator.getLiveAngle() <= indicator.getRangeEndAngle() + 0.02f,
+               "live marker sits on the sweep arc between the set cutoff and the contour extreme");
+        check (opaquePixels (indicator) > 20, "live marker and range arc paint while a note plays");
+
+        amount->setValueNotifyingHost (0.0f);
+        indicator.refresh();
+        check (! indicator.isVisible() && ! indicator.isRangeVisible() && ! indicator.isLiveMarkerVisible(),
+               "indicator hides again when contour amount returns to 0");
+        check (opaquePixels (indicator) == 0, "paint is empty again at contour amount 0");
+
+        amount->setValueNotifyingHost (0.5f);
+        indicator.refresh();
+        const auto requests = indicator.getRepaintRequests();
+        indicator.refresh();
+        indicator.refresh();
+        indicator.refresh();
+        check (indicator.getRepaintRequests() == requests, "unchanged refresh does not repaint the knob");
+        check (cutoffKnob->getLocalBounds().contains (indicator.getLastRepaintBounds()),
+               "repaint region is the Cutoff knob overlay, not the whole editor");
+        check (indicator.getWidth() * indicator.getHeight() < editor->getWidth() * editor->getHeight() / 8,
+               "overlay area is a small fraction of the editor");
+
+        {
+            juce::Image image (juce::Image::ARGB, juce::jmax (1, indicator.getWidth()),
+                               juce::jmax (1, indicator.getHeight()), true);
+            const auto paintOnce = [&]
+            {
+                juce::Graphics g (image);
+                indicator.paint (g);
+            };
+            paintOnce();
+            const auto start = std::chrono::steady_clock::now();
+            constexpr int runs = 40;
+            for (int i = 0; i < runs; ++i)
+                paintOnce();
+            const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - start).count()
+                            / (double) runs;
+            note ("cutoff contour indicator paint: " + fmt (ms, 3) + " ms");
+            check (ms < 8.0, "indicator paint stays well under a 60 Hz frame (got " + fmt (ms, 3) + " ms)");
+        }
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -1390,6 +1801,7 @@ int main()
         { "envelope timing and Decay switch",          testEnvelopeTiming },
         { "note priority and glide",                   testNotePriorityAndGlide },
         { "osc 3 LO free-running LFO",                 testOsc3LfoMode },
+        { "osc 3 dedicated LFO mode",                  testOsc3DedicatedLfo },
         { "A-440 removed, old state still loads",      testA440Removed },
         { "oscillator aliasing sanity",                testAliasing },
         { "44.1k / 48k / 96k pitch",                   testSampleRates },
@@ -1404,6 +1816,7 @@ int main()
         { "switch drag",                               testSwitchDrag },
         { "priority and noise rockers",                testPriorityAndNoiseSwitches },
         { "filter envelope handles",                   testEnvelopeHandles },
+        { "cutoff contour indicator",                  testCutoffContourIndicator },
     };
 
     int failedTests = 0;

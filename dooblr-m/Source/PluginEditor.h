@@ -32,6 +32,8 @@ namespace dooblrm
         juce::Component* findControl (const juce::String& parameterId) const;
         juce::Rectangle<int> getContentArea() const noexcept { return contentArea; }
         ui::FilterReadout& getFilterReadout() noexcept { return filterReadout; }
+        ui::CutoffContourIndicator& getCutoffContourIndicator() noexcept { return cutoffContour; }
+        ui::LfoPulse& getLfoPulse() noexcept { return lfoPulse; }
         ui::ScopeView& getScope() noexcept { return scope; }
         const std::vector<std::unique_ptr<ui::SectionPanel>>& getSections() const { return sections; }
         const std::vector<std::unique_ptr<ui::RotarySwitch>>& getRotaries() const { return rotaries; }
@@ -74,6 +76,8 @@ namespace dooblrm
 
         std::vector<std::unique_ptr<ui::SectionPanel>> sections;
         std::vector<std::unique_ptr<ui::Knob>> knobs;
+        ui::CutoffContourIndicator cutoffContour;
+        ui::LfoPulse lfoPulse;
         std::vector<std::unique_ptr<ui::RotarySwitch>> rotaries;
         std::vector<std::unique_ptr<ui::BatToggle>> toggles;
         std::vector<std::unique_ptr<ui::Wheel>> wheels;

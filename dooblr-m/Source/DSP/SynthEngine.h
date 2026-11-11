@@ -9,6 +9,9 @@
 
 namespace dooblrm::dsp
 {
+    /** Amount of Contour = 1 opens the ladder by this many octaves. */
+    inline constexpr float contourOctaves = 5.0f;
+
     struct EnvSettings
     {
         float attack = 0.002f, decay = 0.5f, sustain = 1.0f;
@@ -29,6 +32,11 @@ namespace dooblrm::dsp
         float osc2Freq = 0.0f;
         int osc3Range = 2, osc3Wave = 0;
         float osc3Freq = 0.0f;
+        bool osc3Lfo = false;
+        float lfoRate = 1.0f;
+        bool lfoSync = false;
+        int lfoDivision = 2;
+        bool lfoRetrigger = false;
 
         float mixOsc1 = 0.8f; bool mixOsc1On = true;
         float mixOsc2 = 0.0f; bool mixOsc2On = false;
@@ -86,6 +94,10 @@ namespace dooblrm::dsp
         int getFilterEnvStage() const noexcept { return filterEnvStageTap.load (std::memory_order_relaxed); }
         const std::atomic<float>& getFilterEnvTap() const noexcept { return filterEnvTap; }
         const std::atomic<int>& getFilterEnvStageTap() const noexcept { return filterEnvStageTap; }
+        float getLfoHz() const noexcept { return lastLfoHz; }
+        float getLfoValue() const noexcept { return lastLfo; }
+        float getLfoPhase() const noexcept { return lfo.phase; }
+        const std::atomic<float>& getLfoTap() const noexcept { return lfoTap; }
         float getGlidePitch() const noexcept { return glide.current; }
         float getLastCutoffHz() const noexcept { return lastCutoffHz; }
         float getLastSample() const noexcept { return lastSample; }
@@ -103,7 +115,10 @@ namespace dooblrm::dsp
         Settings settings;
         double sampleRate = 48000.0;
 
+        float lfoTargetHz() const noexcept;
+
         BlitOsc osc1, osc2, osc3;
+        LfoOsc lfo;
         Drift drift1, drift2, drift3;
         LadderFilter ladder;
         Contour filt, amp;
@@ -130,10 +145,15 @@ namespace dooblrm::dsp
         std::atomic<float> midiModWheel { 0.0f };
         std::atomic<float> filterEnvTap { 0.0f };
         std::atomic<int> filterEnvStageTap { 0 };
+        std::atomic<float> lfoTap { 0.0f };
 
+        HostTime hostTime;
         float feedbackSample = 0.0f;
         float lastSample = 0.0f;
         float lastCutoffHz = 1200.0f;
+        float lastLfoHz = 1.0f;
+        float lastLfo = 0.0f;
+        float osc3AudioGain = 1.0f;
         float outputSmoothed = 1.0f;
         int scopeDecim = 0;
         Rng thermal;

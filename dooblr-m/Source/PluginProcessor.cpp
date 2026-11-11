@@ -9,7 +9,7 @@ namespace dooblrm
 #define DOOBLRM_PARAMETERS(X) \
     X(tune) X(glide) X(modMix) X(osc3Control) X(oscMod) X(filterMod) \
     X(osc1Range) X(osc1Wave) X(osc2Range) X(osc2Wave) X(osc2Freq) \
-    X(osc3Range) X(osc3Wave) X(osc3Freq) \
+    X(osc3Range) X(osc3Wave) X(osc3Freq) X(osc3Lfo) X(lfoRate) X(lfoSync) X(lfoDivision) X(lfoRetrigger) \
     X(mixOsc1) X(mixOsc1On) X(mixOsc2) X(mixOsc2On) X(mixOsc3) X(mixOsc3On) \
     X(mixExt) X(mixExtOn) X(mixNoise) X(mixNoiseOn) X(noiseType) \
     X(cutoff) X(emphasis) X(contourAmt) X(fAttack) X(fDecay) X(fSustain) X(kybd1) X(kybd2) \
@@ -85,6 +85,11 @@ namespace dooblrm
         s.osc3Range = juce::jlimit (0, 5, i (r.osc3Range));
         s.osc3Wave = juce::jlimit (0, 5, i (r.osc3Wave));
         s.osc3Freq = f (r.osc3Freq);
+        s.osc3Lfo = b (r.osc3Lfo);
+        s.lfoRate = f (r.lfoRate);
+        s.lfoSync = b (r.lfoSync);
+        s.lfoDivision = juce::jlimit (0, 5, i (r.lfoDivision));
+        s.lfoRetrigger = b (r.lfoRetrigger);
 
         s.mixOsc1 = f (r.mixOsc1); s.mixOsc1On = b (r.mixOsc1On);
         s.mixOsc2 = f (r.mixOsc2); s.mixOsc2On = b (r.mixOsc2On);

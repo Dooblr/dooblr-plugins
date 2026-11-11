@@ -6,7 +6,8 @@ namespace dooblrm::params
 {
     /** State-tree version written with every saved state (bump when a migration is needed).
         1: 0.1.0–0.1.1. 2: 0.1.2 dropped the A-440 parameter (old sessions that still store
-        it load; the extra PARAM is ignored). */
+        it load; the extra PARAM is ignored). 0.1.5 adds Osc 3 LFO parameters; missing PARAM
+        children are filled with defaults, so the version stays 2. */
     inline constexpr int stateVersion = 2;
 
     /** Parameter IDs. Never rename. a440 was removed in 0.1.2 (old states/presets that still
@@ -30,6 +31,11 @@ namespace dooblrm::params
         inline constexpr const char* osc3Range    = "osc3Range";
         inline constexpr const char* osc3Wave     = "osc3Wave";
         inline constexpr const char* osc3Freq     = "osc3Freq";
+        inline constexpr const char* osc3Lfo      = "osc3Lfo";
+        inline constexpr const char* lfoRate      = "lfoRate";
+        inline constexpr const char* lfoSync      = "lfoSync";
+        inline constexpr const char* lfoDivision  = "lfoDivision";
+        inline constexpr const char* lfoRetrigger = "lfoRetrigger";
 
         // Mixer
         inline constexpr const char* mixOsc1      = "mixOsc1";
@@ -75,7 +81,7 @@ namespace dooblrm::params
         inline constexpr const char* pitchBend    = "pitchBend";
     }
 
-    inline constexpr int parameterCount = 45;
+    inline constexpr int parameterCount = 50;
 
     enum class Wave
     {
@@ -128,6 +134,31 @@ namespace dooblrm::params
     inline const juce::StringArray& priorityNames()
     {
         static const juce::StringArray names { "Low", "Last" };
+        return names;
+    }
+
+    inline const juce::StringArray& lfoDivisionNames()
+    {
+        static const juce::StringArray names { "1", "1/2", "1/4", "1/8", "1/16", "1/32" };
+        return names;
+    }
+
+    /** Beats per LFO cycle in 4/4 (whole note = 4 beats). */
+    inline float lfoDivisionBeats (int index) noexcept
+    {
+        static constexpr float beats[] { 4.0f, 2.0f, 1.0f, 0.5f, 0.25f, 0.125f };
+        return beats[juce::jlimit (0, 5, index)];
+    }
+
+    inline const juce::StringArray& osc3WaveNames()
+    {
+        static const juce::StringArray names { "Tri", "Shk", "Saw", "Sqr", "PW", "PN" };
+        return names;
+    }
+
+    inline const juce::StringArray& osc3LfoWaveNames()
+    {
+        static const juce::StringArray names { "Tri", "Dn", "Up", "Sqr", "S/H", "Rnd" };
         return names;
     }
 
