@@ -129,7 +129,6 @@ namespace dooblrm::params
         addBool (layout, id::decaySwitch, "Decay", true);
 
         addPercent (layout, id::volume, "Volume", 0.7f);
-        addBool (layout, id::a440, "A-440", false);
 
         addChoice (layout, id::notePriority, "Note Priority", priorityNames(), 0); // low, like the original
         addBool (layout, id::legato, "Legato", true);

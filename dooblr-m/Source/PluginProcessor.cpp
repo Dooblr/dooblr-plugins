@@ -14,7 +14,7 @@ namespace dooblrm
     X(mixExt) X(mixExtOn) X(mixNoise) X(mixNoiseOn) X(noiseType) \
     X(cutoff) X(emphasis) X(contourAmt) X(fAttack) X(fDecay) X(fSustain) X(kybd1) X(kybd2) \
     X(aAttack) X(aDecay) X(aSustain) X(decaySwitch) \
-    X(volume) X(a440) \
+    X(volume) \
     X(notePriority) X(legato) X(bendRange) X(velocityOn) X(output) \
     X(modWheel) X(pitchBend)
 
@@ -103,7 +103,6 @@ namespace dooblrm
         s.ampEnv = { f (r.aAttack), f (r.aDecay), f (r.aSustain), b (r.decaySwitch) };
 
         s.volume = f (r.volume);
-        s.a440 = b (r.a440);
 
         s.notePriority = juce::jlimit (0, 1, i (r.notePriority));
         s.legato = b (r.legato);

@@ -29,7 +29,6 @@ namespace dooblrm::dsp
         drift2.seed (0x22222222u);
         drift3.seed (0x33333333u);
         thermal.seed (0xDEADBEEFu);
-        a440Phase = 0.0f;
         outputSmoothed = 1.0f;
         reset();
     }
@@ -54,6 +53,8 @@ namespace dooblrm::dsp
         glide.jump (60.0f);
         midiPitchBend.store (0.0f, std::memory_order_relaxed);
         midiModWheel.store (0.0f, std::memory_order_relaxed);
+        filterEnvTap.store (0.0f, std::memory_order_relaxed);
+        filterEnvStageTap.store (0, std::memory_order_relaxed);
     }
 
     void SynthEngine::allNotesOff()
@@ -285,14 +286,6 @@ namespace dooblrm::dsp
 
         auto sample = filtered * aEnv * vel * settings.volume;
 
-        if (settings.a440)
-        {
-            a440Phase += 440.0f / (float) sampleRate;
-            if (a440Phase >= 1.0f)
-                a440Phase -= 1.0f;
-            sample += 0.18f * std::sin (twoPi * a440Phase);
-        }
-
         const auto targetGain = dbToGain (settings.outputDb);
         outputSmoothed += (targetGain - outputSmoothed) * 0.0015f;
         sample *= outputSmoothed;
@@ -332,6 +325,9 @@ namespace dooblrm::dsp
             if ((++scopeDecim & 1) == 0)
                 scope.push (s);
         }
+
+        filterEnvTap.store (filt.value, std::memory_order_relaxed);
+        filterEnvStageTap.store ((int) filt.stage, std::memory_order_relaxed);
 
         while (eventIndex < nEvents)
         {
