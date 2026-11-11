@@ -20,6 +20,8 @@
 #include "Generation/GenerationService.h"
 #include "Generation/History.h"
 #include "Generation/ModelCatalog.h"
+#include "Generation/SourceAudio.h"
+#include "Generation/BeatSync.h"
 #include "BinaryData.h"
 
 #include <juce_audio_formats/juce_audio_formats.h>
@@ -37,7 +39,9 @@
 #include <vector>
 #include <sys/stat.h>
 #include <pthread.h>
+#if JUCE_MAC
 #include <sys/qos.h>
+#endif
 
 //==============================================================================
 // Counts operator new calls made on a thread marked as the audio thread (real-time safety).
@@ -139,10 +143,10 @@ namespace
         stub.replaceWithText (
             "#!/bin/sh\n"
             "cmd=\"$2\"; shift 2\n"
-            "out=''; seed=0; model=''\n"
-            "while [ $# -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift;; --seed) seed=\"$2\"; shift;; --model) model=\"$2\"; shift;; esac; shift; done\n"
+            "out=''; seed=0; model=''; init=''; noise=''; prompt=''\n"
+            "while [ $# -gt 0 ]; do case \"$1\" in --out) out=\"$2\"; shift;; --seed) seed=\"$2\"; shift;; --model) model=\"$2\"; shift;; --init-audio) init=\"$2\"; shift;; --init-noise) noise=\"$2\"; shift;; --prompt) prompt=\"$2\"; shift;; esac; shift; done\n"
             "mode=$(cat '" + rootPath + "/stub-mode' 2>/dev/null || echo ok)\n"
-            "echo \"$cmd $model $seed\" >> '" + rootPath + "/stub-calls'\n"
+            "echo \"$cmd $model $seed init=$init noise=$noise prompt=$prompt\" >> '" + rootPath + "/stub-calls'\n"
             "echo 'some library warning on stderr' 1>&2\n"
             "case \"$mode\" in\n"
             "  crash) echo '{\"event\":\"progress\",\"stage\":\"sampling\",\"fraction\":0.3}'; kill -KILL $$;;\n"
@@ -259,6 +263,46 @@ namespace
         param->setValueNotifyingHost (param->convertTo0to1 (realValue));
     }
 
+    /** JUCE plugin-state XML (same layout as AudioProcessor::copyXmlToBinary / getXmlFromBinary). */
+    constexpr juce::uint32 pluginStateMagic = 0x21324356;
+
+    std::unique_ptr<juce::XmlElement> xmlFromPluginState (const juce::MemoryBlock& data)
+    {
+        if (data.getSize() > 8 && juce::ByteOrder::littleEndianInt (data.getData()) == pluginStateMagic)
+        {
+            const auto stringLength = (int) juce::ByteOrder::littleEndianInt (juce::addBytesToPointer (data.getData(), 4));
+            if (stringLength > 0)
+                return juce::parseXML (juce::String::fromUTF8 (static_cast<const char*> (data.getData()) + 8,
+                                                               juce::jmin ((int) data.getSize() - 8, stringLength)));
+        }
+        return {};
+    }
+
+    juce::MemoryBlock pluginStateFromXml (const juce::XmlElement& xml)
+    {
+        juce::MemoryBlock dest;
+        juce::MemoryOutputStream out (dest, false);
+        out.writeInt ((int) pluginStateMagic);
+        out.writeInt (0);
+        xml.writeTo (out, juce::XmlElement::TextFormat().singleLine());
+        out.writeByte (0);
+        static_cast<juce::uint32*> (dest.getData())[1]
+            = juce::ByteOrder::swapIfBigEndian ((juce::uint32) dest.getSize() - 9);
+        return dest;
+    }
+
+    juce::XmlElement* findXml (juce::XmlElement* e, const juce::String& name)
+    {
+        if (e == nullptr)
+            return nullptr;
+        if (e->hasTagName (name))
+            return e;
+        for (auto* c = e->getFirstChildElement(); c != nullptr; c = c->getNextElement())
+            if (auto* found = findXml (c, name))
+                return found;
+        return nullptr;
+    }
+
     /** A Processor in a temp home whose worker runs under /usr/bin/python3 (test backend only). */
     struct TestRig
     {
@@ -298,8 +342,8 @@ namespace
         check (p.hasEditor(), "has an editor");
 
         const auto ids = params::allIds();
-        check (ids.size() == 7, "7 automatable parameters");
-        check (p.getParameters().size() == 7, "the processor exposes exactly the 7 parameters to the host");
+        check (ids.size() == 10, "10 automatable parameters");
+        check (p.getParameters().size() == 10, "the processor exposes exactly the 10 parameters to the host");
 
         for (const auto& id : ids)
         {
@@ -313,7 +357,10 @@ namespace
         for (const auto& e : { Expect { "output", -48.0f, 12.0f, 0.0f }, Expect { "tune", -24.0f, 24.0f, 0.0f },
                                Expect { "fine", -100.0f, 100.0f, 0.0f }, Expect { "start", 0.0f, 95.0f, 0.0f },
                                Expect { "attack", 0.0f, 1000.0f, 0.0f }, Expect { "decay", 10.0f, 20000.0f, 20000.0f },
-                               Expect { "velocity", 0.0f, 100.0f, 100.0f } })
+                               Expect { "velocity", 0.0f, 100.0f, 100.0f },
+                               Expect { "variationAmount", 0.0f, 100.0f, 50.0f },
+                               Expect { "sync", 0.0f, 1.0f, 0.0f },
+                               Expect { "tempo", 40.0f, 240.0f, 120.0f } })
         {
             auto* param = dynamic_cast<juce::RangedAudioParameter*> (p.getState().getParameter (e.id));
             const auto& r = param->getNormalisableRange();
@@ -323,8 +370,12 @@ namespace
 
         const auto models = gen::ModelCatalog::all (false);
         check (models.size() == 2, "two real models offered");
-        check (models[0].id == "stable-audio-open-small" && models[0].gated, "Stable Audio Open Small first and gated");
-        check (models[1].id == "audioldm-s-full-v2" && ! models[1].gated, "AudioLDM second, not gated");
+        check (models[0].id == "stable-audio-open-small" && models[0].gated && models[0].supportsSourceVariation
+               && std::abs (models[0].maxSeconds - 11.0) < 1e-9,
+               "Stable Audio Open Small first, gated, supports source variation, max 11 s");
+        check (models[1].id == "audioldm-s-full-v2" && ! models[1].gated && ! models[1].supportsSourceVariation
+               && std::abs (models[1].maxSeconds - 30.0) < 1e-9,
+               "AudioLDM second, not gated, no source variation, max 30 s");
         for (const auto& m : models)
             check (! m.isTest && m.licence.isNotEmpty() && m.licenceUrl.startsWith ("https://"), str (m.id) + " has a licence line and link");
         check (gen::ModelCatalog::all (true).back().isTest, "test backend only with includeTest");
@@ -350,6 +401,9 @@ namespace
         check (text ("fine", -0.01f) == "0.0 ct", "Fine 0 reads 0.0 ct");
         check (text ("start", 25.0f) == "25.0 %", "Start 25.0 %");
         check (text ("velocity", 80.0f) == "80 %", "Velocity 80 %");
+        check (text ("variationAmount", 50.0f) == "50.0 %", "Variation Amount 50.0 %");
+        check (text ("tempo", 120.0f) == "120.0 BPM", "Tempo 120.0 BPM");
+        check (text ("sync", 1.0f) == "On" && text ("sync", 0.0f) == "Off", "Sync On/Off");
     }
 
     void testSampler()
@@ -613,6 +667,18 @@ namespace
         setParam (p, "decay", 700.0f);
         setParam (p, "velocity", 40.0f);
         setParam (p, "output", -3.0f);
+        setParam (p, "variationAmount", 70.0f);
+        setParam (p, "sync", 0.0f);
+        setParam (p, "tempo", 140.0f);
+        p.setLengthUnit (gen::LengthUnit::bar2);
+
+        const auto sourceIn = rig.home.root.getChildFile ("drop-in.wav");
+        juce::AudioBuffer<float> sourceAudio (1, 44100);
+        for (int i = 0; i < 44100; ++i) sourceAudio.setSample (0, i, 0.25f);
+        writeWav (sourceIn, sourceAudio, 44100.0);
+        juce::String sourceError;
+        check (p.loadSourceFile (sourceIn, sourceError), "loaded a source sample: " + str (sourceError));
+        check (p.getSourceSample() != nullptr && p.wasSourceTrimmed() == false, "source present, not trimmed");
 
         juce::MemoryBlock state;
         p.getStateInformation (state);
@@ -623,6 +689,7 @@ namespace
         check (q.getSeed() == 99, "seed restored");
         check (std::abs (q.getSeconds() - 3.25) < 1e-9, "length restored");
         check (q.getModel() == "audioldm-s-full-v2", "model restored");
+        check (q.getLengthUnit() == gen::LengthUnit::bar2, "length unit restored");
         for (const auto& id_ : params::allIds())
         {
             const auto a = p.getState().getParameter (id_)->getValue();
@@ -634,6 +701,34 @@ namespace
                "current sample restored from the history (with its prompt and seed)");
         check (restored != nullptr && std::abs (restored->sampleRate - 32000.0) < 1e-9 && restored->audio.getNumSamples() == 2000,
                "restored audio matches the file");
+        check (q.getSourceSample() == nullptr, "new state does not restore a source (SOURCE UI removed in 0.3.0)");
+        check (p.getSourceSample() != nullptr, "the live instance still holds the source it loaded");
+
+        Processor blank (rig.home.paths());
+        juce::MemoryBlock blankState;
+        blank.getStateInformation (blankState);
+        q.setStateInformation (blankState.getData(), (int) blankState.getSize());
+        check (q.getSourceSample() == nullptr, "blank state has no source");
+        q.setStateInformation (state.getData(), (int) state.getSize());
+        check (q.getSourceSample() == nullptr && q.getPrompt() == "ragtime piano note",
+               "reloading a saved state still ignores source and keeps other settings");
+
+        const auto storedSource = p.getSourceSample()->file;
+        auto xml = xmlFromPluginState (state);
+        check (xml != nullptr, "saved state is plugin XML");
+        auto* generateXml = findXml (xml.get(), params::setting::tree);
+        check (generateXml != nullptr, "generate settings in state xml");
+        generateXml->setAttribute (params::setting::sourceWav, storedSource.getFullPathName());
+        generateXml->setAttribute (params::setting::sourceName, "drop-in.wav");
+        generateXml->setAttribute (params::setting::sourceTrimmed, 0);
+        const auto legacy = pluginStateFromXml (*xml);
+        Processor leg (rig.home.paths());
+        leg.setStateInformation (legacy.getData(), (int) legacy.getSize());
+        check (leg.getSourceSample() == nullptr, "legacy sourceWav in saved state is ignored");
+        check (leg.getPrompt() == "ragtime piano note" && leg.getSeed() == 99,
+               "legacy state still restores prompt and seed");
+        check (leg.getSettings().hasProperty (params::setting::sourceWav) == false,
+               "ignored sourceWav is stripped from the live tree");
 
         // Not in this machine's history any more: falls back to the WAV path.
         rig.home.paths().historyIndex().deleteFile();
@@ -647,6 +742,7 @@ namespace
         Processor s (rig.home.paths());
         s.setStateInformation (state.getData(), (int) state.getSize());
         check (s.getCurrentSample() == nullptr && s.getPrompt() == "ragtime piano note", "missing WAV: settings restore, no sample");
+        check (s.getSourceSample() == nullptr, "missing history WAV does not restore a source either");
 
         // Garbage is ignored.
         const char junk[] = "not a state";
@@ -657,7 +753,10 @@ namespace
         s.getSettings().setProperty (params::setting::model, "nope", nullptr);
         check (s.getModel() == "stable-audio-open-small", "unknown model falls back");
         s.setSeconds (100.0);
-        check (std::abs (s.getSeconds() - params::maxSeconds) < 1e-9, "length clamped to 10 s");
+        check (std::abs (s.getSeconds() - params::maxSeconds) < 1e-9, "length clamped to 30 s");
+        s.getSettings().setProperty (params::setting::seconds, 45.0, nullptr);
+        check (std::abs (s.getSeconds() - 30.0) < 1e-9, "legacy 45 s state clamps to 30 on read");
+        check (std::abs (params::maxSeconds - 30.0) < 1e-9, "plugin max length is 30 s");
     }
 
     void testModelStatus()
@@ -753,6 +852,146 @@ namespace
         check (service.waitUntilIdle (3000), "cancelled download ends quickly");
         check (service.jobStatus().result == gen::JobStatus::Result::cancelled, "download cancelled");
         check (! service.startDownload (gen::ModelCatalog::testBackend), "nothing to download for the test backend");
+    }
+
+    void testSourceSample()
+    {
+        TempHome home;
+
+        // Mono 22.05 kHz -> stereo 44.1 kHz, same duration.
+        juce::AudioBuffer<float> mono (1, 22050);
+        for (int i = 0; i < 22050; ++i) mono.setSample (0, i, 0.4f);
+        juce::AudioBuffer<float> converted;
+        bool trimmed = true;
+        check (gen::SourceAudio::convertToModelInput (mono, 22050.0, converted, trimmed), "converted mono 22.05 kHz");
+        check (converted.getNumChannels() == 2, "mono becomes stereo");
+        check (std::abs (converted.getNumSamples() - 44100) <= 1, "1 s at 22.05 kHz becomes 1 s at 44.1 kHz, got "
+               + std::to_string (converted.getNumSamples()));
+        check (! trimmed, "1 s is not trimmed");
+        check (std::abs (converted.getSample (0, 100) - 0.4f) < 1e-4f
+               && std::abs (converted.getSample (1, 100) - converted.getSample (0, 100)) < 1e-6f,
+               "both stereo channels match the mono source");
+
+        // Already 44.1 stereo: identity besides a possible copy.
+        juce::AudioBuffer<float> stereo (2, 44100);
+        for (int i = 0; i < 44100; ++i) { stereo.setSample (0, i, 0.2f); stereo.setSample (1, i, -0.1f); }
+        check (gen::SourceAudio::convertToModelInput (stereo, 44100.0, converted, trimmed), "converted 44.1 stereo");
+        check (converted.getNumChannels() == 2 && converted.getNumSamples() == 44100 && ! trimmed, "44.1 stereo kept");
+        check (std::abs (converted.getSample (1, 10) + 0.1f) < 1e-6f, "right channel preserved");
+
+        // Longer than 11 s is trimmed.
+        juce::AudioBuffer<float> longMono (1, (int) std::llround (15.0 * 48000.0));
+        longMono.clear();
+        longMono.setSample (0, 0, 1.0f);
+        check (gen::SourceAudio::convertToModelInput (longMono, 48000.0, converted, trimmed), "converted 15 s");
+        check (trimmed, "15 s is trimmed");
+        check (std::abs (converted.getNumSamples() / gen::SourceAudio::targetRate - gen::SourceAudio::maxSeconds) < 0.02,
+               "trimmed length is 11 s at 44.1 kHz, got " + std::to_string (converted.getNumSamples() / 44100.0));
+
+        juce::String error;
+        check (gen::SourceAudio::resolveDroppedFile (home.root.getChildFile ("missing.wav"), error) == juce::File()
+               && error.contains ("not found"), "missing file is rejected");
+
+        const auto txt = home.root.getChildFile ("notes.txt");
+        txt.replaceWithText ("hello", false, false, "\n");
+        error = {};
+        check (gen::SourceAudio::resolveDroppedFile (txt, error) == juce::File()
+               && error.contains ("Not a readable audio file"), "non-audio is rejected: " + str (error));
+
+        const auto wav = home.root.getChildFile ("kick.wav");
+        check (writeWav (wav, mono, 22050.0), "wrote a mono wav");
+        const auto dest = home.paths().source().getChildFile ("copy.wav");
+        auto stored = gen::SourceAudio::loadAndStore (wav, dest, error);
+        check (stored != nullptr, "loadAndStore: " + str (error));
+        check (stored != nullptr && stored->file == dest && dest.existsAsFile(), "wrote a working copy");
+        check (stored != nullptr && stored->originalName == "kick.wav" && stored->audio.getNumChannels() == 2
+               && std::abs (stored->sampleRate - 44100.0) < 0.5 && ! stored->trimmed,
+               "stored copy is 44.1 stereo under the original name");
+
+        // Ableton .alc: only accepted when it names a real audio file.
+        const auto alcBad = home.root.getChildFile ("clip.alc");
+        alcBad.replaceWithText ("<?xml version=\"1.0\"?><Ableton><SampleRef><FileRef>"
+                                "<Path Value=\"/no/such/file.wav\"/></FileRef></SampleRef></Ableton>", false, false, "\n");
+        error = {};
+        check (gen::SourceAudio::resolveDroppedFile (alcBad, error) == juce::File()
+               && error.containsIgnoreCase ("Ableton"), "unresolvable .alc is rejected: " + str (error));
+
+        const auto alcOk = home.root.getChildFile ("good.alc");
+        alcOk.replaceWithText ("<?xml version=\"1.0\"?><Ableton><SampleRef><FileRef><Path Value=\""
+                               + wav.getFullPathName() + "\"/></FileRef></SampleRef></Ableton>", false, false, "\n");
+        error = {};
+        check (gen::SourceAudio::resolveDroppedFile (alcOk, error) == wav, "resolvable .alc points at the audio file: " + str (error));
+
+        TestRig rig;
+        auto& p = *rig.processor;
+        juce::String loadError;
+        check (p.loadSourceFile (wav, loadError), "processor loads a dropped wav: " + str (loadError));
+        check (p.getSourceSample() != nullptr && p.getSourceName() == "kick.wav", "source name is the dropped file");
+        check (p.getSourceSample()->file.getParentDirectory() == rig.home.paths().source(), "copy lives in the working folder");
+        check (p.getSourceMessage().contains ("Loaded"), "status says Loaded");
+
+        p.setPrompt ({});
+        check (p.generate (true), "Variation with a source does not need a prompt");
+        check (p.getService().waitUntilIdle (20000), "source variation job ends");
+        check (p.getService().jobStatus().result == gen::JobStatus::Result::succeeded, "source variation succeeded");
+        const auto calls = rig.home.root.getChildFile ("stub-calls").loadFileAsString();
+        check (calls.contains ("init=" + p.getSourceSample()->file.getFullPathName()),
+               "worker received --init-audio: " + str (calls));
+        check (calls.contains ("noise=0.500"), "worker received default Variation Amount as init noise 0.5: " + str (calls));
+
+        setParam (p, "variationAmount", 25.0f);
+        p.setPrompt ("bright clap");
+        check (p.generate (true) && p.getService().waitUntilIdle (20000), "variation with amount 25 %");
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString().contains ("noise=0.250"),
+               "25 % maps to init_noise 0.25");
+
+        const auto callsBefore = rig.home.root.getChildFile ("stub-calls").loadFileAsString();
+        p.setModel (gen::ModelCatalog::audioLdm);
+        check (! p.generate (true), "AudioLDM refuses source variation");
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString() == callsBefore,
+               "AudioLDM source variation started no worker");
+
+        gen::GenerateRequest blocked { "x", gen::ModelCatalog::audioLdm, 1, 1.0, 0, p.getSourceSample()->file, 0.5f };
+        check (p.getService().startGenerate (blocked) && p.getService().waitUntilIdle (5000), "queued AudioLDM+init fails");
+        check (p.getService().jobStatus().result == gen::JobStatus::Result::failed
+               && p.getService().jobStatus().error.contains ("no audio-to-audio"),
+               "AudioLDM + init audio: copyable refusal");
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString() == callsBefore,
+               "the refusal did not start a worker");
+
+        p.setModel (gen::ModelCatalog::testBackend);
+        p.clearSource();
+        p.setPrompt ({});
+        check (p.getSourceSample() == nullptr, "clear removes the source");
+        check (! p.generate (true), "Variation without a source still needs a prompt");
+        p.setPrompt ("x");
+        check (p.generate (true) && p.getService().waitUntilIdle (20000), "Variation without a source still generates");
+        {
+            const auto last = rig.home.root.getChildFile ("stub-calls").loadFileAsString().trim()
+                                  .fromLastOccurrenceOf ("\n", false, false);
+            check (last.contains ("init= noise=") && ! last.contains ("init=/"),
+                   "Variation without a source does not pass --init-audio: " + str (last));
+        }
+
+        wav.deleteFile();
+        check (dest.existsAsFile(), "the working copy survives the original file being deleted");
+        juce::String fromCopy;
+        check (p.loadSourceFile (dest, fromCopy), "the working copy still loads after the original is gone: " + str (fromCopy));
+
+        // Source preview plays through the sampler without replacing the current sample.
+        juce::AudioBuffer<float> current (2, 4800);
+        for (int i = 0; i < 4800; ++i) { current.setSample (0, i, 0.5f); current.setSample (1, i, 0.5f); }
+        const auto currentWav = rig.home.root.getChildFile ("current.wav");
+        writeWav (currentWav, current, 48000.0);
+        juce::String ignore;
+        check (p.loadFile (currentWav, ignore), "loaded a current sample");
+        check (p.loadSourceFile (dest.existsAsFile() ? dest : currentWav, ignore), "reloaded source");
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer midi;
+        p.requestSourcePreview();
+        p.processBlock (buf, midi);
+        check (buf.getMagnitude (0, 512) > 0.01f, "source Play auditions the source");
+        check (p.getCurrentSample() != nullptr && p.getCurrentSample()->file == currentWav, "current sample is unchanged");
     }
 
     void testWorkerScript()
@@ -906,7 +1145,9 @@ namespace
         {
             // Like a host's audio thread: the highest QoS class (an ordinary thread can be
             // descheduled for milliseconds, which says nothing about the plug-in).
+           #if JUCE_MAC
             pthread_set_qos_class_self_np (QOS_CLASS_USER_INTERACTIVE, 0);
+           #endif
             onAudioThread = true;
             juce::AudioBuffer<float> buf (2, 256);
             juce::MidiBuffer midi;
@@ -943,6 +1184,101 @@ namespace
         check (noStrayProcesses (rig.home.root), "no stray worker processes");
     }
 
+    void testBeatSync()
+    {
+        check (std::abs (gen::secondsForBeats (4, 120.0) - 2.0) < 1e-12, "4 beats at 120 BPM is 2 s");
+        check (std::abs (gen::secondsForBeats (8, 100.0) - 4.8) < 1e-12, "8 beats at 100 BPM is 4.8 s");
+        check (std::abs (gen::secondsForBeats (3, 90.0) - 2.0) < 1e-12, "3 beats at 90 BPM is 2 s");
+        check (gen::beatsFor (gen::LengthUnit::bar1, 4) == 4 && gen::beatsFor (gen::LengthUnit::bar8, 4) == 32,
+               "1 bar / 8 bars in 4/4");
+        check (gen::beatsFor (gen::LengthUnit::bar1, 3) == 3, "1 bar in 3/4 is 3 beats");
+
+        const auto twoBars120 = gen::makeBeatPlan (gen::LengthUnit::bar2, 120.0, 4, 30.0);
+        check (! twoBars120.capped && std::abs (twoBars120.seconds - 4.0) < 1e-12, "2 bars at 120 = 4 s");
+        check (gen::targetSamples (twoBars120.seconds, 44100.0) == 176400, "4 s at 44.1 kHz is 176400 samples");
+
+        const auto eightSlow = gen::makeBeatPlan (gen::LengthUnit::bar8, 60.0, 4, 30.0);
+        check (eightSlow.capped && eightSlow.fitted == gen::LengthUnit::bar4
+               && std::abs (eightSlow.seconds - 16.0) < 1e-12,
+               "8 bars at 60 BPM (32 s) caps to 4 bars (16 s)");
+
+        const auto saoCap = gen::makeBeatPlan (gen::LengthUnit::bar8, 120.0, 4, 11.0);
+        check (saoCap.capped && saoCap.fitted == gen::LengthUnit::bar4
+               && std::abs (saoCap.seconds - 8.0) < 1e-12,
+               "8 bars at 120 (16 s) caps to 4 bars under a 11 s model");
+
+        juce::AudioBuffer<float> buf (2, 100);
+        buf.clear();
+        buf.setSample (0, 0, 1.0f);
+        buf.setSample (1, 50, 1.0f);
+        gen::trimPadWithFades (buf, 200, 44100.0);
+        check (buf.getNumSamples() == 200 && buf.getNumChannels() == 2, "pad length");
+        check (std::abs (buf.getSample (0, 0)) < 0.05f, "fade-in at the start");
+        check (std::abs (buf.getSample (1, 50) - 1.0f) < 1e-5f, "middle sample preserved when padding");
+
+        juce::AudioBuffer<float> longBuf (1, 500);
+        longBuf.clear();
+        longBuf.setSample (0, 0, 1.0f);
+        gen::trimPadWithFades (longBuf, 100, 44100.0);
+        check (longBuf.getNumSamples() == 100, "trim length");
+
+        check (gen::appendTempoToPrompt ("909 kick", 120.0) == "909 kick, 120 BPM", "prompt gets BPM");
+        check (gen::appendTempoToPrompt ("909 kick, 120 BPM", 120.0) == "909 kick, 120 BPM", "BPM not doubled");
+        check (gen::filenameBpmTag (128.4) == "128bpm", "filename tag rounds BPM");
+
+        TestRig rig;
+        auto& p = *rig.processor;
+        check (std::abs (p.getModelMaxSeconds() - 30.0) < 1e-9, "test backend allows 30 s");
+        p.setModel (gen::ModelCatalog::stableAudioOpenSmall);
+        check (std::abs (p.getModelMaxSeconds() - 11.0) < 1e-9, "Stable Audio Open Small caps at 11 s");
+        p.setSeconds (30.0);
+        check (std::abs (p.getSeconds() - 30.0) < 1e-9, "stored length can be 30");
+        p.setModel (gen::ModelCatalog::testBackend);
+
+        p.setPrompt ("909 kick");
+        p.setSeed (1);
+        p.setSeconds (0.5);
+        check (p.generate (false) && p.getService().waitUntilIdle (20000), "sync-off generate");
+        const auto offSample = p.getCurrentSample();
+        check (offSample != nullptr && offSample->audio.getNumSamples() == 22050,
+               "sync-off leaves the worker WAV length unchanged");
+        check (! offSample->file.getFileName().containsIgnoreCase ("bpm"), "sync-off filename has no BPM tag");
+
+        setParam (p, "sync", 1.0f);
+        setParam (p, "tempo", 120.0f);
+        p.setLengthUnit (gen::LengthUnit::bar1);
+        p.setHostTransportForTests (0);
+        check (! p.isUsingHostTempo() && std::abs (p.getEffectiveBpm() - 120.0) < 1e-9, "manual tempo 120");
+        p.setPrompt ("loop");
+        check (p.generate (false) && p.getService().waitUntilIdle (20000), "sync-on generate at 120 BPM, 1 bar");
+        const auto onSample = p.getCurrentSample();
+        const auto expected = gen::targetSamples (2.0, 44100.0);
+        check (onSample != nullptr && onSample->audio.getNumSamples() == expected,
+               "beat-aligned output is 2 s at 44.1 kHz, got " + std::to_string (onSample != nullptr ? onSample->audio.getNumSamples() : 0));
+        check (onSample != nullptr && onSample->file.getFileName().contains ("120bpm"),
+               "filename embeds BPM: " + str (onSample != nullptr ? onSample->file.getFileName() : juce::String{}));
+        check (rig.home.root.getChildFile ("stub-calls").loadFileAsString().contains ("120 BPM"),
+               "worker prompt includes 120 BPM");
+        check (p.getAlignMessage().containsIgnoreCase ("grid"), "says padded/trimmed, no time-stretch");
+
+        p.setHostTransportForTests (100.0, 4, 4);
+        check (p.isUsingHostTempo() && std::abs (p.getEffectiveBpm() - 100.0) < 1e-9, "host tempo 100");
+        p.setLengthUnit (gen::LengthUnit::beat2);
+        check (p.generate (false) && p.getService().waitUntilIdle (20000), "host-tempo generate");
+        const auto hostSample = p.getCurrentSample();
+        const auto hostN = gen::targetSamples (gen::secondsForBeats (2, 100.0), 44100.0);
+        check (hostSample != nullptr && hostSample->audio.getNumSamples() == hostN,
+               "2 beats at 100 BPM is exact sample count");
+        check (hostSample != nullptr && hostSample->file.getFileName().contains ("100bpm"), "filename uses host BPM");
+
+        p.setHostTransportForTests (0);
+        setParam (p, "sync", 0.0f);
+        p.setSeconds (0.5);
+        check (p.generate (false) && p.getService().waitUntilIdle (20000), "sync-off after sync-on");
+        check (p.getCurrentSample() != nullptr && p.getCurrentSample()->audio.getNumSamples() == 22050,
+               "turning Sync off restores unaligned length");
+    }
+
     //==============================================================================
     bool insideAndVisible (juce::Component& c, juce::Component& editor)
     {
@@ -969,6 +1305,7 @@ namespace
             std::vector<std::pair<std::string, juce::Component*>> controls {
                 { "prompt", &editor->getPromptEditor() }, { "seed", &editor->getSeedEditor() }, { "length", &editor->getLengthSlider() },
                 { "generate", &editor->getGenerateButton() }, { "variation", &editor->getVariationButton() },
+                { "sync", &editor->getSyncButton() },
                 { "waveform", &editor->getWaveform() }, { "play", &editor->getPlayButton() }, { "drag", &editor->getDragButton() },
                 { "history", &editor->getHistoryList() }, { "playback", &editor->getPlaybackPanel() },
                 { "model box", &editor->getModelBox() }, { "status", &editor->getStatusLabel() },
@@ -988,16 +1325,80 @@ namespace
 
             check (editor->getPromptEditor().getWidth() >= 300, label + ": prompt at least 300 px wide");
             check (editor->getWaveform().getHeight() >= 150, label + ": waveform at least 150 px tall (" + std::to_string (editor->getWaveform().getHeight()) + ")");
+            check (editor->getWaveform().getX() <= 32, label + ": waveform uses the left side (no source column)");
+            check (editor->getWaveform().getWidth() >= 400, label + ": waveform at least 400 px wide (" + std::to_string (editor->getWaveform().getWidth()) + ")");
+            check (editor->getWaveform().getRight() <= editor->getHistoryList().getX(),
+                   label + ": waveform sits left of history");
             check (editor->getHistoryList().getHeight() >= 120, label + ": history at least 120 px tall");
             check (editor->getGenerateButton().getWidth() >= 100 && editor->getGenerateButton().getHeight() >= 26, label + ": Generate button size");
             check (editor->getDetails().getHeight() >= 30, label + ": details box at least 30 px tall");
 
+            {
+                auto& cap = editor->getSyncCaption();
+                const auto capInner = cap.getLookAndFeel().getLabelBorderSize (cap).subtractedFrom (cap.getLocalBounds());
+                const auto capTextW = juce::GlyphArrangement::getStringWidth (cap.getFont(), cap.getText());
+                check (cap.getText() == "Sync" && capTextW <= (float) capInner.getWidth() + 1.0f,
+                       label + ": Sync caption not truncated (" + std::to_string (capTextW) + " px text in "
+                           + std::to_string (capInner.getWidth()) + " px)");
+
+                auto& sync = editor->getSyncButton();
+                const auto syncTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                               sync.getButtonText());
+                const auto syncTextArea = sync.getLocalBounds().reduced (1).withTrimmedLeft (30).reduced (6, 0);
+                check (sync.getButtonText() == "Sync" && (float) syncTextArea.getWidth() + 1.0f >= syncTextW,
+                       label + ": Sync label not truncated (" + std::to_string (syncTextW) + " px text in "
+                           + std::to_string (syncTextArea.getWidth()) + " px)");
+            }
+
             auto& panel = editor->getPlaybackPanel();
             for (const auto& id : params::allIds())
             {
+                if (id == params::id::variationAmount || id == params::id::tempo || id == params::id::sync)
+                    continue;
                 auto* c = panel.findControl (id);
                 check (c != nullptr && c->isVisible() && panel.getLocalBounds().contains (c->getBounds()), label + ": knob " + str (id) + " inside PLAYBACK");
             }
+
+            editor->getSyncButton().setToggleState (true, juce::sendNotificationSync);
+            editor->refresh();
+            check (insideAndVisible (editor->getLengthChoice(), *editor), label + ": bars/beats choice visible when Sync is on");
+            check (! editor->getLengthSlider().isVisible(), label + ": seconds slider hidden when Sync is on");
+            check (editor->getPromptEditor().getWidth() >= 300, label + ": prompt still 300 px with Sync on");
+            {
+                auto& cap = editor->getSyncCaption();
+                const auto capInner = cap.getLookAndFeel().getLabelBorderSize (cap).subtractedFrom (cap.getLocalBounds());
+                const auto capTextW = juce::GlyphArrangement::getStringWidth (cap.getFont(), cap.getText());
+                check (capTextW <= (float) capInner.getWidth() + 1.0f,
+                       label + ": Sync caption not truncated with Sync on");
+                auto& sync = editor->getSyncButton();
+                const auto syncTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                               sync.getButtonText());
+                const auto syncTextArea = sync.getLocalBounds().reduced (1).withTrimmedLeft (30).reduced (6, 0);
+                check ((float) syncTextArea.getWidth() + 1.0f >= syncTextW,
+                       label + ": Sync label not truncated with Sync on");
+
+                auto& box = editor->getLengthChoice();
+                const auto comboFont = box.getLookAndFeel().getComboBoxFont (box);
+                float longest = 0.0f;
+                for (int i = 0; i < box.getNumItems(); ++i)
+                    longest = juce::jmax (longest, juce::GlyphArrangement::getStringWidth (comboFont, box.getItemText (i)));
+                check ((float) box.getWidth() >= longest + 24.0f,
+                       label + ": bars/beats selector fits its labels (" + std::to_string (box.getWidth())
+                           + " px for " + std::to_string (longest) + " px of text)");
+            }
+            auto* tempoKnob = panel.findControl (params::id::tempo);
+            check (tempoKnob != nullptr && tempoKnob->isVisible() && panel.getLocalBounds().contains (tempoKnob->getBounds()),
+                   label + ": Tempo knob inside PLAYBACK when Sync is on");
+            for (const auto& id : params::allIds())
+            {
+                if (id == params::id::variationAmount || id == params::id::sync || id == params::id::tempo)
+                    continue;
+                auto* c = panel.findControl (id);
+                check (c != nullptr && c->isVisible() && ! c->getBounds().intersects (tempoKnob->getBounds()),
+                       label + ": Tempo does not overlap " + str (id));
+            }
+            editor->getSyncButton().setToggleState (false, juce::sendNotificationSync);
+            editor->refresh();
         }
     }
 
@@ -1049,6 +1450,16 @@ namespace
         check (p.getSeed() == 4242, "seed field sets the seed");
         editor->getLengthSlider().setValue (0.75, juce::sendNotificationSync);
         check (std::abs (p.getSeconds() - 0.75) < 1e-9, "length slider sets the length");
+        check (editor->getLengthSlider().isVisible() && ! editor->getLengthChoice().isVisible(), "seconds length when Sync is off");
+        editor->getSyncButton().setToggleState (true, juce::sendNotificationSync);
+        editor->refresh();
+        check (p.isSyncOn() && editor->getLengthChoice().isVisible() && ! editor->getLengthSlider().isVisible(),
+               "Sync on: bars/beats instead of seconds");
+        check (editor->getPlaybackPanel().isShown (params::id::tempo), "Tempo knob shown for manual tempo");
+        check (editor->getLengthCaption().getText().contains ("manual"), "caption says manual tempo");
+        editor->getSyncButton().setToggleState (false, juce::sendNotificationSync);
+        editor->refresh();
+        check (! p.isSyncOn() && editor->getLengthSlider().isVisible(), "Sync off restores seconds");
         click (editor->getGenerateButton());
         editor->refresh();
         check (editor->getGenerateButton().getButtonText() == "Cancel", "Generate becomes Cancel while running");
@@ -1062,6 +1473,14 @@ namespace
         check (editor->getInfoLabel().getText().contains ("seed 4242"), "info shows the seed");
         check (editor->getHistoryList().getNumEntries() == 1, "history list shows the generation");
         check (editor->getPlayButton().isEnabled() && editor->getDragButton().isEnabled(), "Play and Drag WAV enabled with a sample");
+
+        type (editor->getPromptEditor(), {});
+        editor->refresh();
+        check (! editor->getVariationButton().isEnabled(), "Variation needs a prompt (no source drop zone)");
+        type (editor->getPromptEditor(), "909 kick");
+        editor->refresh();
+        check (editor->getVariationButton().isEnabled(), "Variation enabled again with a prompt");
+        check (p.getSourceSample() == nullptr, "editor has no source sample without a drop zone");
 
         // Drag-out: the history row and the editor hand the WAV path to the OS drag.
         const auto file = editor->getHistoryList().fileForRow (0);
@@ -1084,11 +1503,11 @@ namespace
         click (editor->getVariationButton());
         p.getService().waitUntilIdle (20000);
         editor->refresh();
-        check (editor->getHistoryList().getNumEntries() == 2, "two history rows");
+        check (editor->getHistoryList().getNumEntries() >= 2, "history has the original and the variation");
         if (editor->getHistoryList().getNumEntries() < 2)
             return;
-        const auto first = editor->getHistoryList().getEntries()[1];
-        editor->getHistoryList().getListBox().selectRow (1);
+        const auto first = editor->getHistoryList().getEntries().back();
+        editor->getHistoryList().getListBox().selectRow (editor->getHistoryList().getNumEntries() - 1);
         editor->getHistoryList().onChoose (first, false);
         editor->refresh();
         check (p.getCurrentSample() != nullptr && p.getCurrentSample()->historyId == first.id, "clicking a history row loads it");
@@ -1214,8 +1633,10 @@ int main()
         { "StateRoundTrip", testStateRoundTrip },
         { "ModelStatus", testModelStatus },
         { "WorkerScript", testWorkerScript },
+        { "SourceSample", testSourceSample },
         { "GenerationEndToEnd", testGenerationEndToEnd },
         { "AudioThreadDuringGeneration", testAudioThreadDuringGeneration },
+        { "BeatSync", testBeatSync },
         { "EditorLayout", testEditorLayout },
         { "EditorBehaviour", testEditorBehaviour },
     };

@@ -13,6 +13,12 @@ namespace dooblrm::dsp
         }
 
         float dbToGain (float db) noexcept { return std::pow (10.0f, db / 20.0f); }
+
+        float divisionBeats (int index) noexcept
+        {
+            static constexpr float beats[] { 4.0f, 2.0f, 1.0f, 0.5f, 0.25f, 0.125f };
+            return beats[juce::jlimit (0, 5, index)];
+        }
     }
 
     void SynthEngine::prepare (double sr, int)
@@ -30,6 +36,8 @@ namespace dooblrm::dsp
         drift3.seed (0x33333333u);
         thermal.seed (0xDEADBEEFu);
         outputSmoothed = 1.0f;
+        osc3AudioGain = settings.osc3Lfo ? 0.0f : 1.0f;
+        lfo.hzSmoothed = lfoTargetHz();
         reset();
     }
 
@@ -55,6 +63,12 @@ namespace dooblrm::dsp
         midiModWheel.store (0.0f, std::memory_order_relaxed);
         filterEnvTap.store (0.0f, std::memory_order_relaxed);
         filterEnvStageTap.store (0, std::memory_order_relaxed);
+        lfo = {};
+        lfo.hzSmoothed = lfoTargetHz();
+        lfoTap.store (0.0f, std::memory_order_relaxed);
+        lastLfoHz = lfo.hzSmoothed;
+        lastLfo = 0.0f;
+        osc3AudioGain = settings.osc3Lfo ? 0.0f : 1.0f;
     }
 
     void SynthEngine::allNotesOff()
@@ -83,6 +97,9 @@ namespace dooblrm::dsp
             held[(size_t) heldCount++] = { note, ++noteOrder };
 
         const auto hadGate = gate;
+        const bool retrigger = ! settings.legato || ! hadGate;
+        if (settings.osc3Lfo && settings.lfoRetrigger)
+            lfo.retrigger();
 
         int chosen = note;
         if (settings.notePriority == 0)
@@ -106,7 +123,6 @@ namespace dooblrm::dsp
         currentVelocity = velocity;
         gate = true;
 
-        const bool retrigger = ! settings.legato || ! hadGate;
         filt.gate (true, retrigger);
         amp.gate (true, retrigger);
 
@@ -213,6 +229,16 @@ namespace dooblrm::dsp
         return midiToHz (midi);
     }
 
+    float SynthEngine::lfoTargetHz() const noexcept
+    {
+        if (! settings.lfoSync)
+            return juce::jlimit (0.05f, 30.0f, settings.lfoRate);
+
+        const auto bpm = (hostTime.bpm > 20.0 && hostTime.bpm < 400.0) ? hostTime.bpm : 120.0;
+        const auto beats = divisionBeats (settings.lfoDivision);
+        return juce::jlimit (0.05f, 30.0f, (float) (bpm / 60.0 / (double) beats));
+    }
+
     float SynthEngine::renderSample()
     {
         const auto note = glide.process ((float) currentNote, settings.glide, (float) sampleRate);
@@ -226,9 +252,26 @@ namespace dooblrm::dsp
         const auto d3 = drift3.process();
 
         // Osc 3 first: it is a modulation source (and optionally an audio oscillator).
-        const auto osc3Hz = oscillatorHz (settings.osc3Range, settings.osc3Freq + bendSt,
-                                          settings.osc3Control, note, 0.0f, d3);
-        const auto osc3Out = osc3.process (osc3Hz, (float) sampleRate, settings.osc3Wave);
+        float osc3Out = 0.0f;
+        if (settings.osc3Lfo)
+        {
+            osc3Out = lfo.process (lfoTargetHz(), (float) sampleRate, settings.osc3Wave);
+            lastLfoHz = lfo.hzSmoothed;
+            lastLfo = osc3Out;
+        }
+        else
+        {
+            const auto osc3Hz = oscillatorHz (settings.osc3Range, settings.osc3Freq + bendSt,
+                                              settings.osc3Control, note, 0.0f, d3);
+            osc3Out = osc3.process (osc3Hz, (float) sampleRate, settings.osc3Wave);
+        }
+
+        const auto audioGainTarget = settings.osc3Lfo ? 0.0f : 1.0f;
+        if (std::abs (audioGainTarget - osc3AudioGain) < 1.0e-5f)
+            osc3AudioGain = audioGainTarget;
+        else
+            osc3AudioGain += (audioGainTarget - osc3AudioGain)
+                             * (1.0f - std::exp (-1.0f / (0.005f * (float) sampleRate)));
 
         const auto noiseOut = settings.noiseType == 0 ? noise.white() : noise.pink();
         const auto modSource = (1.0f - settings.modMix) * osc3Out + settings.modMix * noiseOut;
@@ -252,7 +295,7 @@ namespace dooblrm::dsp
         };
         add (settings.mixOsc1On, settings.mixOsc1, o1);
         add (settings.mixOsc2On, settings.mixOsc2, o2);
-        add (settings.mixOsc3On, settings.mixOsc3, osc3Out);
+        add (settings.mixOsc3On, settings.mixOsc3 * osc3AudioGain, osc3Out);
         add (settings.mixNoiseOn, settings.mixNoise, noiseOut);
         if (settings.mixExtOn)
         {
@@ -274,7 +317,7 @@ namespace dooblrm::dsp
         const auto kybd = (settings.kybd1 ? 1.0f / 3.0f : 0.0f) + (settings.kybd2 ? 2.0f / 3.0f : 0.0f);
         auto cutoffHz = settings.cutoff;
         cutoffHz *= std::exp2 (kybd * (note - 60.0f) / 12.0f);
-        cutoffHz *= std::exp2 (settings.contourAmt * 5.0f * fEnv * vel);
+        cutoffHz *= std::exp2 (settings.contourAmt * contourOctaves * fEnv * vel);
         cutoffHz *= std::exp2 (filterModOct);
         lastCutoffHz = cutoffHz;
 
@@ -294,8 +337,10 @@ namespace dooblrm::dsp
         return sample;
     }
 
-    void SynthEngine::process (float* left, float* right, int numSamples, juce::MidiBuffer& midi, const HostTime&)
+    void SynthEngine::process (float* left, float* right, int numSamples, juce::MidiBuffer& midi, const HostTime& time)
     {
+        hostTime = time;
+
         struct Event { int sample; juce::uint8 data[4]; juce::uint8 size; };
         Event events[64];
         int nEvents = 0;
@@ -328,6 +373,7 @@ namespace dooblrm::dsp
 
         filterEnvTap.store (filt.value, std::memory_order_relaxed);
         filterEnvStageTap.store ((int) filt.stage, std::memory_order_relaxed);
+        lfoTap.store (settings.osc3Lfo ? lastLfo : 0.0f, std::memory_order_relaxed);
 
         while (eventIndex < nEvents)
         {

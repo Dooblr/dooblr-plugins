@@ -47,6 +47,80 @@ namespace dooblrm::ui
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
+    /** Faint envelope-sweep arc and live marker on the large Cutoff knob. Hidden when
+        Amount of Contour is 0. Drawn over the knob; does not intercept mouse. */
+    class CutoffContourIndicator final : public juce::Component,
+                                         private juce::Timer,
+                                         private juce::AudioProcessorValueTreeState::Listener
+    {
+    public:
+        CutoffContourIndicator();
+        ~CutoffContourIndicator() override;
+
+        void attach (juce::AudioProcessorValueTreeState& state,
+                     juce::Slider& cutoffSlider,
+                     const std::atomic<float>& envTap);
+
+        void paint (juce::Graphics& g) override;
+        void parentSizeChanged() override;
+        void parentHierarchyChanged() override;
+        bool hitTest (int, int) override { return false; }
+
+        void refresh();
+
+        bool isRangeVisible() const noexcept;
+        bool isLiveMarkerVisible() const noexcept;
+        float getContourAmount() const noexcept;
+        float getRangeStartHz() const noexcept;
+        float getRangeEndHz() const noexcept;
+        float getLiveHz() const noexcept;
+        float getLiveEnvelope() const noexcept;
+        float getRangeStartAngle() const noexcept;
+        float getRangeEndAngle() const noexcept;
+        float getLiveAngle() const noexcept;
+        juce::Point<float> getCentre() const noexcept;
+        float getRingRadius() const noexcept;
+        juce::Point<float> getLiveMarkerPosition() const noexcept;
+        int getRepaintRequests() const noexcept { return repaintRequests; }
+        juce::Rectangle<int> getLastRepaintBounds() const noexcept { return lastRepaintBounds; }
+
+        static constexpr float contourOctaves = 5.0f;
+
+    private:
+        struct Picture
+        {
+            bool rangeVisible = false, liveVisible = false;
+            float contourAmt = 0, cutoffHz = 0, rangeEndHz = 0, liveHz = 0, liveEnv = 0;
+            float startAngle = 0, endAngle = 0, liveAngle = 0, ringRadius = 0, stroke = 1.2f;
+            juce::Point<float> centre, livePos;
+            int width = 0, height = 0;
+        };
+
+        struct Key
+        {
+            int contourQ = 0, cutoffQ = 0, envQ = 0, w = 0, h = 0;
+            bool operator== (const Key&) const = default;
+        };
+
+        void timerCallback() override;
+        void parameterChanged (const juce::String&, float) override;
+        void detachListeners();
+        Picture makePicture() const;
+        Key makeKey (const Picture&) const;
+        float paramHz() const;
+        float paramContour() const;
+        float angleForHz (float hz) const;
+
+        juce::AudioProcessorValueTreeState* state = nullptr;
+        juce::Slider* cutoffSlider = nullptr;
+        const std::atomic<float>* envTap = nullptr;
+        Picture picture;
+        Key lastKey;
+        int repaintRequests = 0;
+        juce::Rectangle<int> lastRepaintBounds;
+        bool keyValid = false;
+    };
+
     /** Discrete rotary switch (range / waveform) with tick marks. */
     class RotarySwitch final : public juce::Component
     {
@@ -64,6 +138,7 @@ namespace dooblrm::ui
         juce::Slider& getSlider() noexcept { return slider; }
         juce::Label& getCaption() noexcept { return captionLabel; }
         const std::vector<TickLabel>& getTickLabels() const noexcept { return tickLayout; }
+        void setTickTexts (const juce::StringArray& labels);
 
         static constexpr int captionHeight = 16;
 
@@ -205,5 +280,32 @@ namespace dooblrm::ui
         Handle dragHandle = Handle::none;
         juce::Point<float> grabOffset;
         bool gestureOpen = false;
+    };
+
+    /** Tiny pulse lamp on the LFO Rate knob. No text. Does not intercept mouse. */
+    class LfoPulse final : public juce::Component, private juce::Timer
+    {
+    public:
+        LfoPulse();
+        ~LfoPulse() override;
+
+        void attach (juce::AudioProcessorValueTreeState& state, const std::atomic<float>& tap);
+        void paint (juce::Graphics& g) override;
+        void parentSizeChanged() override;
+        void parentHierarchyChanged() override;
+        bool hitTest (int, int) override { return false; }
+        void refresh();
+        float getLevel() const noexcept { return level; }
+        int getRepaintRequests() const noexcept { return repaintRequests; }
+
+    private:
+        void timerCallback() override { refresh(); }
+
+        juce::AudioProcessorValueTreeState* state = nullptr;
+        const std::atomic<float>* tap = nullptr;
+        float level = 0;
+        int lastQ = -1;
+        int repaintRequests = 0;
+        bool active = false;
     };
 }

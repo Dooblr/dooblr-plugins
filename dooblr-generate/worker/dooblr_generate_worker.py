@@ -36,7 +36,7 @@ import time
 import traceback
 import wave
 
-WORKER_VERSION = "2"
+WORKER_VERSION = "4"
 
 MODELS = {
     "stable-audio-open-small": {
@@ -54,10 +54,10 @@ MODELS = {
         "required": ["model_index.json", "unet/diffusion_pytorch_model.safetensors",
                      "vae/diffusion_pytorch_model.safetensors", "vocoder/model.safetensors",
                      "text_encoder/model.safetensors"],
-        "max_seconds": 10.0,
+        "max_seconds": 30.0,
         "steps": 25,
     },
-    "test-backend": {"repo": None, "gated": False, "allow": [], "required": [], "max_seconds": 10.0, "steps": 1},
+    "test-backend": {"repo": None, "gated": False, "allow": [], "required": [], "max_seconds": 30.0, "steps": 1},
 }
 
 ACCESS_HELP = ("Stable Audio Open Small is gated on Hugging Face. Sign in at huggingface.co, open "
@@ -253,6 +253,37 @@ def generate_audioldm(args, out, model_dir):
     return {"sample_rate": sr, "channels": 1, "device": device, "load_seconds": round(load_s, 3), "steps": steps}
 
 
+def load_init_audio(path, torch):
+    """Loads a WAV the plug-in stored (44.1 kHz stereo 24-bit) as (sample_rate, tensor [ch, n])."""
+    try:
+        import torchaudio
+        wav, sr = torchaudio.load(path)
+        return int(sr), wav
+    except Exception:
+        pass
+    import numpy as np
+    with wave.open(path, "rb") as w:
+        sr = w.getframerate()
+        nch = w.getnchannels()
+        sw = w.getsampwidth()
+        n = w.getnframes()
+        raw = w.readframes(n)
+    if sw == 3:
+        b = np.frombuffer(raw, dtype=np.uint8).reshape(-1, 3)
+        ints = (b[:, 0].astype(np.int32) | (b[:, 1].astype(np.int32) << 8) | (b[:, 2].astype(np.int32) << 16))
+        ints = np.where(ints >= 0x800000, ints - 0x1000000, ints)
+        audio = ints.astype(np.float32) / 8388607.0
+    elif sw == 2:
+        audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32767.0
+    else:
+        fail("args", "unsupported source WAV sample width %d" % sw, 2)
+    if nch > 1:
+        audio = audio.reshape(-1, nch).T
+    else:
+        audio = audio.reshape(1, -1)
+    return int(sr), torch.from_numpy(np.ascontiguousarray(audio))
+
+
 def generate_stable_audio(args, out, model_dir):
     torch = import_torch()
     try:
@@ -272,13 +303,20 @@ def generate_stable_audio(args, out, model_dir):
     load_s = time.time() - t0
     sr = int(config["sample_rate"])
     steps = args.steps or MODELS["stable-audio-open-small"]["steps"]
+    init_audio = None
+    if args.init_audio:
+        init_audio = load_init_audio(args.init_audio, torch)
     progress("sampling", 0.15)
+    kwargs = dict(
+        steps=steps, cfg_scale=1.0,
+        conditioning=[{"prompt": args.prompt, "seconds_total": float(args.seconds)}],
+        sample_size=int(config["sample_size"]), sample_rate=sr, seed=int(args.seed) % (2 ** 32 - 1),
+        sampler_type="pingpong", device=device)
+    if init_audio is not None:
+        kwargs["init_audio"] = init_audio
+        kwargs["init_noise_level"] = float(args.init_noise)
     with torch.no_grad():
-        audio = generate_diffusion_cond(
-            model, steps=steps, cfg_scale=1.0,
-            conditioning=[{"prompt": args.prompt, "seconds_total": float(args.seconds)}],
-            sample_size=int(config["sample_size"]), sample_rate=sr, seed=int(args.seed) % (2 ** 32 - 1),
-            sampler_type="pingpong", device=device)
+        audio = generate_diffusion_cond(model, **kwargs)
     progress("decoding", 0.9)
     audio = audio[0].to(torch.float32).cpu().numpy()[:, : int(args.seconds * sr)]
     progress("writing", 0.95)
@@ -291,8 +329,14 @@ def cmd_generate(args):
     model = MODELS.get(args.model)
     if model is None:
         fail("args", "unknown model " + args.model, 2)
-    if not args.prompt.strip():
+    args.init_audio = (args.init_audio or "").strip()
+    if not args.prompt.strip() and not args.init_audio:
         fail("args", "the prompt is empty", 2)
+    if args.init_audio and args.model == "audioldm-s-full-v2":
+        fail("args", "AudioLDM S v2 has no audio-to-audio path in this runtime. "
+             "Source variation is only available with Stable Audio Open Small.", 2)
+    if args.init_audio and not os.path.isfile(args.init_audio):
+        fail("args", "source sample not found: " + args.init_audio, 2)
     args.seconds = max(0.1, min(float(args.seconds), model["max_seconds"]))
     if args.model != "test-backend":
         missing = missing_files(args.model, args.model_dir)
@@ -434,6 +478,8 @@ def main(argv=None):
     g.add_argument("--seconds", type=float, default=2.0)
     g.add_argument("--steps", type=int, default=0)
     g.add_argument("--out", required=True)
+    g.add_argument("--init-audio", default="", help="WAV path for audio-to-audio variation (Stable Audio Open Small)")
+    g.add_argument("--init-noise", type=float, default=1.0, help="init_noise_level, 0=closest to source, 1=furthest")
     d = sub.add_parser("download")
     d.add_argument("--model", required=True)
     d.add_argument("--model-dir", required=True)

@@ -49,6 +49,13 @@ namespace dooblr::installer
         if (p == Platform::mac && mac.isValid())         return &mac;
         if (p == Platform::windows && windows.isValid()) return &windows;
         if (any.isValid())                               return &any;
+        // Linux (and any other host) is not a shipped installer platform; tests still
+        // run there, so pick a real zip rather than returning null.
+        if (p == Platform::other)
+        {
+            if (mac.isValid())     return &mac;
+            if (windows.isValid()) return &windows;
+        }
         return nullptr;
     }
 

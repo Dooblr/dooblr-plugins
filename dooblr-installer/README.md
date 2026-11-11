@@ -6,10 +6,10 @@ update.
 
 | Item | Kind | Goes into |
 | --- | --- | --- |
-| dooblr-q, dooblr-kick, dooblr-vocals, dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor | VST3 | Mac: `/Library/Audio/Plug-Ins/VST3` (asks for your password once), or `~/Library/Audio/Plug-Ins/VST3` (just you).<br>Windows: `C:\Program Files\Common Files\VST3` (asks for permission, UAC), or `%LOCALAPPDATA%\Programs\Common\VST3` |
+| dooblr-q, dooblr-kick, dooblr-vocals, dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor, dooblr-0coast, dooblr-generate, dooblr-sub | VST3 | Mac: `/Library/Audio/Plug-Ins/VST3` (asks for your password once), or `~/Library/Audio/Plug-Ins/VST3` (just you).<br>Windows: `C:\Program Files\Common Files\VST3` (asks for permission, UAC), or `%LOCALAPPDATA%\Programs\Common\VST3` |
 | dooblr-prophet panel (optional), dooblr-chords, dooblr-titan | Max for Live device (Ableton Live only) | `<Ableton User Library>/Presets/MIDI Effects/Max MIDI Effect/<device>`, the same folder the dooblr-chords, dooblr-titan and dooblr-prophet build scripts use, so Live's browser shows them under MIDI Effects > Max MIDI Effect |
 
-Version 0.1.4.
+Version 0.1.5. dooblr-generate ships the VST3 and its embedded worker script only; model weights and the Python runtime are never bundled.
 
 ## Download
 
@@ -161,7 +161,7 @@ signatures, and checks that a corrupted zip is rejected.
 Releases are built by GitHub Actions (`.github/workflows/release.yml`):
 
 ```sh
-git tag -a v0.1.4 -m "dooblr installer 0.1.4" && git push origin v0.1.4
+git tag -a v0.1.5 -m "dooblr installer 0.1.5" && git push origin v0.1.5
 ```
 
 The workflow builds every VST3 plug-in and the installer on macOS (universal, ad-hoc signed) and

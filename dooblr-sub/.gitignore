@@ -1,0 +1,19 @@
+# Build output
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+
+# IDE / editor
+.vscode/
+.idea/
+*.xcworkspace/
+xcuserdata/
+.cache/
+compile_commands.json
+
+# OS
+.DS_Store
+
+# Local copy of the built plug-in made by scripts/build.sh (COPY_TO_PROJECT=1)
+/dooblr-sub.vst3/
