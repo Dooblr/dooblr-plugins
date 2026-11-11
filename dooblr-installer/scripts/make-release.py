@@ -3,7 +3,7 @@
 
   make-release.py package  --platform mac|windows --out DIR [--vst3 PATH ...] [--build-root DIR] [--m4l]
       Zips each .vst3 bundle (top folder = bundle name) and, with --m4l, the Max for Live
-      devices (dooblr-prophet panel, dooblr-chords built in a temp copy). Writes
+      devices (dooblr-prophet panel, dooblr-chords and dooblr-titan built in a temp copy). Writes
       DIR/partial-<platform>.json with name, version, sha256 and size per zip.
 
   make-release.py manifest --out DIR [--installer-mac FILE] [--installer-windows FILE] [--base-url URL] PARTIAL...
@@ -11,7 +11,7 @@
       Asset URLs are relative to the manifest unless --base-url is given, so the same files work
       from a GitHub release, any other web folder, or a local file:// folder.
 
-Versions come from each plug-in's CMakeLists.txt project(... VERSION ...) (chords: package.json,
+Versions come from each plug-in's CMakeLists.txt project(... VERSION ...) (chords and titan: package.json,
 prophet panel: UI_VERSION in m4l/src/dooblr-prophet-ui.js) and are checked against the built bundle when it has an Info.plist.
 """
 import argparse, datetime, glob, hashlib, json, os, plistlib, re, shutil, subprocess, sys, tempfile, zipfile
@@ -33,6 +33,8 @@ SUITE = [
     ('dooblr-distressor', 'dooblr-distressor', 'EL8-style compressor',                              'vst3', 'dooblr-distressor.vst3', 'dooblr-distressor', None),
     ('dooblr-chords',   'dooblr-chords',   'Chord progression generator (Max for Live MIDI effect, Ableton Live only)',
                                                                                                     'm4l',  'dooblr-chords',        'dooblr-chords',   None),
+    ('dooblr-titan',    'dooblr-titan',    'MIDI clip tightener and variation writer (Max for Live MIDI effect, Ableton Live only)',
+                                                                                                    'm4l',  'dooblr-titan',         'dooblr-titan',    None),
 ]
 
 def die(msg):
@@ -46,7 +48,7 @@ def cmake_version(folder):
     return m.group(1)
 
 def item_version(item_id, folder):
-    if item_id == 'dooblr-chords':
+    if item_id in ('dooblr-chords', 'dooblr-titan'):
         return json.load(open(os.path.join(REPO, folder, 'package.json')))['version']
     if item_id == 'dooblr-prophet-panel':
         text = open(os.path.join(REPO, folder, 'm4l', 'src', 'dooblr-prophet-ui.js'), encoding='utf-8').read()
@@ -105,13 +107,13 @@ def m4l_source(item_id, tmp):
         src = os.path.join(REPO, 'dooblr-prophet', 'm4l', 'device')
         if not os.path.exists(os.path.join(src, 'dooblr-prophet.amxd')): die('dooblr-prophet/m4l/device/dooblr-prophet.amxd missing')
         return src
-    if item_id == 'dooblr-chords':
+    if item_id in ('dooblr-chords', 'dooblr-titan'):
         # Build in a temp copy so the repo folder is never written to.
-        copy = os.path.join(tmp, 'chords-src')
-        shutil.copytree(os.path.join(REPO, 'dooblr-chords'), copy, ignore=shutil.ignore_patterns('node_modules', 'device', 'dist'))
+        copy = os.path.join(tmp, item_id + '-src')
+        shutil.copytree(os.path.join(REPO, item_id), copy, ignore=shutil.ignore_patterns('node_modules', 'device', 'dist'))
         subprocess.run(['node', 'scripts/build.js'], cwd=copy, check=True)
-        out = os.path.join(copy, 'device', 'dooblr-chords')
-        if not os.path.exists(os.path.join(out, 'dooblr-chords.amxd')): die('chords build produced no amxd')
+        out = os.path.join(copy, 'device', item_id)
+        if not os.path.exists(os.path.join(out, item_id + '.amxd')): die(item_id + ' build produced no amxd')
         return out
     die('unknown m4l item ' + item_id)
 

@@ -7,7 +7,7 @@ update.
 | Item | Kind | Goes into |
 | --- | --- | --- |
 | dooblr-q, dooblr-kick, dooblr-vocals, dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor | VST3 | Mac: `/Library/Audio/Plug-Ins/VST3` (asks for your password once), or `~/Library/Audio/Plug-Ins/VST3` (just you).<br>Windows: `C:\Program Files\Common Files\VST3` (asks for permission, UAC), or `%LOCALAPPDATA%\Programs\Common\VST3` |
-| dooblr-prophet panel (optional), dooblr-chords | Max for Live device (Ableton Live only) | `<Ableton User Library>/Presets/MIDI Effects/Max MIDI Effect/<device>`, the same folder the dooblr-chords and dooblr-prophet build scripts use, so Live's browser shows them under MIDI Effects > Max MIDI Effect |
+| dooblr-prophet panel (optional), dooblr-chords, dooblr-titan | Max for Live device (Ableton Live only) | `<Ableton User Library>/Presets/MIDI Effects/Max MIDI Effect/<device>`, the same folder the dooblr-chords, dooblr-titan and dooblr-prophet build scripts use, so Live's browser shows them under MIDI Effects > Max MIDI Effect |
 
 Version 0.1.4.
 
@@ -165,7 +165,7 @@ git tag -a v0.1.4 -m "dooblr installer 0.1.4" && git push origin v0.1.4
 ```
 
 The workflow builds every VST3 plug-in and the installer on macOS (universal, ad-hoc signed) and
-Windows (x64, MSVC), packages the zips, builds `dooblr-chords`, adds the dooblr-prophet panel,
+Windows (x64, MSVC), packages the zips, builds `dooblr-chords` and `dooblr-titan`, adds the dooblr-prophet panel,
 writes `dooblr-manifest.json` and publishes a GitHub Release with all of them. **Run workflow**
 on the Actions tab builds the same files as a downloadable artifact without publishing.
 
@@ -177,7 +177,7 @@ dooblr-installer/scripts/package-mac.sh "~/dooblr-build/dooblr-installer/DooblrI
 python3 dooblr-installer/scripts/make-release.py manifest --out OUT --installer-mac OUT/dooblr-installer-mac.dmg OUT/partial-mac.json
 ```
 
-Versions come from each plug-in's `CMakeLists.txt`, dooblr-chords' `package.json` and the
+Versions come from each plug-in's `CMakeLists.txt`, dooblr-chords' and dooblr-titan's `package.json` and the
 prophet panel's `UI_VERSION`. Asset names: `<id>-<version>-mac.zip`, `-windows.zip`, `-m4l.zip`.
 
 ## Changing the download address

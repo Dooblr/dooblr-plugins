@@ -1084,6 +1084,7 @@ namespace
         add ("dooblr-soothe", "0.1.3", "Dynamic resonance reducer", "vst3", "dooblr-soothe.vst3");
         add ("dooblr-feedback", "0.1.1", "Automatic live feedback suppressor", "vst3", "dooblr-feedback.vst3");
         add ("dooblr-chords", "0.3.0", "Chord progression generator (Max for Live MIDI effect)", "m4l", "dooblr-chords");
+        add ("dooblr-titan", "0.1.0", "MIDI clip tightener and variation writer (Max for Live MIDI effect)", "m4l", "dooblr-titan");
         const auto mf = writeManifest (root, items);
 
         Manifest m;
@@ -1105,10 +1106,11 @@ namespace
         c.setSize (820, 600);
         check (c.getPage() == ui::InstallerComponent::Page::welcome, "starts on Welcome");
         c.setManifest (m);
-        check (c.numRows() == 8, "one row per item");
+        check (c.numRows() == 9, "one row per item");
         check (c.rowStatus ("dooblr-q") == "Up to date", "q 0.9.5 installed: Up to date");
         check (c.rowStatus ("dooblr-kick") == "Update", "kick 0.3.4 -> 0.3.6: Update");
         check (c.rowStatus ("dooblr-vocals") == "Install", "vocals missing: Install");
+        check (c.rowStatus ("dooblr-titan") == "Install", "titan missing: Install");
         check (c.rowStatus ("dooblr-chords") == "Update", "chords folder with unknown version: Update");
         check (c.rowStatus ("dooblr-prophet-panel") == "Up to date", "prophet panel version read from UI_VERSION in its script: Up to date");
         check (readM4LVersion (m4l.getChildFile ("dooblr-prophet")) == "0.3.2", "readM4LVersion finds UI_VERSION");
@@ -1116,7 +1118,7 @@ namespace
         check (sel.contains ("dooblr-kick") && sel.contains ("dooblr-soothe") && ! sel.contains ("dooblr-q") && ! sel.contains ("dooblr-vocals"),
                "default selection = the updates: " + sel.joinIntoString (","));
         note ("status line: " + c.getStatusLine());
-        check (c.getStatusLine().contains ("8 items") && c.getStatusLine().contains ("3 updates"), "status line counts");
+        check (c.getStatusLine().contains ("9 items") && c.getStatusLine().contains ("3 updates"), "status line counts");
 
         const auto snap = juce::SystemStats::getEnvironmentVariable ("DOOBLRINSTALLER_SNAPSHOT", {});
         const auto save = [&] (const juce::String& name)
@@ -1132,23 +1134,23 @@ namespace
 
         save ("welcome");
         c.showPage (ui::InstallerComponent::Page::choose);
-        check (c.getInstallButtonText() == "Update 3" && c.isInstallEnabled() && c.getSelectionSummary() == "3 of 8 selected",
+        check (c.getInstallButtonText() == "Update 3" && c.isInstallEnabled() && c.getSelectionSummary() == "3 of 9 selected",
                "default: the 3 updates, button \"" + c.getInstallButtonText() + "\", " + c.getSelectionSummary());
 
         // All / None (0.1.3 bug: All ticked only Install/Update rows and unticked the rest, so on a computer where
         // everything is up to date it did nothing; and reading the list again threw the choice away).
         c.clickSelectNone();
         check (c.getSelectedIds().isEmpty() && ! c.isInstallEnabled() && c.getInstallButtonText() == "Install"
-               && c.getSelectionSummary() == "0 of 8 selected", "None unticks everything and disables Install");
+               && c.getSelectionSummary() == "0 of 9 selected", "None unticks everything and disables Install");
         c.clickSelectAll();
-        check (c.getSelectedIds().size() == 8, "All ticks every item (new, updates, up to date): " + c.getSelectedIds().joinIntoString (","));
-        check (c.isInstallEnabled() && c.getInstallButtonText() == "Install and update 8" && c.getSelectionSummary() == "8 of 8 selected",
+        check (c.getSelectedIds().size() == 9, "All ticks every item (new, updates, up to date): " + c.getSelectedIds().joinIntoString (","));
+        check (c.isInstallEnabled() && c.getInstallButtonText() == "Install and update 9" && c.getSelectionSummary() == "9 of 9 selected",
                "All: button \"" + c.getInstallButtonText() + "\", " + c.getSelectionSummary());
         c.clickRow ("dooblr-q");
-        check (c.getSelectedIds().size() == 7 && ! c.getSelectedIds().contains ("dooblr-q") && c.getSelectionSummary() == "7 of 8 selected",
+        check (c.getSelectedIds().size() == 8 && ! c.getSelectedIds().contains ("dooblr-q") && c.getSelectionSummary() == "8 of 9 selected",
                "a row tick still works after All");
         c.clickRow ("dooblr-q");
-        check (c.getSelectedIds().contains ("dooblr-q") && c.getSelectedIds().size() == 8, "and ticks again");
+        check (c.getSelectedIds().contains ("dooblr-q") && c.getSelectedIds().size() == 9, "and ticks again");
         c.clickSelectNone();
         check (c.getSelectedIds().isEmpty() && ! c.isInstallEnabled(), "None after All clears every row");
         c.clickRow ("dooblr-vocals");
@@ -1168,7 +1170,7 @@ namespace
         check (c.getSelectedIds().isEmpty() && ! c.isInstallEnabled(), "None survives a refresh");
         c.clickSelectAll();
         c.setManifest (m);
-        check (c.getSelectedIds().size() == 8, "All survives a refresh");
+        check (c.getSelectedIds().size() == 9, "All survives a refresh");
 
         // A computer where everything is up to date (where All/None did nothing in 0.1.3).
         {

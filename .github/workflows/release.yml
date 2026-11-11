@@ -64,6 +64,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 dooblr-installer/scripts/make-release.py package --platform mac --out dist --build-root build --m4l --require-all
+          # --m4l builds and zips dooblr-chords, dooblr-titan, and the dooblr-prophet panel.
           dooblr-installer/scripts/package-mac.sh "$(find build/dooblr-installer -type d -name 'dooblr installer.app' | head -1)" dist
       - uses: actions/upload-artifact@v4
         with: { name: mac, path: dist/* }
