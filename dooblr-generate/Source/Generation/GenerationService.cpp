@@ -1,5 +1,8 @@
 #include "GenerationService.h"
 
+#include "BeatSync.h"
+#include "SourceAudio.h"
+#include "../Engine/Sample.h"
 #include "BinaryData.h"
 
 #include <cerrno>
@@ -408,7 +411,9 @@ namespace dooblrgenerate::gen
 
     bool GenerationService::startGenerate (const GenerateRequest& request)
     {
-        if (request.prompt.trim().isEmpty() || ModelCatalog::find (request.model) == nullptr)
+        if (ModelCatalog::find (request.model) == nullptr)
+            return false;
+        if (request.prompt.trim().isEmpty() && ! request.initAudio.existsAsFile())
             return false;
 
         const juce::ScopedLock sl (lock);
@@ -520,13 +525,25 @@ namespace dooblrgenerate::gen
         if (! python.existsAsFile())
             return finishFailed ("Python runtime not installed (the system Python is never used). Run dooblr-generate/scripts/setup-runtime.sh or set DOOBLR_GENERATE_PYTHON.", "runtime");
 
-        if (const auto* model = ModelCatalog::find (job.modelId); isGenerate && model != nullptr && ! model->isTest)
+        if (const auto* model = ModelCatalog::find (job.modelId); isGenerate && model != nullptr)
         {
-            const auto folder = modelFolder (job.modelId);
-            const auto missing = ModelCatalog::missingFiles (*model, folder);
-            if (! missing.isEmpty())
-                return finishFailed (model->displayName + " is not installed or incomplete. Missing in "
-                                     + folder.getFullPathName() + ": " + missing.joinIntoString (", "), "missing");
+            if (job.request.initAudio != juce::File())
+            {
+                if (! model->supportsSourceVariation)
+                    return finishFailed (model->displayName + " has no audio-to-audio path in this runtime. "
+                                         "Source variation is only available with Stable Audio Open Small.", "args");
+                if (! job.request.initAudio.existsAsFile())
+                    return finishFailed ("Source sample is missing: " + job.request.initAudio.getFullPathName(), "args");
+            }
+
+            if (! model->isTest)
+            {
+                const auto folder = modelFolder (job.modelId);
+                const auto missing = ModelCatalog::missingFiles (*model, folder);
+                if (! missing.isEmpty())
+                    return finishFailed (model->displayName + " is not installed or incomplete. Missing in "
+                                         + folder.getFullPathName() + ": " + missing.joinIntoString (", "), "missing");
+            }
         }
 
         const auto worker = installWorker();
@@ -538,7 +555,7 @@ namespace dooblrgenerate::gen
         {
             const auto& r = job.request;
             juce::String id;
-            outFile = history.newWavFile (r.prompt, r.seed, id);
+            outFile = history.newWavFile (r.prompt, r.seed, id, r.bpm > 0 ? juce::roundToInt (r.bpm) : 0);
             paths.history().createDirectory();
             entry.id = id;
             entry.prompt = r.prompt.trim();
@@ -552,6 +569,9 @@ namespace dooblrgenerate::gen
                              "--out", outFile.getFullPathName() });
             if (r.steps > 0)
                 args.addArray ({ "--steps", juce::String (r.steps) });
+            if (r.initAudio.existsAsFile())
+                args.addArray ({ "--init-audio", r.initAudio.getFullPathName(),
+                                 "--init-noise", juce::String (r.initNoiseLevel, 3) });
         }
         else
         {
@@ -655,6 +675,18 @@ namespace dooblrgenerate::gen
 
             if (! outFile.existsAsFile())
                 return finishFailed ("The worker reported success but wrote no file: " + outFile.getFullPathName(), "generate");
+
+            if (job.request.alignToGrid)
+            {
+                juce::String loadError;
+                if (auto sample = engine::Sample::load (outFile, loadError))
+                {
+                    const auto n = targetSamples (job.request.seconds, sample->sampleRate);
+                    trimPadWithFades (sample->audio, n, sample->sampleRate);
+                    if (! SourceAudio::writeWav (outFile, sample->audio, sample->sampleRate))
+                        return finishFailed ("Could not write the beat-aligned WAV: " + outFile.getFullPathName(), "generate");
+                }
+            }
 
             history.add (entry);
 

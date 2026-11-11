@@ -16,6 +16,7 @@ namespace dooblrgenerate::gen
         juce::String licenceUrl;
         bool gated = false;         // needs a Hugging Face account + accepted licence + token
         bool isTest = false;        // NOT AI: the synthetic test backend
+        bool supportsSourceVariation = false;  // audio-to-audio Variation from a dropped sample
         double maxSeconds = 10.0;
         juce::StringArray requiredFiles;
     };

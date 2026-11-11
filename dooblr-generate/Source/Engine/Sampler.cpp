@@ -108,14 +108,14 @@ namespace dooblrgenerate::engine
     }
 
     void Sampler::process (juce::AudioBuffer<float>& out, const juce::MidiBuffer& midi, const Sample* sample,
-                           const PlaybackSettings& settings)
+                           const PlaybackSettings& settings, const Sample* extraKeep)
     {
         out.clear();
         outputGain.setTargetValue (settings.outputDb <= -47.99f ? 0.0f : juce::Decibels::decibelsToGain (settings.outputDb));
 
         // A sample that was replaced stops its voices (the old buffer may be freed after this block).
         for (auto& v : voices)
-            if (v.active && v.sample != sample)
+            if (v.active && v.sample != sample && v.sample != extraKeep)
                 v.active = false;
 
         int position = 0;

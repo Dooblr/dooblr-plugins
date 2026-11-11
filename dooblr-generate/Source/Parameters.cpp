@@ -28,7 +28,8 @@ namespace dooblrgenerate::params
 
     juce::StringArray allIds()
     {
-        return { id::output, id::tune, id::fine, id::start, id::attack, id::decay, id::velocity };
+        return { id::output, id::tune, id::fine, id::start, id::attack, id::decay, id::velocity,
+                 id::variationAmount, id::sync, id::tempo };
     }
 
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout()
@@ -82,6 +83,26 @@ namespace dooblrgenerate::params
             Attributes().withLabel ("%").withStringFromValueFunction ([] (float v, int)
             {
                 return juce::String (v, 0) + " %";
+            })));
+
+        layout.add (std::make_unique<Float> (juce::ParameterID { id::variationAmount, 1 }, "Variation Amount",
+            juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 50.0f,
+            Attributes().withLabel ("%").withStringFromValueFunction ([] (float v, int)
+            {
+                return juce::String (v, 1) + " %";
+            })));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::sync, 1 }, "Sync", false,
+            juce::AudioParameterBoolAttributes().withStringFromValueFunction ([] (bool v, int)
+            {
+                return v ? juce::String ("On") : juce::String ("Off");
+            })));
+
+        layout.add (std::make_unique<Float> (juce::ParameterID { id::tempo, 1 }, "Tempo",
+            juce::NormalisableRange<float> (minTempoBpm, maxTempoBpm, 0.1f), defaultTempoBpm,
+            Attributes().withLabel ("BPM").withStringFromValueFunction ([] (float v, int)
+            {
+                return juce::String (v, 1) + " BPM";
             })));
 
         return layout;

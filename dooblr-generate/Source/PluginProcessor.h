@@ -2,6 +2,7 @@
 
 #include "Engine/Sample.h"
 #include "Engine/Sampler.h"
+#include "Generation/BeatSync.h"
 #include "Generation/GenerationService.h"
 #include "Generation/History.h"
 #include "Parameters.h"
@@ -63,14 +64,40 @@ public:
     void setSeed (juce::int64);
     void setSeconds (double);
     void setModel (const juce::String&);
+    bool isSyncOn() const;
+    float getTempoBpm() const;
+    double getEffectiveBpm() const;
+    bool isUsingHostTempo() const;
+    int getBeatsPerBar() const;
+    dooblrgenerate::gen::LengthUnit getLengthUnit();
+    void setLengthUnit (dooblrgenerate::gen::LengthUnit);
+    double getModelMaxSeconds();
+    dooblrgenerate::gen::BeatPlan getBeatPlan();
+    juce::String getAlignMessage() const { return alignMessage; }
+    /** Tests: inject a host tempo (bpm <= 0 clears it). */
+    void setHostTransportForTests (double bpm, int numerator = 4, int denominator = 4);
 
-    /** Starts a generation with the current settings (a new random seed first if variation). */
+    /** Starts a generation with the current settings (a new random seed first if variation).
+        With a source sample loaded, Variation is audio-to-audio of that source. */
     bool generate (bool variation);
     static juce::int64 randomSeed();
 
     /** Loads a history entry (or any audio file) as the current sample. Message thread. */
     bool loadHistoryEntry (const juce::String& id, juce::String& error);
     bool loadFile (const juce::File& file, juce::String& error);
+
+    /** Loads a dropped audio file (or a resolvable Ableton .alc) as the Variation source. */
+    bool loadSourceFile (const juce::File& file, juce::String& error);
+    void clearSource();
+    std::shared_ptr<const dooblrgenerate::engine::Sample> getSourceSample() const { return sourceSlot.current(); }
+    juce::String getSourceName() const { return sourceName; }
+    bool wasSourceTrimmed() const noexcept { return sourceTrimmed; }
+    juce::String getSourceMessage() const { return sourceMessage; }
+    bool isSourceMessageError() const noexcept { return sourceMessageError; }
+    void requestSourcePreview() noexcept { sourcePreviewRequested.store (true); }
+    int getSourceSerial() const noexcept { return sourceSerial.load(); }
+    float getVariationAmount() const;
+    bool currentModelSupportsSourceVariation();
 
     /** The sample being played (nullptr: none). */
     std::shared_ptr<const dooblrgenerate::engine::Sample> getCurrentSample() const { return slot.current(); }
@@ -92,9 +119,14 @@ private:
     juce::AudioProcessorValueTreeState state;
     dooblrgenerate::gen::History history;
     dooblrgenerate::engine::SampleSlot slot;
+    dooblrgenerate::engine::SampleSlot sourceSlot;
     dooblrgenerate::engine::Sampler sampler;
     std::atomic<bool> previewRequested { false };
+    std::atomic<bool> sourcePreviewRequested { false };
     std::atomic<int> sampleSerial { 0 };
+    std::atomic<int> sourceSerial { 0 };
+    juce::String sourceName, sourceMessage;
+    bool sourceTrimmed = false, sourceMessageError = false;
 
     std::atomic<float>* output = nullptr;
     std::atomic<float>* tune = nullptr;
@@ -103,6 +135,12 @@ private:
     std::atomic<float>* attack = nullptr;
     std::atomic<float>* decay = nullptr;
     std::atomic<float>* velocity = nullptr;
+    std::atomic<float>* sync = nullptr;
+    std::atomic<float>* tempo = nullptr;
+    std::atomic<double> hostBpm { 0.0 };
+    std::atomic<int> hostNumerator { 4 };
+    std::atomic<int> hostDenominator { 4 };
+    juce::String alignMessage;
 
     // Last: its thread may call onGenerated until it is destroyed, so it goes first.
     dooblrgenerate::gen::GenerationService service;

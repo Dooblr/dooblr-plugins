@@ -94,7 +94,7 @@ namespace dooblrgenerate::gen
         return false;
     }
 
-    juce::File History::newWavFile (const juce::String& prompt, juce::int64 seed, juce::String& idOut) const
+    juce::File History::newWavFile (const juce::String& prompt, juce::int64 seed, juce::String& idOut, int bpm) const
     {
         juce::String slug;
         for (auto c : prompt.toLowerCase())
@@ -108,6 +108,8 @@ namespace dooblrgenerate::gen
 
         const auto stamp = juce::Time::getCurrentTime().formatted ("%Y%m%d-%H%M%S");
         auto base = stamp + "-" + slug + "-s" + juce::String (seed);
+        if (bpm > 0)
+            base << "-" << bpm << "bpm";
         auto file = paths.history().getChildFile (base + ".wav");
 
         for (int n = 2; file.exists(); ++n)

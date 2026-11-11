@@ -17,7 +17,10 @@ namespace dooblrgenerate::params
         inline constexpr const char* start    = "start";
         inline constexpr const char* attack   = "attack";
         inline constexpr const char* decay    = "decay";
-        inline constexpr const char* velocity = "velocity";
+        inline constexpr const char* velocity         = "velocity";
+        inline constexpr const char* variationAmount  = "variationAmount"; // added in 0.2.0; no editor control from 0.3.0
+        inline constexpr const char* sync             = "sync";            // added in 0.3.0
+        inline constexpr const char* tempo            = "tempo";           // added in 0.3.0
     }
 
     /** Decay at its maximum means no decay (the sample plays to its end at full level). */
@@ -36,9 +39,14 @@ namespace dooblrgenerate::params
         inline constexpr const char* seed        = "seed";
         inline constexpr const char* seconds     = "seconds";
         inline constexpr const char* model       = "model";
-        inline constexpr const char* currentWav  = "currentWav";
-        inline constexpr const char* currentId   = "currentId";
+        inline constexpr const char* currentWav     = "currentWav";
+        inline constexpr const char* currentId      = "currentId";
+        inline constexpr const char* sourceWav      = "sourceWav";      // added in 0.2.0; ignored from 0.3.0
+        inline constexpr const char* sourceName     = "sourceName";     // ignored from 0.3.0
+        inline constexpr const char* sourceTrimmed  = "sourceTrimmed";  // ignored from 0.3.0
+        inline constexpr const char* lengthUnit     = "lengthUnit";     // added in 0.3.0: BeatSync::LengthUnit
     }
 
-    inline constexpr double minSeconds = 0.25, maxSeconds = 10.0, defaultSeconds = 2.0;
+    inline constexpr double minSeconds = 0.25, maxSeconds = 30.0, defaultSeconds = 2.0;
+    inline constexpr float minTempoBpm = 40.0f, maxTempoBpm = 240.0f, defaultTempoBpm = 120.0f;
 }
