@@ -611,7 +611,7 @@ namespace
                    && ct.contains ("HTTP status: 404") && ct.contains ("Message: ") && ct.contains ("Tried: DOOBLR_GITHUB_TOKEN"),
                "copy text has version, OS, step, URL, HTTP status, message, details");
         check (! ct.contains (goodToken) && ! e.shortText().contains (goodToken) && ! e.url.contains (goodToken), "copy text never contains a token");
-        check (installerVersion() == "0.1.4", "installer version 0.1.4: " + installerVersion());
+        check (installerVersion() == "0.1.5", "installer version 0.1.5: " + installerVersion());
 
         // "Get access on GitHub": the pre-filled token page (only the parameters GitHub documents).
         {

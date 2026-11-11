@@ -33,6 +33,7 @@ env:
     dooblr-feedback:DOOBLRFEEDBACK:DooblrFeedback
     dooblr-distressor:DOOBLRDISTRESSOR:DooblrDistressor
     dooblr-0coast:DOOBLR0COAST:Dooblr0Coast
+    dooblr-generate:DOOBLRGENERATE:DooblrGenerate
     dooblr-sub:DOOBLRSUB:DooblrSub
 
 jobs:
@@ -84,6 +85,13 @@ jobs:
           set -euo pipefail
           for p in $PLUGINS; do
             IFS=: read -r name prefix target <<< "$p"
+            # dooblr-generate's worker is POSIX (posix_spawn + Mac GPU). Manifest still lists it
+            # from the Mac zip; make-release.py skips it on Windows even with --require-all.
+            # Model weights are never part of any zip.
+            if [ "$name" = "dooblr-generate" ]; then
+              echo "skip $name on Windows (macOS-only worker)"
+              continue
+            fi
             cmake -S "$name" -B "build/$name" -A x64 \
               -DCMAKE_MSVC_RUNTIME_LIBRARY=MultiThreaded \
               -DFETCHCONTENT_SOURCE_DIR_JUCE="$RUNNER_TEMP/juce" \

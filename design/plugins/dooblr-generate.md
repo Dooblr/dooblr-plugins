@@ -43,6 +43,9 @@ Read `design/INDEX.md` first. This file has two parts:
   revenue) and AudioLDM S v2 (open, CC BY-NC-SA, labelled non-commercial). Weights never in the
   repo or installer. Token file `<support>/hf_token` (0600), passed to the worker as a path.
   Test backend (not AI) hidden unless `DOOBLR_GENERATE_TEST_BACKEND=1`; always labelled.
+  **Installer (0.3.1)**: listed in the suite manifest as a Mac VST3. The zip is the plug-in
+  bundle with the embedded worker script (`juce_add_binary_data`); model weights and the
+  Python runtime are never bundled. Windows packaging skips it (POSIX worker).
 - **UI** (one page, 940x600..2400x1400, default 1080x660): header (title, version, Model box);
   prompt bar with captions above (Prompt, Seed, Length or bars/beats, Sync, Generate/Cancel, Variation) and a progress
   line; waveform (no text on it; Start shown as a `dynamic`-coloured line; test samples drawn in
@@ -88,7 +91,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE instrument VST3 (target `DooblrGenerate`, product "dooblr-generate", code Dbgn)
 - Version: 0.3.1
 - Last source change: 2026-11-11
-- Source tree: `f03239b5bcbe` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
+- Source tree: `9a7d7894bdf5` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-generate/scripts/build.sh` (build dir `~/dooblr-build/dooblr-generate`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrGenerateTests` (Tests/CMakeLists.txt)

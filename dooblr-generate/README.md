@@ -14,7 +14,9 @@ in a history you can go back to.
   Live keeps running. **Cancel** kills the worker (and anything it started) at once.
 - No model weights are part of this repository, the plug-in or the installer. The plug-in downloads
   them on request, or you point it at a folder you downloaded yourself.
-- Not in the dooblr installer or the release workflow yet.
+- In the dooblr installer and the release workflow as a Mac VST3. The zip is the plug-in bundle
+  with the embedded worker script only; model weights and the Python runtime are never bundled.
+  Windows is skipped (the worker uses posix_spawn and a Mac GPU runtime).
 
 ## Models
 
