@@ -14,6 +14,8 @@
 //   dropfile <path>      a .mid file dropped on the SOURCE drop zone (live.drop)
 //   useclip              read the clip shown in Live's Detail View as the source
 //   clearsource          forget the source and go back to fresh progressions
+//   openpanel <name> [v] open or close the Advanced or Source overlay panel
+//   closepanel           close any open overlay panel
 // With a source loaded, Generate/Reroll/Write make a VARIATION or a B SECTION
 // of it (the VAR/B switch, param kind) instead of a fresh progression.
 // Outlets:
@@ -23,7 +25,7 @@
 autowatch = 0;
 inlets = 1;
 outlets = 2;
-setinletassist(0, 'init, param <name> <value>, generate, reroll, write, lock <index>, dropfile <path>, useclip, clearsource');
+setinletassist(0, 'init, param <name> <value>, generate, reroll, write, lock <index>, dropfile <path>, useclip, clearsource, openpanel, closepanel');
 setoutletassist(0, 'setstate <json> to the chord display');
 setoutletassist(1, 'set <seed> to the Seed number box');
 
@@ -52,14 +54,27 @@ var BUTTON_HINTS = {
   kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.'
 };
 
+// Overlay panels. Members start hidden in the patcher; js toggles the hidden
+// attribute so they cover the chord display without being saved parameters.
+// The first name in each list is the backdrop.
+var PANELS = {
+  advanced: ['adv_bg', 'adv_title', 'adv_close', 'adv_bars_label', 'adv_seed_label', 'bass_label',
+    'duration', 'seed', 'write', 'register', 'spread', 'velocity', 'humanize', 'bass'],
+  source: ['src_bg', 'src_title', 'src_close', 'srcdrop', 'useclip', 'clearsource', 'kind', 'srcinfo']
+};
+var PANEL_NAMES = ['advanced', 'source'];
+var openPanel = null;
+
 // ---- messages -------------------------------------------------------------
 
 function loadbang() {
+  closepanel();
   refresh();
 }
 
 function init() {
   ready = true;
+  closepanel();
   refresh();
 }
 
@@ -241,6 +256,26 @@ function readFileBytes(path) {
 
 function errText(e) { return (e && e.message) ? e.message : String(e); }
 
+function openpanel(name, value) {
+  var key = String(name || '');
+  if (key !== 'advanced' && key !== 'source') { return; }
+  // live.text in toggle mode sends 1 when turned on and 0 when turned off.
+  // A bang (no value) toggles. Opening one panel closes the other.
+  if (value === 0 || value === '0') {
+    if (openPanel === key) { openPanel = null; }
+  } else if (value === undefined || value === 'bang') {
+    openPanel = (openPanel === key) ? null : key;
+  } else {
+    openPanel = key;
+  }
+  applyPanelVisibility();
+}
+
+function closepanel() {
+  openPanel = null;
+  applyPanelVisibility();
+}
+
 function anything() {
   post('dooblr-chords: unknown message ' + messagename + '\n');
 }
@@ -333,6 +368,50 @@ function updateSourceInfo() {
   } catch (e) {
     post('dooblr-chords: could not update srcinfo: ' + e + '\n');
   }
+  updateSourceBadge();
+}
+
+// Small chip on the main view so a loaded source is not hidden inside the panel.
+function updateSourceBadge() {
+  var text = '';
+  var hide = true;
+  if (source) {
+    var d = E.sourceDisplay(source, settings.root, settings.mode);
+    var kind = (settings.kind === 1) ? 'B' : 'VAR';
+    text = kind + ' \u00B7 ' + d.name;
+    hide = false;
+  }
+  try {
+    var obj = self.patcher.getnamed('srcbadge');
+    if (!obj) { return; }
+    obj.message('set', text);
+    obj.hidden = hide ? 1 : 0;
+  } catch (e) {
+    post('dooblr-chords: could not update srcbadge: ' + e + '\n');
+  }
+}
+
+function setHidden(varname, hide) {
+  try {
+    var obj = self.patcher.getnamed(varname);
+    if (!obj) { return; }
+    obj.hidden = hide ? 1 : 0;
+  } catch (e) {
+    post('dooblr-chords: could not hide ' + varname + ': ' + e + '\n');
+  }
+}
+
+function applyPanelVisibility() {
+  var i, j, name, members, show;
+  for (i = 0; i < PANEL_NAMES.length; i++) {
+    name = PANEL_NAMES[i];
+    members = PANELS[name];
+    show = openPanel === name;
+    for (j = 0; j < members.length; j++) { setHidden(members[j], !show); }
+  }
+  // Keep the opener buttons in sync (they are visible on the main view).
+  setControl('open_advanced', openPanel === 'advanced' ? 1 : 0);
+  setControl('open_source', openPanel === 'source' ? 1 : 0);
 }
 
 function sendState() {

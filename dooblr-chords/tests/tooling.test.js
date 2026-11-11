@@ -53,14 +53,33 @@ test('validator: catches duplicate ids, dangling lines and bad indices', () => {
   assert.ok(validate(p, 'x', MAIN).some((e) => /uses inlet 5/.test(e)));
 
   p = clone();
+  const width = p.patcher.devicewidth;
   const dial = p.patcher.boxes.find((w) => w.box.maxclass === 'live.dial').box;
-  dial.presentation_rect = [700, 150, 46, 58];
-  assert.ok(validate(p, 'x', MAIN).some((e) => /outside 724x169/.test(e)));
+  dial.presentation_rect = [width - 10, 150, 46, 58];
+  assert.ok(validate(p, 'x', MAIN).some((e) => new RegExp('outside ' + width + 'x169').test(e)));
 
   p = clone();
-  const dials = p.patcher.boxes.filter((w) => w.box.maxclass === 'live.dial').map((w) => w.box);
-  dials[1].presentation_rect = dials[0].presentation_rect.slice();
+  const mainDials = p.patcher.boxes.filter((w) => w.box.varname === 'color' || w.box.varname === 'chromatic').map((w) => w.box);
+  mainDials[1].presentation_rect = mainDials[0].presentation_rect.slice();
   assert.ok(validate(p, 'x', MAIN).some((e) => /overlap in presentation/.test(e)));
+
+  p = clone();
+  const register = p.patcher.boxes.find((w) => w.box.varname === 'register').box;
+  // A small rect over the blocks, clear of the other Advanced controls.
+  register.presentation_rect = [560, 110, 40, 40];
+  assert.ok(validate(p, 'x', MAIN).every((e) => !/overlap/.test(e)), 'a panel may cover the chord display');
+
+  p = clone();
+  const spread = p.patcher.boxes.find((w) => w.box.varname === 'spread').box;
+  const velocity = p.patcher.boxes.find((w) => w.box.varname === 'velocity').box;
+  spread.presentation_rect = velocity.presentation_rect.slice();
+  assert.ok(validate(p, 'x', MAIN).some((e) => /overlap inside the advanced panel/.test(e)));
+
+  p = clone();
+  const srcdrop = p.patcher.boxes.find((w) => w.box.varname === 'srcdrop').box;
+  const seed = p.patcher.boxes.find((w) => w.box.varname === 'seed').box;
+  srcdrop.presentation_rect = seed.presentation_rect.slice();
+  assert.ok(validate(p, 'x', MAIN).every((e) => !/overlap/.test(e)), 'two mutually exclusive panels may occupy the same space');
 
   p = clone();
   const pre = p.patcher.boxes.find((w) => /^prepend param /.test(w.box.text || '')).box;

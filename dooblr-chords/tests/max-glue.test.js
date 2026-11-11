@@ -298,6 +298,8 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.deepStrictEqual(t.lastMsg('mode', 'set'), ['set', 1]);
   assert.deepStrictEqual(t.lastMsg('length', 'set'), ['set', 4]);
   assert.match(t.lastMsg('srcinfo', 'set')[1], /my riff .* A Natural Minor .* 4 chords, 4 bars/);
+  assert.strictEqual(t.lastMsg('srcbadge', 'set')[1], 'VAR \u00B7 my riff');
+  assert.strictEqual(t.out.named.srcbadge.hidden, 0);
   assert.strictEqual(t.lastActive('kind'), 1);
   assert.strictEqual(t.lastActive('clearsource'), 1);
   assert.strictEqual(t.live.calls.length, 0, 'loading a source writes nothing');
@@ -310,6 +312,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.strictEqual(t.lastState().chords[0].changed, false);
 
   t.ctx.param('kind', 1);
+  assert.strictEqual(t.lastMsg('srcbadge', 'set')[1], 'B \u00B7 my riff');
   assert.strictEqual(t.lastState().heading, 'B SECTION');
   assert.strictEqual(t.lastState().region.length > 0, true, 'B section state carries its region for the header');
   assert.ok(t.lastState().key.indexOf(t.lastState().region) > 0);
@@ -323,6 +326,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.strictEqual(t.lastState().heading, 'PROGRESSION');
   assert.ok(t.lastMsg('srcdrop', 'clear'));
   assert.strictEqual(t.lastActive('kind'), 0);
+  assert.strictEqual(t.out.named.srcbadge.hidden, 1);
 });
 
 test('dropped files that are not usable MIDI report a warning and keep the old source', () => {
@@ -433,7 +437,7 @@ function loadBlocks() {
     return function () { ops.push([k].concat(Array.prototype.slice.call(arguments))); };
   }, set: (o, k, v) => { o[k] = v; return true; } });
   ctx.mgraphics = mg;
-  ctx.box = { rect: [146, 96, 580, 164], message: (...a) => { annotations.push(a); } };
+  ctx.box = { rect: [136, 99, 632, 165], message: (...a) => { annotations.push(a); } };
   ctx.post = () => {};
   ctx.outlet = function () { outlets.push(Array.prototype.slice.call(arguments)); };
   ctx.setinletassist = ctx.setoutletassist = () => {};
@@ -454,7 +458,7 @@ test('display paints 4 and 12 chords and maps clicks to lock messages', () => {
   assert.ok(texts.indexOf('\u266DII') >= 0, 'one-row blocks show the Roman numeral');
   assert.ok(b.annotations.some((m) => m[0] === 'annotation' && /Status: Wrote x to slot 2\./.test(m[1])));
   b.ctx.onclick(10, 40);
-  b.ctx.onclick(434 - 5, 60);
+  b.ctx.onclick(496 - 5, 50);
   b.ctx.onclick(10, 2); // header: no lock
   assert.deepStrictEqual(b.outlets.map((o) => o.slice()), [[0, 'lock', 0], [0, 'lock', 3]]);
 
@@ -478,9 +482,59 @@ test('display shows the source strip, the VARIATION heading and changed chords',
   assert.ok(texts.indexOf('VARIATION') >= 0);
   assert.ok(texts.indexOf('SOURCE') >= 0);
   assert.ok(texts.some((s) => /Am {3}F {3}C {3}G/.test(s)));
-  assert.ok(!texts.some((s) => /riff/.test(s)), 'the source name is in the SOURCE column, not the strip');
+  assert.ok(!texts.some((s) => /riff/.test(s)), 'the source name is on the badge and in the Source panel, not the strip');
   assert.strictEqual(b.ops.filter((o) => o[0] === 'ellipse').length, 1, 'one changed marker');
   b.ctx.onclick(10, 20); // source strip: no lock
   b.ctx.onclick(10, 50);
   assert.deepStrictEqual(b.outlets.map((o) => o.slice()), [[0, 'lock', 0]]);
+});
+
+test('overlay panels start closed, toggle from js, and reset on init', () => {
+  const t = loadController();
+  const hiddenOf = (name) => t.out.named[name] && t.out.named[name].hidden;
+  t.ctx.loadbang();
+  ['adv_bg', 'adv_title', 'adv_close', 'duration', 'seed', 'write', 'register', 'spread',
+    'velocity', 'humanize', 'bass', 'src_bg', 'src_title', 'src_close', 'srcdrop',
+    'useclip', 'clearsource', 'kind', 'srcinfo'].forEach((n) => {
+    assert.strictEqual(hiddenOf(n), 1, n + ' should be hidden after loadbang');
+  });
+  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
+  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
+
+  t.ctx.openpanel('advanced', 1);
+  assert.strictEqual(hiddenOf('adv_bg'), 0);
+  assert.strictEqual(hiddenOf('duration'), 0);
+  assert.strictEqual(hiddenOf('write'), 0);
+  assert.strictEqual(hiddenOf('register'), 0);
+  assert.strictEqual(hiddenOf('src_bg'), 1);
+  assert.strictEqual(hiddenOf('srcdrop'), 1);
+  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 1]);
+  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
+
+  t.ctx.openpanel('source', 1);
+  assert.strictEqual(hiddenOf('src_bg'), 0);
+  assert.strictEqual(hiddenOf('srcdrop'), 0);
+  assert.strictEqual(hiddenOf('kind'), 0);
+  assert.strictEqual(hiddenOf('adv_bg'), 1);
+  assert.strictEqual(hiddenOf('write'), 1);
+  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
+  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 1]);
+
+  t.ctx.openpanel('source', 0);
+  assert.strictEqual(hiddenOf('src_bg'), 1);
+  assert.strictEqual(hiddenOf('adv_bg'), 1);
+  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
+
+  t.ctx.openpanel('advanced', 1);
+  t.ctx.init();
+  assert.strictEqual(hiddenOf('adv_bg'), 1, 'init closes the panel');
+  assert.strictEqual(hiddenOf('src_bg'), 1);
+  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
+
+  t.ctx.openpanel('advanced');
+  assert.strictEqual(hiddenOf('adv_bg'), 0, 'a bang toggles the panel open');
+  t.ctx.openpanel('advanced');
+  assert.strictEqual(hiddenOf('adv_bg'), 1, 'a second bang toggles it closed');
+  t.ctx.closepanel();
+  assert.strictEqual(hiddenOf('adv_bg'), 1);
 });

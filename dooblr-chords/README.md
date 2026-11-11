@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.3.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.4.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -17,9 +17,9 @@ Version 0.3.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   (default 1).
 * **Color** (0 to 100) adds sevenths, then ninths, elevenths and thirteenths,
   skipping avoid notes. At 0 every chord is a triad.
-* **Chromatic** (0 to 100) adds borrowed chords, secondary dominants, tritone
-  substitutions and the Neapolitan. At 0 the progression is strictly
-  diatonic.
+* **Spice** (the Chromatic parameter, 0 to 100) adds borrowed chords, secondary
+  dominants, tritone substitutions and the Neapolitan. At 0 the progression
+  is strictly diatonic.
 * **Generation** walks a functional Markov chain (tonic, pre-dominant,
   dominant) and ends on a cadence: an authentic V–I, or a turnaround that
   loops back to the start.
@@ -31,8 +31,8 @@ Version 0.3.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   chords and regenerates the rest.
 * **Velocity**, plus **Humanize** for small timing and velocity changes. Humanize
   is off by default.
-* **Source**: drop a `.mid` file on the SOURCE drop zone, or select a MIDI
-  clip in Live and press **USE CLIP**. The device detects the source's chords
+* **Source**: open **SOURCE …**, drop a `.mid` file on the drop zone, or
+  select a MIDI clip in Live and press **USE CLIP**. The device detects the source's chords
   (block chords and arpeggios, bass inversions, up to 16 chords) and its key,
   shows both, and sets Root, Mode and Length to match.
 * **VAR / B**: with a source loaded, Generate, Reroll and Write make
@@ -51,27 +51,51 @@ Version 0.3.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   thickness (3 to 5).
 * Incoming MIDI passes straight through.
 
+## First use
+
+The main view only shows what you need to make a progression. Advanced
+sound settings and the variation / B-section tools live in pop-up panels
+inside the device (not separate Max windows).
+
+1. Drop the device on a MIDI track that has an instrument after it.
+2. Pick a **Root** and **Mode**, set **Length**, and optionally turn **Color**
+   (richer chords) or **Spice** (more unexpected chords).
+3. Press **Generate**. A clip is written to the next empty slot, and the
+   chords appear in the blocks.
+4. Click a block to lock it, then press **Reroll** to change the others.
+5. Press **ADVANCED …** for Bars per Chord, voicing, velocity, humanize,
+   Seed and Write. Press **SOURCE …** to drop a `.mid` file, use a clip as
+   the source, or pick a variation or B section. Each panel has a title and
+   a close (×) button; they close again when the device is reloaded.
+
 ## Controls
 
-The layout is 724 x 169 px in five columns. The controls you use most are
-large and bright; the ones you set once are small and grey but always there.
+The device is 640 × 169 px. The left rail holds Generate and Reroll. The
+main pane shows the key, length, Color, Spice and the chord blocks, with
+**ADVANCED …** and **SOURCE …** in the corner. Those buttons open an overlay
+that covers the chord display (and the rest of the main pane) until you
+close it.
 
 | Section | Control | What it does |
 |---|---|---|
 | Actions (left) | **Generate** | The largest button. Picks a new seed, clears locks and writes a clip to the next empty slot. |
 | | **Reroll** | Picks a new seed, keeps locked chords and writes a clip. It is dimmed until a chord is locked. |
-| | Write (small) | Writes the progression shown into the next empty slot again, unchanged. |
-| | Seed (small) | The current seed. Type a number to recall a progression. It is drawn at 60% when every chord is locked, because it then only affects Humanize. |
-| KEY | **Root**, **Mode**, **Length**, Bars per Chord | Key, scale, number of chords and chord length. |
-| TENSION | **Color**, **Chromatic** (large dials) | Extensions and chromatic substitutions. |
-| ADVANCED | Register, Spread, Bass | Lowest upper note, voicing width and the bass note on or off. Small grey dials. |
-| | Velocity, Humanize | Note velocity and human feel. Small grey dials. |
-| SOURCE (right) | drop zone | Drop a `.mid` file to load it as the source. The path is saved with the Set. |
+| | source badge | When a source is loaded, a small chip such as `VAR · my riff` appears under Reroll, so that state is not hidden in the Source panel. |
+| Main | **Root**, **Mode**, **Length** | Key, scale and number of chords. |
+| | **Color**, **Spice** | Color adds extensions. Spice is the Chromatic parameter: borrowed chords and substitutions. The Live parameter name is still Chromatic. |
+| | **ADVANCED …** | Opens the Advanced overlay. |
+| | **SOURCE …** | Opens the Source overlay. |
+| | chord blocks | Each block shows the chord name over its Roman numeral. Click a block to lock or unlock it. The header shows the heading (VARIATION or B SECTION with a source, plus the B key area) and the last status message; hover over the blocks to read a long status in full. With a source a SOURCE strip lists the source's chords. |
+| ADVANCED panel | Bars per Chord | How long each chord lasts: half a bar, one bar or two bars. |
+| | Register, Spread, Bass | Lowest upper note, voicing width and the bass note on or off. |
+| | Velocity, Humanize | Note velocity and human feel. |
+| | Seed | The current seed. Type a number to recall a progression. It is drawn at 60% when every chord is locked, because it then only affects Humanize. |
+| | Write | Writes the progression shown into the next empty slot again, unchanged. |
+| SOURCE panel | drop zone | Drop a `.mid` file to load it as the source. The path is saved with the Set. |
 | | **USE CLIP** | Loads the MIDI clip shown in the Detail View (else the clip in the highlighted slot). Uses the loop if looping, else start to end marker. |
-| | CLEAR (small) | Forgets the source. Generate makes fresh progressions again. |
+| | CLEAR | Forgets the source. Generate makes fresh progressions again. |
 | | **VAR / B** | Variation or B section of the source. Dimmed without a source. |
 | | info line | Source name, detected key, chord and bar count, or a hint while there is no source. |
-| PROGRESSION | chord blocks | Each block shows the chord name over its Roman numeral. Click a block to lock or unlock it. The header shows the heading (VARIATION or B SECTION with a source, plus the B key area), and the last status message on the right; hover over the blocks to read a long status in full. With a source a SOURCE strip lists the source's chords. |
 
 Changing a control updates the preview but does not write anything. Only
 Generate, Reroll and Write create clips. Clips are named like
@@ -184,14 +208,16 @@ the files in `device/`, because they are generated.
     are not restored.
 13. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
     send the js the message `ascii 1`.
-14. The device is 724 px wide with five columns: actions, KEY/TENSION/
-    ADVANCED over the chord blocks, and SOURCE. Generate, Reroll, Root, Mode,
-    Length, Color, Chromatic, USE CLIP and VAR/B are the large, bright
-    controls; Write, Seed, CLEAR and the ADVANCED dials are small and grey.
-    Every label is readable, nothing is clipped or overlapping, and the
-    ADVANCED dials can be dragged and double-clicked to type a value. VAR/B
-    and CLEAR are dimmed. Hover over the blocks: the hint ends with the full
-    status text.
+14. The device is 640 px wide. The main view shows the left rail (Generate,
+    Reroll), Key, Length, Color, Spice and the chord blocks, with ADVANCED …
+    and SOURCE … in the top-right. The Advanced and Source controls are not
+    on the main view. Press ADVANCED …: a panel covers the chord display,
+    with a title and a close (×). Bars per Chord, the voicing and output
+    dials, Bass, Seed and Write are all inside it and none overlap. Close it
+    with × or by pressing ADVANCED … again. Press SOURCE …: the drop zone,
+    USE CLIP, CLEAR, VAR/B and the info line are in that panel. VAR/B and
+    CLEAR are dimmed. Close it, reload the Set: both panels start closed.
+    Hover over the blocks: the hint ends with the full status text.
 15. Drag a `.mid` file with block chords (for example Am F C G, one bar each)
     from Finder onto the drop zone. The status reads "Loaded <name>: A Natural
     Minor, 4 chords…", Root/Mode/Length change to A, Natural Minor and 4, the
@@ -265,8 +291,12 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
-* The 0.3.0 layout: how `live.dial` draws at 42 x 36 px with its name and
-  value shown (the arc may be very small), the 8.5 pt and 9 pt fonts on
-  `live.*` objects, `textcolor` dimming on the grey Seed box, and how the
-  724 px device sits in Live's device chain. `scripts/render-layout.py` only
-  approximates Live's widgets.
+* The 0.4.0 layout in Live: toggling the `hidden` attribute from js on
+  presentation objects (`this.patcher.getnamed(...).hidden`) so an overlay
+  covers the jsui, the drawing order of non-background panels above the
+  chord display, whether hidden objects still eat clicks or drops, `live.drop`
+  only while the Source panel is open, `live.text` buttons with
+  `parameter_enable` 0, the × and ellipsis glyphs, Color/Spice captions with
+  `showname` off, 8.5 pt button labels, and how the 640 px device sits in
+  Live's device chain. `scripts/render-layout.py` only approximates Live's
+  widgets.

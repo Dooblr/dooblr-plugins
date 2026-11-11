@@ -98,7 +98,17 @@ class Canvas:
                 break
             self.text(line, x + 2, y + 2 + pt + i * lh, pt, color, bold)
 
+def visible(b, state):
+    panel = b.get('panel')
+    if panel:
+        return state.get('panel') == panel
+    if b.get('varname') == 'srcbadge':
+        return bool(state.get('badge'))
+    return True
+
 def draw_box(c, b, state):
+    if not visible(b, state):
+        return
     cls = b['maxclass']
     r = b['presentation_rect']
     x, y, w, h = r
@@ -111,6 +121,8 @@ def draw_box(c, b, state):
         text = b.get('text', '')
         if b.get('varname') == 'srcinfo':
             text = state.get('srcinfo', text)
+        if b.get('varname') == 'srcbadge':
+            text = state.get('badge') or text
         c.wrap(text, r, pt, rgba(b.get('textcolor', [0, 0, 0, 1])), bold)
     elif cls == 'live.text':
         val = initial(b, state['values']) if b.get('mode') == 1 else 0
@@ -158,10 +170,16 @@ def draw_box(c, b, state):
         frac = (val - lo) / float(hi - lo or 1)
         tc = rgba(b['textcolor'])
         th = pt + 2
-        c.text(p['parameter_shortname'], x + w / 2, y + th / 2, pt, tc, False, 'mm')
-        c.text(value_text(b, val), x + w / 2, y + h - th / 2, pt, tc, False, 'mm')
-        rad = max(4, min(w, h - 2 * th) / 2 - 2)
-        cx, cy = x + w / 2, y + th + (h - 2 * th) / 2
+        show_name = b.get('showname', 1)
+        show_num = b.get('shownumber', 1)
+        top = th if show_name else 2
+        bot = th if show_num else 2
+        if show_name:
+            c.text(p['parameter_shortname'], x + w / 2, y + th / 2, pt, tc, False, 'mm')
+        if show_num:
+            c.text(value_text(b, val), x + w / 2, y + h - bot / 2, pt, tc, False, 'mm')
+        rad = max(4, min(w, h - top - bot) / 2 - 2)
+        cx, cy = x + w / 2, y + top + (h - top - bot) / 2
         box = [c.xy(cx - rad, cy - rad), c.xy(cx + rad, cy + rad)]
         lw = max(2, int(round(max(1.5, rad * 0.16) * S)))
         c.d.arc(box, 135, 405, fill=rgba(b['dialcolor']), width=lw)

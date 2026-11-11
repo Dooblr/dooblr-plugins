@@ -4,7 +4,7 @@
 // Checks: unique box ids, patchlines reference existing boxes with valid
 // inlet/outlet indices, known objects have the expected inlet/outlet counts,
 // presentation boxes fit the device, parameter names and varnames are unique,
-// and the patcher and src/max/main.js agree on message and parameter names.
+// overlay-panel membership (from PANELS in main.js), and the patcher and src/max/main.js agree on message and parameter names.
 'use strict';
 const fs = require('fs');
 const path = require('path');
@@ -76,13 +76,40 @@ function validate(patcher, label, mainSource) {
     }
   });
 
-  // Controls and labels must not overlap in presentation (panels are backdrops).
+  // Overlay panels from main.js: members may cover the main view and each
+  // other (only one panel is shown at a time), but two members of the same
+  // panel must not overlap, and two main-view controls must not overlap.
+  // Backdrops (maxclass panel) are excluded, as before.
+  const panels = parsePanels(mainSource);
+  const memberOf = {};
+  Object.keys(panels).forEach((name) => {
+    (panels[name] || []).forEach((vn) => {
+      if (memberOf[vn] && memberOf[vn] !== name) { err('varname ' + vn + ' is in more than one panel'); }
+      memberOf[vn] = name;
+    });
+    (panels[name] || []).forEach((vn) => {
+      const b = Object.keys(byId).map((k) => byId[k]).filter((x) => x.varname === vn)[0];
+      if (!b) { err('panel ' + name + ' member ' + vn + ' has no box'); }
+      else if (b.presentation && b.hidden !== 1) { err(b.id + ' (' + vn + ') is a panel member but is not hidden in the patcher'); }
+    });
+  });
+
   const shown = p.boxes.map((w) => w.box).filter((b) => b && b.presentation && b.maxclass !== 'panel' &&
     Array.isArray(b.presentation_rect) && b.presentation_rect.length === 4);
+  const overlaps = (a, b) => {
+    const r = a.presentation_rect, q = b.presentation_rect;
+    return r[0] < q[0] + q[2] && q[0] < r[0] + r[2] && r[1] < q[1] + q[3] && q[1] < r[1] + r[3];
+  };
+  const panelOf = (b) => (b.varname && memberOf[b.varname]) || null;
   for (let i = 0; i < shown.length; i++) {
     for (let j = i + 1; j < shown.length; j++) {
-      const r = shown[i].presentation_rect, q = shown[j].presentation_rect;
-      if (r[0] < q[0] + q[2] && q[0] < r[0] + r[2] && r[1] < q[1] + q[3] && q[1] < r[1] + r[3]) {
+      if (!overlaps(shown[i], shown[j])) { continue; }
+      const pa = panelOf(shown[i]), pb = panelOf(shown[j]);
+      if (pa && pb && pa !== pb) { continue; }                 // two overlays, mutually exclusive
+      if ((pa && !pb) || (!pa && pb)) { continue; }            // a panel covering the main view
+      if (pa && pa === pb) {
+        err(shown[i].id + ' and ' + shown[j].id + ' overlap inside the ' + pa + ' panel');
+      } else {
         err(shown[i].id + ' and ' + shown[j].id + ' overlap in presentation');
       }
     }
@@ -145,5 +172,19 @@ function main() {
   console.log('patcher ok: ' + p.boxes.length + ' boxes, ' + p.lines.length + ' lines' + (process.argv.indexOf('--built') >= 0 ? ' (source and built amxd)' : ''));
 }
 
+function parsePanels(mainSource) {
+  const panels = {};
+  if (!mainSource) { return panels; }
+  const block = /var PANELS = \{([\s\S]*?)\};/.exec(mainSource);
+  if (!block) { return panels; }
+  const re = /([a-z]+):\s*\[([\s\S]*?)\]/g;
+  let m;
+  while ((m = re.exec(block[1]))) {
+    const names = m[2].match(/'([^']+)'/g);
+    panels[m[1]] = names ? names.map((s) => s.slice(1, -1)) : [];
+  }
+  return panels;
+}
+
 if (require.main === module) { main(); }
-module.exports = { validate };
+module.exports = { validate, parsePanels };

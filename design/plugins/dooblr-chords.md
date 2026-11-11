@@ -17,11 +17,11 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: Max for Live MIDI effect that writes chord progressions into Session View clip slots.
-- Version: 0.3.0
-- Last source change: 2026-11-01
-- Source tree: `5138ec19eeae` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chords`)
+- Version: 0.4.0
+- Last source change: 2026-11-11
+- Source tree: `9ca1efab0fd5` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chords`)
 - Build/test: `dooblr-chords/scripts/build.js`
-- Device: device width 724 px
+- Device: device width 640 px
 
 ### Parameters (19 rows, 19 parameters after loops; from `src/patcher/dooblr-chords.maxpat`)
 
@@ -31,14 +31,14 @@ Read `design/INDEX.md` first. This file has two parts:
 |---|---|---|---|---|---|
 | generate | live.text enum | Generate | [off, on] |  |  |
 | reroll | live.text enum | Reroll | [off, on] |  |  |
-| write | live.text enum | Write | [off, on] |  |  |
-| seed | live.numbox int | Seed | 1..99999 | 1 |  |
 | root | live.menu enum | Root | [C, C#, D, Eb, E, F, F#, G, Ab, A, Bb, B] | 0 |  |
 | mode | live.menu enum | Mode | [Major, Natural Minor, Dorian, Phrygian, Lydian, Mixolydian, Harmonic Minor] | 1 |  |
 | length | live.numbox int | Length | 2..16 | 4 |  |
-| duration | live.tab enum | Duration | [1/2, 1, 2] | 1 |  |
 | color | live.dial int | Color | 0..100 | 35 |  |
 | chromatic | live.dial int | Chromatic | 0..100 | 10 |  |
+| write | live.text enum | Write | [off, on] |  |  |
+| seed | live.numbox int | Seed | 1..99999 | 1 |  |
+| duration | live.tab enum | Duration | [1/2, 1, 2] | 1 |  |
 | register | live.dial int | Register | 36..72 | 60 |  |
 | spread | live.dial int | Spread | 0..100 | 25 |  |
 | bass | live.text enum | Bass | [off, on] | 1 |  |
@@ -88,7 +88,7 @@ Read `design/INDEX.md` first. This file has two parts:
 ### Tests
 
 - `tests/generator.test.js` (11): progression length matches the Length setting (2..16), same seed and settings give identical output; different seeds differ, chromatic 0 is strictly diatonic in every mode and colour, more chromatic means more substitutions, and all four kinds appear, raising Color only adds tones and keeps the roots (chromatic 0), progressions usually start on the tonic and end with a cadence, no diminished opening chord and no immediate repeats of a degree, lock and reroll keeps locked chords exactly, locked chords are stored relative to the key, so they follow a key change, clip name format, newSeed stays in range
-- `tests/max-glue.test.js` (16): no Live API use before live.thisdevice, then writes into the first empty slot, fills slots in order and reports a full track without creating scenes, falls back to set_notes when add_new_notes adds nothing, finds the track from inside a rack, parameters update the preview without writing, lock and reroll keep locked chords, Reroll is dimmed without locks, Seed is drawn partly ignored when every chord is locked, shrinking Length drops locks beyond the end, a dropped .mid file becomes the source; Generate writes a variation of it, dropped files that are not usable MIDI report a warning and keep the old source, a path re-sent while the Set loads keeps the saved Root, Mode and Length, USE CLIP reads the Detail View clip loop, shifted to start at 0, USE CLIP falls back to the highlighted slot and explains audio or missing clips, with a source, locks survive Reroll and switching VAR/B clears them, display paints 4 and 12 chords and maps clicks to lock messages, display shows the source strip, the VARIATION heading and changed chords
+- `tests/max-glue.test.js` (17): no Live API use before live.thisdevice, then writes into the first empty slot, fills slots in order and reports a full track without creating scenes, falls back to set_notes when add_new_notes adds nothing, finds the track from inside a rack, parameters update the preview without writing, lock and reroll keep locked chords, Reroll is dimmed without locks, Seed is drawn partly ignored when every chord is locked, shrinking Length drops locks beyond the end, a dropped .mid file becomes the source; Generate writes a variation of it, dropped files that are not usable MIDI report a warning and keep the old source, a path re-sent while the Set loads keeps the saved Root, Mode and Length, USE CLIP reads the Detail View clip loop, shifted to start at 0, USE CLIP falls back to the highlighted slot and explains audio or missing clips, with a source, locks survive Reroll and switching VAR/B clears them, display paints 4 and 12 chords and maps clicks to lock messages, display shows the source strip, the VARIATION heading and changed chords, overlay panels start closed, toggle from js, and reset on init
 - `tests/source.test.js` (12): midifile reads notes in beats, names, running status and note-on 0 offs, midifile reads format 1, other divisions and rounds the length up to whole bars, midifile rejects files that are not SMF with readable errors, analysis finds the chords and key of a block-chord clip, analysis merges repeated chords, ignores muted notes and reports empty clips, analysis round-trips generated progressions (pitch classes match), VAR keeps the key, length, rhythm, first and last chords, and is deterministic, VAR with Chromatic 0 stays in the key; other lengths use uniform slots, VAR keeps locked chords, B section moves away, ends on a chord that leads home, and fills the clip, B section keeps the rhythm plan when asked (locks during Reroll), engine without a source is unchanged by the kind setting
 - `tests/theory.test.js` (5): modes have the expected interval sets, diatonic triad qualities per mode, key spelling follows the key signature, chord building and naming, extensions avoid minor-9th clashes except b9/b13 on dominants
 - `tests/tooling.test.js` (4): amxd: chunk layout and round trip, validator: the source patcher is clean, validator: catches duplicate ids, dangling lines and bad indices, ES5 scanner rejects ES2015+ syntax and accepts ES5

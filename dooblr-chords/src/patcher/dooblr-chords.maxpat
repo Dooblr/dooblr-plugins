@@ -44,7 +44,7 @@
 		"boxanimatetime": 200,
 		"enablehscroll": 1,
 		"enablevscroll": 1,
-		"devicewidth": 724,
+		"devicewidth": 640,
 		"description": "Chord progression generator that writes clips into Session View.",
 		"digest": "",
 		"tags": "",
@@ -79,14 +79,14 @@
 					"patching_rect": [
 						0,
 						0,
-						904,
+						640,
 						169
 					],
 					"presentation": 1,
 					"presentation_rect": [
 						0,
 						0,
-						724,
+						640,
 						169
 					]
 				}
@@ -125,7 +125,7 @@
 					"presentation_rect": [
 						0,
 						0,
-						136,
+						124,
 						169
 					]
 				}
@@ -162,10 +162,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						12,
+						10,
 						10,
 						3,
-						30
+						28
 					]
 				}
 			},
@@ -194,9 +194,9 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						20,
+						18,
 						8,
-						112,
+						102,
 						18
 					]
 				}
@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.3.0",
+					"text": "v0.4.0",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -226,9 +226,9 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						20,
+						18,
 						26,
-						60,
+						54,
 						14
 					]
 				}
@@ -333,10 +333,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						12,
+						10,
 						46,
-						112,
-						42
+						104,
+						54
 					]
 				}
 			},
@@ -440,231 +440,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						12,
-						94,
-						74,
-						24
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.text",
-					"varname": "write",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						""
-					],
-					"parameter_enable": 1,
-					"mode": 0,
-					"text": "Write",
-					"texton": "Write",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activebgoncolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activetextcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activetextoncolor": [
-						0.902,
-						0.91,
-						0.922,
-						1
-					],
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"bgoncolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						0.38
-					],
-					"textoncolor": [
-						0.902,
-						0.91,
-						0.922,
-						0.38
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Write",
-							"parameter_shortname": "Write",
-							"parameter_type": 2,
-							"parameter_enum": [
-								"off",
-								"on"
-							],
-							"parameter_mmax": 1,
-							"parameter_invisible": 2
-						}
-					},
-					"annotation_name": "Write",
-					"annotation": "Write puts the progression shown below into the next empty clip slot without changing it.",
-					"id": "obj-8",
-					"patching_rect": [
-						75,
-						84,
-						61,
-						20
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						90,
-						94,
-						34,
-						24
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Seed",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-9",
-					"patching_rect": [
 						10,
-						113,
-						34,
-						16
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						12,
-						129,
-						28,
-						14
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.numbox",
-					"varname": "seed",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"fontname": "Arial",
-					"fontsize": 9,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"tricolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activetricolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activeslidercolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Seed",
-							"parameter_shortname": "Seed",
-							"parameter_type": 1,
-							"parameter_mmin": 1,
-							"parameter_mmax": 99999,
-							"parameter_initial": [
-								1
-							],
-							"parameter_initial_enable": 1,
-							"parameter_unitstyle": 0,
-							"parameter_invisible": 1
-						}
-					},
-					"annotation_name": "Seed",
-					"annotation": "The seed makes a progression repeatable. The same seed and settings always give the same chords.",
-					"id": "obj-10",
-					"patching_rect": [
-						46,
-						112,
-						90,
-						18
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						42,
-						128,
-						82,
-						18
+						108,
+						104,
+						26
 					]
 				}
 			},
@@ -700,7 +479,7 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						136,
+						124,
 						0,
 						1,
 						169
@@ -732,9 +511,9 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						146,
+						136,
 						4,
-						60,
+						50,
 						14
 					]
 				}
@@ -833,10 +612,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						146,
-						20,
-						44,
-						22
+						136,
+						22,
+						52,
+						24
 					]
 				}
 			},
@@ -929,10 +708,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						194,
-						20,
-						104,
-						22
+						196,
+						22,
+						120,
+						24
 					]
 				}
 			},
@@ -961,41 +740,9 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						146,
-						46,
-						44,
-						14
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Bars per Chord",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-19",
-					"patching_rect": [
-						200,
-						49,
-						90,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						194,
-						46,
-						104,
+						136,
+						52,
+						52,
 						14
 					]
 				}
@@ -1075,161 +822,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						146,
-						60,
-						44,
-						22
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.tab",
-					"varname": "duration",
-					"numinlets": 1,
-					"numoutlets": 3,
-					"outlettype": [
-						"",
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"num_lines_patching": 1,
-					"num_lines_presentation": 1,
-					"fontname": "Arial",
-					"fontsize": 10,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activebgoncolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"activetextcolor": [
-						0.902,
-						0.91,
-						0.922,
-						1
-					],
-					"activetextoncolor": [
-						0.086,
-						0.094,
-						0.11,
-						1
-					],
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"bgoncolor": [
-						0.373,
-						0.702,
-						0.631,
-						0.38
-					],
-					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
-						0.38
-					],
-					"textoncolor": [
-						0.086,
-						0.094,
-						0.11,
-						0.38
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Duration",
-							"parameter_shortname": "Duration",
-							"parameter_type": 2,
-							"parameter_enum": [
-								"1/2",
-								"1",
-								"2"
-							],
-							"parameter_mmax": 2,
-							"parameter_initial": [
-								1
-							],
-							"parameter_initial_enable": 1,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Bars per Chord",
-					"annotation": "Bars per Chord sets how long each chord lasts: half a bar, one bar or two bars.",
-					"id": "obj-21",
-					"patching_rect": [
-						202,
-						63,
-						86,
-						16
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						194,
-						60,
-						104,
-						22
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "panel",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"mode": 0,
-					"border": 0,
-					"rounded": 0,
-					"background": 1,
-					"ignoreclick": 1,
-					"bgcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"bgfillcolor_type": "color",
-					"bgfillcolor_color": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"id": "obj-22",
-					"patching_rect": [
-						292,
-						6,
-						1,
-						72
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						306,
-						6,
-						1,
-						84
+						136,
+						66,
+						52,
+						24
 					]
 				}
 			},
@@ -1238,8 +834,8 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "TENSION",
-					"fontname": "Arial Bold",
+					"text": "Color",
+					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
 						0.541,
@@ -1258,11 +854,12 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						314,
+						326,
 						4,
-						90,
+						70,
 						14
-					]
+					],
+					"varname": "color_label"
 				}
 			},
 			{
@@ -1276,7 +873,7 @@
 						"float"
 					],
 					"parameter_enable": 1,
-					"showname": 1,
+					"showname": 0,
 					"shownumber": 1,
 					"dialcolor": [
 						0.173,
@@ -1342,10 +939,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						314,
+						326,
 						18,
-						56,
-						72
+						70,
+						76
 					]
 				}
 			},
@@ -1360,7 +957,7 @@
 						"float"
 					],
 					"parameter_enable": 1,
-					"showname": 1,
+					"showname": 0,
 					"shownumber": 1,
 					"dialcolor": [
 						0.173,
@@ -1416,7 +1013,7 @@
 						}
 					},
 					"annotation_name": "Chromatic",
-					"annotation": "Chromatic adds borrowed chords, secondary dominants, tritone substitutions and the Neapolitan. At 0 every chord stays in the scale.",
+					"annotation": "Spice (the Chromatic control) adds borrowed chords, secondary dominants, tritone substitutions and the Neapolitan. At 0 every chord stays in the scale.",
 					"id": "obj-25",
 					"patching_rect": [
 						346,
@@ -1426,560 +1023,10 @@
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						374,
+						404,
 						18,
-						56,
-						72
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "panel",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"mode": 0,
-					"border": 0,
-					"rounded": 0,
-					"background": 1,
-					"ignoreclick": 1,
-					"bgcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"bgfillcolor_type": "color",
-					"bgfillcolor_color": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"id": "obj-26",
-					"patching_rect": [
-						396,
-						6,
-						1,
-						72
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						438,
-						6,
-						1,
-						84
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "ADVANCED",
-					"fontname": "Arial Bold",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-27",
-					"patching_rect": [
-						398,
-						3,
-						90,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						446,
-						4,
-						90,
-						14
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.dial",
-					"varname": "register",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"showname": 1,
-					"shownumber": 1,
-					"dialcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"activedialcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"needlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activeneedlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"panelcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"fontname": "Arial",
-					"fontsize": 8.5,
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Register",
-							"parameter_shortname": "Register",
-							"parameter_type": 1,
-							"parameter_mmin": 36,
-							"parameter_mmax": 72,
-							"parameter_initial": [
-								60
-							],
-							"parameter_initial_enable": 1,
-							"parameter_unitstyle": 8,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Register",
-					"annotation": "Register sets the lowest note of the upper voices.",
-					"id": "obj-28",
-					"patching_rect": [
-						400,
-						20,
-						46,
-						58
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						446,
-						18,
-						42,
-						36
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.dial",
-					"varname": "spread",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"showname": 1,
-					"shownumber": 1,
-					"dialcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"activedialcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"needlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activeneedlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"panelcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"fontname": "Arial",
-					"fontsize": 8.5,
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Spread",
-							"parameter_shortname": "Spread",
-							"parameter_type": 1,
-							"parameter_mmin": 0,
-							"parameter_mmax": 100,
-							"parameter_initial": [
-								25
-							],
-							"parameter_initial_enable": 1,
-							"parameter_unitstyle": 5,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Spread",
-					"annotation": "Spread opens the voicing from close position to drop-2 to wide open.",
-					"id": "obj-29",
-					"patching_rect": [
-						450,
-						20,
-						46,
-						58
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						492,
-						18,
-						42,
-						36
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Bass",
-					"fontname": "Arial",
-					"fontsize": 8.5,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-30",
-					"patching_rect": [
-						500,
-						20,
-						44,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						538,
-						18,
-						42,
-						12
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.text",
-					"varname": "bass",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						""
-					],
-					"parameter_enable": 1,
-					"mode": 1,
-					"text": "Off",
-					"texton": "On",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activebgoncolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"activetextcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activetextoncolor": [
-						0.086,
-						0.094,
-						0.11,
-						1
-					],
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"bgoncolor": [
-						0.373,
-						0.702,
-						0.631,
-						0.38
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						0.38
-					],
-					"textoncolor": [
-						0.086,
-						0.094,
-						0.11,
-						0.38
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Bass",
-							"parameter_shortname": "Bass",
-							"parameter_type": 2,
-							"parameter_enum": [
-								"off",
-								"on"
-							],
-							"parameter_mmax": 1,
-							"parameter_initial": [
-								1
-							],
-							"parameter_initial_enable": 1,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Bass",
-					"annotation": "Bass adds a separate bass note an octave or more below the chord.",
-					"id": "obj-31",
-					"patching_rect": [
-						500,
-						36,
-						40,
-						18
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						538,
-						32,
-						42,
-						18
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.dial",
-					"varname": "velocity",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"showname": 1,
-					"shownumber": 1,
-					"dialcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"activedialcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"needlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activeneedlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"panelcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"fontname": "Arial",
-					"fontsize": 8.5,
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Velocity",
-							"parameter_shortname": "Velocity",
-							"parameter_type": 1,
-							"parameter_mmin": 1,
-							"parameter_mmax": 127,
-							"parameter_initial": [
-								100
-							],
-							"parameter_initial_enable": 1,
-							"parameter_unitstyle": 0,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Velocity",
-					"annotation": "Velocity sets how hard every note is played.",
-					"id": "obj-34",
-					"patching_rect": [
-						552,
-						20,
-						46,
-						58
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						446,
-						56,
-						42,
-						36
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.dial",
-					"varname": "humanize",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"showname": 1,
-					"shownumber": 1,
-					"dialcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"activedialcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"needlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activeneedlecolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"panelcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"fontname": "Arial",
-					"fontsize": 8.5,
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Humanize",
-							"parameter_shortname": "Humanize",
-							"parameter_type": 1,
-							"parameter_mmin": 0,
-							"parameter_mmax": 100,
-							"parameter_initial": [
-								0
-							],
-							"parameter_initial_enable": 1,
-							"parameter_unitstyle": 5,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Humanize",
-					"annotation": "Humanize nudges note timing and velocity a little. At 0 the notes are exactly on the grid.",
-					"id": "obj-35",
-					"patching_rect": [
-						604,
-						20,
-						50,
-						58
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						492,
-						56,
-						42,
-						36
+						70,
+						76
 					]
 				}
 			},
@@ -1998,17 +1045,17 @@
 					"annotation": "Click a chord to lock it. Locked chords stay the same when you press Reroll.",
 					"id": "obj-38",
 					"patching_rect": [
-						146,
-						96,
-						434,
-						68
+						136,
+						99,
+						496,
+						66
 					],
 					"presentation": 1,
 					"presentation_rect": [
-						146,
-						96,
-						434,
-						68
+						136,
+						99,
+						496,
+						66
 					]
 				}
 			},
@@ -2439,7 +1486,7 @@
 			{
 				"box": {
 					"maxclass": "comment",
-					"text": "Controls send \"param <name> <value>\" to the js. The drop zone sends \"dropfile <path>\"; USE CLIP and CLEAR send \"useclip\" and \"clearsource\". The js sends \"setstate\" to the display and \"set <seed>\" back to the Seed box; it sets srcinfo, root, mode and length by varname.",
+					"text": "Controls send \"param <name> <value>\" to the js. The drop zone sends \"dropfile <path>\"; USE CLIP and CLEAR send \"useclip\" and \"clearsource\". ADVANCED … and SOURCE … send \"openpanel <name> <0|1>\"; the close buttons send \"closepanel\". The js hides overlay objects with the hidden attribute, sends \"setstate\" to the display and \"set <seed>\" back to the Seed box, and sets srcinfo, srcbadge, root, mode and length by varname.",
 					"numinlets": 1,
 					"numoutlets": 0,
 					"fontsize": 10,
@@ -2450,498 +1497,6 @@
 						520,
 						48
 					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "panel",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"mode": 0,
-					"border": 0,
-					"rounded": 0,
-					"background": 1,
-					"ignoreclick": 1,
-					"bgcolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"bgfillcolor_type": "color",
-					"bgfillcolor_color": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"id": "obj-63",
-					"patching_rect": [
-						760,
-						6,
-						1,
-						158
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						588,
-						6,
-						1,
-						158
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "SOURCE",
-					"fontname": "Arial Bold",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-64",
-					"patching_rect": [
-						766,
-						3,
-						90,
-						14
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						596,
-						4,
-						90,
-						14
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.drop",
-					"varname": "srcdrop",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						""
-					],
-					"parameter_enable": 1,
-					"legend": "Drop a .mid file",
-					"fontname": "Arial",
-					"fontsize": 9.5,
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"bordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Source File",
-							"parameter_shortname": "Source",
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "Source File",
-					"annotation": "Drop a MIDI file (.mid) here to use its chords as the source. VAR and B then write a variation or a B section of it. The file path is saved with the Set.",
-					"id": "obj-65",
-					"patching_rect": [
-						768,
-						19,
-						128,
-						44
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						596,
-						20,
-						120,
-						34
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.text",
-					"varname": "useclip",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						""
-					],
-					"parameter_enable": 1,
-					"mode": 0,
-					"text": "USE CLIP",
-					"texton": "USE CLIP",
-					"fontname": "Arial Bold",
-					"fontsize": 10,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activebgoncolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activetextcolor": [
-						0.902,
-						0.91,
-						0.922,
-						1
-					],
-					"activetextoncolor": [
-						0.902,
-						0.91,
-						0.922,
-						1
-					],
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"bgoncolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
-						0.38
-					],
-					"textoncolor": [
-						0.902,
-						0.91,
-						0.922,
-						0.38
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Use Clip",
-							"parameter_shortname": "Use Clip",
-							"parameter_type": 2,
-							"parameter_enum": [
-								"off",
-								"on"
-							],
-							"parameter_mmax": 1,
-							"parameter_invisible": 2
-						}
-					},
-					"annotation_name": "Use Clip",
-					"annotation": "USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.",
-					"id": "obj-66",
-					"patching_rect": [
-						768,
-						67,
-						62,
-						18
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						596,
-						58,
-						78,
-						22
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.text",
-					"varname": "clearsource",
-					"numinlets": 1,
-					"numoutlets": 2,
-					"outlettype": [
-						"",
-						""
-					],
-					"parameter_enable": 1,
-					"mode": 0,
-					"text": "CLEAR",
-					"texton": "CLEAR",
-					"fontname": "Arial",
-					"fontsize": 8.5,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activebgoncolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activetextcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"activetextoncolor": [
-						0.902,
-						0.91,
-						0.922,
-						1
-					],
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"bgoncolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						0.38
-					],
-					"textoncolor": [
-						0.902,
-						0.91,
-						0.922,
-						0.38
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Clear Source",
-							"parameter_shortname": "Clear",
-							"parameter_type": 2,
-							"parameter_enum": [
-								"off",
-								"on"
-							],
-							"parameter_mmax": 1,
-							"parameter_invisible": 2
-						}
-					},
-					"annotation_name": "Clear Source",
-					"annotation": "CLEAR forgets the source, so Generate makes fresh progressions again.",
-					"id": "obj-67",
-					"patching_rect": [
-						834,
-						67,
-						62,
-						18
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						678,
-						58,
-						38,
-						22
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "live.tab",
-					"varname": "kind",
-					"numinlets": 1,
-					"numoutlets": 3,
-					"outlettype": [
-						"",
-						"",
-						"float"
-					],
-					"parameter_enable": 1,
-					"num_lines_patching": 1,
-					"num_lines_presentation": 1,
-					"fontname": "Arial Bold",
-					"fontsize": 11,
-					"activebgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						1
-					],
-					"activebgoncolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"activetextcolor": [
-						0.902,
-						0.91,
-						0.922,
-						1
-					],
-					"activetextoncolor": [
-						0.086,
-						0.094,
-						0.11,
-						1
-					],
-					"bgcolor": [
-						0.145,
-						0.161,
-						0.192,
-						0.38
-					],
-					"bgoncolor": [
-						0.373,
-						0.702,
-						0.631,
-						0.38
-					],
-					"textcolor": [
-						0.902,
-						0.91,
-						0.922,
-						0.38
-					],
-					"textoncolor": [
-						0.086,
-						0.094,
-						0.11,
-						0.38
-					],
-					"bordercolor": [
-						0.173,
-						0.188,
-						0.22,
-						1
-					],
-					"focusbordercolor": [
-						0.373,
-						0.702,
-						0.631,
-						1
-					],
-					"saved_attribute_attributes": {
-						"valueof": {
-							"parameter_longname": "Source Kind",
-							"parameter_shortname": "Kind",
-							"parameter_type": 2,
-							"parameter_enum": [
-								"VAR",
-								"B"
-							],
-							"parameter_mmax": 1,
-							"parameter_initial": [
-								0
-							],
-							"parameter_initial_enable": 1,
-							"parameter_invisible": 0
-						}
-					},
-					"annotation_name": "VAR / B",
-					"annotation": "VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.",
-					"id": "obj-68",
-					"patching_rect": [
-						768,
-						90,
-						128,
-						18
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						596,
-						84,
-						120,
-						26
-					]
-				}
-			},
-			{
-				"box": {
-					"maxclass": "comment",
-					"numinlets": 1,
-					"numoutlets": 0,
-					"text": "Drop a .mid file or press USE CLIP.",
-					"fontname": "Arial",
-					"fontsize": 9,
-					"textcolor": [
-						0.541,
-						0.569,
-						0.612,
-						1
-					],
-					"ignoreclick": 1,
-					"background": 0,
-					"id": "obj-69",
-					"patching_rect": [
-						766,
-						112,
-						132,
-						52
-					],
-					"presentation": 1,
-					"presentation_rect": [
-						594,
-						114,
-						124,
-						50
-					],
-					"varname": "srcinfo"
 				}
 			},
 			{
@@ -3053,6 +1608,1959 @@
 						150,
 						140,
 						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Spice",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-76",
+					"patching_rect": [
+						404,
+						200,
+						70,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						404,
+						4,
+						70,
+						14
+					],
+					"varname": "spice_label"
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend openpanel advanced",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-84",
+					"patching_rect": [
+						20,
+						252,
+						180,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend openpanel source",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-85",
+					"patching_rect": [
+						110,
+						252,
+						180,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "route bang 1",
+					"numinlets": 2,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						""
+					],
+					"id": "obj-86",
+					"patching_rect": [
+						200,
+						252,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "message",
+					"text": "closepanel",
+					"numinlets": 2,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-87",
+					"patching_rect": [
+						200,
+						284,
+						80,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 0,
+					"ignoreclick": 0,
+					"bgcolor": [
+						0.114,
+						0.125,
+						0.149,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.114,
+						0.125,
+						0.149,
+						1
+					],
+					"id": "obj-78",
+					"patching_rect": [
+						128,
+						260,
+						200,
+						40
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						128,
+						0,
+						512,
+						169
+					],
+					"varname": "adv_bg",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "panel",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"mode": 0,
+					"border": 0,
+					"rounded": 0,
+					"background": 0,
+					"ignoreclick": 0,
+					"bgcolor": [
+						0.114,
+						0.125,
+						0.149,
+						1
+					],
+					"bgfillcolor_type": "color",
+					"bgfillcolor_color": [
+						0.114,
+						0.125,
+						0.149,
+						1
+					],
+					"id": "obj-79",
+					"patching_rect": [
+						348,
+						260,
+						200,
+						40
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						128,
+						0,
+						512,
+						169
+					],
+					"varname": "src_bg",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "write",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "Write",
+					"texton": "Write",
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Write",
+							"parameter_shortname": "Write",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Write",
+					"annotation": "Write puts the progression shown below into the next empty clip slot without changing it.",
+					"id": "obj-8",
+					"patching_rect": [
+						75,
+						84,
+						61,
+						20
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						404,
+						50,
+						64,
+						24
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Seed",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-9",
+					"patching_rect": [
+						10,
+						113,
+						34,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						304,
+						36,
+						40,
+						14
+					],
+					"varname": "adv_seed_label",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.numbox",
+					"varname": "seed",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"fontname": "Arial",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"tricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetricolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activeslidercolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Seed",
+							"parameter_shortname": "Seed",
+							"parameter_type": 1,
+							"parameter_mmin": 1,
+							"parameter_mmax": 99999,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 0,
+							"parameter_invisible": 1
+						}
+					},
+					"annotation_name": "Seed",
+					"annotation": "The seed makes a progression repeatable. The same seed and settings always give the same chords.",
+					"id": "obj-10",
+					"patching_rect": [
+						46,
+						112,
+						90,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						304,
+						50,
+						88,
+						24
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Bars per Chord",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-19",
+					"patching_rect": [
+						200,
+						49,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						36,
+						100,
+						14
+					],
+					"varname": "adv_bars_label",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "duration",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Duration",
+							"parameter_shortname": "Duration",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"1/2",
+								"1",
+								"2"
+							],
+							"parameter_mmax": 2,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Bars per Chord",
+					"annotation": "Bars per Chord sets how long each chord lasts: half a bar, one bar or two bars.",
+					"id": "obj-21",
+					"patching_rect": [
+						202,
+						63,
+						86,
+						16
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						50,
+						148,
+						24
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "ADVANCED",
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-27",
+					"patching_rect": [
+						398,
+						3,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						8,
+						200,
+						16
+					],
+					"varname": "adv_title",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "register",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"needlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activeneedlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 10,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Register",
+							"parameter_shortname": "Register",
+							"parameter_type": 1,
+							"parameter_mmin": 36,
+							"parameter_mmax": 72,
+							"parameter_initial": [
+								60
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 8,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Register",
+					"annotation": "Register sets the lowest note of the upper voices.",
+					"id": "obj-28",
+					"patching_rect": [
+						400,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						84,
+						64,
+						72
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "spread",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"needlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activeneedlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 10,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Spread",
+							"parameter_shortname": "Spread",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								25
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Spread",
+					"annotation": "Spread opens the voicing from close position to drop-2 to wide open.",
+					"id": "obj-29",
+					"patching_rect": [
+						450,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						212,
+						84,
+						64,
+						72
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Bass",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-30",
+					"patching_rect": [
+						500,
+						20,
+						44,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						432,
+						84,
+						48,
+						14
+					],
+					"varname": "bass_label",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "bass",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 1,
+					"text": "Off",
+					"texton": "On",
+					"fontname": "Arial",
+					"fontsize": 10,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Bass",
+							"parameter_shortname": "Bass",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_initial": [
+								1
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Bass",
+					"annotation": "Bass adds a separate bass note an octave or more below the chord.",
+					"id": "obj-31",
+					"patching_rect": [
+						500,
+						36,
+						40,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						432,
+						100,
+						48,
+						22
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "velocity",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"needlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activeneedlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 10,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Velocity",
+							"parameter_shortname": "Velocity",
+							"parameter_type": 1,
+							"parameter_mmin": 1,
+							"parameter_mmax": 127,
+							"parameter_initial": [
+								100
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 0,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Velocity",
+					"annotation": "Velocity sets how hard every note is played.",
+					"id": "obj-34",
+					"patching_rect": [
+						552,
+						20,
+						46,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						284,
+						84,
+						64,
+						72
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.dial",
+					"varname": "humanize",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"showname": 1,
+					"shownumber": 1,
+					"dialcolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"activedialcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"needlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activeneedlecolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"panelcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"fontname": "Arial",
+					"fontsize": 10,
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Humanize",
+							"parameter_shortname": "Humanize",
+							"parameter_type": 1,
+							"parameter_mmin": 0,
+							"parameter_mmax": 100,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_unitstyle": 5,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Humanize",
+					"annotation": "Humanize nudges note timing and velocity a little. At 0 the notes are exactly on the grid.",
+					"id": "obj-35",
+					"patching_rect": [
+						604,
+						20,
+						50,
+						58
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						356,
+						84,
+						64,
+						72
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "SOURCE",
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-64",
+					"patching_rect": [
+						766,
+						3,
+						90,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						8,
+						200,
+						16
+					],
+					"varname": "src_title",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.drop",
+					"varname": "srcdrop",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"legend": "Drop a .mid file",
+					"fontname": "Arial",
+					"fontsize": 10,
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"bordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Source File",
+							"parameter_shortname": "Source",
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "Source File",
+					"annotation": "Drop a MIDI file (.mid) here to use its chords as the source. VAR and B then write a variation or a B section of it. The file path is saved with the Set.",
+					"id": "obj-65",
+					"patching_rect": [
+						768,
+						19,
+						128,
+						44
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						40,
+						248,
+						52
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "useclip",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "USE CLIP",
+					"texton": "USE CLIP",
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Use Clip",
+							"parameter_shortname": "Use Clip",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Use Clip",
+					"annotation": "USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.",
+					"id": "obj-66",
+					"patching_rect": [
+						768,
+						67,
+						62,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						400,
+						40,
+						92,
+						24
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "clearsource",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 1,
+					"mode": 0,
+					"text": "CLEAR",
+					"texton": "CLEAR",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Clear Source",
+							"parameter_shortname": "Clear",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"off",
+								"on"
+							],
+							"parameter_mmax": 1,
+							"parameter_invisible": 2
+						}
+					},
+					"annotation_name": "Clear Source",
+					"annotation": "CLEAR forgets the source, so Generate makes fresh progressions again.",
+					"id": "obj-67",
+					"patching_rect": [
+						834,
+						67,
+						62,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						500,
+						40,
+						52,
+						24
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "kind",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Source Kind",
+							"parameter_shortname": "Kind",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"VAR",
+								"B"
+							],
+							"parameter_mmax": 1,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					},
+					"annotation_name": "VAR / B",
+					"annotation": "VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.",
+					"id": "obj-68",
+					"patching_rect": [
+						768,
+						90,
+						128,
+						18
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						140,
+						100,
+						248,
+						28
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Drop a .mid file or press USE CLIP.",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-69",
+					"patching_rect": [
+						766,
+						112,
+						132,
+						52
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						400,
+						72,
+						200,
+						80
+					],
+					"varname": "srcinfo",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "adv_close",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 0,
+					"mode": 0,
+					"text": "×",
+					"texton": "×",
+					"fontname": "Arial Bold",
+					"fontsize": 14,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Close Advanced",
+					"annotation": "Closes the Advanced panel.",
+					"id": "obj-82",
+					"patching_rect": [
+						200,
+						220,
+						22,
+						22
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						456,
+						6,
+						22,
+						22
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "src_close",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 0,
+					"mode": 0,
+					"text": "×",
+					"texton": "×",
+					"fontname": "Arial Bold",
+					"fontsize": 14,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Close Source",
+					"annotation": "Closes the Source panel.",
+					"id": "obj-83",
+					"patching_rect": [
+						230,
+						220,
+						22,
+						22
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						456,
+						6,
+						22,
+						22
+					],
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "",
+					"fontname": "Arial Bold",
+					"fontsize": 9,
+					"textcolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-77",
+					"patching_rect": [
+						8,
+						200,
+						108,
+						22
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						8,
+						140,
+						108,
+						22
+					],
+					"varname": "srcbadge",
+					"hidden": 1
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "open_advanced",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 0,
+					"mode": 1,
+					"text": "ADVANCED …",
+					"texton": "ADVANCED …",
+					"fontname": "Arial",
+					"fontsize": 8.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Advanced",
+					"annotation": "Opens the Advanced panel: Bars per Chord, voicing, velocity, humanize, seed and Write.",
+					"id": "obj-80",
+					"patching_rect": [
+						20,
+						220,
+						80,
+						20
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						486,
+						6,
+						70,
+						20
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.text",
+					"varname": "open_source",
+					"numinlets": 1,
+					"numoutlets": 2,
+					"outlettype": [
+						"",
+						""
+					],
+					"parameter_enable": 0,
+					"mode": 1,
+					"text": "SOURCE …",
+					"texton": "SOURCE …",
+					"fontname": "Arial",
+					"fontsize": 8.5,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Source",
+					"annotation": "Opens the Source panel: drop a .mid file, use the selected clip, or choose a variation or B section.",
+					"id": "obj-81",
+					"patching_rect": [
+						110,
+						220,
+						80,
+						20
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						560,
+						6,
+						64,
+						20
 					]
 				}
 			}
@@ -3698,6 +4206,114 @@
 				"patchline": {
 					"source": [
 						"obj-75",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-80",
+						0
+					],
+					"destination": [
+						"obj-84",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-84",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-81",
+						0
+					],
+					"destination": [
+						"obj-85",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-85",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-82",
+						0
+					],
+					"destination": [
+						"obj-86",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-83",
+						0
+					],
+					"destination": [
+						"obj-86",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-86",
+						0
+					],
+					"destination": [
+						"obj-87",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-86",
+						1
+					],
+					"destination": [
+						"obj-87",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-87",
 						0
 					],
 					"destination": [

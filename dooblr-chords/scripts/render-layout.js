@@ -55,17 +55,31 @@ function paintBlocks(rect, state) {
 const chord = (name, roman, extra) => Object.assign({ name, roman, func: 'T', source: 'diatonic', locked: false }, extra || {});
 const STATES = [
   {
-    title: 'No source: Generate, one chord locked',
-    inactive: ['clearsource', 'kind'],
-    values: {},
+    title: 'Main view: no source, one chord locked',
+    panel: null,
+    inactive: [],
+    values: { open_advanced: 0, open_source: 0 },
+    badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',
     blocks: { heading: 'PROGRESSION', status: 'Wrote A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
       chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
   },
   {
-    title: 'Source loaded: VAR selected, Reroll dimmed (nothing locked)',
+    title: 'ADVANCED panel open',
+    panel: 'advanced',
+    inactive: [],
+    values: { open_advanced: 1, open_source: 0, seed: 48213 },
+    badge: '',
+    srcinfo: 'Drop a .mid file or press USE CLIP.',
+    blocks: { heading: 'PROGRESSION', status: 'Wrote A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
+      chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
+  },
+  {
+    title: 'SOURCE panel open, a clip loaded as VAR',
+    panel: 'source',
     inactive: ['reroll'],
-    values: { kind: 0 },
+    values: { open_advanced: 0, open_source: 1, kind: 0 },
+    badge: 'VAR \u00B7 my riff',
     dropped: 'my riff.mid',
     srcinfo: 'my riff \u00B7 A Natural Minor \u00B7 4 chords, 4 bars',
     blocks: { heading: 'VARIATION', status: 'Loaded my riff: A Natural Minor, 4 chords.', level: 'ok', locked: 0,
@@ -74,9 +88,27 @@ const STATES = [
   }
 ];
 
+function parsePanels() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/max/main.js'), 'utf8');
+  const block = /var PANELS = \{([\s\S]*?)\};/.exec(src);
+  const panels = {};
+  if (!block) { return panels; }
+  const re = /([a-z]+):\s*\[([\s\S]*?)\]/g;
+  let m;
+  while ((m = re.exec(block[1]))) {
+    const names = m[2].match(/'([^']+)'/g);
+    panels[m[1]] = names ? names.map((x) => x.slice(1, -1)) : [];
+  }
+  return panels;
+}
+
+const memberOf = {};
+const panels = parsePanels();
+Object.keys(panels).forEach((name) => (panels[name] || []).forEach((vn) => { memberOf[vn] = name; }));
+
 const boxes = patcher.boxes.map((w) => w.box).filter((b) => b.presentation).map((b) => {
   const v = b.saved_attribute_attributes && b.saved_attribute_attributes.valueof;
-  return Object.assign({}, b, { param: v || null });
+  return Object.assign({}, b, { param: v || null, panel: (b.varname && memberOf[b.varname]) || null });
 });
 const jsui = boxes.find((b) => b.maxclass === 'jsui');
 
