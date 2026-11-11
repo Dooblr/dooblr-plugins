@@ -9,7 +9,7 @@ DSP follows the attached references: Stilson/Smith BLIT oscillators, Huovilainen
 non-linear ladder, Folkman's Model D service-manual contours and mixer, and the usual
 analog-synth voice (keyboard CV, glide, low-note priority) described in the MIT 6.101 report.
 
-Version 0.1.0.
+Version 0.1.1.
 
 ## Board
 
@@ -33,6 +33,10 @@ Header: Undo / Redo, preset menu (factory and user), Save / Load (`.dm` files in
 
 Shortcuts: Cmd-Z undo, Cmd-Shift-Z or Cmd-Y redo (50 steps; only knob gestures are
 recorded, not host automation). Double-click a knob to reset it; Shift-drag for fine moves.
+Knobs have no value bubble or overlay while dragging (the pointer and filled arc stay; the
+host still shows the value). Vertical rockers click to toggle, or drag with the lever
+(up = on, down = off); dragging across neighbouring rockers flips them in one undo step.
+Rotary range / waveform switches step by dragging.
 
 MIDI: notes, pitch bend, mod wheel (CC1), sustain pedal. Velocity is ignored unless Velocity
 is on. VST3 MIDI-CC-as-parameter emulation is compiled off, so the host sees the real

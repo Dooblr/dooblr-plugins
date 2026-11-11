@@ -1,6 +1,7 @@
 #include "BoardControls.h"
 
 #include <cmath>
+#include <functional>
 
 namespace dooblrm::ui
 {
@@ -8,6 +9,19 @@ namespace dooblrm::ui
     {
         constexpr float rotaryStart = juce::MathConstants<float>::pi * 1.15f;
         constexpr float rotaryEnd   = juce::MathConstants<float>::pi * 2.85f;
+        constexpr int slideThreshold = 4;
+
+        void forEachBatToggle (juce::Component& root, const std::function<void (BatToggle&)>& fn)
+        {
+            std::function<void (juce::Component&)> walk = [&] (juce::Component& c)
+            {
+                if (auto* t = dynamic_cast<BatToggle*> (&c))
+                    fn (*t);
+                for (int i = 0; i < c.getNumChildComponents(); ++i)
+                    walk (*c.getChildComponent (i));
+            };
+            walk (root);
+        }
 
         void styleCaption (juce::Label& label, const juce::String& text)
         {
@@ -58,7 +72,6 @@ namespace dooblrm::ui
         slider.setColour (juce::Slider::rotarySliderFillColourId, fill);
         if (auto* p = state.getParameter (parameterId))
             slider.setDoubleClickReturnValue (true, p->convertFrom0to1 (p->getDefaultValue()));
-        slider.setPopupDisplayEnabled (true, false, this);
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, parameterId, slider);
         styleCaption (captionLabel, caption);
         addAndMakeVisible (slider);
@@ -176,9 +189,12 @@ namespace dooblrm::ui
                           const juce::String& caption)
     {
         setComponentID (parameterId);
+        setMouseCursor (juce::MouseCursor::PointingHandCursor);
+        parameter = state.getParameter (parameterId);
         button.setComponentID (parameterId);
         button.setButtonText ({});
         button.setClickingTogglesState (true);
+        button.setInterceptsMouseClicks (false, false);
         attachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, parameterId, button);
         button.onStateChange = [this] { repaint(); };
         styleCaption (captionLabel, caption);
@@ -194,6 +210,106 @@ namespace dooblrm::ui
         auto bounds = getLocalBounds();
         captionLabel.setBounds (bounds.removeFromBottom (16));
         button.setBounds (bounds);
+    }
+
+    void BatToggle::setOnFromSlide (bool on)
+    {
+        if (parameter == nullptr)
+            return;
+        const auto target = on ? 1.0f : 0.0f;
+        if (std::abs (parameter->getValue() - target) < 1.0e-6f)
+            return;
+        if (! gestureOpen)
+        {
+            parameter->beginChangeGesture();
+            gestureOpen = true;
+        }
+        parameter->setValueNotifyingHost (target);
+        repaint();
+    }
+
+    void BatToggle::endSlideGesture()
+    {
+        if (! gestureOpen || parameter == nullptr)
+            return;
+        parameter->endChangeGesture();
+        gestureOpen = false;
+    }
+
+    void BatToggle::applySlideTo (BatToggle* other)
+    {
+        if (other == nullptr)
+            return;
+        other->setOnFromSlide (slideOn);
+        if (! other->gestureOpen)
+            return;
+        for (auto* existing : slideGroup)
+            if (existing == other)
+                return;
+        slideGroup.push_back (other);
+    }
+
+    void BatToggle::mouseDown (const juce::MouseEvent&)
+    {
+        sliding = false;
+        slideGroup.clear();
+        stateAtDown = parameter != nullptr && parameter->getValue() >= 0.5f;
+    }
+
+    void BatToggle::mouseDrag (const juce::MouseEvent& e)
+    {
+        const auto dx = (float) e.getDistanceFromDragStartX();
+        const auto dy = (float) e.getDistanceFromDragStartY();
+        if (! sliding)
+        {
+            if (std::abs (dx) < (float) slideThreshold && std::abs (dy) < (float) slideThreshold)
+                return;
+            sliding = true;
+            if (std::abs (dy) >= std::abs (dx))
+                slideOn = dy < 0.0f;
+            else
+                slideOn = ! stateAtDown;
+        }
+
+        auto* root = getTopLevelComponent();
+        if (root == nullptr)
+        {
+            applySlideTo (this);
+            return;
+        }
+
+        const auto cur = root->getLocalPoint (this, e.position);
+        const auto down = root->getLocalPoint (this, e.getMouseDownPosition().toFloat());
+        const juce::Line<float> stroke (down, cur);
+        forEachBatToggle (*root, [this, root, cur, stroke] (BatToggle& t)
+        {
+            const auto bounds = root->getLocalArea (&t, t.getLocalBounds().toFloat());
+            if (bounds.contains (cur) || bounds.intersects (stroke))
+                applySlideTo (&t);
+        });
+    }
+
+    void BatToggle::mouseUp (const juce::MouseEvent& e)
+    {
+        if (! sliding)
+        {
+            if (parameter != nullptr && getLocalBounds().contains (e.getPosition()) && ! e.mods.isPopupMenu())
+            {
+                parameter->beginChangeGesture();
+                parameter->setValueNotifyingHost (parameter->getValue() >= 0.5f ? 0.0f : 1.0f);
+                parameter->endChangeGesture();
+                repaint();
+            }
+        }
+        else
+        {
+            for (auto* t : slideGroup)
+                t->endSlideGesture();
+            endSlideGesture();
+        }
+
+        slideGroup.clear();
+        sliding = false;
     }
 
     void BatToggle::paint (juce::Graphics& g)

@@ -75,7 +75,8 @@ namespace dooblrm::ui
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
 
-    /** Vertical rocker, dooblr-flat (no wood, no chrome). */
+    /** Vertical rocker, dooblr-flat (no wood, no chrome). Click toggles; drag the lever
+        (up = on, down = off) or rake across neighbouring rockers in one undo gesture. */
     class BatToggle final : public juce::Component
     {
     public:
@@ -83,6 +84,9 @@ namespace dooblrm::ui
                    const juce::String& caption);
         void paint (juce::Graphics& g) override;
         void resized() override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
         juce::ToggleButton& getButton() noexcept { return button; }
         juce::Label& getCaption() noexcept { return captionLabel; }
 
@@ -92,9 +96,16 @@ namespace dooblrm::ui
             void paint (juce::Graphics&) override {}
         };
 
+        void setOnFromSlide (bool on);
+        void endSlideGesture();
+        void applySlideTo (BatToggle* other);
+
         SilentToggle button;
         juce::Label captionLabel;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> attachment;
+        juce::RangedAudioParameter* parameter = nullptr;
+        std::vector<BatToggle*> slideGroup;
+        bool sliding = false, slideOn = false, stateAtDown = false, gestureOpen = false;
     };
 
     /** Pitch or mod wheel. Pitch springs back to centre on mouse-up. */
