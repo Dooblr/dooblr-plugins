@@ -10,6 +10,9 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "DSP/Phonetics/Phrase.h"
+#include "DSP/Phonetics/Coarticulation.h"
+#include "DSP/Articulation.h"
+#include "DSP/HumanVoice.h"
 #include <juce_audio_formats/juce_audio_formats.h>
 #include "Presets.h"
 #include "UI/ControlPanel.h"
@@ -19,6 +22,7 @@
 #include <algorithm>
 #include <cfloat>
 #include <cmath>
+#include <functional>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -210,13 +214,13 @@ namespace
         check (p->getNumPrograms() == 10, "Init + 9 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
         check (p->getProgramName (0) == "Init", "first program is Init");
         check (juce::String (JucePlugin_VersionString) == DOOBLRTHROAT_PROJECT_VERSION, "JUCE version string matches CMake");
-        check (p->getParameters().size() == 24, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
+        check (p->getParameters().size() == 26, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
 
         for (auto* expected : { id::vowel, id::height, id::back, id::nasal, id::female, id::child,
                                 id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
                                 id::vibratoDepth, id::vibratoRate, id::glide, id::bendRange,
                                 id::attack, id::decay, id::sustain, id::release, id::output,
-                                id::mode, id::rate })
+                                id::mode, id::rate, id::effort, id::formantTune })
             check (p->getState().getParameter (expected) != nullptr, std::string ("parameter id ") + expected);
     }
 
@@ -305,8 +309,8 @@ namespace
         if (editor == nullptr)
             return;
 
-        check (editor->getWidth() >= 940 && editor->getHeight() >= 600, "minimum editor size");
-        check (editor->getPanels().size() == 6, "six control panels");
+        check (editor->getWidth() >= 900 && editor->getHeight() >= 560, "minimum editor size");
+        check (editor->getPanels().size() == 5, "five control panels");
         check (editor->getVowelPad().isVisible(), "vowel pad is visible");
         if (auto* status = dynamic_cast<juce::Label*> (editor->findChildWithID ("status")))
         {
@@ -636,6 +640,15 @@ namespace
         const auto cat = joinIpas (g.word ("cat", false));
         check (cat.find ("k") != std::string::npos && cat.find ("æ") != std::string::npos && cat.find ("t") != std::string::npos,
                "cat is k ae t (" + cat + ")");
+        const auto funkSegs = g.word ("funk", false);
+        const auto funk = joinIpas (funkSegs);
+        check (funk == "f ʌ ŋ k" || (funk.find ("f") != std::string::npos && funk.find ("ʌ") != std::string::npos
+               && funk.find ("ŋ") != std::string::npos && funk.find ("k") != std::string::npos),
+               "funk is f ʌ ŋ k (" + funk + ")");
+        bool funkStress = false;
+        for (const auto& s : funkSegs)
+            if (s.ipa == "ʌ" && s.stress && *s.stress == 1) funkStress = true;
+        check (funkStress, "funk has primary stress on ʌ");
         const auto madeup = joinIpas (dsp::phonetics::letterToSound ("blorpt"));
         check (! madeup.empty(), "letter-to-sound returns phones for blorpt (" + madeup + ")");
         const auto twelve = g.toPhrases ("12");
@@ -816,7 +829,7 @@ namespace
                 p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
             std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
             check (ed != nullptr, "editor for screenshot");
-            ed->setSize (980, 720);
+            ed->setSize (980, 600);
             const auto img = ed->createComponentSnapshot (ed->getLocalBounds());
             juce::File f (shotEnv);
             f.getParentDirectory().createDirectory();
@@ -824,6 +837,445 @@ namespace
             juce::FileOutputStream os (f);
             juce::PNGImageFormat png;
             check (os.openedOk() && png.writeImageToStream (img, os), "write UI screenshot");
+        }
+    }
+
+
+    struct BandEnergy
+    {
+        double rms = 0, low = 0, high = 0;
+        int n = 0;
+    };
+
+    BandEnergy measureBand (const juce::AudioBuffer<float>& buf, int start, int end, double sr)
+    {
+        BandEnergy e;
+        const int n = buf.getNumSamples();
+        start = std::max (0, start);
+        end = std::min (n, end);
+        if (end <= start) return e;
+        // One-pole lowpass ~400 Hz and a first-difference highpass (~3 kHz emphasis).
+        const auto a = 1.0 - std::exp (-2.0 * 3.141592653589793 * 400.0 / sr);
+        double lp = 0, prev = 0, s = 0, sl = 0, sh = 0;
+        for (int i = start; i < end; ++i)
+        {
+            const auto x = double (buf.getSample (0, i));
+            lp += a * (x - lp);
+            const auto hp = x - prev;
+            prev = x;
+            s += x * x;
+            sl += lp * lp;
+            sh += hp * hp;
+        }
+        e.n = end - start;
+        e.rms = std::sqrt (s / e.n);
+        e.low = std::sqrt (sl / e.n);
+        e.high = std::sqrt (sh / e.n);
+        return e;
+    }
+
+    juce::AudioBuffer<float> renderPhraseWav (const juce::String& text, double sr, double seconds)
+    {
+        Processor p;
+        p.setPhraseText (text);
+        p.getState().getParameter (id::mode)->setValueNotifyingHost (
+            p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
+        p.getState().getParameter (id::rate)->setValueNotifyingHost (
+            p.getState().getParameter (id::rate)->convertTo0to1 (1.0f));
+        p.setNonRealtime (true);
+        p.prepareToPlay (sr, 512);
+        p.applyBodyOnMessageThread();
+        const int n = int (sr * seconds);
+        juce::AudioBuffer<float> all (1, n);
+        all.clear();
+        int done = 0;
+        bool on = false;
+        while (done < n)
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            buf.clear();
+            juce::MidiBuffer midi;
+            if (! on)
+            {
+                midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), 0);
+                on = true;
+            }
+            p.processBlock (buf, midi);
+            const int take = std::min (512, n - done);
+            all.copyFrom (0, done, buf, 0, 0, take);
+            done += take;
+            if (done > int (sr * 0.25) && ! p.getEngine().isSounding() && ! p.getEngine().phraseActive())
+                break;
+        }
+        p.releaseResources();
+        if (done < n)
+            all.setSize (1, juce::jmax (done, 1), true, true, true);
+        return all;
+    }
+
+    const dsp::phonetics::PlannedSegment* findSeg (const std::vector<dsp::phonetics::PlannedSegment>& segs,
+                                                   const char* ipa)
+    {
+        for (const auto& s : segs)
+            if (s.ipa == ipa) return &s;
+        return nullptr;
+    }
+
+    void testFunkG2PAndDiction()
+    {
+        auto& g = testG2P();
+        dsp::BodyMix body;
+        auto phrase = dsp::phonetics::buildPhrase (g, "funk", body);
+        check (phrase != nullptr && ! phrase->speak.segments.empty(), "funk phrase planned");
+        if (phrase == nullptr) return;
+
+        std::string seq;
+        for (const auto& s : phrase->speak.segments)
+        {
+            if (! seq.empty()) seq += " ";
+            seq += s.ipa;
+        }
+        check (seq.find ("f") != std::string::npos && seq.find ("ʌ") != std::string::npos
+               && seq.find ("ŋ") != std::string::npos && seq.find ("k") != std::string::npos,
+               "planned funk phones include f ʌ ŋ k (" + seq + ")");
+
+        const double sr = 48000.0;
+        auto buf = renderPhraseWav ("funk", sr, 1.5);
+        const auto* fSeg = findSeg (phrase->speak.segments, "f");
+        const auto* ngSeg = findSeg (phrase->speak.segments, "ŋ");
+        const auto* kSeg = findSeg (phrase->speak.segments, "k");
+        check (fSeg && ngSeg && kSeg, "funk plan has f, ŋ and k");
+        if (! fSeg || ! ngSeg || ! kSeg) return;
+
+        const auto fE = measureBand (buf, int (fSeg->t0 * sr), int (fSeg->t1 * sr), sr);
+        const auto ngE = measureBand (buf, int (ngSeg->t0 * sr), int (ngSeg->t1 * sr), sr);
+        const int k0 = int (kSeg->t0 * sr);
+        const int k1 = int (kSeg->t1 * sr);
+        const int kEnd = std::min (buf.getNumSamples(), k1 + int (0.08 * sr));
+        // Closure: interior of the stop. Burst: late in the stop and a short window after.
+        const auto closE = measureBand (buf, k0 + (k1 - k0) / 5, k0 + (k1 - k0) / 2, sr);
+        const auto burstE = measureBand (buf, k0 + (k1 - k0) / 2, kEnd, sr);
+
+        check (fE.high > 1.0e-4, "/f/ has frication-band energy (high=" + std::to_string (fE.high) + ")");
+        check (fE.high > closE.high * 1.2 || fE.high > 2.0e-4,
+               "/f/ high-band exceeds /k/ closure (f=" + std::to_string (fE.high)
+               + " close=" + std::to_string (closE.high) + ")");
+        check (ngE.low > 1.0e-4, "ŋ has low-band nasal murmur (low=" + std::to_string (ngE.low) + ")");
+        check (burstE.rms > closE.rms * 1.2 || burstE.high > closE.high * 1.3,
+               "/k/ has a closure then a burst (close rms=" + std::to_string (closE.rms)
+               + " burst rms=" + std::to_string (burstE.rms) + ")");
+        check (closE.rms < 0.05, "/k/ closure is a quiet gap (rms=" + std::to_string (closE.rms) + ")");
+    }
+
+    bool boundsInside (juce::Rectangle<int> child, juce::Rectangle<int> parent)
+    {
+        // 1 px tolerance for outline drawing.
+        return child.getX() >= parent.getX() - 1
+            && child.getY() >= parent.getY() - 1
+            && child.getRight() <= parent.getRight() + 1
+            && child.getBottom() <= parent.getBottom() + 1;
+    }
+
+    void assertLayout (Editor& editor, const juce::String& tag)
+    {
+        const auto outer = editor.getLocalBounds();
+        check (outer.getWidth() > 0 && outer.getHeight() > 0, "editor has size (" + tag.toStdString() + ")");
+
+        std::function<void(juce::Component&)> walk = [&] (juce::Component& c)
+        {
+            for (int i = 0; i < c.getNumChildComponents(); ++i)
+            {
+                auto* child = c.getChildComponent (i);
+                if (child == nullptr || ! child->isVisible()) continue;
+                const auto b = child->getBounds();
+                if (b.isEmpty()) continue;
+                const auto inEditor = child->getBounds().translated (c.getX(), c.getY());
+                // Containment vs the editor in editor coordinates.
+                auto r = child->getBounds();
+                juce::Component* p = child->getParentComponent();
+                while (p != nullptr && p != &editor)
+                {
+                    r.translate (p->getX(), p->getY());
+                    p = p->getParentComponent();
+                }
+                check (boundsInside (r, outer),
+                       "child '" + child->getName().toStdString()
+                       + "' (" + child->getComponentID().toStdString() + ") at "
+                       + std::to_string (r.getX()) + "," + std::to_string (r.getY())
+                       + " " + std::to_string (r.getWidth()) + "x" + std::to_string (r.getHeight())
+                       + " is inside the editor " + std::to_string (outer.getWidth()) + "x"
+                       + std::to_string (outer.getHeight()) + " (" + tag.toStdString() + ")");
+                walk (*child);
+                (void) inEditor;
+            }
+        };
+        walk (editor);
+
+        std::vector<std::pair<juce::String, juce::Rectangle<int>>> top;
+        for (int i = 0; i < editor.getNumChildComponents(); ++i)
+        {
+            auto* child = editor.getChildComponent (i);
+            if (child == nullptr || ! child->isVisible()) continue;
+            const auto b = child->getBounds();
+            if (b.getWidth() <= 1 || b.getHeight() <= 1) continue;
+            top.push_back ({ child->getComponentID().isNotEmpty() ? child->getComponentID()
+                                                                  : child->getName(), b });
+        }
+        for (size_t i = 0; i < top.size(); ++i)
+            for (size_t j = i + 1; j < top.size(); ++j)
+            {
+                auto overlap = top[i].second.getIntersection (top[j].second);
+                // Allow a 1 px shared edge.
+                if (overlap.getWidth() <= 1 || overlap.getHeight() <= 1)
+                    continue;
+                check (false, "top-level overlap " + top[i].first.toStdString()
+                       + " vs " + top[j].first.toStdString()
+                       + " (" + std::to_string (overlap.getWidth()) + "x"
+                       + std::to_string (overlap.getHeight()) + ") at "
+                       + tag.toStdString());
+            }
+    }
+
+    void testEditorLayoutNoClipOrOverlap()
+    {
+        Processor p;
+        p.setPhraseText ("hello world");
+        std::unique_ptr<juce::AudioProcessorEditor> base (p.createEditor());
+        auto* editor = dynamic_cast<Editor*> (base.get());
+        check (editor != nullptr, "editor for layout");
+        if (editor == nullptr) return;
+
+        const int sizes[][2] = { { 980, 600 }, { 900, 560 }, { 1100, 720 }, { 1200, 800 } };
+        for (const auto& sz : sizes)
+        {
+            editor->setSize (sz[0], sz[1]);
+            editor->resized();
+            assertLayout (*editor, juce::String (sz[0]) + "x" + juce::String (sz[1]));
+        }
+
+        check (editor->findChildWithID ("phraseText") != nullptr, "phrase text field is present");
+        check (editor->findChildWithID (id::mode) != nullptr, "mode combo is a top-level control");
+        check (editor->findChildWithID (id::rate) != nullptr, "rate slider is a top-level control");
+    }
+
+
+    juce::AudioBuffer<float> renderIpaSyllableWav (const char* consonant, const char* vowel,
+                                                   double sr, double seconds)
+    {
+        dsp::phonetics::initInventory();
+        std::vector<dsp::phonetics::Segment> segs (2);
+        segs[0].ipa = consonant;
+        segs[1].ipa = vowel;
+        segs[1].stress = 1;
+        dsp::phonetics::PlanOptions o;
+        o.f0 = 110.0;
+        o.rate = 1.0;
+        o.intonation = dsp::phonetics::Intonation::Statement;
+        auto plan = dsp::phonetics::planUtterance (segs, o);
+
+        auto voice = dsp::HumanVoice::with_defaults (sr);
+        auto src = dsp::DEFAULT_SOURCE;
+        src.f0 = 110.0;
+        src.pressure = 8.0;
+        src.effort = 0.5;
+        voice.set_source (src);
+        voice.set_gate (1.0);
+        voice.scoreGestures = plan.gestures.data();
+        voice.scoreCount = plan.gestures.size();
+        voice.scoreT = 0.0;
+        voice.scoreRate = 1.0;
+        voice.scoreActive = ! plan.gestures.empty();
+
+        const int n = int (sr * seconds);
+        juce::AudioBuffer<float> all (1, n);
+        all.clear();
+        std::vector<float> block (512);
+        int done = 0;
+        const int tail = int (sr * (plan.end + 0.08));
+        while (done < n)
+        {
+            const int take = std::min (512, n - done);
+            std::fill (block.begin(), block.begin() + take, 0.0f);
+            voice.render (block.data(), size_t (take));
+            all.copyFrom (0, done, block.data(), take);
+            done += take;
+            if (done > tail)
+                break;
+        }
+        if (done < n)
+            all.setSize (1, juce::jmax (done, 1), true, true, true);
+        return all;
+    }
+
+    struct MidConsonantArtic
+    {
+        double tbX = 0, tbY = 0, lipProt = 0, lipAp = 0, jaw = 0;
+        bool ok = false;
+    };
+
+    MidConsonantArtic midConsonantArtic (const char* consonant, const char* vowel)
+    {
+        MidConsonantArtic out;
+        dsp::phonetics::initInventory();
+        std::vector<dsp::phonetics::Segment> segs (2);
+        segs[0].ipa = consonant;
+        segs[1].ipa = vowel;
+        segs[1].stress = 1;
+        auto plan = dsp::phonetics::planUtterance (segs, {});
+        const dsp::phonetics::PlannedSegment* cSeg = nullptr;
+        for (const auto& s : plan.segments)
+            if (s.ipa == consonant) { cSeg = &s; break; }
+        if (cSeg == nullptr)
+            return out;
+        dsp::phonetics::Blended b[dsp::phonetics::N_CONTROL];
+        dsp::phonetics::blendAll (plan.gestures.data(), plan.gestures.size(),
+                                  0.5 * (cSeg->t0 + cSeg->t1), b);
+        auto val = [&] (dsp::ArticKey k) {
+            const auto i = dsp::artic_index (k);
+            return b[i].weight > 0.0 ? b[i].value : 0.0;
+        };
+        out.tbX = val (dsp::ArticKey::TbX);
+        out.tbY = val (dsp::ArticKey::TbY);
+        out.lipProt = val (dsp::ArticKey::LipProt);
+        out.lipAp = val (dsp::ArticKey::LipAp);
+        out.jaw = val (dsp::ArticKey::Jaw);
+        out.ok = b[dsp::artic_index (dsp::ArticKey::TbY)].weight > 0.0;
+        return out;
+    }
+
+    void testCoarticulationAndTargetApproximation()
+    {
+        using namespace dsp::phonetics;
+        initInventory();
+        const dsp::BodyMix male {};
+
+        auto va = vowelArtic ("a", male);
+        auto vi = vowelArtic ("i", male);
+        auto vu = vowelArtic ("u", male);
+        check (va && vi && vu, "corner vowels a, i, u are in the inventory");
+        if (! (va && vi && vu))
+            return;
+
+        const auto wa = vowelCornerWeights (*va, male);
+        const auto wi = vowelCornerWeights (*vi, male);
+        const auto wu = vowelCornerWeights (*vu, male);
+        check (std::abs (wa.a1) < 0.08 && std::abs (wa.a2) < 0.08, " /a/ maps to the /a/ corner (a1=a2=0)");
+        check (std::abs (wi.a1 - 1.0) < 0.08 && std::abs (wi.a2) < 0.08, " /i/ maps to the /i/ corner (a1=1)");
+        check (std::abs (wu.a2 - 1.0) < 0.08 && std::abs (wu.a1) < 0.08, " /u/ maps to the /u/ corner (a2=1)");
+        // /u/ lips should sit near the /u/ labial corner.
+        check (wu.b2 > 0.7, " /u/ labial weight is mostly /u/");
+
+        auto* kDef = phonemeByIpa ("k");
+        check (kDef != nullptr, "inventory has /k/");
+        if (kDef != nullptr)
+        {
+            const auto ka = contextConsonantTarget (*kDef, &*va, male);
+            const auto ki = contextConsonantTarget (*kDef, &*vi, male);
+            const auto ku = contextConsonantTarget (*kDef, &*vu, male);
+            const auto kaX = ka.get (dsp::ArticKey::TbX).value_or (0);
+            const auto kiX = ki.get (dsp::ArticKey::TbX).value_or (0);
+            const auto kuX = ku.get (dsp::ArticKey::TbX).value_or (0);
+            check (kiX > kaX + 0.25, "/k/ tongue body is fronter next to /i/ than /a/");
+            check (kiX > kuX + 0.25, "/k/ tongue body is fronter next to /i/ than /u/");
+            const auto kuLip = ku.get (dsp::ArticKey::LipProt).value_or (0);
+            const auto kiLip = ki.get (dsp::ArticKey::LipProt).value_or (0);
+            check (kuLip > kiLip + 0.3, "/k/ lips are more protruded next to /u/ than /i/");
+            // Constriction height (dominant TbY) stays a velar closure in every context.
+            const auto kyA = ka.get (dsp::ArticKey::TbY).value_or (0);
+            const auto kyI = ki.get (dsp::ArticKey::TbY).value_or (0);
+            check (std::abs (kyA - kyI) < 0.15, "/k/ keeps a similar velar height in /a/ and /i/");
+        }
+
+        const auto midKa = midConsonantArtic ("k", "a");
+        const auto midKi = midConsonantArtic ("k", "i");
+        const auto midKu = midConsonantArtic ("k", "u");
+        check (midKa.ok && midKi.ok && midKu.ok, "planned /k/ in ka, ki, ku has a tongue-body target");
+        check (midKi.tbX > midKa.tbX + 0.2, "planned /k/ in ki is fronter than in ka");
+        check (midKi.tbX > midKu.tbX + 0.2, "planned /k/ in ki is fronter than in ku");
+        check (midKu.lipProt > midKi.lipProt + 0.2, "planned /k/ in ku is more rounded than in ki");
+
+        // Third-order target approximation: no overshoot, lips faster than tongue body.
+        dsp::ArticulatorBank bank;
+        dsp::ArticPatch start;
+        start.set (dsp::ArticKey::LipAp, 0.2);
+        start.set (dsp::ArticKey::TbX, 2.3);
+        bank.snap (start);
+        dsp::ArticPatch goal;
+        goal.set (dsp::ArticKey::LipAp, 1.2);
+        goal.set (dsp::ArticKey::TbX, 3.3);
+        bank.set_target (goal);
+        bank.effortScale = 1.0;
+        for (auto& s : bank.speed) s = 1.0;
+        bank.tip_free = false;
+        const auto lip0 = bank.x.lip_ap, tb0 = bank.x.tb_x;
+        const auto lipGoal = 1.2, tbGoal = 3.3;
+        double lipHalf = -1, tbHalf = -1, lipMin = lip0, lipMax = lip0, tbMin = tb0, tbMax = tb0;
+        const double dt = 0.001;
+        for (int n = 0; n < 800; ++n)
+        {
+            bank.step (dt);
+            const auto t = (n + 1) * dt;
+            lipMin = std::min (lipMin, bank.x.lip_ap);
+            lipMax = std::max (lipMax, bank.x.lip_ap);
+            tbMin = std::min (tbMin, bank.x.tb_x);
+            tbMax = std::max (tbMax, bank.x.tb_x);
+            if (lipHalf < 0.0 && (bank.x.lip_ap - lip0) >= 0.5 * (lipGoal - lip0))
+                lipHalf = t;
+            if (tbHalf < 0.0 && (bank.x.tb_x - tb0) >= 0.5 * (tbGoal - tb0))
+                tbHalf = t;
+        }
+        check (lipHalf > 0.0 && tbHalf > 0.0, "both articulators reach halfway to the target");
+        check (lipHalf < tbHalf, "lips approach a new target faster than the tongue body");
+        check (lipMin >= lip0 - 0.02 && lipMax <= lipGoal + 0.05, "lip approach does not overshoot or reverse");
+        check (tbMin >= tb0 - 0.02 && tbMax <= tbGoal + 0.05, "tongue-body approach does not overshoot or reverse");
+        check (std::abs (bank.x.lip_ap - lipGoal) < 0.05, "lips settle near the target by 800 ms");
+        check (std::abs (bank.x.tb_x - tbGoal) < 0.08, "tongue body settles near the target by 800 ms");
+    }
+
+    void testWriteDictionWavs()
+    {
+        const char* dirEnv = std::getenv ("DOOBLRTHROAT_DICTION_DIR");
+        const char* tagEnv = std::getenv ("DOOBLRTHROAT_DICTION_TAG");
+        if (dirEnv == nullptr || dirEnv[0] == 0)
+            return;
+        const juce::String tag = (tagEnv != nullptr && tagEnv[0] != 0) ? tagEnv : "after";
+        juce::File dir (dirEnv);
+        dir.createDirectory();
+        const char* words[] = { "funk", "hello world", "street", "thinks", "jump", "sixth" };
+        for (const char* w : words)
+        {
+            auto buf = renderPhraseWav (w, 48000.0, 2.0);
+            juce::String stem (w);
+            stem = stem.replaceCharacter (' ', '-');
+            juce::File f = dir.getChildFile (stem + "_" + tag + ".wav");
+            f.deleteFile();
+            juce::WavAudioFormat wavFmt;
+            auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream());
+            check (os != nullptr, std::string ("open diction wav ") + w);
+            if (os == nullptr) continue;
+            std::unique_ptr<juce::AudioFormatWriter> writer (
+                wavFmt.createWriterFor (os.release(), 48000.0, 1u, 16, {}, 0));
+            check (writer != nullptr, std::string ("diction wav writer ") + w);
+            if (writer != nullptr)
+                check (writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples()),
+                       std::string ("write diction wav ") + w);
+        }
+        const char* cvs[][3] = { { "ka", "k", "a" }, { "ki", "k", "i" }, { "ku", "k", "u" } };
+        for (const auto& cv : cvs)
+        {
+            auto buf = renderIpaSyllableWav (cv[1], cv[2], 48000.0, 1.2);
+            juce::File f = dir.getChildFile (juce::String (cv[0]) + "_" + tag + ".wav");
+            f.deleteFile();
+            juce::WavAudioFormat wavFmt;
+            auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream());
+            check (os != nullptr, std::string ("open diction wav ") + cv[0]);
+            if (os == nullptr) continue;
+            std::unique_ptr<juce::AudioFormatWriter> writer (
+                wavFmt.createWriterFor (os.release(), 48000.0, 1u, 16, {}, 0));
+            check (writer != nullptr, std::string ("diction wav writer ") + cv[0]);
+            if (writer != nullptr)
+                check (writer->writeFromAudioSampleBuffer (buf, 0, buf.getNumSamples()),
+                       std::string ("write diction wav ") + cv[0]);
         }
     }
 
@@ -849,6 +1301,10 @@ int main()
         { "phrase state round-trip",     testPhraseStateRoundTrip },
         { "edit text while notes play",  testEditTextWhileNotesPlay },
         { "hello wav / screenshot",      testWriteHelloWavAndScreenshot },
+        { "funk G2P and diction",         testFunkG2PAndDiction },
+        { "coarticulation and TA",         testCoarticulationAndTargetApproximation },
+        { "editor layout no clip",        testEditorLayoutNoClipOrOverlap },
+        { "diction wavs",                 testWriteDictionWavs },
         { "sample rates and block sizes", testSampleRatesAndBlockSizes },
         { "stress automation and body swap", testStressAutomationAndBodySwap },
     };

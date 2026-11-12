@@ -7,7 +7,8 @@ namespace dooblrthroat::params
     inline constexpr int stateVersion = 1;
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
-        Every ID through "output" was added in 0.1.0. "mode" and "rate" were added in 0.2.0. */
+        Every ID through "output" was added in 0.1.0. "mode" and "rate" were added in 0.2.0.
+        "effort" and "formantTune" were added in 0.2.1. */
     namespace id
     {
         inline constexpr const char* vowel      = "vowel";
@@ -34,6 +35,8 @@ namespace dooblrthroat::params
         inline constexpr const char* output       = "output";
         inline constexpr const char* mode         = "mode";
         inline constexpr const char* rate         = "rate";
+        inline constexpr const char* effort       = "effort";
+        inline constexpr const char* formantTune  = "formantTune";
     }
 
     /** Choice 0 is the vowel pad; 1..N_VOWELS are the named vowels. */

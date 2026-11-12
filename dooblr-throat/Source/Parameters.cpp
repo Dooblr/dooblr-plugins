@@ -106,6 +106,9 @@ namespace dooblrthroat::params
             juce::NormalisableRange<float> (0.25f, 2.5f, 0.0f, 0.6f), 1.0f,
             Attributes().withStringFromValueFunction (formatRate).withLabel ("x")));
 
+        addPercent (layout, id::effort, "Effort", 0.5f);
+        addPercent (layout, id::formantTune, "Tuning", 0.0f);
+
         return layout;
     }
 }

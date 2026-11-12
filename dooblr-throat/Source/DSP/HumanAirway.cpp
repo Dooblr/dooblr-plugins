@@ -157,10 +157,17 @@ namespace dooblrthroat::dsp
             const auto bwd = to_branch (std::max (0, min_i - off));
             if (src >= 0 && fwd >= 0 && bwd >= 0)
             {
-                list.push_back (NoiseSpec::make (size_t (src), size_t (fwd), size_t (bwd), g.constriction * w_area).band (2600.0, 350.0));
                 const auto s_min = min_i < n_ph_i ? (double (min_i) + 0.5) * dx_ph : ph_len + ((double (min_i - n_ph_i) + 0.5) * dx_or);
+                // Place-dependent frication (labial /f/ is wide and high; /s/ is high and narrower; /ʃ/ mid).
+                const auto rel = or_len > 1e-6 ? clamp ((s_min - ph_len) / or_len, 0.0, 1.0) : 0.5;
+                double fc = 2600.0, bw = 350.0, gain = 1.0, teethFc = 5000.0, teethBw = 1200.0;
+                if (rel > 0.82) { fc = 5500.0; bw = 1800.0; gain = 1.7; teethFc = 6500.0; teethBw = 2000.0; }      // labial /f/
+                else if (rel > 0.62) { fc = 6200.0; bw = 900.0; gain = 1.25; teethFc = 7000.0; teethBw = 1400.0; } // dental / alveolar /s θ/
+                else if (rel > 0.42) { fc = 3200.0; bw = 1000.0; gain = 1.2; teethFc = 3800.0; teethBw = 1100.0; } // postalveolar /ʃ/
+                else { fc = 1800.0; bw = 550.0; gain = 1.0; }
+                list.push_back (NoiseSpec::make (size_t (src), size_t (fwd), size_t (bwd), g.constriction * w_area * gain).band (fc, bw));
                 const auto behind = (f.teeth_s - s_min) / body.scale;
-                const auto w_dist = smoothstep (0.15, 0.5, behind) * (1.0 - smoothstep (2.6, 4.0, behind));
+                const auto w_dist = smoothstep (0.05, 0.45, behind) * (1.0 - smoothstep (2.6, 4.0, behind));
                 const auto w_jet = 1.0 - smoothstep (0.2 * k2, 0.5 * k2, min_a);
                 const auto wt = w_dist * w_jet;
                 if (wt > 1e-3)
@@ -168,7 +175,7 @@ namespace dooblrthroat::dsp
                     const auto teeth_i = n_ph_i + int (js_min (double (n_or - 2), js_max (0.0, js_round ((f.teeth_s - ph_len) / dx_or))));
                     const auto tb = to_branch (teeth_i);
                     if (tb >= 0)
-                        list.push_back (NoiseSpec::make (size_t (src), size_t (tb), size_t (bwd), g.teeth * wt).band (5000.0, 1200.0));
+                        list.push_back (NoiseSpec::make (size_t (src), size_t (tb), size_t (bwd), g.teeth * wt * gain).band (teethFc, teethBw));
                 }
             }
         }

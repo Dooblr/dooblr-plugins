@@ -26,12 +26,16 @@ namespace dooblrthroat::dsp
     void HumanVoice::reset()
     {
         artic.x = artic.target;
-        for (auto& vi : artic.v) vi = 0.0;
         if (artic.tip_free)
         {
             const auto tip = rest_tip (artic.x.jaw, artic.x.tb_x, artic.x.tb_y);
             artic.x.tt_x = artic.target.tt_x = tip.x;
             artic.x.tt_y = artic.target.tt_y = tip.y;
+        }
+        for (size_t i = 0; i < N_ARTIC; ++i)
+        {
+            artic.v[i] = 0.0;
+            artic.z1[i] = artic.z2[i] = artic.x.get (ARTIC_ALL[i]);
         }
         airway.apply (artic.x, 0.0);
         airway.net.snap_to_targets();
@@ -48,6 +52,7 @@ namespace dooblrthroat::dsp
         dec.pos = 0;
         dec.count = 0;
         std::fill (dec.buf.begin(), dec.buf.end(), 0.0);
+        effort_body = 0.0;
         clearScore();
     }
 
@@ -55,6 +60,12 @@ namespace dooblrthroat::dsp
     {
         artic.tip_free = tip_free;
         artic.set_target (values);
+    }
+
+    void HumanVoice::snap_articulation (const ArticPatch& values, bool tip_free)
+    {
+        artic.tip_free = tip_free;
+        artic.snap (values);
     }
 
     void HumanVoice::apply_source()
@@ -206,12 +217,42 @@ namespace dooblrthroat::dsp
             glottis.params.closure = base_closure;
         }
 
+        // Articulatory effort scales the 2007 time constants (smaller tau = faster).
+        // Default Effort 0.5 keeps the nominal Mermelstein/Birkholz rates.
+        const auto userE = clamp (source.effort, 0.25, 1.0);
+        artic.effortScale = 2.0 * userE;
         artic.step (dt);
         if (! (scoreActive && scoreGestures != nullptr && scoreCount > 0))
         {
             glottis.params.abduction = base_abduction;
             glottis.params.closure = base_closure;
         }
+
+        // Advance f0 first so formant tuning can use the current pitch.
+        {
+            const auto g = js_max (0.002, is_finite (source.glide) ? source.glide : 0.06);
+            auto f0_target = is_finite (source.f0) ? source.f0 : 110.0;
+            f0_target = clamp (f0_target, 1.0, 20000.0);
+            if (f0 > 1e-6 && is_finite (f0))
+                f0 *= pow (f0_target / f0, 1.0 - exp (-dt / g));
+            else
+                f0 = f0_target;
+            if (! is_finite (f0)) f0 = f0_target;
+            glottis.params.f0 = clamp (f0, 1.0, 20000.0);
+        }
+        const auto tune = clamp (source.formantTuning, 0.0, 1.0);
+        if (tune > 1e-4)
+        {
+            const auto amount = tune * smoothstep (250.0, 550.0, f0);
+            if (amount > 1e-4)
+            {
+                artic.x.jaw += amount * 0.32;
+                artic.x.tb_y -= amount * 0.28;
+                artic.x.larynx += amount * 0.18;
+                artic.x.epilarynx += amount * clamp (source.effort, 0.0, 1.0) * 0.12;
+            }
+        }
+
         const auto x = artic.x;
         airway.apply (x, dt);
         if (enforce_contacts())
@@ -223,16 +264,27 @@ namespace dooblrthroat::dsp
         gate += (gate_goal - gate) * (1.0 - exp (-dt / tau));
         p_lung = source.pressure * CM_H2O * gate * breathMul;
         p_lung_step = (p_lung - p_lung_now) / double (ctrl_every);
-        glottis.params.effort = clamp ((abs (source.pressure * gate) - 3.0) / 10.0, 0.0, 1.0);
-        const auto g = js_max (0.002, is_finite (source.glide) ? source.glide : 0.06);
-        auto f0_target = is_finite (source.f0) ? source.f0 : 110.0;
-        f0_target = clamp (f0_target, 1.0, 20000.0);
-        if (f0 > 1e-6 && is_finite (f0))
-            f0 *= pow (f0_target / f0, 1.0 - exp (-dt / g));
+        const auto pressureEffort = clamp ((abs (source.pressure * gate) - 3.0) / 10.0, 0.0, 1.0);
+        const auto userEffort = clamp (source.effort, 0.0, 1.0);
+        // Default userEffort 0.5 leaves the 0.2.0 pressure mapping unchanged.
+        auto effort = clamp (pressureEffort + (userEffort - 0.5), 0.0, 1.0);
+        if (gate > 0.75)
+            effort_body = js_min (0.12, effort_body + dt * 0.08);
         else
-            f0 = f0_target;
-        if (! is_finite (f0)) f0 = f0_target;
-        glottis.params.f0 = clamp (f0, 1.0, 20000.0);
+            effort_body *= exp (-dt / 0.08);
+        effort = clamp (effort + effort_body, 0.0, 1.0);
+        glottis.params.effort = effort;
+
+        // Source spectral tilt follows effort and pitch (brighter when louder or higher in the register).
+        const auto s = source;
+        const auto bright = s.brightness - DEFAULT_SOURCE.brightness;
+        const auto by_tension = 0.4 * s.tension + 1.375 * js_max (0.0, s.tension - 0.6);
+        const auto midF0 = 220.0 * airway.body.scale;
+        const auto reg = clamp (log2 (js_max (40.0, f0) / js_max (40.0, midF0)), -1.5, 1.5);
+        auto& gp = glottis.params;
+        gp.open_quotient = clamp ((0.78 - 0.36 * s.tension) - 0.10 * (effort - 0.5) - 0.04 * js_max (0.0, reg), 0.25, 0.98);
+        gp.closure_sharpness = clamp (by_tension + 0.8 * bright + 0.28 * (effort - 0.5) + 0.12 * reg, 0.0, 1.0);
+        gp.skew = clamp (0.56 + 0.16 * s.tension + 0.2 * bright + 0.08 * (effort - 0.5), 0.3, 0.9);
     }
 
     bool HumanVoice::enforce_contacts()

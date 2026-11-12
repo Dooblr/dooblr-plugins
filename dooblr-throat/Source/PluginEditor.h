@@ -15,8 +15,9 @@ namespace dooblrthroat
 {
     /**
         One-page editor (design/dooblr-design-system.md): a 60 px header (title, version,
-        undo / redo, presets, output) and a single board — phrase text, vowel pad, voice, source, pitch
-        and envelope. Cmd-Z undoes, Cmd-Shift-Z / Cmd-Y redo; every other key goes to the host.
+        undo / redo, presets, output) and a single board — a compact phrase row, vowel pad,
+        voice, source, pitch and envelope. Cmd-Z undoes, Cmd-Shift-Z / Cmd-Y redo; every
+        other key goes to the host.
     */
     class DooblrThroatEditor final : public juce::AudioProcessorEditor,
                                      private juce::Timer,
@@ -56,12 +57,13 @@ namespace dooblrthroat
         ui::DooblrLookAndFeel lookAndFeel;
 
         juce::Label titleLabel, subtitleLabel, outputCaption, statusLabel, vowelCaption;
-        juce::Label phraseCaption, phraseReadout;
+        juce::Label phraseCaption, phraseReadout, modeCaption, rateCaption;
         juce::TextEditor phraseEditor;
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, saveButton { "Save" }, loadButton { "Load" };
         juce::TextButton restartButton { "Reset" };
-        juce::ComboBox presetBox;
+        juce::ComboBox presetBox, modeBox;
         juce::Slider outputSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
+        juce::Slider rateSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rateAttachment;

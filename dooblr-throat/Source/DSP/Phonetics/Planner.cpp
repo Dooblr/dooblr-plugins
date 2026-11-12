@@ -1,4 +1,5 @@
 #include "Planner.h"
+#include "Coarticulation.h"
 #include <sys/types.h>
 #include "Durations.h"
 #include "../Math.h"
@@ -81,7 +82,7 @@ namespace dooblrthroat::dsp::phonetics
 
     void oralGesturesInto (const PhonemeDef& def, const ArticPatch& tg,
                            double a, double b, double speed, std::string_view label,
-                           std::vector<Gesture>& out)
+                           std::vector<Gesture>& out, bool holdClosed)
     {
         ArticPatch dom, sec;
         for (size_t i = 0; i < N_ARTIC; ++i)
@@ -103,26 +104,62 @@ namespace dooblrthroat::dsp::phonetics
         for (size_t i = 0; i < def.nDominant; ++i)
             if (! (def.dominant[i] == ArticKey::LipAp || def.dominant[i] == ArticKey::Labiodental))
                 lipsOnly = false;
-        const auto lead = closing ? (bodyOnly ? 0.034 : lipsOnly ? 0.019 : 0.02) : 0.0;
-        const auto early = closing ? (bodyOnly ? 0.024 : lipsOnly ? 0.022 : 0.031) : 0.008;
+        const auto lead = holdClosed ? 0.0 : (closing ? (bodyOnly ? 0.034 : lipsOnly ? 0.019 : 0.02) : 0.0);
+        const auto early = holdClosed ? 0.012 : (closing ? (bodyOnly ? 0.024 : lipsOnly ? 0.022 : 0.031) : 0.008);
+        const auto hold = holdClosed ? 0.08 : 0.045;
         if (! dom.is_empty())
             out.push_back (Gesture::make (a - early, js_max (a + 0.01, b - lead), 0.03, bodyOnly ? 0.03 : 0.018, 40.0, Targets::fromArtic (dom))
-                               .withSpeed (sp).withReleaseHold (0.045).withLabel (label));
-        const bool alveolar = std::string_view (def.place) == "alveolar" && ! tg.get (ArticKey::TbX)
-            && (def.manner == Manner::Stop || def.manner == Manner::Nasal || def.manner == Manner::Fricative
-                || def.manner == Manner::Affricate || def.manner == Manner::Tap);
-        if (alveolar)
-            out.push_back (Gesture::make (a, b, 0.05, 0.05, 1.2,
-                                          Targets::one (ArticKey::TbX, 3.2).set (ArticKey::TbY, 7.4))
-                               .withLabel (label));
+                               .withSpeed (sp).withReleaseHold (hold).withLabel (label));
+        // Secondary keys (including context-coloured tongue body and lips) share
+        // one gesture. The third-order tracker, not a linear ramp or a weak
+        // isolated TbX, shapes the movement.
         if (! sec.is_empty())
+            out.push_back (Gesture::make (a, b, 0.012, 0.012, 2.2, Targets::fromArtic (sec)).withLabel (label));
+    }
+
+
+    namespace
+    {
+        bool samePlaceFamily (std::string_view a, std::string_view b)
         {
-            auto place = bodyOnly ? sec.get (ArticKey::TbX) : std::optional<double>{};
-            if (place) sec.values[artic_index (ArticKey::TbX)].reset();
-            if (! sec.is_empty())
-                out.push_back (Gesture::make (a, b, 0.05, 0.05, 2.2, Targets::fromArtic (sec)).withLabel (label));
-            if (place)
-                out.push_back (Gesture::make (a, b, 0.05, 0.05, 0.25, Targets::one (ArticKey::TbX, *place)).withLabel (label));
+            auto family = [] (std::string_view p) -> int {
+                if (p == "bilabial" || p == "labiodental") return 1;
+                if (p == "dental" || p == "alveolar" || p == "postalveolar" || p == "retroflex") return 2;
+                if (p == "palatal" || p == "velar" || p == "uvular") return 3;
+                return 0;
+            };
+            const auto fa = family (a), fb = family (b);
+            return fa != 0 && fa == fb;
+        }
+
+        bool isOralObstruent (const PhonemeDef* d)
+        {
+            if (d == nullptr) return false;
+            return ! d->nasal && (d->manner == Manner::Stop || d->manner == Manner::Fricative
+                                  || d->manner == Manner::Affricate);
+        }
+
+        ArticPatch releaseOpening (const PhonemeDef& def)
+        {
+            ArticPatch p;
+            const auto place = std::string_view (def.place);
+            if (place == "bilabial" || place == "labiodental")
+            {
+                p.set (ArticKey::LipAp, 0.42);
+                if (def.targets.get (ArticKey::Labiodental))
+                    p.set (ArticKey::Labiodental, 0.15);
+            }
+            else if (place == "dental" || place == "alveolar" || place == "postalveolar" || place == "retroflex")
+            {
+                const auto y = def.targets.get (ArticKey::TtY).value_or (9.6);
+                p.set (ArticKey::TtY, y - 1.25);
+            }
+            else
+            {
+                const auto y = def.targets.get (ArticKey::TbY).value_or (8.3);
+                p.set (ArticKey::TbY, y - 1.35);
+            }
+            return p;
         }
     }
 
@@ -204,7 +241,6 @@ namespace dooblrthroat::dsp::phonetics
             times.push_back ({ t, t + d });
             t += d;
         }
-        const auto end = t;
 
         std::vector<size_t> vIdx;
         for (size_t i = 0; i < segs.size(); ++i)
@@ -213,11 +249,18 @@ namespace dooblrthroat::dsp::phonetics
         for (size_t n = 0; n < vIdx.size(); ++n)
         {
             const auto i = vIdx[n];
-            const auto prev = n > 0 ? times[vIdx[n - 1]].t1 : times[i].t0 - 0.08;
-            const auto next = n + 1 < vIdx.size() ? times[vIdx[n + 1]].t0 : times[i].t1 + 0.08;
-            const auto rIn = js_max (0.03, 0.75 * (times[i].t0 - prev)) + 0.01;
-            const auto rOut = js_max (0.03, 0.4 * (next - times[i].t1)) + 0.01;
-            gestures.push_back (Gesture::make (times[i].t0, times[i].t1, rIn, rOut, 1.0, Targets::fromArtic (*segs[i].vowel))
+            // Anticipatory coarticulation (Birkholz 2007/2013): the upcoming
+            // vowel target starts during the preceding consonant. Short ramps
+            // so the third-order tracker, not linear interpolation, approaches it.
+            auto vStart = times[i].t0;
+            if (i > 0 && ! segs[i - 1].vowel)
+            {
+                const auto c0 = times[i - 1].t0, c1 = times[i - 1].t1;
+                vStart = c0 + 0.45 * js_max (0.0, c1 - c0);
+            }
+            const auto rIn = 0.008;
+            const auto rOut = 0.012;
+            gestures.push_back (Gesture::make (vStart, times[i].t1, rIn, rOut, 1.0, Targets::fromArtic (*segs[i].vowel))
                                     .withLabel (segs[i].ipa));
         }
 
@@ -234,23 +277,40 @@ namespace dooblrthroat::dsp::phonetics
             const auto& def = *segs[i].def;
             const bool nextVowel = i + 1 < segs.size() && segs[i + 1].vowel.has_value();
             const Seg* prevSeg = i > 0 ? &segs[i - 1] : nullptr;
-            auto addOral = [&] (const ArticPatch& tg, double a, double b, double speed, std::string_view label)
+            const Seg* nextSeg = i + 1 < segs.size() ? &segs[i + 1] : nullptr;
+            const ArticPatch* neighbor = nullptr;
+            for (size_t j = i + 1; j < segs.size() && neighbor == nullptr; ++j)
+                if (segs[j].vowel) neighbor = &*segs[j].vowel;
+            if (neighbor == nullptr)
             {
-                oralGesturesInto (def, tg, a, b, speed, label, gestures);
+                for (size_t j = i; j-- > 0 && neighbor == nullptr; )
+                    if (segs[j].vowel) neighbor = &*segs[j].vowel;
+            }
+            if (neighbor == nullptr && o.contextVowel)
+                neighbor = &*o.contextVowel;
+            const auto ctx = contextConsonantTarget (def, neighbor, body);
+            auto addOral = [&] (const ArticPatch& tg, double a, double b, double speed, std::string_view label, bool holdClosed = false)
+            {
+                oralGesturesInto (def, tg, a, b, speed, label, gestures, holdClosed);
             };
+            const bool nextHomorganicStop = nextSeg && nextSeg->def
+                && (nextSeg->def->manner == Manner::Stop || nextSeg->def->manner == Manner::Affricate)
+                && samePlaceFamily (def.place, nextSeg->def->place);
+            const bool holdIntoNext = def.manner == Manner::Nasal && nextHomorganicStop;
+            const double oralEnd = holdIntoNext ? times[i + 1].t1 : t1;
             switch (def.manner)
             {
                 case Manner::Stop:
                     if (prePlacedBehindClosure (segs, i))
-                        addOral (def.targets, t0 + js_min (PLACED_CLOSURE_DELAY, js_max (0.0, dur - 0.03)), t1, 1.55, def.ipa);
+                        addOral (ctx, t0 + js_min (PLACED_CLOSURE_DELAY, js_max (0.0, dur - 0.03)), t1, 1.55, def.ipa);
                     else
-                        addOral (def.targets, t0, t1, 1.55, def.ipa);
+                        addOral (ctx, t0, t1, 1.55, def.ipa);
                     break;
                 case Manner::Nasal:
-                    addOral (def.targets, t0, t1, 1.55, def.ipa);
+                    addOral (ctx, t0, oralEnd, 1.55, def.ipa, holdIntoNext);
                     break;
                 case Manner::Tap:
-                    addOral (def.targets, t0, t1, 2.8, def.ipa);
+                    addOral (ctx, t0, t1, 2.8, def.ipa);
                     break;
                 case Manner::Trill:
                 {
@@ -258,34 +318,51 @@ namespace dooblrthroat::dsp::phonetics
                     for (double k = 0; k < nTr; k += 1.0)
                     {
                         const auto a = t0 + (k / nTr) * dur;
-                        addOral (def.targets, a, a + 0.35 / 26.0, 3.2, def.ipa);
+                        addOral (ctx, a, a + 0.35 / 26.0, 3.2, def.ipa);
                     }
                     break;
                 }
                 case Manner::Affricate:
                 {
                     const auto split = t0 + dur * 0.55;
-                    addOral (def.targets, t0, split, 2.0, def.ipa);
+                    addOral (ctx, t0, split, 2.0, def.ipa);
                     if (def.release)
                     {
-                        // temporary: use same def oral? should use release phoneme targets
                         if (auto rel = phoneme (def.release, body))
-                            oralGesturesInto (*rel, rel->targets, split + 0.008, t1, 1.4, def.ipa, gestures);
+                        {
+                            const auto relCtx = contextConsonantTarget (*rel, neighbor, body);
+                            oralGesturesInto (*rel, relCtx, split + 0.008, t1, 1.4, def.ipa, gestures);
+                        }
                     }
                     break;
                 }
                 case Manner::Fricative:
                 case Manner::Approximant:
                 case Manner::Lateral:
-                    addOral (def.targets, t0, t1, 1.3, def.ipa);
+                    addOral (ctx, t0, t1, 1.3, def.ipa);
                     break;
                 case Manner::Glottal:
                 case Manner::Vowel:
                     break;
             }
             if (def.nasal)
-                gestures.push_back (Gesture::make (t0 - 0.02, t1 - 0.02, 0.05, 0.03, 4.0, Targets::one (ArticKey::Velum, 0.45))
+            {
+                // Anticipatory lowering through the preceding vowel; close at a following oral obstruent.
+                auto velStart = t0 - 0.075;
+                if (prevSeg && prevSeg->vowel)
+                    velStart = js_min (velStart, times[i - 1].t0 + 0.35 * (times[i - 1].t1 - times[i - 1].t0));
+                auto velEnd = t1 + 0.012;
+                if (nextSeg && nextSeg->def && isOralObstruent (&*nextSeg->def))
+                    velEnd = times[i + 1].t0;
+                gestures.push_back (Gesture::make (velStart, velEnd, 0.045, 0.022, 5.0, Targets::one (ArticKey::Velum, 0.62))
                                         .withLabel ("velum"));
+            }
+            else if (prevSeg && prevSeg->def && prevSeg->def->nasal && isOralObstruent (&def))
+            {
+                // Oral consonant after a nasal: velum firmly closed for an oral burst.
+                gestures.push_back (Gesture::make (t0 - 0.01, t1 + 0.02, 0.018, 0.03, 6.0, Targets::one (ArticKey::Velum, 0.0))
+                                        .withLabel ("velum-close"));
+            }
             if (def.glottal == GlottalKind::Open)
                 gestures.push_back (Gesture::make (t0 - 0.01, t1, 0.03, 0.035, 5.0, Targets::one (SourceKey::Abduction, 0.33))
                                         .withLabel ("h"));
@@ -299,24 +376,52 @@ namespace dooblrthroat::dsp::phonetics
             {
                 if (def.manner == Manner::Stop || def.manner == Manner::Affricate)
                 {
-                    const bool aspirated = nextVowel && ! (prevSeg && prevSeg->ipa == "s");
+                    const bool afterS = prevSeg && (prevSeg->ipa == "s" || prevSeg->ipa == "ʃ");
+                    const bool aspirated = nextVowel && ! afterS;
                     const auto vot = (aspirated ? 0.05 : 0.012) / rate;
                     gestures.push_back (Gesture::make (t0 + 0.25 * dur, t1 + vot * 0.4, 0.035, aspirated ? 0.045 : 0.02, 6.0,
                                                        Targets::one (SourceKey::Abduction, aspirated ? 0.36 : 0.22))
                                             .withLabel ("aspiration"));
                 }
                 else
-                    gestures.push_back (Gesture::make (t0 - 0.015, t1 + 0.005, 0.03, 0.03, 6.0, Targets::one (SourceKey::Abduction, 0.3))
+                    gestures.push_back (Gesture::make (t0 - 0.015, t1 + 0.008, 0.03, 0.03, 6.0, Targets::one (SourceKey::Abduction, 0.44))
                                             .withLabel ("voiceless"));
             }
             else if (def.manner == Manner::Fricative)
                 gestures.push_back (Gesture::make (t0, t1, 0.03, 0.03, 3.0, Targets::one (SourceKey::Abduction, 0.035))
                                         .withLabel ("voiced frication"));
+
+            // Word-final / pre-fricative stop release and burst.
+            if (def.manner == Manner::Stop || def.manner == Manner::Affricate)
+            {
+                const bool nextFricative = nextSeg && nextSeg->def && nextSeg->def->manner == Manner::Fricative;
+                const bool nextSameStop = nextHomorganicStop;
+                const bool phraseFinal = (i + 1 == segs.size()) || segs[i].wordEnd;
+                const bool needsRelease = ! nextVowel && ! nextSameStop;
+                if (needsRelease)
+                {
+                    for (auto& g : gestures)
+                        if (g.label.view() == def.ipa)
+                            g.releaseHold = 0.0;
+                    const auto burst = (phraseFinal && ! nextFricative) ? 0.05 : 0.024;
+                    const auto openAt = js_max (t0 + 0.5 * dur, t1 - 0.012);
+                    const auto open = releaseOpening (def);
+                    if (! open.is_empty())
+                        gestures.push_back (Gesture::make (openAt, openAt + burst, 0.005, 0.018, 10.0, Targets::fromArtic (open))
+                                                .withSpeed (2.4).withLabel ("release"));
+                    const auto abd = def.voicing == Voicing::Voiceless ? 0.48 : 0.18;
+                    gestures.push_back (Gesture::make (openAt, openAt + burst + 0.016, 0.003, 0.02, 7.0,
+                                                       Targets::one (SourceKey::Abduction, abd))
+                                            .withLabel ("burst"));
+                    t = js_max (t, openAt + burst + 0.03);
+                }
+            }
         }
 
         const bool openEnd = o.openEnd;
         const bool sung = o.sung;
         const auto breathAt = sung ? BREATH_SUNG_AT : 0.04;
+        const auto end = js_max (t, times.empty() ? o.t0 + 0.06 : times.back().t1);
         gestures.push_back (Gesture::make (o.t0 + breathAt, end, 0.04, openEnd ? 0.07 : 0.05, 1.0, Targets::one (SourceKey::Breath, 1.0))
                                 .withLabel ("breath"));
         if (! openEnd)
@@ -353,25 +458,26 @@ namespace dooblrthroat::dsp::phonetics
             else
             {
                 const auto prog = (t0 - o.t0) / total;
-                const auto decl = 1.0 - 0.1 * prog;
+                const auto decl = 1.0 - 0.18 * prog;
                 const bool isNuclear = ssize_t (i) == nuclear;
-                const auto acc = s.stress == 1 ? 1.0 + (isNuclear ? accent * 1.8 : accent)
-                                : s.stress == 2 ? 1.0 + accent * 0.5 : 1.0;
+                const auto acc = s.stress == 1 ? 1.0 + (isNuclear ? accent * 2.1 : accent * 1.15)
+                                : s.stress == 2 ? 1.0 + accent * 0.55 : 1.0 - accent * 0.15;
                 target = f0 * decl * acc;
                 const bool last = n + 1 == vIdx.size();
                 if (last && o.intonation == Intonation::Question)
                     target = f0 * 1.35;
                 if (last && o.intonation == Intonation::Statement)
                 {
-                    if (isNuclear && t1 - t0 > 0.08)
+                    const auto fall = f0 * 0.76;
+                    if (t1 - t0 > 0.06)
                     {
                         gestures.push_back (Gesture::make (t0, t0 + 0.35 * (t1 - t0), 0.05, 0.05, 1.0, Targets::one (SourceKey::F0, target))
                                                 .withLabel ("pitch"));
-                        gestures.push_back (Gesture::make (t0 + 0.55 * (t1 - t0), t1, 0.06, 0.06, 1.0, Targets::one (SourceKey::F0, f0 * 0.82))
+                        gestures.push_back (Gesture::make (t0 + 0.55 * (t1 - t0), t1, 0.06, 0.08, 1.0, Targets::one (SourceKey::F0, fall))
                                                 .withLabel ("pitch"));
                         continue;
                     }
-                    target = f0 * 0.82;
+                    target = fall;
                 }
             }
             const auto r = hasF0 && sung ? pitchRamp (t1 - t0) : 0.06;
@@ -388,6 +494,6 @@ namespace dooblrthroat::dsp::phonetics
                                         .withLabel ("pitch"));
             }
         }
-        return Plan { std::move (gestures), std::move (planned), end };
+                return Plan { std::move (gestures), std::move (planned), end };
     }
 }

@@ -157,6 +157,8 @@ namespace dooblrthroat::dsp
         if (s.speechMode < 0) s.speechMode = 0;
         if (s.speechMode > 1) s.speechMode = 1;
         s.speechRate = float (clamp (double (fin (s.speechRate, 1.0f)), 0.25, 2.5));
+        s.effort = float (clamp (double (fin (s.effort, 0.5f)), 0.0, 1.0));
+        s.formantTune = float (clamp (double (fin (s.formantTune, 0.0f)), 0.0, 1.0));
     }
 
     void ThroatEngine::setSettings (const ThroatSettings& incoming)
@@ -192,6 +194,8 @@ namespace dooblrthroat::dsp
         src.vibrato_rate = s.vibratoRate;
         src.glide = s.glide;
         src.voiced = s.voiced;
+        src.effort = s.effort;
+        src.formantTuning = s.formantTune;
         if (useLiveNote && currentNote_ >= 0)
             src.f0 = safeHz (double (currentNote_) + double (bendSemis_));
         voice.set_source (src);
@@ -206,7 +210,10 @@ namespace dooblrthroat::dsp
             p = vowel_at (s.vowelHeight, s.vowelBack, s.body);
         if (s.nasal > 0.0f)
             p.set (ArticKey::Velum, s.nasal);
-        voice.set_articulation (p, s.tipFree);
+        if (voice.gate < 1.0e-4 && voice.gate_target < 1.0e-4 && ! voice.scoreActive)
+            voice.snap_articulation (p, s.tipFree);
+        else
+            voice.set_articulation (p, s.tipFree);
     }
 
     double ThroatEngine::currentHz() const
@@ -355,10 +362,9 @@ namespace dooblrthroat::dsp
         {
             if (v.scoreT >= ph->speak.end)
             {
+                // Speak stops at the end of the phrase, even if the key is still held.
                 clearTalk (&v);
-                if (held_.empty() && stage_ != Stage::idle)
-                    stage_ = Stage::release;
-                else if (held_.empty())
+                if (stage_ != Stage::idle)
                     stage_ = Stage::release;
             }
             return;
@@ -542,7 +548,9 @@ namespace dooblrthroat::dsp
         }
 
         const auto sr = float (sampleRate_ > 0.0 ? sampleRate_ : 48000.0);
-        const auto attackS = js_max (1e-4, settings_.attack);
+        auto attackS = js_max (1e-4, settings_.attack);
+        if (talk_ != Talk::Off)
+            attackS = js_min (attackS, 0.008);
         const auto decayS = js_max (1e-4, settings_.decay);
         const auto releaseS = js_max (1e-4, settings_.release);
         const auto sustain = clamp (settings_.sustain, 0.0, 1.0);

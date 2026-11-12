@@ -35,7 +35,8 @@ namespace dooblrthroat::presets
             { "Choir Lead", {
                 { vowel, 1.0f }, { female, 0.65f }, { breath, 0.12f }, { tension, 0.45f },
                 { brightness, 0.35f }, { vibratoDepth, 0.08f }, { vibratoRate, 5.4f },
-                { glide, 0.08f }, { attack, 0.05f }, { release, 0.22f }, { output, -4.0f } } },
+                { glide, 0.08f }, { attack, 0.05f }, { release, 0.22f }, { output, -4.0f },
+                { effort, 0.6f }, { formantTune, 0.7f } } },
             { "Low Voice", {
                 { vowel, 13.0f }, { female, 0.0f }, { child, 0.0f }, { fry, 0.22f },
                 { breath, 0.1f }, { tension, 0.35f }, { brightness, 0.12f }, { pressure, 10.0f },
@@ -53,7 +54,8 @@ namespace dooblrthroat::presets
                 { vowel, 14.0f }, { mode, 0.0f }, { rate, 1.0f },
                 { breath, 0.12f }, { tension, 0.5f }, { brightness, 0.28f },
                 { vibratoDepth, 0.05f }, { vibratoRate, 5.5f }, { glide, 0.06f },
-                { attack, 0.03f }, { release, 0.15f } },
+                { attack, 0.03f }, { release, 0.15f },
+                { effort, 0.6f }, { formantTune, 0.65f } },
                 "come and go" },
         };
         return patches;

@@ -16,6 +16,8 @@ namespace dooblrthroat::dsp
         double fry = 0.0, roughness = 0.1, vibrato_depth = 0.0, vibrato_rate = 6.0, drift = 5.0;
         bool voiced = true;
         double brightness = 0.25;
+        double effort = 0.5;          // 0.5 matches the 0.2.0 pressure-derived default
+        double formantTuning = 0.0;   // 0 = off (speech); 1 = F1/F2 track harmonics at high f0
     };
 
     inline constexpr VoiceSource DEFAULT_SOURCE {};
@@ -41,6 +43,7 @@ namespace dooblrthroat::dsp
         double lim_env = 0.0, lim_release = 0.0, max_penetration = 0.1;
         int64_t ctrl_every = 0, ctrl_counter = 0, lim_hold = 0, lim_hold_n = 0;
         double base_abduction = 0.0, base_closure = 0.0;
+        double effort_body = 0.0;
 
         // Phrase / gesture score. The gesture pointer is into a PublishedPhrase
         // owned off the audio thread; the voice never allocates or frees it.
@@ -54,6 +57,7 @@ namespace dooblrthroat::dsp
         static HumanVoice with_defaults (double fs_out) { return HumanVoice (fs_out, BODY_MALE, oversample_for (fs_out)); }
 
         void set_articulation (const ArticPatch& values, bool tip_free);
+        void snap_articulation (const ArticPatch& values, bool tip_free);
         void set_source (const VoiceSource& s) { source = s; apply_source(); }
         void set_gate (double level) { gate_target = clamp (level, 0.0, 1.5); }
         void clearScore() noexcept

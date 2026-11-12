@@ -11,7 +11,7 @@ namespace dooblrthroat
     X(breath) X(tension) X(brightness) X(fry) X(roughness) X(pressure) X(voiced) \
     X(vibratoDepth) X(vibratoRate) X(glide) X(bendRange) \
     X(attack) X(decay) X(sustain) X(release) X(output) \
-    X(mode) X(rate)
+    X(mode) X(rate) X(effort) X(formantTune)
 
     struct DooblrThroatProcessor::RawParameters
     {
@@ -97,6 +97,8 @@ namespace dooblrthroat
         s.tipFree = true;
         s.speechMode = i (r.mode);
         s.speechRate = f (r.rate);
+        s.effort = f (r.effort);
+        s.formantTune = f (r.formantTune);
         return s;
     }
 

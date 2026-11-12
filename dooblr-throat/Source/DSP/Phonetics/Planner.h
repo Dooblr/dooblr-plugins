@@ -27,10 +27,13 @@ namespace dooblrthroat::dsp::phonetics
         bool openEnd = false;
         bool sung = false;
         bool hasF0 = true;
+        // Used when the segment list itself has no neighbouring vowel (e.g. a
+        // Sung-mode coda of only consonants). Message-thread planning only.
+        std::optional<ArticPatch> contextVowel;
     };
 
     Plan planUtterance (const std::vector<Segment>& input, const PlanOptions& o);
     void oralGesturesInto (const PhonemeDef& def, const ArticPatch& tg,
                            double a, double b, double speed, std::string_view label,
-                           std::vector<Gesture>& out);
+                           std::vector<Gesture>& out, bool holdClosed = false);
 }

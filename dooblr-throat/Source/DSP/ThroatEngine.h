@@ -27,6 +27,8 @@ namespace dooblrthroat::dsp
         bool voiced = true, tipFree = true;
         int speechMode = 0;     // 0 Sing, 1 Speak
         float speechRate = 1.0f;
+        float effort = 0.5f;
+        float formantTune = 0.0f;
     };
 
     class ThroatEngine

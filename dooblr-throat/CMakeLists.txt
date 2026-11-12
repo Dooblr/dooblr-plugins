@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-throat VERSION 0.2.0 LANGUAGES C CXX)
+project(dooblr-throat VERSION 0.2.1 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -66,6 +66,7 @@ target_sources(DooblrThroat
         Source/DSP/Phonetics/English.cpp
         Source/DSP/Phonetics/Durations.cpp
         Source/DSP/Phonetics/Syllables.cpp
+        Source/DSP/Phonetics/Coarticulation.cpp
         Source/DSP/Phonetics/Planner.cpp
         Source/DSP/Phonetics/Phrase.cpp
         Source/DSP/Phonetics/Cmudict.cpp

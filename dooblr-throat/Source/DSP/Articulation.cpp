@@ -1,5 +1,6 @@
 #include "Articulation.h"
 #include <cstring>
+#include <cmath>
 
 namespace dooblrthroat::dsp
 {
@@ -156,10 +157,13 @@ namespace dooblrthroat::dsp
         {
             speed[i] = 1.0;
             omega[i] = 2.0 * PI * ARTIC_SPECS[i].hz;
+            z1[i] = z2[i] = x.get (ARTIC_ALL[i]);
         }
         const auto tip = rest_tip (NEUTRAL.jaw, NEUTRAL.tb_x, NEUTRAL.tb_y);
         x.tt_x = target.tt_x = tip.x;
         x.tt_y = target.tt_y = tip.y;
+        z1[artic_index (ArticKey::TtX)] = z2[artic_index (ArticKey::TtX)] = tip.x;
+        z1[artic_index (ArticKey::TtY)] = z2[artic_index (ArticKey::TtY)] = tip.y;
     }
 
     void ArticulatorBank::set_target (const ArticPatch& values)
@@ -176,17 +180,24 @@ namespace dooblrthroat::dsp
     {
         set_target (values);
         x = target;
-        for (auto& vi : v) vi = 0.0;
+        for (size_t i = 0; i < N_ARTIC; ++i)
+        {
+            v[i] = 0.0;
+            z1[i] = z2[i] = x.get (ARTIC_ALL[i]);
+        }
     }
 
     void ArticulatorBank::step (double dt)
     {
+        if (! (dt > 0.0) || ! is_finite (dt))
+            return;
         if (tip_free)
         {
             const auto tip = rest_tip (x.jaw, x.tb_x, x.tb_y);
             target.tt_x = tip.x;
             target.tt_y = tip.y;
         }
+        const auto e = (is_finite (effortScale) && effortScale > 1.0e-6) ? effortScale : 1.0;
         for (size_t i = 0; i < N_ARTIC; ++i)
         {
             const auto k = ARTIC_ALL[i];
@@ -195,11 +206,17 @@ namespace dooblrthroat::dsp
             if (tgt < s.min) tgt = s.min;
             else if (tgt > s.max) tgt = s.max;
             effective.set (k, tgt);
-            const auto w = omega[i] * speed[i];
-            const auto xi = x.get (k);
-            const auto acc = w * w * (tgt - xi) - 2.0 * w * v[i];
-            v[i] += acc * dt;
-            x.set (k, xi + v[i] * dt);
+            const auto sp = (speed[i] > 1.0e-6 && is_finite (speed[i])) ? speed[i] : 1.0;
+            // Third-order cascade H(s) = 1/(1 + tau s)^3 (Birkholz 2007 eq. 2–3).
+            // Exact per-stage update, no allocation, stable for any dt.
+            const auto tau = js_max (0.003, ARTIC_TAU[i] / (sp * e));
+            const auto decay = std::exp (-dt / tau);
+            z1[i] = tgt + (z1[i] - tgt) * decay;
+            z2[i] = z1[i] + (z2[i] - z1[i]) * decay;
+            const auto prev = x.get (k);
+            const auto next = z2[i] + (prev - z2[i]) * decay;
+            v[i] = (next - prev) / dt;
+            x.set (k, next);
         }
     }
 }

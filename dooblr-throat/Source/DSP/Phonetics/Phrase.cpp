@@ -87,6 +87,9 @@ namespace dooblrthroat::dsp::phonetics
             {
                 PlanOptions co = ho;
                 co.openEnd = false;
+                const char* codaVowelIpa = parts ? (parts[1] ? parts[1] : parts[0]) : syl.nucleus.ipa.c_str();
+                if (auto v = vowelArtic (codaVowelIpa, body))
+                    co.contextVowel = *v;
                 auto coda = planUtterance (codaSegs, co);
                 sp.coda = std::move (coda.gestures);
                 sp.codaSegments = std::move (coda.segments);

@@ -16,6 +16,40 @@ namespace dooblrthroat::dsp
 
     inline constexpr GlottisParams DEFAULT_GLOTTIS {};
 
+
+    // Three interpolating random walks at CHANT-like timescales (~0.05, 0.111, 1.219 s).
+    struct PitchFlutter
+    {
+        struct Band { double period = 0.05, t = 0, a = 0, b = 0; };
+        Band bands[3] { { 0.05 }, { 0.111 }, { 1.219 } };
+        double vibWalk = 0.0;
+
+        double step (double dt, Rng& rng) noexcept
+        {
+            double s = 0.0;
+            for (auto& b : bands)
+            {
+                b.t += dt;
+                if (b.t >= b.period)
+                {
+                    b.t -= b.period;
+                    if (b.t >= b.period) b.t = 0.0;
+                    b.a = b.b;
+                    b.b = rng.gauss();
+                }
+                const auto u = b.period > 1e-9 ? clamp (b.t / b.period, 0.0, 1.0) : 0.0;
+                s += b.a + (b.b - b.a) * u;
+            }
+            return s / 3.0;
+        }
+
+        double vibratoWander (double dt, Rng& rng) noexcept
+        {
+            vibWalk += (rng.gauss() - vibWalk) * (1.0 - exp (-dt / 0.35));
+            return vibWalk;
+        }
+    };
+
     struct ParametricGlottis
     {
         double fs = 48000.0;
@@ -36,5 +70,7 @@ namespace dooblrthroat::dsp
         double static_sm = 0.0, closure_sm = 0.0, amp_sm = 0.0, sm_coef = 0.0;
         Rng rng;
         Drift drift;
+        PitchFlutter flutter;
+        double flutter_value = 0.0, vib_wander = 0.0;
     };
 }

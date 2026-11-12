@@ -41,9 +41,17 @@ namespace dooblrthroat::dsp
         {
             drift_counter = 32;
             drift_value = drift.step();
-            vib_phase += ((p.vibrato_rate * 32.0) / fs) * (1.0 + 0.04 * drift_value);
+            const auto dt32 = 32.0 / fs;
+            flutter_value = flutter.step (dt32, rng);
+            vib_wander = flutter.vibratoWander (dt32, rng);
+            const auto rateMul = 1.0 + 0.04 * drift_value + 0.05 * vib_wander;
+            vib_phase += ((p.vibrato_rate * 32.0) / fs) * rateMul;
             if (vib_phase > 1.0) vib_phase -= 1.0;
-            const auto cents = p.vibrato_depth * sin (TAU * vib_phase) + p.drift * drift_value;
+            const auto depthMul = 1.0 + 0.08 * vib_wander;
+            // Residual jitter is about ±0.5% (~9 cents) with no vibrato, plus the slower drift.
+            const auto flutterCents = 9.0 * flutter_value;
+            const auto cents = p.vibrato_depth * depthMul * sin (TAU * vib_phase)
+                             + p.drift * drift_value + flutterCents;
             pitch_factor = pow (2.0, cents / 1200.0);
         }
         auto f0 = p.f0 * pitch_factor;

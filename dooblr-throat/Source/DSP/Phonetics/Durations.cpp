@@ -98,6 +98,7 @@ namespace dooblrthroat::dsp::phonetics
                 if (! wordFinalSyl) p *= 0.85;
                 if (vowelsInWord[word[i]] > 1) p *= 0.8;
                 if (stress == 0) { min *= 0.5; p *= 0.7; }
+                else if (stress == 1) p *= 1.12;
                 const bool hasNx = i + 1 < n && word[i + 1] == word[i] && ! inf[i + 1].vowel;
                 if (hasNx)
                 {
@@ -106,7 +107,7 @@ namespace dooblrthroat::dsp::phonetics
                     double f = 1.0;
                     if (nx.manner == Manner::Fricative) f = voiced ? 1.6 : 1.0;
                     else if (nx.manner == Manner::Stop || nx.manner == Manner::Affricate) f = voiced ? 1.2 : 0.7;
-                    else if (nx.manner == Manner::Nasal) f = 0.85;
+                    else if (nx.manner == Manner::Nasal) f = stress > 0 ? 1.05 : 0.95; // room for nasalization
                     p *= finalSyl ? f : (0.7 + 0.3 * f);
                 }
                 if (i + 1 < n && inf[i + 1].vowel) p *= 1.2;
@@ -124,8 +125,9 @@ namespace dooblrthroat::dsp::phonetics
             if (! wordInitial) p *= 0.85;
             const bool prevC = i > 0 && ! inf[i - 1].vowel;
             const bool nextC = i + 1 < n && ! inf[i + 1].vowel;
-            if (prevC && nextC) p *= 0.5;
-            else if (prevC || nextC) p *= 0.7;
+            const bool fric = inf[i].manner == Manner::Fricative;
+            if (prevC && nextC) p *= fric ? 0.75 : 0.5;
+            else if (prevC || nextC) p *= fric ? 0.85 : 0.7;
             out[i] = (min + (inh - min) * p) / 1000.0;
         }
         return out;

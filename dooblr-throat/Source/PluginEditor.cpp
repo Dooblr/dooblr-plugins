@@ -25,7 +25,7 @@ namespace dooblrthroat
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
         constexpr int headerHeight = 60, margin = 12, panelGap = 6;
-        constexpr int phraseStripH = 72;
+        constexpr int phraseRowH = 40;
         constexpr int meterWidth = 34;
     }
 
@@ -100,6 +100,22 @@ namespace dooblrthroat
         restartButton.onClick = [this] { synth.requestPhraseRestart(); updatePhraseReadout(); };
         addAndMakeVisible (restartButton);
 
+        styleLabel (modeCaption, "Mode", 11.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (rateCaption, "Rate", 11.0f, Palette::textMuted, juce::Justification::centredRight);
+        modeBox.setComponentID (id::mode);
+        modeBox.setTooltip ("Sing: one syllable per note. Speak: the whole phrase on a single note.");
+        modeBox.addItemList (params::modeNames(), 1);
+        modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, id::mode, modeBox);
+        rateSlider.setComponentID (id::rate);
+        rateSlider.setTooltip ("Speak-mode rate (does not change MIDI pitch).");
+        rateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
+        rateSlider.setColour (juce::Slider::trackColourId, Palette::accent.withAlpha (0.7f));
+        rateSlider.setColour (juce::Slider::backgroundColourId, Palette::divider);
+        rateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, id::rate, rateSlider);
+        for (juce::Component* c : { (juce::Component*) &modeCaption, (juce::Component*) &modeBox,
+                                    (juce::Component*) &rateCaption, (juce::Component*) &rateSlider })
+            addAndMakeVisible (c);
+
         for (juce::Component* c : { (juce::Component*) &undoButton, (juce::Component*) &redoButton, (juce::Component*) &presetBox,
                                     (juce::Component*) &saveButton, (juce::Component*) &loadButton,
                                     (juce::Component*) &outputSlider, (juce::Component*) &outputMeter })
@@ -115,8 +131,8 @@ namespace dooblrthroat
         updatePhraseReadout();
 
         setResizable (true, true);
-        setResizeLimits (940, 660, 2400, 1600);
-        setSize (980, 720);
+        setResizeLimits (900, 560, 2400, 1600);
+        setSize (980, 600);
         startTimerHz (15);
     }
 
@@ -143,7 +159,9 @@ namespace dooblrthroat
         addPanel ("Voice", Palette::dynamic, {
             { id::female, "Female" },
             { id::child, "Child" },
-            { id::nasal, "Nasal" } });
+            { id::nasal, "Nasal" },
+            { id::effort, "Effort" },
+            { id::formantTune, "Tuning" } });
         addPanel ("Source", Palette::spectrum, {
             { id::breath, "Breath" },
             { id::tension, "Tension" },
@@ -162,9 +180,6 @@ namespace dooblrthroat
             { id::decay, "Decay" },
             { id::sustain, "Sustain" },
             { id::release, "Release" } });
-        addPanel ("Phrase", Palette::accent, {
-            { id::mode, "Mode", Kind::combo, 96 },
-            { id::rate, "Rate" } });
     }
 
     void DooblrThroatEditor::setStatus (const juce::String& text)
@@ -298,14 +313,16 @@ namespace dooblrthroat
 
         if (synth.getPresetName() != shownPresetName && ! presetBox.isPopupActive())
             refreshPresetBox();
-            updatePhraseReadout();
+        updatePhraseReadout();
     }
 
     void DooblrThroatEditor::changeListenerCallback (juce::ChangeBroadcaster*)
     {
         if (! presetBox.isPopupActive())
+        {
             refreshPresetBox();
             refreshPhraseEditor();
+        }
         updatePhraseReadout();
     }
 
@@ -400,55 +417,62 @@ namespace dooblrthroat
         auto* source = panels[2].get();
         auto* pitch = panels[3].get();
         auto* env = panels[4].get();
-        auto* phrase = panels.size() > 5 ? panels[5].get() : nullptr;
 
         const int statusH = 22;
         auto status = area.removeFromBottom (statusH);
-        statusLabel.setBounds (status.reduced (4, 0));
+        statusLabel.setBounds (status.reduced (4, 0).withTrimmedRight (22));
         area.removeFromBottom (panelGap);
 
         {
-            auto strip = area.removeFromTop (phraseStripH);
-            phraseCaption.setBounds (strip.removeFromTop (16));
-            if (phrase != nullptr)
-            {
-                const int phraseW = juce::jmax (200, phrase->getPreferredHeight (220) > 0 ? 240 : 240);
-                auto controls = strip.removeFromRight (phraseW);
-                phrase->setBounds (controls);
-                strip.removeFromRight (panelGap);
-            }
+            auto strip = area.removeFromTop (phraseRowH);
+            phraseCaption.setBounds (strip.removeFromLeft (52).withSizeKeepingCentre (52, 16));
+            strip.removeFromLeft (6);
+
+            auto rateArea = strip.removeFromRight (168);
+            rateCaption.setBounds (rateArea.removeFromLeft (36).withSizeKeepingCentre (36, 16));
+            rateSlider.setBounds (rateArea.withSizeKeepingCentre (rateArea.getWidth(), 24));
+            strip.removeFromRight (8);
+            modeBox.setBounds (strip.removeFromRight (96).withSizeKeepingCentre (96, 26));
+            strip.removeFromRight (4);
+            modeCaption.setBounds (strip.removeFromRight (40).withSizeKeepingCentre (40, 16));
+            strip.removeFromRight (8);
             restartButton.setBounds (strip.removeFromRight (56).withSizeKeepingCentre (56, 24));
             strip.removeFromRight (6);
-            phraseReadout.setBounds (strip.removeFromRight (140));
+            phraseReadout.setBounds (strip.removeFromRight (108).withSizeKeepingCentre (108, 22));
             strip.removeFromRight (6);
-            phraseEditor.setBounds (strip.reduced (0, 8));
+            phraseEditor.setBounds (strip.reduced (0, 6));
         }
         area.removeFromTop (panelGap);
 
         const auto width = area.getWidth();
-        const int padSize = juce::jlimit (ui::VowelPad::minSize, 240, juce::jmin (area.getHeight() / 2, width / 3));
-
-        auto top = area.removeFromTop (juce::jmax (padSize + 16, vowel->getPreferredHeight (width - padSize - panelGap)));
+        const auto sourceH = source->getPreferredHeight (width);
+        const auto midW = (width - panelGap) / 2;
+        const auto midH = juce::jmax (pitch->getPreferredHeight (midW), env->getPreferredHeight (midW));
+        const int topBudget = juce::jmax (ui::VowelPad::minSize + 16,
+                                          area.getHeight() - sourceH - midH - 2 * panelGap);
+        const int padSize = juce::jlimit (ui::VowelPad::minSize, 240,
+                                          juce::jmin (topBudget - 16, width / 3));
+        const auto colW = width - padSize - panelGap;
+        const auto vowelH = vowel->getPreferredHeight (colW);
+        const auto voiceH = voice->getPreferredHeight (colW);
+        const int topH = juce::jmax (padSize + 16, vowelH + panelGap + voiceH);
+        auto top = area.removeFromTop (juce::jmin (topH, juce::jmax (padSize + 16, area.getHeight() - sourceH - midH - 2 * panelGap)));
         {
             auto padCol = top.removeFromLeft (padSize);
             vowelCaption.setBounds (padCol.removeFromTop (16));
-            vowelPad.setBounds (padCol.removeFromTop (padSize));
+            const int padH = juce::jmin (padSize, padCol.getHeight());
+            vowelPad.setBounds (padCol.removeFromTop (padH));
             top.removeFromLeft (panelGap);
-            const auto colW = (top.getWidth() - panelGap) / 2;
-            const auto vowelH = juce::jmax (vowel->getPreferredHeight (colW), voice->getPreferredHeight (colW));
-            auto row = top.removeFromTop (vowelH);
-            vowel->setBounds (row.removeFromLeft (colW));
-            row.removeFromLeft (panelGap);
-            voice->setBounds (row);
+            vowel->setBounds (top.removeFromTop (vowelH));
+            if (top.getHeight() > 0)
+                top.removeFromTop (juce::jmin (panelGap, top.getHeight()));
+            voice->setBounds (top.removeFromTop (juce::jmin (voiceH, juce::jmax (0, top.getHeight()))));
         }
 
         area.removeFromTop (panelGap);
-        const auto sourceH = source->getPreferredHeight (width);
         source->setBounds (area.removeFromTop (sourceH));
         area.removeFromTop (panelGap);
 
-        const auto midW = (width - panelGap) / 2;
-        const auto midH = juce::jmax (pitch->getPreferredHeight (midW), env->getPreferredHeight (midW));
         auto mid = area.removeFromTop (midH);
         pitch->setBounds (mid.removeFromLeft (midW));
         mid.removeFromLeft (panelGap);

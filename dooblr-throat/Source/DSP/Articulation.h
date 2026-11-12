@@ -1,6 +1,8 @@
 #pragma once
-// Articulator state, body mix and critically-damped tracking, ported from CHIMERA
-// (MIT, Copyright 2026 Jameson Hodge).
+// Articulator state, body mix and target-approximation tracking, ported from CHIMERA
+// (MIT, Copyright 2026 Jameson Hodge). The audio-thread tracker is a third-order
+// cascaded first-order system after Birkholz (2007), Interspeech; time constants
+// follow the lips / tip / body / velum relatives cited there from Mermelstein (1973).
 
 #include "Geom.h"
 #include "Math.h"
@@ -108,10 +110,38 @@ namespace dooblrthroat::dsp
         { -1.6, 1.6, 8.0 }, { 0.0, 1.0, 6.0 }, { 0.0, 1.0, 6.0 }, { 0.0, 1.0, 10.0 }, { 0.0, 1.0, 9.0 }
     };
 
+    // Birkholz 2007, citing Mermelstein 1973: tongue body and jaw ~75 ms, tongue
+    // tip ~50 ms, lips ~30 ms (first-order). The third-order system reaches 90%
+    // in about 5.32 tau, vs 2.30 tau for first-order, so these values are those
+    // constants scaled by 2.30/5.32 to keep the same rise time. Velum is an
+    // independent command; 60 ms first-order equivalent.
+    inline constexpr double kTauFirstToThird = 2.302585 / 5.322;
+    inline constexpr double ARTIC_TAU[N_ARTIC] = {
+        0.075 * kTauFirstToThird, // Jaw
+        0.075 * kTauFirstToThird, // TbX
+        0.075 * kTauFirstToThird, // TbY
+        0.050 * kTauFirstToThird, // TtX
+        0.050 * kTauFirstToThird, // TtY
+        0.050 * kTauFirstToThird, // TtCurl
+        0.075 * kTauFirstToThird, // Root
+        0.030 * kTauFirstToThird, // LipAp
+        0.030 * kTauFirstToThird, // LipProt
+        0.030 * kTauFirstToThird, // LipWidth
+        0.030 * kTauFirstToThird, // Labiodental
+        0.060 * kTauFirstToThird, // Velum
+        0.075 * kTauFirstToThird, // Larynx
+        0.060 * kTauFirstToThird, // Epilarynx
+        0.060 * kTauFirstToThird, // Ventricular
+        0.050 * kTauFirstToThird, // Lateral
+        0.075 * kTauFirstToThird  // Dorsum
+    };
+
     struct ArticulatorBank
     {
         HumanArtic x = NEUTRAL, target = NEUTRAL, effective = NEUTRAL;
         double v[N_ARTIC] {}, speed[N_ARTIC] {}, omega[N_ARTIC] {};
+        double z1[N_ARTIC] {}, z2[N_ARTIC] {}; // first two stages of the 3rd-order cascade
+        double effortScale = 1.0;              // 1 at default Effort; smaller tau when > 1
         bool tip_free = true;
 
         ArticulatorBank();
