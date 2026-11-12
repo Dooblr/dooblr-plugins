@@ -13,10 +13,10 @@ namespace dooblrvocals::dsp
     inline constexpr int numChainOrders = 24; // 4! orders of Gate, EQ, Comp, Limiter
 
     enum class CorrectionMode { keyed = 0, chromatic };
-    enum class QualityMode { live = 0, hq };
+    enum class QualityMode { low = 0, mid, high, live = mid, hq = high }; // pre-0.3.0 Live == Mid, HQ == High
 
     /** Latency parameter (v0.2): Tracking is the near-zero-latency causal path, Mix the 2048-sample
-        look-ahead path. Quality HQ (and offline renders) overrides both with the 8192 path. */
+        look-ahead path. Quality High (and offline renders) overrides both with the 8192 path. */
     enum class LatencyMode { tracking = 0, mix };
 
     /** What actually runs: resolved from Latency, Quality and the host's offline flag. */
@@ -132,7 +132,7 @@ namespace dooblrvocals::dsp
 
     inline const char* processModeName (ProcessMode mode) noexcept
     {
-        return mode == ProcessMode::tracking ? "Tracking" : mode == ProcessMode::hq ? "HQ" : "Mix";
+        return mode == ProcessMode::tracking ? "Tracking" : mode == ProcessMode::hq ? "High" : "Mix";
     }
 
     /** Scale-mode harmony: the note `degrees` scale steps from noteMidi (counting only notes in
@@ -192,7 +192,7 @@ namespace dooblrvocals::dsp
         float a4Hz = 440.0f;
         bool formant = true;
         InputType input = InputType::tenor;
-        QualityMode quality = QualityMode::live;
+        QualityMode quality = QualityMode::mid;
         LatencyMode latency = LatencyMode::mix;
         float rangeLowHz = 0.0f;     // learned range (0 = use the Range / voice type)
         float rangeHighHz = 0.0f;
@@ -212,10 +212,35 @@ namespace dooblrvocals::dsp
 
     inline ProcessMode processModeFor (const PitchSettings& s, bool nonRealtime) noexcept
     {
-        if (nonRealtime || s.quality == QualityMode::hq)
+        if (nonRealtime || s.quality == QualityMode::high)
             return ProcessMode::hq;
 
         return s.latency == LatencyMode::tracking ? ProcessMode::tracking : ProcessMode::mix;
+    }
+
+    /** Detector hop (samples): Low 128, Mid 64, High 32. Offline / High always uses the High hop. */
+    inline int detectorHopFor (ProcessMode mode, QualityMode quality) noexcept
+    {
+        if (mode == ProcessMode::hq || quality == QualityMode::high)
+            return 32;
+        // Tracking keeps the 64-sample hop so live unison / onsets stay aligned.
+        if (quality == QualityMode::low && mode != ProcessMode::tracking)
+            return 128;
+        return 64;
+    }
+
+    /** YIN cumulative-mean threshold: looser on Low (cheaper, slightly more octave-prone), stricter on High. */
+    inline float yinThresholdFor (ProcessMode mode, QualityMode quality) noexcept
+    {
+        if (mode == ProcessMode::hq || quality == QualityMode::high)
+            return 0.10f;
+        return quality == QualityMode::low ? 0.18f : 0.15f;
+    }
+
+    /** Analysis-window period count: Low uses a shorter window; Mid / High 2.5 (High then doubles it). */
+    inline float detectorWindowPeriods (QualityMode quality) noexcept
+    {
+        return quality == QualityMode::low ? 2.0f : 2.5f; // High uses Mid's 2.5 (3.0 would double the FFT-sized window and the CPU)
     }
 
     /** The key / scale mask harmonies step through (also in chromatic correction mode). */

@@ -211,7 +211,7 @@ namespace dooblrvocals::dsp
                                        : (double) std::clamp (gainDb + extraGainDb, -eqdynamics::maxTotalGainDb, eqdynamics::maxTotalGainDb);
         };
 
-        if (band == 0)      low.setParameters (Biquad::Type::lowShelf, s.lowFreq, 0.707, total (s.lowGainDb), sampleRate);
+        if (band == 0)      low.setParameters (Biquad::Type::peak, s.lowFreq, std::max (0.2, (double) s.lowQ), total (s.lowGainDb), sampleRate);
         else if (band == 1) mid.setParameters (Biquad::Type::peak, s.midFreq, s.midQ, total (s.midGainDb), sampleRate);
         else                high.setParameters (Biquad::Type::highShelf, s.highFreq, 0.707, total (s.highGainDb), sampleRate);
     }
@@ -228,8 +228,9 @@ namespace dooblrvocals::dsp
         std::array<bool, 3> dyn {};
         std::array<float, 3> attack {}, release {};
         std::array<SvfCoefficients, 3> detector {};
-        const DetectorShape shapes[] { DetectorShape::lowShelf, DetectorShape::bell, DetectorShape::highShelf };
+        const DetectorShape shapes[] { DetectorShape::bell, DetectorShape::bell, DetectorShape::highShelf };
         const float freqs[] { s.lowFreq, s.midFreq, s.highFreq };
+        const float qs[] { s.lowQ, s.midQ, 0.707f };
 
         for (size_t b = 0; b < 3; ++b)
         {
@@ -239,7 +240,7 @@ namespace dooblrvocals::dsp
             {
                 attack[b] = onePole (s.dynamics[b].attackMs);
                 release[b] = onePole (s.dynamics[b].releaseMs);
-                detector[b] = makeDetectorCoefficients (shapes[b], freqs[b], b == 1 ? s.midQ : 0.707, sampleRate);
+                detector[b] = makeDetectorCoefficients (shapes[b], freqs[b], qs[b], sampleRate);
             }
             else if (dynamicApplied[b])
             {
@@ -312,6 +313,7 @@ namespace dooblrvocals::dsp
 
         const auto changed = ! hasCoefficients
                           || std::abs (s.lowFreq - last.lowFreq) > 1.0e-4f || std::abs (s.lowGainDb - last.lowGainDb) > 1.0e-4f
+                          || std::abs (s.lowQ - last.lowQ) > 1.0e-4f
                           || std::abs (s.midFreq - last.midFreq) > 1.0e-4f || std::abs (s.midGainDb - last.midGainDb) > 1.0e-4f
                           || std::abs (s.midQ - last.midQ) > 1.0e-4f
                           || std::abs (s.highFreq - last.highFreq) > 1.0e-4f || std::abs (s.highGainDb - last.highGainDb) > 1.0e-4f;
@@ -330,7 +332,7 @@ namespace dooblrvocals::dsp
 
         if (changed)
         {
-            low.setParameters (Biquad::Type::lowShelf, s.lowFreq, 0.707, s.lowGainDb, sampleRate);
+            low.setParameters (Biquad::Type::peak, s.lowFreq, std::max (0.2, (double) s.lowQ), s.lowGainDb, sampleRate);
             mid.setParameters (Biquad::Type::peak, s.midFreq, s.midQ, s.midGainDb, sampleRate);
             high.setParameters (Biquad::Type::highShelf, s.highFreq, 0.707, s.highGainDb, sampleRate);
             last = s;

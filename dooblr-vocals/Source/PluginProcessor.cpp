@@ -329,6 +329,22 @@ void DooblrVocalsAudioProcessor::resetLearnedRange()
     presets::apply (parameters, values, true);
 }
 
+
+namespace
+{
+    /** Sessions and presets saved before 0.3.0 have no "eq_low_q" parameter. There, Quality was
+        Live (0) / HQ (1). Live is the same analysis as the new Mid (1) and HQ is the new High (2). */
+    void migratePre030Quality (juce::ValueTree& state)
+    {
+        if (state.getChildWithProperty ("id", "eq_low_q").isValid())
+            return;
+
+        auto quality = state.getChildWithProperty ("id", "quality");
+        if (quality.isValid())
+            quality.setProperty ("value", juce::roundToInt ((float) quality.getProperty ("value")) >= 1 ? 2.0f : 1.0f, nullptr);
+    }
+}
+
 //==============================================================================
 void DooblrVocalsAudioProcessor::loadFactoryPreset (int index, bool asGesture)
 {
@@ -375,6 +391,7 @@ bool DooblrVocalsAudioProcessor::loadUserPreset (const juce::File& file, juce::S
     }
 
     auto state = juce::ValueTree::fromXml (*xml);
+    migratePre030Quality (state);
     presets::ValueList overrides;
 
     for (const auto& child : state)
@@ -434,6 +451,7 @@ void DooblrVocalsAudioProcessor::setStateInformation (const void* data, int size
         return;
 
     auto state = juce::ValueTree::fromXml (*xml);
+    migratePre030Quality (state);
 
     for (int i = state.getNumChildren(); --i >= 0;)
     {

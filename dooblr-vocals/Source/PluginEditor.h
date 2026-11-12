@@ -103,9 +103,6 @@ public:
     juce::TextButton& getNoiseLearnButton() noexcept { return noiseLearnButton; }
     juce::Label& getNoiseLabel() noexcept { return noiseLabel; }
     /** Dynamic EQ band shown in the Dynamic EQ panel (0 low, 1 mid, 2 high); for tests and the band box. */
-    void setEqDynamicBand (int band, bool refreshEnablement = true);
-    int getEqDynamicBand() const noexcept { return eqDynBand; }
-    juce::ComboBox& getEqDynamicBandBox() noexcept { return eqDynBandBox; }
     /** Noise reducer status line (also called by the timer). */
     void updateNoiseUi();
     juce::TextButton& getLearnResetButton() noexcept { return learnResetButton; }
@@ -204,8 +201,6 @@ private:
     void updateKeyFollowUi();
     juce::TextButton learnButton { "Learn Range" }, learnResetButton { "Reset" };
     juce::Label learnLabel;
-    juce::ComboBox eqDynBandBox;
-    int eqDynBand = 1; // Mid
     juce::TextButton noiseLearnButton { "Learn Noise" };
     juce::Label noiseLabel;
     juce::String learnMessage;

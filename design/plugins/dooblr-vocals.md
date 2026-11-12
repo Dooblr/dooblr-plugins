@@ -17,16 +17,16 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE effect VST3, Standalone (target `DooblrVocals`, product "dooblr-vocals", code Dbvx)
-- Version: 0.2.0
-- Last source change: 2026-11-01
-- Source tree: `1058a6f374aa` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-vocals`)
+- Version: 0.3.0
+- Last source change: 2026-11-12
+- Source tree: `3385907e7eee` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-vocals`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-vocals/scripts/build.sh` (build dir `~/dooblr-build/dooblr-vocals`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrVocalsTests` (Tests/CMakeLists.txt)
 - Build/test: target `DooblrVocalsLoadCheck` (Tools/LoadCheck/CMakeLists.txt)
 - Hand-written spec: `design/dooblr-design-system.md` §11 dooblr-vocals (V)
 
-### Parameters (109 rows, about 133 parameters after loops; from `Source/Parameters.cpp`)
+### Parameters (110 rows, about 134 parameters after loops; from `Source/Parameters.cpp`)
 
 `{n}` = index or name filled in by a loop; `x` = loop condition or repeat count.
 
@@ -43,7 +43,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | a4_hz | float | A4 | range(415, 466) | 440 |  |
 | formant | bool | Formant | on/off | true |  |
 | input_type | choice | Range | [Soprano, Alto, Tenor, Baritone, Bass] | 2 (Tenor) |  |
-| quality | choice | Quality | [Live, HQ] | 0 (Live) |  |
+| quality | choice | Quality | [Low, Mid, High] | 1 (Mid) |  |
 | gate_on | bool | Gate On | on/off | false |  |
 | gate_threshold | float | Gate Threshold | range(-80, 0) | -40 |  |
 | gate_attack | float | Gate Attack | range(0.1, 50, 1) | 1 |  |
@@ -51,13 +51,13 @@ Read `design/INDEX.md` first. This file has two parts:
 | gate_release | float | Gate Release | range(1, 1000, 80) | 80 |  |
 | gate_range | float | Gate Range | range(0, 80) | 60 |  |
 | eq_on | bool | EQ On | on/off | false |  |
-| eq_low_freq | float | EQ Low Freq | 20..500 (custom mapping) | 80 |  |
-| eq_low_gain | float | EQ Low Gain | range(-24, 24) | 0 |  |
-| eq_mid_freq | float | EQ Mid Freq | 100..10000 (custom mapping) | 1000 |  |
-| eq_mid_gain | float | EQ Mid Gain | range(-24, 24) | 0 |  |
-| eq_mid_q | float | EQ Mid Q | 0.2..10 (custom mapping) | 1 |  |
-| eq_high_freq | float | EQ High Freq | 2000..20000 (custom mapping) | 8000 |  |
-| eq_high_gain | float | EQ High Gain | range(-24, 24) | 0 |  |
+| eq_low_freq | float | EQ Band 1 Freq | 20..500 (custom mapping) | 80 |  |
+| eq_low_gain | float | EQ Band 1 Gain | range(-24, 24) | 0 |  |
+| eq_mid_freq | float | EQ Band 2 Freq | 100..10000 (custom mapping) | 1000 |  |
+| eq_mid_gain | float | EQ Band 2 Gain | range(-24, 24) | 0 |  |
+| eq_mid_q | float | EQ Band 2 Q | 0.2..10 (custom mapping) | 1 |  |
+| eq_high_freq | float | EQ Air Freq | 2000..20000 (custom mapping) | 11000 |  |
+| eq_high_gain | float | EQ Air Gain | range(-24, 24) | 0 |  |
 | eq_hpf_on | bool | EQ High-Pass On | on/off | false |  |
 | eq_hpf_freq | float | EQ High-Pass Freq | 20..500 (custom mapping) | 80 |  |
 | eq_hpf_slope | choice | EQ High-Pass Slope | [12 dB/oct, 24 dB/oct, 48 dB/oct] | 1 (24 dB/oct) |  |
@@ -141,6 +141,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | deess_range | float | De-Esser Range | range(0, 24) | de.rangeDb |  |
 | deess_mode | choice | De-Esser Mode | [Split, Wide] | de.mode |  |
 | deess_listen | bool | De-Esser Listen | on/off | false |  |
+| eq_low_q | float | EQ Band 1 Q | 0.2..10 (custom mapping) | 1 |  |
 
 ### Source map
 
@@ -213,5 +214,9 @@ Read `design/INDEX.md` first. This file has two parts:
 
 ### Tests
 
-- `Tests/VocalsTests.cpp` (46): InstantiationAndMetadata, PitchDetectionTones, PitchDetectionVibrato, KeyedVsChromaticCorrection, UnvoicedPassthrough, LatencyModes, LatencyReporting, GateBehaviour, ChainReorder, ParameterAndStateRoundTrip, NoDeadParameters, UndoHistory, NoAudioThreadAllocations, Editor, MouseAcrossSections, LayoutFit, ProcessorTabToggles, ScalesAndMasks, StrictSnapping, TrackingSnapping, HarmonyIntervals, HarmonyPanAndAlignment, PresetSanity, Reverb, Delay, FxRouting, RangeLearn, FxPages, VibratoGolden, VibratoRespect, KeyFollow, HarmonyLoFi, VocalWorkstationPreset, ReverbPresetRt60, LearnRangeLongRuns, LearnProgress, PresetsBitIdentical, NoiseReducer, EqHighPass, EqDynamics, DeEsser, CompressorKnee, OutputCeiling, PresetLoudness, ModeToggle, DesignFixes
+- `Tests/VocalsTests.cpp` (49): InstantiationAndMetadata, PitchDetectionTones, PitchDetectionVibrato, KeyedVsChromaticCorrection, UnvoicedPassthrough, LatencyModes, LatencyReporting, GateBehaviour, ChainReorder, ParameterAndStateRoundTrip, NoDeadParameters, UndoHistory, NoAudioThreadAllocations, Editor, MouseAcrossSections, LayoutFit, ProcessorTabToggles, ScalesAndMasks, StrictSnapping, TrackingSnapping, HarmonyIntervals, HarmonyPanAndAlignment, PresetSanity, Reverb, Delay, FxRouting, RangeLearn, FxPages, VibratoGolden, VibratoRespect, KeyFollow, HarmonyLoFi, VocalWorkstationPreset, ReverbPresetRt60, LearnRangeLongRuns, LearnProgress, PresetsBitIdentical, NoiseReducer, EqHighPass, EqDynamics, DeEsser, CompressorKnee, OutputCeiling, PresetLoudness, ModeToggle, DesignFixes, LegacyStateMigration, PitchTrackingAccuracy, QualityCpu
 <!-- END AUTO-GENERATED -->
+
+## 0.3.0 (2026-11-12)
+
+Vocal EQ layout (High-pass, Band 1, Band 2, Air), all with the existing per-band dynamic EQ. Old low shelf maps to Band 1 as a peak at the same frequency and gain, Q default 1 (`eq_low_q` appended so host indices stay put). Old mid stays Band 2; old high shelf is Air (default 11 kHz on new sessions). Tracking Speed is the large central Correction knob. Quality is Low / Mid / High (default Mid = the old Live analysis, High = the old HQ; sessions and presets saved before 0.3.0 are migrated on load: Live→Mid, HQ→High; Low is the new cheap mode, about half of Mid's CPU in Mix). Pitch detector: octave checks, quieter voicing floor, hop-rate octave lock, hold-note smoothing under 12 cents.

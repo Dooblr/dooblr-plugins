@@ -26,12 +26,15 @@ namespace dooblrvocals::ui
 
             switch (spec.kind)
             {
+                case Kind::heroKnob:
                 case Kind::knob:
                 {
+                    const auto hero = spec.kind == Kind::heroKnob;
+                    const auto boxW = hero ? heroKnobWidth : knobWidth;
                     auto slider = std::make_unique<juce::Slider> (juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow);
-                    slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, knobWidth, 16);
+                    slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, boxW, hero ? 20 : 16);
                     slider->setColour (juce::Slider::rotarySliderFillColourId, colour);
-                    slider->getProperties().set ("maxKnobDiameter", 46.0);
+                    slider->getProperties().set ("maxKnobDiameter", hero ? (double) heroKnobDiameter : 46.0);
                     slider->setTooltip (parameter->getName (64));
                     item.sliderAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, spec.parameterId, *slider);
 
@@ -46,7 +49,7 @@ namespace dooblrvocals::ui
                         slider->setMouseDragSensitivity (720);
 
                     item.control = std::move (slider);
-                    item.width = knobWidth;
+                    item.width = hero ? heroKnobWidth : knobWidth;
 
                     item.caption = std::make_unique<juce::Label>();
                     item.caption->setText (spec.caption, juce::dontSendNotification);
@@ -210,7 +213,7 @@ namespace dooblrvocals::ui
         constexpr int gap = 6, minKnobWidth = 56;
 
         // Units of the flow: each shown unslotted item, and each slot (always, shown or not).
-        struct Unit { bool knob = true; int width = 0; int slot = -1; juce::Rectangle<int> bounds; };
+        struct Unit { bool knob = true; int width = 0; int slot = -1; juce::Rectangle<int> bounds; bool hero = false; };
         std::vector<Unit> units;
         std::vector<int> unitOf (items.size(), -1);
         std::map<int, int> slotUnits;
@@ -218,8 +221,8 @@ namespace dooblrvocals::ui
         for (size_t i = 0; i < items.size(); ++i)
         {
             const auto& item = items[i];
-            const auto isKnob = item.extra == nullptr && item.spec.kind == Kind::knob;
-            const auto w = isKnob ? (int) knobWidth : item.width;
+            const auto isKnob = item.extra == nullptr && (item.spec.kind == Kind::knob || item.spec.kind == Kind::heroKnob);
+            const auto w = item.spec.kind == Kind::heroKnob ? (int) heroKnobWidth : (isKnob ? (int) knobWidth : item.width);
 
             if (item.spec.slot >= 0)
             {
@@ -240,7 +243,7 @@ namespace dooblrvocals::ui
             }
 
             unitOf[i] = (int) units.size();
-            units.push_back ({ isKnob, w, item.spec.slot, {} });
+            units.push_back ({ isKnob, w, item.spec.slot, {}, item.spec.kind == Kind::heroKnob });
         }
 
         // Narrow windows: if slimmer knobs (down to 56 px) keep the panel on one row, use them
@@ -259,19 +262,53 @@ namespace dooblrvocals::ui
         int x = 0, y = titleHeight;
         for (auto& unit : units)
         {
-            const auto w = unit.knob ? knobW : unit.width;
+            const auto w = unit.knob ? (unit.hero ? (int) heroKnobWidth : knobW) : unit.width;
+            const auto h = unit.hero && rowHeight != compactKnobHeight ? (int) heroKnobHeight : rowHeight;
 
             if (x > 0 && x + w > width)
             {
                 x = 0;
-                y += rowHeight + gap;
+                y += rowHeight + gap; // previous row; hero-only panels have one row
             }
 
-            unit.bounds = { x, y, w, rowHeight };
+            unit.bounds = { x, y, w, h };
             x += w + gap;
 
             if (slots != nullptr && unit.slot >= 0)
                 slots->emplace_back (unit.slot, unit.bounds);
+        }
+
+        // Centre any row that contains a hero knob (Tracking Speed sits in the middle of its panel).
+        {
+            std::map<int, int> rowLeft, rowRight;
+            for (const auto& unit : units)
+            {
+                const auto y0 = unit.bounds.getY();
+                if (auto it = rowLeft.find (y0); it == rowLeft.end())
+                {
+                    rowLeft[y0] = unit.bounds.getX();
+                    rowRight[y0] = unit.bounds.getRight();
+                }
+                else
+                {
+                    it->second = std::min (it->second, unit.bounds.getX());
+                    rowRight[y0] = std::max (rowRight[y0], unit.bounds.getRight());
+                }
+            }
+            std::map<int, int> rowShift;
+            for (const auto& unit : units)
+            {
+                if (! unit.hero)
+                    continue;
+                const auto y0 = unit.bounds.getY();
+                if (rowShift.find (y0) != rowShift.end())
+                    continue;
+                const auto used = rowRight[y0] - rowLeft[y0];
+                rowShift[y0] = std::max (0, (width - used) / 2 - rowLeft[y0]);
+            }
+            for (auto& unit : units)
+                if (auto it = rowShift.find (unit.bounds.getY()); it != rowShift.end())
+                    unit.bounds.translate (it->second, 0);
         }
 
         std::vector<juce::Rectangle<int>> cells;
@@ -285,9 +322,9 @@ namespace dooblrvocals::ui
 
             const auto& unit = units[(size_t) unitOf[i]];
             const auto& item = items[i];
-            const auto isKnob = item.extra == nullptr && item.spec.kind == Kind::knob;
+            const auto isKnob = item.extra == nullptr && (item.spec.kind == Kind::knob || item.spec.kind == Kind::heroKnob);
             // A member narrower than its slot sits at the slot's left (knobs: centred).
-            const auto w = isKnob ? (unit.knob ? unit.bounds.getWidth() : std::min ((int) knobWidth, unit.bounds.getWidth())) : std::min (item.width, unit.bounds.getWidth());
+            const auto w = isKnob ? (unit.knob ? unit.bounds.getWidth() : std::min (item.spec.kind == Kind::heroKnob ? (int) heroKnobWidth : (int) knobWidth, unit.bounds.getWidth())) : std::min (item.width, unit.bounds.getWidth());
             cells.push_back (isKnob ? unit.bounds.withSizeKeepingCentre (w, unit.bounds.getHeight()) : unit.bounds.withWidth (w));
         }
 
@@ -353,8 +390,9 @@ namespace dooblrvocals::ui
 
             switch (item.spec.kind)
             {
+                case Kind::heroKnob:
                 case Kind::knob:
-                    item.caption->setBounds (cell.removeFromTop (16));
+                    item.caption->setBounds (cell.removeFromTop (item.spec.kind == Kind::heroKnob ? 18 : 16));
                     item.control->setBounds (cell);
                     break;
                 case Kind::combo:

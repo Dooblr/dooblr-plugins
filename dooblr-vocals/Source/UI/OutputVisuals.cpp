@@ -270,7 +270,7 @@ namespace dooblrvocals::ui
 
     //==============================================================================
     const std::array<EqDisplay::BandIds, EqDisplay::numBands> EqDisplay::bandIds {
-        BandIds { "eq_low_freq", "eq_low_gain", nullptr },
+        BandIds { "eq_low_freq", "eq_low_gain", "eq_low_q" },
         BandIds { "eq_mid_freq", "eq_mid_gain", "eq_mid_q" },
         BandIds { "eq_high_freq", "eq_high_gain", nullptr },
     };
@@ -278,7 +278,7 @@ namespace dooblrvocals::ui
     namespace
     {
         constexpr float minHz = 20.0f, maxHz = 20000.0f, gainRange = 24.0f, spectrumTopDb = 0.0f, spectrumBottomDb = -96.0f;
-        const char* bandNames[] { "Low", "Mid", "High" };
+        const char* bandNames[] { "Band 1", "Band 2", "Air" };
     }
 
     EqDisplay::EqDisplay (juce::AudioProcessorValueTreeState& s) : gesture (s)
@@ -362,7 +362,7 @@ namespace dooblrvocals::ui
     {
         juce::uint64 hash = 17;
 
-        for (const auto* id : { "eq_on", "eq_low_freq", "eq_low_gain", "eq_mid_freq", "eq_mid_gain", "eq_mid_q", "eq_high_freq", "eq_high_gain",
+        for (const auto* id : { "eq_on", "eq_low_freq", "eq_low_gain", "eq_low_q", "eq_mid_freq", "eq_mid_gain", "eq_mid_q", "eq_high_freq", "eq_high_gain",
                                 "eq_hpf_on", "eq_hpf_freq", "eq_hpf_slope", "eq_low_dyn_on", "eq_mid_dyn_on", "eq_high_dyn_on" })
             hash = mixHash (hash, gesture.get (id));
 
@@ -430,7 +430,7 @@ namespace dooblrvocals::ui
         lastHash = paramHash();
         const auto rate = analyzer.getSampleRate();
         dsp::Biquad lowFilter, midFilter, highFilter;
-        lowFilter.setParameters (dsp::Biquad::Type::lowShelf, gesture.get ("eq_low_freq"), 0.707, gesture.get ("eq_low_gain"), rate);
+        lowFilter.setParameters (dsp::Biquad::Type::peak, gesture.get ("eq_low_freq"), std::max (0.2f, gesture.get ("eq_low_q")), gesture.get ("eq_low_gain"), rate);
         midFilter.setParameters (dsp::Biquad::Type::peak, gesture.get ("eq_mid_freq"), gesture.get ("eq_mid_q"), gesture.get ("eq_mid_gain"), rate);
         highFilter.setParameters (dsp::Biquad::Type::highShelf, gesture.get ("eq_high_freq"), 0.707, gesture.get ("eq_high_gain"), rate);
         const auto hpfOn = gesture.get ("eq_hpf_on") > 0.5f;
@@ -472,7 +472,7 @@ namespace dooblrvocals::ui
             return juce::jlimit (-dsp::eqdynamics::maxTotalGainDb, dsp::eqdynamics::maxTotalGainDb, gesture.get (gainId) + shownDynamicDb[(size_t) band]);
         };
         dsp::Biquad lowLive, midLive, highLive;
-        lowLive.setParameters (dsp::Biquad::Type::lowShelf, gesture.get ("eq_low_freq"), 0.707, withDynamic ("eq_low_gain", 0), rate);
+        lowLive.setParameters (dsp::Biquad::Type::peak, gesture.get ("eq_low_freq"), std::max (0.2f, gesture.get ("eq_low_q")), withDynamic ("eq_low_gain", 0), rate);
         midLive.setParameters (dsp::Biquad::Type::peak, gesture.get ("eq_mid_freq"), gesture.get ("eq_mid_q"), withDynamic ("eq_mid_gain", 1), rate);
         highLive.setParameters (dsp::Biquad::Type::highShelf, gesture.get ("eq_high_freq"), 0.707, withDynamic ("eq_high_gain", 2), rate);
         std::vector<juce::Point<float>> staticPoints;

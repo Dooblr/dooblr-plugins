@@ -36,10 +36,10 @@ namespace dooblrvocals::dsp
         std::fill (rawDiff.begin(), rawDiff.end(), 0.0f);
     }
 
-    int PitchDetector::recommendedWindow (float minHz) const noexcept
+    int PitchDetector::recommendedWindow (float minHz, float periods) const noexcept
     {
         const auto period = sampleRate / std::max (40.0f, minHz);
-        const auto w = (int) std::ceil (2.5 * period);
+        const auto w = (int) std::ceil (std::max (2.0f, periods) * period);
         int n = 512;
         while (n < w)
             n <<= 1;
@@ -54,7 +54,9 @@ namespace dooblrvocals::dsp
             return out;
 
         const auto rms = rmsOf (x, window);
-        if (rms < 0.003f) // ~ -50 dBFS: breaths and gaps stay unvoiced
+        // Quiet breaths stay unvoiced; a lower floor (~-58 dBFS) still lets breathy notes through
+        // when the period is clear (tight CMND below).
+        if (rms < 0.0012f)
             return out;
 
         const auto tauMin = std::max (2, (int) std::floor (sampleRate / std::max (maxHz, minHz + 1.0f)));
@@ -92,8 +94,30 @@ namespace dooblrvocals::dsp
             d[tau] = d[tau] * (float) tau / (float) std::max (1.0e-12, running);
         }
 
+        auto isLocalMin = [d, tauMax] (int tau) noexcept
+        {
+            return tau > 1 && tau < tauMax && d[tau] <= d[tau - 1] && d[tau] <= d[tau + 1];
+        };
+
+        auto refineTau = [raw, tauMax] (int bestTau) noexcept -> float
+        {
+            for (int step = 0; step < 2 && bestTau + 1 < tauMax && raw[bestTau + 1] < raw[bestTau]; ++step)
+                ++bestTau;
+            for (int step = 0; step < 2 && bestTau - 1 > 1 && raw[bestTau - 1] < raw[bestTau]; ++step)
+                --bestTau;
+
+            auto tau = (float) bestTau;
+            if (bestTau > 1 && bestTau < tauMax)
+            {
+                const auto s0 = (double) raw[bestTau - 1], s1 = (double) raw[bestTau], s2 = (double) raw[bestTau + 1];
+                const auto curvature = s0 - 2.0 * s1 + s2;
+                if (curvature > 1.0e-12)
+                    tau += (float) std::clamp (0.5 * (s0 - s2) / curvature, -1.0, 1.0);
+            }
+            return tau;
+        };
+
         // Classic YIN: smallest tau below the threshold, then the local minimum.
-        // A later global min is usually 2× / 3× the period of a clean sine.
         auto bestTau = tauMin;
         auto bestCmnd = 1.0f;
         auto found = false;
@@ -117,33 +141,59 @@ namespace dooblrvocals::dsp
             }
         }
 
-        if (! found && bestCmnd > 0.35f)
+        // Quiet / breathy: insist on a clearer period than a loud tone would need.
+        const auto quietGate = rms < 0.003f ? 0.28f : 0.35f;
+        if (! found && bestCmnd > quietGate)
             return out;
 
-        // Parabolic interpolation on the raw difference function (YIN step 5): the cumulative
-        // mean normalisation skews the dip, the raw function is symmetric around the period.
-        for (int step = 0; step < 2 && bestTau + 1 < tauMax && raw[bestTau + 1] < raw[bestTau]; ++step)
-            ++bestTau;
-        for (int step = 0; step < 2 && bestTau - 1 > 1 && raw[bestTau - 1] < raw[bestTau]; ++step)
-            --bestTau;
-
-        auto tau = (float) bestTau;
-        if (bestTau > 1 && bestTau < tauMax)
+        // Octave-low: a later dip at 2T can win when the first crossing is missed. If a clear
+        // valley exists at T/2, T/3 or T/4, prefer the shorter period.
+        for (int div = 2; div <= 4; ++div)
         {
-            const auto s0 = (double) raw[bestTau - 1], s1 = (double) raw[bestTau], s2 = (double) raw[bestTau + 1];
-            // Vertex of the parabola through (-1, s0), (0, s1), (1, s2).
-            const auto curvature = s0 - 2.0 * s1 + s2;
-            if (curvature > 1.0e-12)
-                tau += (float) std::clamp (0.5 * (s0 - s2) / curvature, -1.0, 1.0);
+            const auto half = (int) std::lround ((double) bestTau / (double) div);
+            if (half < tauMin)
+                break;
+
+            int t = half;
+            while (t + 1 <= tauMax && d[t + 1] < d[t])
+                ++t;
+            while (t - 1 >= tauMin && d[t - 1] < d[t])
+                --t;
+
+            if (t >= tauMin && t < bestTau
+                && (isLocalMin (t) || d[t] < yinThreshold)
+                && d[t] < std::max (yinThreshold * 1.15f, bestCmnd + 0.08f))
+            {
+                bestTau = t;
+                bestCmnd = d[t];
+            }
         }
 
+        // Octave-high (missing fundamental, breathy / low notes): if 3/2 of the picked period is
+        // also a valley, we likely locked onto 2F0. Fold down to F0.
+        if (bestTau * 2 <= tauMax)
+        {
+            const auto threeHalves = (bestTau * 3) / 2;
+            if (threeHalves > bestTau + 2 && threeHalves <= tauMax
+                && d[threeHalves] < yinThreshold * 1.2f
+                && (isLocalMin (threeHalves) || d[threeHalves] <= d[bestTau] + 0.05f)
+                && d[bestTau * 2] < yinThreshold * 1.15f)
+            {
+                bestTau *= 2;
+                bestCmnd = d[bestTau];
+            }
+        }
+
+        const auto tau = refineTau (bestTau);
         const auto hz = (float) sampleRate / std::max (2.0f, tau);
         if (hz < minHz * 0.9f || hz > maxHz * 1.1f)
             return out;
 
         out.hz = hz;
         out.confidence = std::clamp (1.0f - bestCmnd, 0.0f, 1.0f);
-        out.voiced = out.confidence > (hq ? 0.35f : 0.40f);
+        const auto voiceThresh = hq ? 0.32f : 0.38f;
+        // Breathy but periodic: slightly lower voicing bar, still gated by the tighter quiet CMND.
+        out.voiced = out.confidence > (rms < 0.003f ? voiceThresh - 0.05f : voiceThresh);
         return out;
     }
 
@@ -286,9 +336,24 @@ namespace dooblrvocals::dsp
         t = std::clamp (t, (double) (newestInput - delaySize + 2), (double) newestInput);
         const auto i0 = (std::int64_t) std::floor (t);
         const auto frac = (float) (t - (double) i0);
-        const auto a = (int) (((i0 % delaySize) + delaySize) % delaySize);
-        const auto b = a + 1 == delaySize ? 0 : a + 1;
-        return buf[a] + frac * (buf[b] - buf[a]);
+        auto at = [this, buf] (std::int64_t i) noexcept -> float
+        {
+            return buf[(int) (((i % delaySize) + delaySize) % delaySize)];
+        };
+
+        if (interpQuality <= 0)
+        {
+            const auto a = at (i0);
+            return a + frac * (at (i0 + 1) - a);
+        }
+
+        // 4-point Catmull-Rom / cubic Hermite (Mid and High quality).
+        const auto ym1 = at (i0 - 1), y0 = at (i0), y1 = at (i0 + 1), y2 = at (i0 + 2);
+        const auto c0 = y0;
+        const auto c1 = 0.5f * (y1 - ym1);
+        const auto c2 = ym1 - 2.5f * y0 + 2.0f * y1 - 0.5f * y2;
+        const auto c3 = 0.5f * (y2 - ym1) + 1.5f * (y0 - y1);
+        return ((c3 * frac + c2) * frac + c1) * frac + c0;
     }
 
     namespace
@@ -764,6 +829,9 @@ namespace dooblrvocals::dsp
         inputCount = 0;
         hopCounter = 0;
         lastEstimate = {};
+        trackedHz = 0.0f;
+        lastWindowRms = 0.0f;
+        voicedRun = 0;
         lastCorrectedHz = 0.0f;
         lastRatio = 1.0f;
         lastVoiced = false;
@@ -874,7 +942,7 @@ namespace dooblrvocals::dsp
         if (mode == ProcessMode::tracking)
         {
             // Causal: the newest window of input (there is no look-ahead to centre it in).
-            window = std::min (detector.recommendedWindow (minHz), delaySize - 4);
+            window = std::min (detector.recommendedWindow (minHz, detectorWindowPeriods (s.quality)), delaySize - 4);
             for (int i = 0; i < window; ++i)
             {
                 const auto d = window - 1 - i;
@@ -884,7 +952,7 @@ namespace dooblrvocals::dsp
         }
         else
         {
-            window = std::min (detector.recommendedWindow (minHz) * (hq ? 2 : 1), delaySize - latency - 4);
+            window = std::min (detector.recommendedWindow (minHz, detectorWindowPeriods (s.quality)) * (hq ? 2 : 1), delaySize - latency - 4);
             if (window < 64)
                 return;
 
@@ -905,8 +973,68 @@ namespace dooblrvocals::dsp
             estimateTime = newest - std::max (0, latency - ahead - 1);
         }
 
-        const auto threshold = hq ? 0.10f : 0.15f;
+        const auto threshold = yinThresholdFor (mode, s.quality);
         lastEstimate = detector.analyse (monoScratch.data(), window, minHz, maxHz, threshold, hq);
+
+        // Temporal stability: octave lock to the recent voiced pitch, light smoothing of
+        // period jitter on held notes, hysteresis at voicing edges, and a free reset on onsets.
+        {
+            auto windowRms = 0.0f;
+            if (window > 0)
+            {
+                double acc = 0.0;
+                for (int i = 0; i < window; ++i)
+                    acc += (double) monoScratch[(size_t) i] * (double) monoScratch[(size_t) i];
+                windowRms = (float) std::sqrt (acc / (double) window);
+            }
+            const auto onset = lastWindowRms > 1.0e-6f && windowRms > lastWindowRms * 3.5f;
+            lastWindowRms = windowRms;
+
+            if (onset)
+            {
+                trackedHz = 0.0f;
+                voicedRun = 0;
+            }
+
+            if (lastEstimate.voiced && lastEstimate.hz > 20.0f && trackedHz > 20.0f && ! onset)
+            {
+                const auto ratio = lastEstimate.hz / trackedHz;
+                if (ratio > 1.87f && ratio < 2.15f && lastEstimate.confidence < 0.92f)
+                    lastEstimate.hz *= 0.5f;
+                else if (ratio > 0.46f && ratio < 0.535f && lastEstimate.confidence < 0.92f)
+                    lastEstimate.hz *= 2.0f;
+                else if (ratio > 2.80f && ratio < 3.20f && lastEstimate.confidence < 0.92f)
+                    lastEstimate.hz /= 3.0f;
+                else if (ratio > 0.31f && ratio < 0.36f && lastEstimate.confidence < 0.92f)
+                    lastEstimate.hz *= 3.0f;
+
+                const auto cents = 1200.0f * std::log2 (std::max (1.0e-6f, lastEstimate.hz / trackedHz));
+                // Hold-note jitter is typically a few cents of tau stepping; wider swings (vibrato)
+                // must pass through unsmoothed.
+                if (std::abs (cents) < 12.0f)
+                    lastEstimate.hz = trackedHz + 0.4f * (lastEstimate.hz - trackedHz);
+            }
+
+            if (lastEstimate.voiced && lastEstimate.hz > 20.0f)
+            {
+                trackedHz = lastEstimate.hz;
+                voicedRun = std::min (voicedRun + 1, 64);
+            }
+            else if (voicedRun > 0 && trackedHz > 20.0f && lastEstimate.confidence > 0.22f && windowRms > 0.0012f)
+            {
+                // Short drop-outs on a held note: keep voicing for a hop or two.
+                lastEstimate.hz = trackedHz;
+                lastEstimate.voiced = true;
+                --voicedRun;
+            }
+            else
+            {
+                lastEstimate.voiced = false;
+                voicedRun = 0;
+                if (windowRms < 0.0012f)
+                    trackedHz = 0.0f;
+            }
+        }
 
         // Hop-scaled corrector: treat one hop as the time step.
         // Temporarily scale by calling process once per hop (the 64x factor inside matches live hop).
@@ -957,8 +1085,10 @@ namespace dooblrvocals::dsp
 
         mode = processModeFor (s, nonRealtime);
         latency = latencyForMode (mode, sampleRate);
-        hop = mode == ProcessMode::hq ? 32 : 64;
+        hop = detectorHopFor (mode, s.quality);
         const auto causal = mode == ProcessMode::tracking;
+        shifter.setInterpolationQuality (s.quality == QualityMode::low ? 0 : 1);
+        harmonizer.setInterpolationQuality (s.quality == QualityMode::low ? 0 : 1);
 
         const auto mixTarget = s.enabled ? std::clamp (s.amount, 0.0f, 1.0f) : 0.0f;
         const auto mixCoeff = 1.0f - std::exp (-1.0f / (0.005f * (float) sampleRate));

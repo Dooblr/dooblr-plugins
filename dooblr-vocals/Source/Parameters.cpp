@@ -178,7 +178,7 @@ namespace dooblrvocals::params
         addFloat (layout, "a4_hz", "A4", range (415.0f, 466.0f), 440.0f, hzString(), "Hz");
         addBool (layout, "formant", "Formant", true);
         addChoice (layout, "input_type", "Range", { "Soprano", "Alto", "Tenor", "Baritone", "Bass" }, 2);
-        addChoice (layout, "quality", "Quality", { "Live", "HQ" }, 0);
+        addChoice (layout, "quality", "Quality", { "Low", "Mid", "High" }, 1);
 
         //== Gate ========================================================================
         addBool (layout, "gate_on", "Gate On", false);
@@ -190,13 +190,13 @@ namespace dooblrvocals::params
 
         //== EQ ==========================================================================
         addBool (layout, "eq_on", "EQ On", false);
-        addFloat (layout, "eq_low_freq", "EQ Low Freq", logRange (20.0f, 500.0f), 80.0f, hzString(), "Hz");
-        addFloat (layout, "eq_low_gain", "EQ Low Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
-        addFloat (layout, "eq_mid_freq", "EQ Mid Freq", logRange (100.0f, 10000.0f), 1000.0f, hzString(), "Hz");
-        addFloat (layout, "eq_mid_gain", "EQ Mid Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
-        addFloat (layout, "eq_mid_q", "EQ Mid Q", logRange (0.2f, 10.0f), 1.0f, suffixed ({}, 2));
-        addFloat (layout, "eq_high_freq", "EQ High Freq", logRange (2000.0f, 20000.0f), 8000.0f, hzString(), "Hz");
-        addFloat (layout, "eq_high_gain", "EQ High Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
+        addFloat (layout, "eq_low_freq", "EQ Band 1 Freq", logRange (20.0f, 500.0f), 80.0f, hzString(), "Hz");
+        addFloat (layout, "eq_low_gain", "EQ Band 1 Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
+        addFloat (layout, "eq_mid_freq", "EQ Band 2 Freq", logRange (100.0f, 10000.0f), 1000.0f, hzString(), "Hz");
+        addFloat (layout, "eq_mid_gain", "EQ Band 2 Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
+        addFloat (layout, "eq_mid_q", "EQ Band 2 Q", logRange (0.2f, 10.0f), 1.0f, suffixed ({}, 2));
+        addFloat (layout, "eq_high_freq", "EQ Air Freq", logRange (2000.0f, 20000.0f), 11000.0f, hzString(), "Hz");
+        addFloat (layout, "eq_high_gain", "EQ Air Gain", range (-24.0f, 24.0f), 0.0f, dbString(), "dB");
         addBool (layout, "eq_hpf_on", "EQ High-Pass On", false);
         addFloat (layout, "eq_hpf_freq", "EQ High-Pass Freq", logRange (20.0f, 500.0f), 80.0f, hzString(), "Hz");
         addChoice (layout, "eq_hpf_slope", "EQ High-Pass Slope", { "12 dB/oct", "24 dB/oct", "48 dB/oct" }, 1);
@@ -353,6 +353,9 @@ namespace dooblrvocals::params
                       [] (float v, int) { return juce::String (v, 1) + " dB"; }, "dB");
             addChoice (layout, "deess_mode", "De-Esser Mode", { "Split", "Wide" }, de.mode);
             addBool (layout, "deess_listen", "De-Esser Listen", false);
+
+            // Appended in 0.3.0: Band 1 Q. Kept at the end so existing host automation indices stay put.
+            addFloat (layout, "eq_low_q", "EQ Band 1 Q", logRange (0.2f, 10.0f), 1.0f, suffixed ({}, 2));
         }
 
         return layout;
@@ -368,7 +371,7 @@ namespace dooblrvocals::params
         a4 = getId ("a4_hz"); formant = getId ("formant"); inputType = getId ("input_type"); quality = getId ("quality");
         gateOn = getId ("gate_on"); gateThreshold = getId ("gate_threshold"); gateAttack = getId ("gate_attack");
         gateHold = getId ("gate_hold"); gateRelease = getId ("gate_release"); gateRange = getId ("gate_range");
-        eqOn = getId ("eq_on"); eqLowFreq = getId ("eq_low_freq"); eqLowGain = getId ("eq_low_gain");
+        eqOn = getId ("eq_on"); eqLowFreq = getId ("eq_low_freq"); eqLowGain = getId ("eq_low_gain"); eqLowQ = getId ("eq_low_q");
         eqMidFreq = getId ("eq_mid_freq"); eqMidGain = getId ("eq_mid_gain"); eqMidQ = getId ("eq_mid_q");
         eqHighFreq = getId ("eq_high_freq"); eqHighGain = getId ("eq_high_gain");
         eqHpfOn = getId ("eq_hpf_on"); eqHpfFreq = getId ("eq_hpf_freq"); eqHpfSlope = getId ("eq_hpf_slope");
@@ -440,7 +443,8 @@ namespace dooblrvocals::params
         s.pitch.input = (dsp::InputType) i (inputType);
         s.pitch.quality = (dsp::QualityMode) i (quality);
         s.gate = { b (gateOn), f (gateThreshold), f (gateAttack), f (gateHold), f (gateRelease), f (gateRange) };
-        s.eq = { b (eqOn), f (eqLowFreq), f (eqLowGain), f (eqMidFreq), f (eqMidGain), f (eqMidQ), f (eqHighFreq), f (eqHighGain) };
+        s.eq = { b (eqOn), f (eqLowFreq), f (eqLowGain), f (eqLowQ) > 0.0f ? f (eqLowQ) : 1.0f,
+                 f (eqMidFreq), f (eqMidGain), f (eqMidQ), f (eqHighFreq), f (eqHighGain) };
         s.noiseReducer.enabled = b (nrOn);
         s.noiseReducer.mode = juce::jlimit (0, 1, i (nrMode));
         s.noiseReducer.amountDb = f (nrAmount);

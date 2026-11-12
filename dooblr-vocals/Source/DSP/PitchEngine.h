@@ -32,7 +32,7 @@ namespace dooblrvocals::dsp
         PitchEstimate analyse (const float* x, int window, float minHz, float maxHz,
                                float yinThreshold, bool hq) const noexcept;
 
-        int recommendedWindow (float minHz) const noexcept;
+        int recommendedWindow (float minHz, float periods = 2.5f) const noexcept;
 
     private:
         double sampleRate = 48000.0;
@@ -93,6 +93,9 @@ namespace dooblrvocals::dsp
             where the grains do not cover the output. The lead keeps the default behaviour. */
         void setHarmonyVoice (bool on) noexcept { harmonyVoice = on; }
 
+        /** 0 = linear interpolation (Low quality), 1+ = 4-point cubic Hermite (Mid / High). */
+        void setInterpolationQuality (int quality) noexcept { interpQuality = quality; }
+
         /** One wet sample for output time tOut (input sample number); newest is the last
             input sample number written to the delay buffers.
             causal (Tracking, v0.2): grains are not shortened to fit the look-ahead; their
@@ -114,6 +117,7 @@ namespace dooblrvocals::dsp
         std::vector<float> olaL, olaR, olaW;
         int olaSize = 0, olaMask = 0, maxHalf = 0;
         bool marking = false, harmonyVoice = false;
+        int interpQuality = 1;
         double synthMark = 0.0, analysisEpoch = 0.0;
     };
 
@@ -133,6 +137,11 @@ namespace dooblrvocals::dsp
     public:
         void prepare (double sampleRate, int maxGrainHalf, const float* left, const float* right, int size);
         void reset() noexcept;
+        void setInterpolationQuality (int quality) noexcept
+        {
+            for (auto& shifter : shifters)
+                shifter.setInterpolationQuality (quality);
+        }
 
         /** Once per detector hop: new detected / lead pitch (Hz, 0 = unvoiced). */
         void setPitch (float detectedHz, float leadHz, bool isVoiced, const HarmonySettings& h, int mask, float a4) noexcept
@@ -223,8 +232,9 @@ namespace dooblrvocals::dsp
 
     /**
         Real-time pitch correction: delay (reported as latency) -> YIN -> snap -> PSOLA -> mix.
-        HQ uses a longer delay, a larger analysis window, a smaller hop and a stricter YIN threshold.
-        When nonRealtime is set the HQ path is used even if the quality parameter is Live.
+        High uses a longer delay, a larger analysis window, a smaller hop, a stricter YIN threshold
+        and cubic interpolation in the shifter. When nonRealtime is set the High path is used even
+        if the quality parameter is Low.
     */
     class PitchEngine
     {
@@ -274,6 +284,10 @@ namespace dooblrvocals::dsp
         std::vector<float> delayL, delayR, monoScratch;
         std::int64_t inputCount = 0; // input samples written so far (absolute time line)
         float voiceEnv = 0.0f;
+
+        float trackedHz = 0.0f;
+        float lastWindowRms = 0.0f;
+        int voicedRun = 0;
 
         PitchDetector detector;
         PitchCorrector corrector;

@@ -439,7 +439,8 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
 
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Correction", pageColour (pitchPage), Specs {
         { "corr_key", "Key", K::combo }, { "corr_scale", "Scale", K::combo },
-        { "retune_speed", "Retune", K::knob }, { "humanize", "Humanize", K::knob }, { "vibrato", "Vibrato", K::knob },
+        { "retune_speed", "Tracking Speed", K::heroKnob },
+        { "humanize", "Humanize", K::knob }, { "vibrato", "Vibrato", K::knob },
         { "corr_amount", "Amount", K::knob } }));
     pagePanels[pitchPage].push_back (std::make_unique<ControlPanel> (state, "Detector", pageColour (pitchPage), Specs {
         { "input_type", "Range", K::combo, 110 }, { "a4_hz", "A4", K::knob }, { "formant", "Formant", K::toggle, 88 },
@@ -452,27 +453,23 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     pagePanels[gatePage].push_back (std::make_unique<ControlPanel> (state, "Gate", pageColour (gatePage), Specs {
         { "gate_threshold", "Threshold", K::knob }, { "gate_attack", "Attack", K::knob }, { "gate_hold", "Hold", K::knob },
         { "gate_release", "Release", K::knob }, { "gate_range", "Range", K::knob } }));
-    pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "EQ", pageColour (eqPage), Specs {
-        { "eq_low_freq", "Low freq", K::knob }, { "eq_low_gain", "Low gain", K::knob },
-        { "eq_mid_freq", "Mid freq", K::knob }, { "eq_mid_gain", "Mid gain", K::knob }, { "eq_mid_q", "Mid Q", K::knob },
-        { "eq_high_freq", "High freq", K::knob }, { "eq_high_gain", "High gain", K::knob } }));
     pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "High-pass", pageColour (eqPage), Specs {
         { "eq_hpf_on", "HPF", K::toggle, 76 }, { "eq_hpf_freq", "Freq", K::knob }, { "eq_hpf_slope", "Slope", K::combo, 104 } }));
-    {
-        // Dynamic EQ (from dooblr-q): one band's Dynamic / Range / Threshold / Attack / Release at a time,
-        // picked with the band box; the three bands' controls share fixed slots, so switching never reflows.
-        Specs specs;
-        for (const auto* band : { "low", "mid", "high" })
-        {
-            const auto id = [band] (const char* what) { return juce::String ("eq_") + band + "_dyn_" + what; };
-            specs.push_back ({ id ("on"), "Dynamic", K::toggle, 96, 0, 0 });
-            specs.push_back ({ id ("range"), "Range", K::knob, 0, 0, 1 });
-            specs.push_back ({ id ("thresh"), "Threshold", K::knob, 0, 0, 2 });
-            specs.push_back ({ id ("attack"), "Attack", K::knob, 0, 0, 3 });
-            specs.push_back ({ id ("release"), "Release", K::knob, 0, 0, 4 });
-        }
-        pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "Dynamic EQ", pageColour (eqPage), specs));
-    }
+    pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "Band 1", pageColour (eqPage), Specs {
+        { "eq_low_freq", "Freq", K::knob }, { "eq_low_gain", "Gain", K::knob }, { "eq_low_q", "Q", K::knob },
+        { "eq_low_dyn_on", "Dynamic", K::toggle, 96 }, { "eq_low_dyn_range", "Range", K::knob },
+        { "eq_low_dyn_thresh", "Threshold", K::knob }, { "eq_low_dyn_attack", "Attack", K::knob },
+        { "eq_low_dyn_release", "Release", K::knob } }));
+    pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "Band 2", pageColour (eqPage), Specs {
+        { "eq_mid_freq", "Freq", K::knob }, { "eq_mid_gain", "Gain", K::knob }, { "eq_mid_q", "Q", K::knob },
+        { "eq_mid_dyn_on", "Dynamic", K::toggle, 96 }, { "eq_mid_dyn_range", "Range", K::knob },
+        { "eq_mid_dyn_thresh", "Threshold", K::knob }, { "eq_mid_dyn_attack", "Attack", K::knob },
+        { "eq_mid_dyn_release", "Release", K::knob } }));
+    pagePanels[eqPage].push_back (std::make_unique<ControlPanel> (state, "Air", pageColour (eqPage), Specs {
+        { "eq_high_freq", "Freq", K::knob }, { "eq_high_gain", "Gain", K::knob },
+        { "eq_high_dyn_on", "Dynamic", K::toggle, 96 }, { "eq_high_dyn_range", "Range", K::knob },
+        { "eq_high_dyn_thresh", "Threshold", K::knob }, { "eq_high_dyn_attack", "Attack", K::knob },
+        { "eq_high_dyn_release", "Release", K::knob } }));
     pagePanels[dynamicsPage].push_back (std::make_unique<ControlPanel> (state, "Compressor", pageColour (dynamicsPage), Specs {
         { "comp_threshold", "Threshold", K::knob }, { "comp_ratio", "Ratio", K::knob }, { "comp_knee", "Knee", K::knob },
         { "comp_attack", "Attack", K::knob }, { "comp_release", "Release", K::knob }, { "comp_makeup", "Makeup", K::knob } }));
@@ -556,9 +553,9 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     latencyLabel.setComponentID ("latencyReadout");
     latencyLabel.setTooltip ("Tracking: ~5 ms, for monitoring while recording (slightly rougher onsets).\n"
                              "Mix: 43 ms look-ahead for clean grains, compensated by the host.\n"
-                             "HQ (Quality) overrides both and is always used for offline renders.");
-    pagePanels[pitchPage][1]->addExtra (latencyLabel, 118);
-    pagePanels[pitchPage][1]->addExtra (learnButton, 100);
+                             "High quality overrides both and is always used for offline renders.");
+    pagePanels[pitchPage][1]->addExtra (latencyLabel, 100);
+    pagePanels[pitchPage][1]->addExtra (learnButton, 88);
 
     // Noise reducer: Learn Noise (plain state, like Learn Range) and a status readout.
     noiseLearnButton.setComponentID ("learnNoise");
@@ -577,37 +574,32 @@ DooblrVocalsAudioProcessorEditor::DooblrVocalsAudioProcessorEditor (DooblrVocals
     updateNoiseUi();
     updateLatencyLabel();
 
-    // Dynamic EQ band picker (view state only, not a parameter).
-    eqDynBandBox.setComponentID ("eqDynBand");
-    eqDynBandBox.addItemList ({ "Low", "Mid", "High" }, 1);
-    eqDynBandBox.setSelectedId (eqDynBand + 1, juce::dontSendNotification);
-    eqDynBandBox.setTooltip ("Which EQ band's dynamics to edit: Low shelf, Mid bell or High shelf");
-    eqDynBandBox.onChange = [this] { setEqDynamicBand (eqDynBandBox.getSelectedId() - 1); };
-    pagePanels[eqPage][2]->addExtra (eqDynBandBox, 84, -1, "eq_low_dyn_on");
-
-    for (const auto* band : { "low", "mid", "high" })
+    // Per-band dynamic Range knobs use the dynamic colour, same as dooblr-q (copied, not edited).
+    for (auto& panel : pagePanels[eqPage])
     {
-        const auto id = [band] (const char* what) { return juce::String ("eq_") + band + "_dyn_" + what; };
-        if (auto* range = dynamic_cast<juce::Slider*> (pagePanels[eqPage][2]->findControl (id ("range"))))
+        for (const auto* band : { "low", "mid", "high" })
         {
-            range->setColour (juce::Slider::rotarySliderFillColourId, Palette::dynamic);
-            range->setTooltip ("Dynamic Range: how far the band moves with level. Negative: it cuts as the band gets "
-                               "louder (de-essing, taming boom). Positive: it boosts.");
+            const auto id = [band] (const char* what) { return juce::String ("eq_") + band + "_dyn_" + what; };
+            if (auto* range = dynamic_cast<juce::Slider*> (panel->findControl (id ("range"))))
+            {
+                range->setColour (juce::Slider::rotarySliderFillColourId, Palette::dynamic);
+                range->setTooltip ("Dynamic Range: how far the band moves with level. Negative: it cuts as the band gets "
+                                   "louder (de-essing, taming boom, backing Air off harsh sibilance). Positive: it boosts.");
+            }
+            if (auto* thresh = panel->findControl (id ("thresh")))
+                if (auto* tip = dynamic_cast<juce::SettableTooltipClient*> (thresh))
+                    tip->setTooltip ("Threshold: the band's detected level where the dynamic gain starts (6 dB soft knee)");
+            if (auto* toggle = panel->findControl (id ("on")))
+                if (auto* tip = dynamic_cast<juce::SettableTooltipClient*> (toggle))
+                    tip->setTooltip ("Dynamic: let this band's gain follow its own level (Range / Threshold / Attack / Release)");
         }
-        if (auto* thresh = pagePanels[eqPage][2]->findControl (id ("thresh")))
-            if (auto* tip = dynamic_cast<juce::SettableTooltipClient*> (thresh))
-                tip->setTooltip ("Threshold: the band's detected level where the dynamic gain starts (6 dB soft knee)");
-        if (auto* toggle = pagePanels[eqPage][2]->findControl (id ("on")))
-            if (auto* tip = dynamic_cast<juce::SettableTooltipClient*> (toggle))
-                tip->setTooltip ("Dynamic: let this band's gain follow its own level (Range / Threshold / Attack / Release)");
     }
 
     eqDisplay.setDynamicGainSource ([this] (int band) { return audioProcessor.getEqDynamicGainDb (band); });
-    setEqDynamicBand (eqDynBand, false);
 
     if (auto* latencyBox = dynamic_cast<juce::ComboBox*> (pagePanels[pitchPage][1]->findControl ("latency_mode")))
         latencyBox->setTooltip ("Latency: Tracking (near-zero, for live monitoring) or Mix (look-ahead, higher fidelity). "
-                                "Quality HQ overrides it.");
+                                "Quality High overrides it.");
 
     if (auto* modeBox = dynamic_cast<juce::ComboBox*> (pagePanels[limiterPage].front()->findControl ("lim_mode")))
     {
@@ -734,27 +726,6 @@ void DooblrVocalsAudioProcessorEditor::setStatus (const juce::String& text)
     statusLabel.setText (text, juce::dontSendNotification);
 }
 
-void DooblrVocalsAudioProcessorEditor::setEqDynamicBand (int band, bool refreshEnablement)
-{
-    eqDynBand = juce::jlimit (0, 2, band);
-    eqDynBandBox.setSelectedId (eqDynBand + 1, juce::dontSendNotification);
-    auto& panel = *pagePanels[eqPage][2];
-    auto changed = false;
-
-    for (int b = 0; b < 3; ++b)
-    {
-        const juce::String prefix = juce::String ("eq_") + (b == 0 ? "low" : (b == 1 ? "mid" : "high")) + "_dyn_";
-        for (const auto* what : { "on", "range", "thresh", "attack", "release" })
-            changed = panel.setShown (prefix + what, b == eqDynBand) || changed;
-    }
-
-    if (changed)
-        panel.resized();
-
-    if (refreshEnablement)
-        updateEnablement();
-}
-
 void DooblrVocalsAudioProcessorEditor::updateEnablement()
 {
     const auto value = [this] (const juce::String& id)
@@ -792,23 +763,24 @@ void DooblrVocalsAudioProcessorEditor::updateEnablement()
                                                + "; this is the fallback when Key Follow is off"
                              : (state.getParameter (id) != nullptr ? state.getParameter (id)->getName (64) : juce::String()));
     }
-    setEnabled (pitchPage, "latency_mode", juce::roundToInt (value ("quality")) == 0);
+    setEnabled (pitchPage, "latency_mode", juce::roundToInt (value ("quality")) != (int) dooblrvocals::dsp::QualityMode::high);
 
     const auto limiter = juce::roundToInt (value ("lim_mode"));
     setEnabled (limiterPage, "lim_mode", limiter > 0);
     setEnabled (limiterPage, "lim_ceiling", limiter > 0);
     setEnabled (limiterPage, "lim_release", limiter == 2);
 
-    // Dynamic EQ: the shown band's knobs at 0.4 alpha while its Dynamic switch is off (as in dooblr-q).
-    if (pagePanels[eqPage].size() > 2)
+    // Dynamic EQ: each band's knobs at 0.4 alpha while its Dynamic switch is off (as in dooblr-q).
+    for (auto& panel : pagePanels[eqPage])
     {
-        auto& dynPanel = *pagePanels[eqPage][2];
         for (int b = 0; b < 3; ++b)
         {
             const juce::String prefix = juce::String ("eq_") + (b == 0 ? "low" : (b == 1 ? "mid" : "high")) + "_dyn_";
+            if (panel->findControl (prefix + "on") == nullptr)
+                continue;
             const auto used = value (prefix + "on") > 0.5f;
             for (const auto* what : { "range", "thresh", "attack", "release" })
-                dynPanel.setDimmed (prefix + what, ! used, 0.4f);
+                panel->setDimmed (prefix + what, ! used, 0.4f);
         }
     }
 
@@ -1456,7 +1428,10 @@ void DooblrVocalsAudioProcessorEditor::resized()
 
     // Short windows: compact rows when the page's panels would squeeze the display (the Pitch page
     // also keeps room for its key-follow strip).
-    const auto panelLimit = content.getHeight() - 200 - (selectedPage == pitchPage ? 34 : 0);
+    const auto reservedDisplay = selectedPage == pitchPage ? 140
+                                 : selectedPage == eqPage ? 140
+                                 : 200;
+    const auto panelLimit = content.getHeight() - reservedDisplay - (selectedPage == pitchPage ? 34 : 0);
     for (auto& panel : pagePanels[(size_t) selectedPage])
         panel->setCompact (false);
     for (auto& panel : pagePanels[(size_t) selectedPage])
@@ -1471,7 +1446,7 @@ void DooblrVocalsAudioProcessorEditor::resized()
         }
     }
 
-    controlsArea = content.removeFromBottom (juce::jmin (panelsHeight + 14, content.getHeight() - 200));
+    controlsArea = content.removeFromBottom (juce::jmin (panelsHeight + 14, content.getHeight() - reservedDisplay));
     {
         auto controls = controlsArea.reduced (20, 10);
         for (auto& panel : pagePanels[(size_t) selectedPage])

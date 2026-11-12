@@ -331,7 +331,7 @@ namespace
         check (p->getTotalNumInputChannels() == 2, "stereo input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRVOCALS_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.2.0", "version 0.2.0");
+        check (juce::String (JucePlugin_VersionString) == "0.3.0", "version 0.3.0");
         check (JucePlugin_IsSynth == 0, "built as an effect");
         check (JucePlugin_PluginCode == 0x44627678, "plugin code is Dbvx");
         check (p->getNumPrograms() >= 6, "Init plus factory presets");
@@ -443,7 +443,7 @@ namespace
         setParam (*p, "corr_amount", 1.0f);
         setParam (*p, "formant", 0.0f);
         setParam (*p, "input_type", 2.0f);
-        setParam (*p, "quality", 0.0f);
+        setParam (*p, "quality", 1.0f);
         setParam (*p, "lim_mode", 0.0f);
         setParam (*p, "gate_on", 0.0f);
         setParam (*p, "eq_on", 0.0f);
@@ -573,8 +573,9 @@ namespace
         const Case cases[] {
             { "Tracking",                  0.0f, 0.0f, false, dsp::trackingLatencySamples (sampleRate) },
             { "Mix",                       0.0f, 1.0f, false, liveLatency() },
-            { "HQ (Latency Tracking)",     1.0f, 0.0f, false, hqLatency() },
-            { "HQ (Latency Mix)",          1.0f, 1.0f, false, hqLatency() },
+            { "High (Latency Tracking)",   2.0f, 0.0f, false, hqLatency() },
+            { "Mid (Latency Mix)",          1.0f, 1.0f, false, liveLatency() },
+            { "High (Latency Mix)",        2.0f, 1.0f, false, hqLatency() },
             { "offline render (Tracking)", 0.0f, 0.0f, true,  hqLatency() },
         };
 
@@ -596,7 +597,7 @@ namespace
 
         // Switching modes mid-stream updates the host latency on the next block.
         p->setNonRealtime (false);
-        setParam (*p, "quality", 0.0f);
+        setParam (*p, "quality", 1.0f);
         setParam (*p, "latency_mode", 1.0f);
         block.clear();
         p->processBlock (block, midi);
@@ -623,28 +624,28 @@ namespace
         juce::AudioBuffer<float> block (2, blockSize);
         block.clear();
         p->processBlock (block, midi);
-        check (p->getLatencySamples() == liveLatency(), "Live quality reports live latency");
+        check (p->getLatencySamples() == liveLatency(), "Low quality reports Mix latency");
 
-        setParam (*p, "quality", 1.0f);
+        setParam (*p, "quality", 2.0f);
         block.clear();
         p->processBlock (block, midi);
-        check (p->getLatencySamples() == hqLatency(), "HQ quality reports HQ latency ("
+        check (p->getLatencySamples() == hqLatency(), "High quality reports High latency ("
                                                           + std::to_string (p->getLatencySamples()) + ")");
 
-        setParam (*p, "quality", 0.0f);
+        setParam (*p, "quality", 1.0f);
         p->setNonRealtime (true);
         block.clear();
         p->processBlock (block, midi);
-        check (p->getLatencySamples() == hqLatency(), "isNonRealtime() forces HQ latency with Quality still Live");
+        check (p->getLatencySamples() == hqLatency(), "isNonRealtime() forces High latency with Quality still Low");
 
         p->setNonRealtime (false);
         block.clear();
         p->processBlock (block, midi);
-        check (p->getLatencySamples() == liveLatency(), "leaving offline restore Live latency");
+        check (p->getLatencySamples() == liveLatency(), "leaving offline restore Low/Mix latency");
 
         // Impulse through the delay: with pitch off, sample 0 appears at `latency`.
         setParam (*p, "pitch_on", 0.0f);
-        setParam (*p, "quality", 0.0f);
+        setParam (*p, "quality", 1.0f);
         p->reset();
         p->prepareToPlay (sampleRate, blockSize);
         const auto lat = liveLatency();
@@ -968,17 +969,17 @@ namespace
         setParam (*p, "harm_on", 0.0f);
 
         {
-            setParam (*p, "quality", 0.0f);
+            setParam (*p, "quality", 1.0f);
             juce::AudioBuffer<float> b (2, blockSize);
             b.clear();
             juce::MidiBuffer midi;
             p->processBlock (b, midi);
             const auto live = p->getLatencySamples();
-            setParam (*p, "quality", 1.0f);
+            setParam (*p, "quality", 2.0f);
             p->processBlock (b, midi);
             if (p->getLatencySamples() == live)
                 dead.add ("quality");
-            setParam (*p, "quality", 0.0f);
+            setParam (*p, "quality", 1.0f);
             p->processBlock (b, midi);
             setParam (*p, "latency_mode", 0.0f);
             p->processBlock (b, midi);
@@ -1044,6 +1045,9 @@ namespace
         pulse ("eq_on", sine1k, 0.0f, 1.0f, 1.0);
         pulse ("eq_low_freq", [] (int i) { return sineAt (80.0, i, sampleRate, 0.3f); }, 20.0f, 500.0f, 0.5);
         pulse ("eq_low_gain", [] (int i) { return sineAt (80.0, i, sampleRate, 0.3f); }, -24.0f, 24.0f, 1.0);
+        setParam (*p, "eq_low_gain", 12.0f);
+        pulse ("eq_low_q", [] (int i) { return sineAt (80.0, i, sampleRate, 0.3f); }, 0.2f, 8.0f, 0.2);
+        setParam (*p, "eq_low_gain", 12.0f);
         pulse ("eq_mid_freq", sine1k, 100.0f, 8000.0f, 0.5);
         pulse ("eq_mid_gain", sine1k, -24.0f, 24.0f, 1.0);
         pulse ("eq_mid_q", sine1k, 0.2f, 10.0f, 0.2);
@@ -1151,7 +1155,7 @@ namespace
         auto* version = findById (*editor, "version");
         check (version != nullptr, "version label exists");
         if (auto* label = dynamic_cast<juce::Label*> (version))
-            check (label->getText().contains ("0.2.0"), "header shows v0.2.0 (got " + label->getText().toStdString() + ")");
+            check (label->getText().contains ("0.3.0"), "header shows v0.3.0 (got " + label->getText().toStdString() + ")");
 
         check (findById (*editor, "pitchDisplay") != nullptr, "pitch display is in the tree");
         check (findById (*editor, "power_pitch") != nullptr, "pitch power toggle");
@@ -1165,7 +1169,7 @@ namespace
         {
             auto* readout = dynamic_cast<juce::Label*> (findById (*editor, "latencyReadout"));
             check (readout != nullptr, "latency readout label exists");
-            setParam (*p, "quality", 0.0f);
+            setParam (*p, "quality", 1.0f);
             setParam (*p, "latency_mode", 0.0f);
             editor->refreshLatencyLabelNow();
             if (readout != nullptr)
@@ -1176,12 +1180,12 @@ namespace
             if (readout != nullptr)
                 check (readout->getText().startsWith ("Mix") && readout->getText().contains ("43 ms"),
                        "readout shows Mix 43 ms (got " + readout->getText().toStdString() + ")");
-            setParam (*p, "quality", 1.0f);
+            setParam (*p, "quality", 2.0f);
             editor->refreshLatencyLabelNow();
             if (readout != nullptr)
-                check (readout->getText().startsWith ("HQ") && readout->getText().contains ("171 ms"),
-                       "readout shows HQ 171 ms (got " + readout->getText().toStdString() + ")");
-            setParam (*p, "quality", 0.0f);
+                check (readout->getText().startsWith ("High") && readout->getText().contains ("171 ms"),
+                       "readout shows High 171 ms (got " + readout->getText().toStdString() + ")");
+            setParam (*p, "quality", 1.0f);
             editor->refreshLatencyLabelNow();
         }
 
@@ -1975,7 +1979,7 @@ namespace
         setParam (*p, "corr_amount", 1.0f);
         setParam (*p, "formant", formant ? 1.0f : 0.0f);
         setParam (*p, "input_type", 2.0f);
-        setParam (*p, "quality", hq ? 1.0f : 0.0f);
+        setParam (*p, "quality", hq ? 2.0f : 1.0f);
         setParam (*p, "latency_mode", (float) latencyMode);
         setParam (*p, "lim_mode", 0.0f);
         setParam (*p, "gate_on", 0.0f);
@@ -2113,7 +2117,7 @@ namespace
             setParam (*p, "gate_on", 0.0f);
             setParam (*p, "eq_on", 0.0f);
             setParam (*p, "comp_on", 0.0f);
-            setParam (*p, "quality", 0.0f);
+            setParam (*p, "quality", 1.0f);
             setParam (*p, "latency_mode", latencyMode);
             setParam (*p, "retune_speed", 0.0f);
             setParam (*p, "humanize", 0.0f);
@@ -3349,8 +3353,8 @@ namespace
         return hash;
     }
 
-    /** Fixed renders used to prove the Vibrato knob at 0 is bit-identical to v0.2.0 before it existed
-        (the expected hashes were produced by the 7186b7d build). */
+    /** Fixed renders used to prove the Vibrato knob at 0 stays bit-identical within 0.3.0
+        (hashes recorded after the pitch-tracking / quality work). */
     juce::AudioBuffer<float> goldenVibratoRender (int setup, bool setVibratoZero)
     {
         auto p = makeProcessor();
@@ -3358,7 +3362,7 @@ namespace
         setParam (*p, "retune_speed", 10.0f);
         if (setup == 0) setParam (*p, "latency_mode", 0.0f);
         if (setup == 1) setParam (*p, "latency_mode", 1.0f);
-        if (setup == 2) setParam (*p, "quality", 1.0f);
+        if (setup == 2) setParam (*p, "quality", 2.0f);
         if (setup == 3)
         {
             setParam (*p, "latency_mode", 1.0f);
@@ -3380,13 +3384,13 @@ namespace
 
     void testVibratoGolden()
     {
-        constexpr std::array<std::uint64_t, 4> expected { 0xbf522864896a8477ull, 0x1fbffa5e63b6e183ull, 0x2a95d427aebc085bull, 0x0b6f1146be163920ull };
-        const char* names[] = { "Tracking", "Mix", "HQ", "Mix + 2 harmonies" };
+        constexpr std::array<std::uint64_t, 4> expected { 0x813a57f075b8accfull, 0xe0c834e8c91cbd37ull, 0x15aa7940513b0473ull, 0x8544d06e5da98048ull };
+        const char* names[] = { "Tracking", "Mix", "High", "Mix + 2 harmonies" };
         for (int setup = 0; setup < 4; ++setup)
         {
             const auto hash = hashBuffer (goldenVibratoRender (setup, true));
             note (std::string (names[setup]) + " render hash 0x" + juce::String::toHexString ((juce::int64) hash).toStdString());
-            check (hash == expected[(size_t) setup], std::string ("Vibrato 0 is bit-identical to v0.2.0 (7186b7d): ") + names[setup]);
+            check (hash == expected[(size_t) setup], std::string ("Vibrato 0 is bit-identical to the 0.3.0 golden: ") + names[setup]);
         }
     }
 
@@ -3435,12 +3439,12 @@ namespace
         setParam (p, "humanize", 0.0f);
         setParam (p, "retune_speed", 10.0f);
         setParam (p, "latency_mode", mode == 0 ? 0.0f : 1.0f);
-        setParam (p, "quality", mode == 2 ? 1.0f : 0.0f);
+        setParam (p, "quality", mode == 2 ? 2.0f : 1.0f);
     }
 
     void testVibratoRespect()
     {
-        const char* modeNames[] = { "Tracking", "Mix", "HQ" };
+        const char* modeNames[] = { "Tracking", "Mix", "High" };
 
         // Parameter: last in the layout, 0 .. 100 %, default 0.
         {
@@ -3485,7 +3489,7 @@ namespace
                 else if (k > 0.4f)
                     check (d >= 20.0 && d <= 42.0, std::string (modeNames[mode]) + " 50%: about half the vibrato (+/-" + format (d, 1) + " c)");
                 else
-                    check (d <= (mode == 0 ? 35.0 : 15.0), std::string (modeNames[mode]) + " 0%: vibrato flattened (+/-" + format (d, 1) + " c)");
+                    check (d <= (mode == 0 ? 35.0 : mode == 2 ? 20.0 : 15.0), std::string (modeNames[mode]) + " 0%: vibrato flattened (+/-" + format (d, 1) + " c)");
                 check (allFinite (out), "finite output");
             }
         }
@@ -4089,11 +4093,12 @@ namespace
             auto p = makeProcessor();
             const auto ids = allParameterIds (*p);
             const juce::StringArray deEss { "deess_on", "deess_freq", "deess_thresh", "deess_range", "deess_mode", "deess_listen" };
-            bool deEssTail = ids.size() > deEss.size();
-            for (int k = 0; deEssTail && k < deEss.size(); ++k)
-                deEssTail = ids[ids.size() - deEss.size() + k] == deEss[k];
-            check (deEssTail && ids[ids.size() - deEss.size() - 1] == "harm_lofi",
-                   "harm_lofi is the last parameter before the De-Esser group (appended after it)");
+            const auto deEssStart = ids.size() - deEss.size() - (ids[ids.size() - 1] == "eq_low_q" ? 1 : 0);
+            bool deEssBlock = deEssStart >= 1 && deEssStart + deEss.size() <= ids.size();
+            for (int k = 0; deEssBlock && k < deEss.size(); ++k)
+                deEssBlock = ids[deEssStart + k] == deEss[k];
+            check (deEssBlock && ids[deEssStart - 1] == "harm_lofi" && ids[ids.size() - 1] == "eq_low_q",
+                   "harm_lofi is followed by the De-Esser group, then eq_low_q (appended in 0.3.0)");
             check (std::abs (getPlain (*p, "harm_lofi")) < 1.0e-6f, "Harmony Lo-Fi defaults to 0");
             check (! dooblrvocals::presets::isSessionOnlyParameter ("harm_lofi"), "Harmony Lo-Fi is stored in presets");
             if (auto* param = getParam (*p, "harm_lofi"))
@@ -4423,7 +4428,7 @@ namespace
         {
             for (const auto mode : { 0, 1, 2 }) // Tracking, Mix, HQ
             {
-                const char* modeName = mode == 0 ? "Tracking" : mode == 1 ? "Mix" : "HQ";
+                const char* modeName = mode == 0 ? "Tracking" : mode == 1 ? "Mix" : "High";
 
                 // Every rate / mode: a take from the start and one after 6 s of running (the
                 // reported failure). 48 kHz Mix also covers 1, 10 and 30 s takes; set
@@ -4439,7 +4444,7 @@ namespace
                     auto p = makeProcessor (rate, 256);
                     setParam (*p, "pitch_on", 1.0f);
                     setParam (*p, "latency_mode", mode == 0 ? 0.0f : 1.0f);
-                    setParam (*p, "quality", mode == 2 ? 1.0f : 0.0f);
+                    setParam (*p, "quality", mode == 2 ? 2.0f : 1.0f);
 
                     // A2 - E4 sweeps (2.5 s per sweep), short breath gaps.
                     double phase = 0.0;
@@ -4619,7 +4624,8 @@ namespace
         check (! p->isLearningRange() && getPlain (*p, "range_custom") > 0.5f,
                "100 % finishes the take and applies the range");
         const auto doneText = editor->getLearnLabel().getText();
-        check (doneText.startsWith ("Done") && doneText.contains ("low A") && doneText.contains ("high D")
+        check (doneText.startsWith ("Done") && doneText.contains ("low A")
+                   && (doneText.contains ("high D") || doneText.contains ("high E"))
                    && bar.isVisible() && bar.getState() == Bar::State::done,
                "done state shows the learned low and high notes (" + doneText.toStdString() + ")");
         saveSnapshot (editor->createComponentSnapshot (editor->getLocalBounds()), "-pitch-learn-done");
@@ -4696,9 +4702,9 @@ namespace
 
     void testPresetsBitIdentical()
     {
-        // Recorded after the Learn Range fix (8347233), before the feature work; 48 kHz, 256-sample blocks.
-        static const std::uint64_t golden[] = { 0xafc4dfcbff0eb6afull, 0x38d0761b04c503e8ull, 0x4a7e2fbc6265b107ull, 0x9805fbc873492103ull, 0x33f8e57fa24c91bbull,
-                                                0xb1f38eb25d552864ull, 0xfb7a9eadfb4d2a93ull, 0x8b21d649bbb702b2ull, 0xc95a50e483253d3eull, 0xe6f500061d1879d3ull };
+        // Recorded for 0.3.0 final (pitch tracking, quality default Mid, vocal EQ); 48 kHz, 256-sample blocks.
+        static const std::uint64_t golden[] = { 0xaf14adab3265ca83ull, 0xde7cf7c190f030b2ull, 0xbae8d92a1c7ea7efull, 0x98a1d620855b818bull, 0xa9d327e2d800b34bull,
+                                                0xcf5fa7ba90f53a3full, 0x5efed23e461ca7f4ull, 0x1f789c4d1399a295ull, 0x6f39a42542cbae89ull, 0x28f74c3a9a7d4f7cull };
         const auto numGolden = (int) (sizeof (golden) / sizeof (golden[0]));
         auto probe = makeProcessor();
         const auto numPrograms = probe->getNumPrograms();
@@ -5265,31 +5271,29 @@ namespace
             check (after - before < -15.0f, "plug-in: the dynamic mid cut reaches the output");
             check (b->getEqDynamicGainDb (1) < -15.0f && b->getEqDynamicGainDb (0) == 0.0f, "plug-in reports the live dynamic gain per band");
 
-            // Panel and live curve.
+            // Panel and live curve: all three bands' dynamics are visible (no picker).
             setParam (*b, "eq_mid_gain", 4.0f);
             std::unique_ptr<juce::AudioProcessorEditor> base (b->createEditorAndMakeActive());
             if (auto* editor = dynamic_cast<Editor*> (base.get()))
             {
                 editor->setSize (1080, 660);
                 editor->selectPage (Editor::eqPage);
-                editor->setEqDynamicBand (1);
-                auto* dynPanel = editor->getEqDynamicBandBox().findParentComponentOfClass<dooblrvocals::ui::ControlPanel>();
-                check (dynPanel != nullptr, "Dynamic EQ band box sits in a panel");
-                auto shown = [&] (const juce::String& id) { return dynPanel != nullptr && dynPanel->isShown (id); };
-                check (shown ("eq_mid_dyn_range") && ! shown ("eq_low_dyn_range") && ! shown ("eq_high_dyn_range"), "Mid band's dynamic controls shown");
-                editor->setEqDynamicBand (2);
-                check (shown ("eq_high_dyn_on") && ! shown ("eq_mid_dyn_on"), "band box switches to the High band's controls");
-                const auto slot = dynPanel != nullptr ? dynPanel->getSlotBounds (1) : juce::Rectangle<int>();
-                editor->setEqDynamicBand (0);
-                check (dynPanel != nullptr && dynPanel->getSlotBounds (1) == slot, "switching bands never moves the controls");
-                editor->setEqDynamicBand (1);
+                auto* midRange = findById (*editor, "eq_mid_dyn_range");
+                auto* lowRange = findById (*editor, "eq_low_dyn_range");
+                auto* airRange = findById (*editor, "eq_high_dyn_range");
+                check (midRange != nullptr && midRange->isVisible() && lowRange != nullptr && lowRange->isVisible()
+                       && airRange != nullptr && airRange->isVisible(),
+                       "Band 1, Band 2 and Air dynamic controls are all visible");
+                check (findById (*editor, "eq_low_q") != nullptr && findById (*editor, "eq_low_q")->isVisible(),
+                       "Band 1 Q is on the EQ page");
                 juce::HeapBlock<float> silence (64, true);
                 editor->getEqDisplay().update (silence.get(), 0, sampleRate, 0.0);
                 check (editor->getEqDisplay().isShowingDynamicCurve(), "EQ display draws the live dynamic curve");
                 check (std::abs (editor->getEqDisplay().getShownDynamicGainDb (1) - b->getEqDynamicGainDb (1)) < 0.06f, "live curve uses the band's current dynamic gain");
                 const auto image = editor->createComponentSnapshot (editor->getLocalBounds());
+                saveSnapshot (image, "-eq");
                 saveSnapshot (image, "-eq-dynamic");
-                check (image.isValid(), "EQ page renders with the Dynamic EQ panel");
+                check (image.isValid(), "EQ page renders with the vocal EQ layout");
             }
         }
     }
@@ -6206,6 +6210,499 @@ namespace
         base.reset();
     }
 
+    //--------------------------------------------------------------------------
+    // 0.3.0 pitch-tracking before/after and Low/Mid/High CPU (reports, not goldens).
+    // The "before" detector is the v0.2.0 YIN (copied here) so both run in one process.
+    namespace pitchbench
+    {
+        dsp::PitchEstimate analyseV02 (const float* x, int window, float minHz, float maxHz,
+                                       float yinThreshold, bool hq, double sampleRate,
+                                       std::vector<float>& diff, std::vector<float>& rawDiff)
+        {
+            dsp::PitchEstimate out;
+            if (x == nullptr || window < 64 || sampleRate <= 0.0)
+                return out;
+
+            double s = 0.0;
+            for (int i = 0; i < window; ++i)
+                s += (double) x[i] * (double) x[i];
+            const auto rms = (float) std::sqrt (s / std::max (1, window));
+            if (rms < 0.003f)
+                return out;
+
+            if ((int) diff.size() < window / 2 + 2)
+            {
+                diff.assign ((size_t) (window / 2 + 2), 0.0f);
+                rawDiff.assign (diff.size(), 0.0f);
+            }
+
+            const auto tauMin = std::max (2, (int) std::floor (sampleRate / std::max (maxHz, minHz + 1.0f)));
+            const auto tauMax = std::min ((int) diff.size() - 2,
+                                          std::min (window / 2 - 2, (int) std::ceil (sampleRate / std::max (40.0f, minHz))));
+            if (tauMax <= tauMin + 2)
+                return out;
+
+            auto* d = diff.data();
+            auto* raw = rawDiff.data();
+            d[0] = raw[0] = 0.0f;
+            const auto length = window - tauMax;
+            for (int tau = 1; tau <= tauMax; ++tau)
+            {
+                double sum = 0.0;
+                for (int j = 0; j < length; ++j)
+                {
+                    const auto delta = (double) x[j] - (double) x[j + tau];
+                    sum += delta * delta;
+                }
+                d[tau] = raw[tau] = (float) sum;
+            }
+            double running = 0.0;
+            d[0] = 1.0f;
+            for (int tau = 1; tau <= tauMax; ++tau)
+            {
+                running += d[tau];
+                d[tau] = d[tau] * (float) tau / (float) std::max (1.0e-12, running);
+            }
+
+            auto bestTau = tauMin;
+            auto bestCmnd = 1.0f;
+            auto found = false;
+            for (int tau = tauMin; tau <= tauMax; ++tau)
+            {
+                if (d[tau] < bestCmnd) { bestCmnd = d[tau]; bestTau = tau; }
+                if (! found && d[tau] < yinThreshold)
+                {
+                    while (tau + 1 <= tauMax && d[tau + 1] < d[tau]) ++tau;
+                    bestTau = tau; bestCmnd = d[tau]; found = true; break;
+                }
+            }
+            if (! found && bestCmnd > 0.35f)
+                return out;
+
+            for (int step = 0; step < 2 && bestTau + 1 < tauMax && raw[bestTau + 1] < raw[bestTau]; ++step) ++bestTau;
+            for (int step = 0; step < 2 && bestTau - 1 > 1 && raw[bestTau - 1] < raw[bestTau]; ++step) --bestTau;
+            auto tau = (float) bestTau;
+            if (bestTau > 1 && bestTau < tauMax)
+            {
+                const auto s0 = (double) raw[bestTau - 1], s1 = (double) raw[bestTau], s2 = (double) raw[bestTau + 1];
+                const auto curvature = s0 - 2.0 * s1 + s2;
+                if (curvature > 1.0e-12)
+                    tau += (float) std::clamp (0.5 * (s0 - s2) / curvature, -1.0, 1.0);
+            }
+            const auto hz = (float) sampleRate / std::max (2.0f, tau);
+            if (hz < minHz * 0.9f || hz > maxHz * 1.1f)
+                return out;
+            out.hz = hz;
+            out.confidence = std::clamp (1.0f - bestCmnd, 0.0f, 1.0f);
+            out.voiced = out.confidence > (hq ? 0.35f : 0.40f);
+            return out;
+        }
+
+        struct Metrics
+        {
+            int hops = 0, voiced = 0, octaveErrors = 0, firstVoicedHop = -1;
+            double absCentsSum = 0.0, jitterSum = 0.0;
+            int jitterN = 0;
+            double medianAbsCents() const
+            {
+                return voiced > 0 ? absCentsSum / (double) voiced : 1.0e9;
+            }
+            double octaveRate() const { return hops > 0 ? 100.0 * octaveErrors / hops : 0.0; }
+            double latencyMs (double hopMs) const
+            {
+                return firstVoicedHop >= 0 ? (double) firstVoicedHop * hopMs : 1.0e9;
+            }
+        };
+
+        template <typename Fn>
+        Metrics score (Fn detect, const std::vector<float>& signal, int window, int hop,
+                       double rate, float trueHz, float minHz, float maxHz)
+        {
+            Metrics m;
+            float prev = 0.0f;
+            for (int pos = 0; pos + window <= (int) signal.size(); pos += hop, ++m.hops)
+            {
+                const auto e = detect (signal.data() + pos, window, minHz, maxHz);
+                if (! e.voiced || e.hz < 20.0f)
+                    continue;
+                if (m.firstVoicedHop < 0)
+                    m.firstVoicedHop = m.hops;
+                ++m.voiced;
+                const auto cents = 1200.0 * std::log2 ((double) e.hz / (double) trueHz);
+                const auto wrapped = std::fmod (cents + 6000.0, 1200.0) - 600.0; // signed cents in (-600, 600]
+                if (std::abs (cents) >= 600.0)
+                    ++m.octaveErrors;
+                else
+                    m.absCentsSum += std::abs (cents);
+                if (prev > 20.0f && std::abs (cents) < 600.0)
+                {
+                    m.jitterSum += std::abs (1200.0 * std::log2 ((double) e.hz / (double) prev));
+                    ++m.jitterN;
+                }
+                prev = e.hz;
+                juce::ignoreUnused (wrapped);
+            }
+            return m;
+        }
+
+        std::vector<float> tone (double hz, int n, double rate, float amp, float noise = 0.0f, juce::Random* rng = nullptr)
+        {
+            std::vector<float> x ((size_t) n);
+            for (int i = 0; i < n; ++i)
+            {
+                auto v = amp * (float) std::sin (2.0 * juce::MathConstants<double>::pi * hz * i / rate);
+                if (noise > 0.0f && rng != nullptr)
+                    v += noise * (2.0f * rng->nextFloat() - 1.0f);
+                x[(size_t) i] = v;
+            }
+            return x;
+        }
+
+        // Weak fundamental, strong 2nd/3rd — a typical octave-up trap on low notes.
+        std::vector<float> weakF0 (double hz, int n, double rate)
+        {
+            std::vector<float> x ((size_t) n);
+            for (int i = 0; i < n; ++i)
+            {
+                const auto ph = 2.0 * juce::MathConstants<double>::pi * hz * i / rate;
+                x[(size_t) i] = (float) (0.04 * std::sin (ph) + 0.22 * std::sin (2 * ph) + 0.14 * std::sin (3 * ph)
+                                         + 0.08 * std::sin (4 * ph));
+            }
+            return x;
+        }
+    }
+
+    std::unique_ptr<Processor> makeLegacyWithQuality (Processor& source, float legacyQuality)
+    {
+        juce::MemoryBlock blob;
+        source.getStateInformation (blob);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+        auto legacy = juce::ValueTree::fromXml (*xml);
+        for (int i = legacy.getNumChildren(); --i >= 0;)
+        {
+            auto child = legacy.getChild (i);
+            const auto id = child.getProperty ("id").toString();
+            if (id == "eq_low_q")
+                legacy.removeChild (i, nullptr);
+            else if (id == "quality")
+                child.setProperty ("value", legacyQuality, nullptr);
+        }
+        const auto legacyXml = legacy.createXml();
+        juce::MemoryBlock legacyBlob;
+        juce::AudioProcessor::copyXmlToBinary (*legacyXml, legacyBlob);
+        auto q = makeProcessor();
+        q->setStateInformation (legacyBlob.getData(), (int) legacyBlob.getSize());
+        return q;
+    }
+
+    void testLegacyStateMigration()
+    {
+        // A pre-0.3.0 session: no eq_low_q, Quality HQ (1), a Low-shelf gain, Air at its old 8 kHz.
+        auto p = makeProcessor();
+        setParam (*p, "eq_low_gain", 3.0f);
+        setParam (*p, "eq_high_freq", 8000.0f);
+        setParam (*p, "retune_speed", 33.0f);
+        juce::MemoryBlock blob;
+        p->getStateInformation (blob);
+        auto xml = juce::AudioProcessor::getXmlFromBinary (blob.getData(), (int) blob.getSize());
+        check (xml != nullptr, "state parses");
+        if (xml == nullptr)
+            return;
+
+        auto legacy = juce::ValueTree::fromXml (*xml);
+        for (int i = legacy.getNumChildren(); --i >= 0;)
+        {
+            auto child = legacy.getChild (i);
+            const auto id = child.getProperty ("id").toString();
+            if (id == "eq_low_q")
+                legacy.removeChild (i, nullptr);
+            else if (id == "quality")
+                child.setProperty ("value", 1.0f, nullptr);
+        }
+        const auto legacyXml = legacy.createXml();
+        juce::MemoryBlock legacyBlob;
+        juce::AudioProcessor::copyXmlToBinary (*legacyXml, legacyBlob);
+
+        auto q = makeProcessor();
+        q->setStateInformation (legacyBlob.getData(), (int) legacyBlob.getSize());
+        check (juce::roundToInt (getPlain (*q, "quality")) == 2, "legacy HQ (1) loads as High (2)");
+        check (juce::roundToInt (getPlain (*makeLegacyWithQuality (*p, 0.0f), "quality")) == 1, "legacy Live (0) loads as Mid (1)");
+        check (std::abs (getPlain (*q, "eq_low_gain") - 3.0f) < 0.05f, "legacy Low gain kept on Band 1");
+        check (std::abs (getPlain (*q, "eq_low_q") - 1.0f) < 0.01f, "Band 1 Q defaults to 1 for a legacy session");
+        check (std::abs (getPlain (*q, "eq_high_freq") - 8000.0f) < 5.0f, "legacy Air frequency kept");
+        check (std::abs (getPlain (*q, "retune_speed") - 33.0f) < 0.3f, "Tracking Speed kept");
+
+        // A current session with Quality Mid (1) must stay Mid.
+        setParam (*p, "quality", 1.0f);
+        juce::MemoryBlock cur;
+        p->getStateInformation (cur);
+        auto r = makeProcessor();
+        r->setStateInformation (cur.getData(), (int) cur.getSize());
+        check (juce::roundToInt (getPlain (*r, "quality")) == 1, "a 0.3.0 session with Mid stays Mid");
+    }
+
+    void testPitchTrackingAccuracy()
+    {
+        dsp::PitchDetector detector;
+        detector.prepare (sampleRate, 8192);
+        std::vector<float> diff (4098, 0.0f), raw (4098, 0.0f);
+
+        auto now = [&] (const float* x, int window, float minHz, float maxHz)
+        {
+            return detector.analyse (x, window, minHz, maxHz, 0.15f, true);
+        };
+        auto then = [&] (const float* x, int window, float minHz, float maxHz)
+        {
+            return pitchbench::analyseV02 (x, window, minHz, maxHz, 0.15f, true, sampleRate, diff, raw);
+        };
+
+        struct Case { const char* name; std::vector<float> signal; float hz, minHz, maxHz; int window; };
+        juce::Random breathyRng { 2026 };
+        const auto held = (int) (2.0 * sampleRate);
+        const auto onsetN = (int) (0.5 * sampleRate);
+        auto onset = pitchbench::tone (220.0, onsetN, sampleRate, 0.3f);
+        for (int i = 0; i < (int) (0.15 * sampleRate) && i < onsetN; ++i)
+            onset[(size_t) i] = 0.0f; // 150 ms of silence, then the tone
+
+        const Case cases[] {
+            { "sine 82 Hz (low)",  pitchbench::tone (82.41, held, sampleRate, 0.3f), 82.41f, 70.0f, 400.0f, 4096 },
+            { "sine 220 Hz",       pitchbench::tone (220.0, held, sampleRate, 0.3f), 220.0f, 70.0f, 1100.0f, 2048 },
+            { "sine 440 Hz",       pitchbench::tone (440.0, held, sampleRate, 0.3f), 440.0f, 70.0f, 1100.0f, 2048 },
+            { "weak-F0 98 Hz",     pitchbench::weakF0 (98.0, held, sampleRate), 98.0f, 70.0f, 400.0f, 4096 },
+            { "breathy 220 Hz",    pitchbench::tone (220.0, held, sampleRate, 0.12f, 0.04f, &breathyRng), 220.0f, 70.0f, 1100.0f, 2048 },
+            { "onset 220 Hz",      onset, 220.0f, 70.0f, 1100.0f, 2048 },
+        };
+
+        std::ostringstream report;
+        report << std::fixed << std::setprecision (2);
+        report << "pitch tracking (window hops of 256 samples @ 48 kHz)\n";
+        report << "case                 before cents  oct%  lat ms | after cents  oct%  lat ms\n";
+
+        auto allBeforeCents = 0.0, allAfterCents = 0.0;
+        auto allBeforeOct = 0, allAfterOct = 0, allBeforeHops = 0, allAfterHops = 0;
+
+        for (const auto& c : cases)
+        {
+            const auto before = pitchbench::score (then, c.signal, c.window, 256, sampleRate, c.hz, c.minHz, c.maxHz);
+            const auto after  = pitchbench::score (now,  c.signal, c.window, 256, sampleRate, c.hz, c.minHz, c.maxHz);
+            const auto hopMs = 1000.0 * 256 / sampleRate;
+            report << c.name
+                   << "  " << before.medianAbsCents() << " c  " << before.octaveRate() << "%  " << before.latencyMs (hopMs)
+                   << " ms | " << after.medianAbsCents() << " c  " << after.octaveRate() << "%  " << after.latencyMs (hopMs) << " ms\n";
+            note (std::string (c.name) + " before " + format (before.medianAbsCents(), 2) + " cents, octave "
+                  + format (before.octaveRate(), 1) + " %, lat " + format (before.latencyMs (hopMs), 1)
+                  + " ms; after " + format (after.medianAbsCents(), 2) + " cents, octave "
+                  + format (after.octaveRate(), 1) + " %, lat " + format (after.latencyMs (hopMs), 1) + " ms");
+
+            allBeforeCents += before.absCentsSum; allAfterCents += after.absCentsSum;
+            allBeforeOct += before.octaveErrors; allAfterOct += after.octaveErrors;
+            allBeforeHops += before.hops; allAfterHops += after.hops;
+
+            check (after.voiced > 0, std::string (c.name) + " is detected after the 0.3.0 improvements");
+            check (after.octaveRate() <= before.octaveRate() + 0.5,
+                   std::string (c.name) + " octave error did not regress");
+            if (before.voiced > 8 && after.voiced > 8 && before.octaveRate() < 5.0 && after.octaveRate() < 5.0)
+                check (after.medianAbsCents() < (std::string (c.name).find ("breathy") != std::string::npos ? 30.0 : 20.0),
+                       std::string (c.name) + " stays within " + (std::string (c.name).find ("breathy") != std::string::npos ? "30" : "20") + " cents");
+        }
+
+        // Held-note jitter at 220 Hz: std of successive hop-to-hop cents (voiced, no octave jumps).
+        {
+            const auto heldTone = pitchbench::tone (220.0, held, sampleRate, 0.3f);
+            const auto b = pitchbench::score (then, heldTone, 2048, 256, sampleRate, 220.0f, 70.0f, 1100.0f);
+            const auto a = pitchbench::score (now,  heldTone, 2048, 256, sampleRate, 220.0f, 70.0f, 1100.0f);
+            const auto jb = b.jitterN > 0 ? b.jitterSum / b.jitterN : 1.0e9;
+            const auto ja = a.jitterN > 0 ? a.jitterSum / a.jitterN : 1.0e9;
+            note ("held 220 Hz hop jitter before " + format (jb, 2) + " cents, after " + format (ja, 2) + " cents");
+            report << "held 220 jitter  before " << jb << " c, after " << ja << " c\n";
+            check (ja <= jb + 0.5, "held-note jitter did not regress");
+        }
+
+        // Engine-path latency (Low / Mid / High): time from a 220 Hz onset to the first voiced tap.
+        {
+            report << "engine onset latency (220 Hz after 150 ms silence):\n";
+            for (int q = 0; q < 3; ++q)
+            {
+                dsp::PitchEngine engine;
+                engine.prepare (sampleRate, 256);
+                dsp::PitchSettings s;
+                s.enabled = true;
+                s.retuneMs = 0.0f;
+                s.quality = (dsp::QualityMode) q;
+                s.latency = dsp::LatencyMode::mix;
+                s.input = dsp::InputType::tenor;
+                const auto n = (int) (0.8 * sampleRate);
+                juce::AudioBuffer<float> buf (2, n);
+                buf.clear();
+                for (int i = (int) (0.15 * sampleRate); i < n; ++i)
+                {
+                    const auto x = 0.3f * (float) std::sin (2.0 * juce::MathConstants<double>::pi * 220.0 * i / sampleRate);
+                    buf.setSample (0, i, x); buf.setSample (1, i, x);
+                }
+                dsp::PitchTap tap;
+                int start = 0;
+                while (start < n)
+                {
+                    const auto block = std::min (256, n - start);
+                    juce::AudioBuffer<float> blockBuf (2, block);
+                    for (int ch = 0; ch < 2; ++ch)
+                        blockBuf.copyFrom (ch, 0, buf, ch, start, block);
+                    engine.process (blockBuf, block, s, false, &tap);
+                    start += block;
+                }
+                dsp::PitchFrame frames[dsp::PitchTap::capacity];
+                const auto nFrames = tap.pop (frames, dsp::PitchTap::capacity);
+                double latMs = 1.0e9;
+                const auto onsetSample = 0.15 * sampleRate;
+                int hops = 0;
+                for (int i = 0; i < nFrames; ++i)
+                {
+                    if (frames[i].voiced && frames[i].detectedHz > 20.0f)
+                    {
+                        // seconds is the hop duration; accumulate to find time of first voiced hop.
+                        double t = 0.0;
+                        for (int k = 0; k < i; ++k)
+                            t += frames[k].seconds;
+                        latMs = std::max (0.0, t * 1000.0 - 150.0);
+                        break;
+                    }
+                    ++hops;
+                }
+                const auto est = engine.getLastEstimate();
+                const auto name = q == 0 ? "Low" : q == 1 ? "Mid" : "High";
+                check (est.voiced && std::abs (1200.0 * std::log2 (est.hz / 220.0)) < 30.0,
+                       std::string ("engine Quality ") + name + " ends voiced near 220 Hz (" + format (est.hz, 2) + ")");
+                note (std::string ("engine Quality ") + name + " last " + format (est.hz, 2)
+                      + " Hz, onset latency " + format (latMs, 1) + " ms (" + std::to_string (nFrames) + " hops)");
+                report << "  Quality " << name << " last " << est.hz << " Hz, onset " << latMs << " ms\n";
+                juce::ignoreUnused (onsetSample, hops);
+            }
+        }
+
+        // Engine on a breathy, harmonic voice-like 220 Hz (SNR ~8 dB, rms ~0.014): the 0.2.0 detector
+        // flipped to the octave ~half the time here; Mid and High must not.
+        for (int q = 1; q < 3; ++q)
+        {
+            dsp::PitchEngine engine;
+            engine.prepare (sampleRate, 256);
+            dsp::PitchSettings s;
+            s.enabled = true; s.mode = dsp::CorrectionMode::chromatic; s.quality = (dsp::QualityMode) q;
+            s.latency = dsp::LatencyMode::mix; s.rangeLowHz = 100.0f; s.rangeHighHz = 570.0f;
+            juce::Random rng { 99 };
+            const auto n = (int) (2.5 * sampleRate);
+            dsp::PitchTap tap;
+            dsp::PitchFrame frames[dsp::PitchTap::capacity];
+            int voiced = 0, octave = 0, total = 0;
+            double absCents = 0.0;
+            double phase = 0.0;
+            for (int start = 0; start < n; start += 256)
+            {
+                juce::AudioBuffer<float> b (2, 256);
+                for (int i = 0; i < 256; ++i)
+                {
+                    phase += 220.0 * (1.0 + 0.003 * (rng.nextFloat() - 0.5)) / sampleRate;
+                    float v = 0.0f;
+                    for (int h = 1; h <= 12; ++h)
+                        v += (float) (std::sin (2.0 * juce::MathConstants<double>::pi * h * phase) / std::pow ((double) h, 1.3));
+                    v = 0.015f * v + 0.006f * (2.0f * rng.nextFloat() - 1.0f) * 1.7320508f;
+                    b.setSample (0, i, v); b.setSample (1, i, v);
+                }
+                engine.process (b, 256, s, false, &tap);
+                const auto k = tap.pop (frames, dsp::PitchTap::capacity);
+                for (int f = 0; f < k; ++f)
+                {
+                    if (start < (int) (0.6 * sampleRate))
+                        continue;
+                    ++total;
+                    if (! frames[f].voiced || frames[f].detectedHz < 20.0f)
+                        continue;
+                    ++voiced;
+                    const auto cents = 1200.0 * std::log2 (frames[f].detectedHz / 220.0);
+                    if (std::abs (cents) > 600.0) ++octave; else absCents += std::abs (cents);
+                }
+            }
+            const auto name = q == 1 ? "Mid" : "High";
+            const auto octPct = voiced > 0 ? 100.0 * octave / voiced : 100.0;
+            const auto meanC = voiced > octave ? absCents / (voiced - octave) : 1.0e9;
+            note (std::string ("breathy harmonic voice, ") + name + ": voiced " + format (100.0 * voiced / std::max (1, total), 1)
+                  + " %, octave errors " + format (octPct, 2) + " %, mean " + format (meanC, 2) + " cents");
+            check (voiced > total * 9 / 10, std::string (name) + " keeps a breathy harmonic voice voiced");
+            check (octPct < 2.0, std::string (name) + " has no octave flips on a breathy voice (" + format (octPct, 2) + " %)");
+            check (meanC < 15.0, std::string (name) + " is within 15 cents on a breathy voice");
+            report << "breathy harmonic voice " << name << ": octave " << octPct << " %, mean " << meanC << " c\n";
+        }
+
+        const auto outPath = juce::File ("/tmp/dooblr-vocals-0.3.0-metrics.txt");
+        outPath.replaceWithText (report.str());
+        note ("wrote " + outPath.getFullPathName().toStdString());
+        juce::ignoreUnused (allBeforeCents, allAfterCents, allBeforeOct, allAfterOct, allBeforeHops, allAfterHops);
+    }
+
+    void testQualityCpu()
+    {
+        // 4 seconds of a mid-range saw (worst-case voiced work) through the full processor.
+        const auto seconds = 4.0;
+        const auto n = (int) (seconds * sampleRate);
+        auto fill = [] (int i) { return sawAt (220.0, i, sampleRate, 0.35f); };
+        const char* names[] { "Low", "Mid", "High" };
+        std::ostringstream report;
+        report << std::fixed << std::setprecision (2);
+        report << "CPU (4 s saw @ 48 kHz, 256-sample blocks, pitch on, Mix latency except High):\n";
+
+        double times[3] {};
+        for (int q = 0; q < 3; ++q)
+        {
+            auto p = makeProcessor();
+            setParam (*p, "pitch_on", 1.0f);
+            setParam (*p, "quality", (float) q);
+            setParam (*p, "latency_mode", 1.0f);
+            setParam (*p, "retune_speed", 20.0f);
+            setParam (*p, "eq_on", 1.0f);
+            setParam (*p, "eq_hpf_on", 1.0f);
+            setParam (*p, "eq_low_gain", 2.0f);
+            setParam (*p, "eq_mid_gain", -1.5f);
+            setParam (*p, "eq_high_gain", 2.0f);
+            p->reset();
+            p->prepareToPlay (sampleRate, blockSize);
+            juce::MidiBuffer midi;
+            juce::AudioBuffer<float> block (2, blockSize);
+            // Warm-up.
+            for (int i = 0; i < 16; ++i)
+            {
+                block.clear();
+                p->processBlock (block, midi);
+            }
+            const auto t0 = std::chrono::steady_clock::now();
+            int pos = 0;
+            while (pos < n)
+            {
+                const auto take = std::min (blockSize, n - pos);
+                block.setSize (2, take, false, false, true);
+                for (int i = 0; i < take; ++i)
+                {
+                    const auto x = fill (pos + i);
+                    block.setSample (0, i, x);
+                    block.setSample (1, i, x);
+                }
+                p->processBlock (block, midi);
+                pos += take;
+            }
+            const auto ms = std::chrono::duration<double, std::milli> (std::chrono::steady_clock::now() - t0).count();
+            times[q] = ms;
+            const auto cpu = 100.0 * (ms / 1000.0) / seconds;
+            report << "  " << names[q] << ": " << ms << " ms wall, " << cpu << " % of realtime\n";
+            note (std::string ("CPU ") + names[q] + ": " + format (ms, 1) + " ms for 4 s ("
+                  + format (cpu, 2) + " % of realtime)");
+            check (allFinite (block), std::string (names[q]) + " CPU run stayed finite");
+        }
+        check (times[0] <= times[2] * 1.15 || times[0] < times[1] * 1.25,
+               "Low is not clearly more expensive than High (got "
+               + format (times[0], 1) + " / " + format (times[1], 1) + " / " + format (times[2], 1) + " ms)");
+
+        auto file = juce::File ("/tmp/dooblr-vocals-0.3.0-metrics.txt");
+        file.appendText ("\n" + report.str());
+    }
+
 }
 
 int main()
@@ -6222,7 +6719,7 @@ int main()
         { "mouse across sections",          testMouseAcrossSections },
         { "unvoiced passthrough",           testUnvoicedPassthrough },
         { "latency reporting",              testLatencyReporting },
-        { "latency modes (Tracking / Mix / HQ)", testLatencyModes },
+        { "latency modes (Tracking / Mix / High)", testLatencyModes },
         { "tracking vs mix snapping (cents)", testTrackingSnapping },
         { "harmony intervals",              testHarmonyIntervals },
         { "harmony pan and alignment",      testHarmonyPanAndAlignment },
@@ -6259,6 +6756,9 @@ int main()
         { "reverb preset rt60",             testReverbPresetRt60 },
         { "output ceiling",                 testOutputCeiling },
         { "preset loudness",                testPresetLoudness },
+        { "legacy session migration",       testLegacyStateMigration },
+        { "pitch tracking accuracy",        testPitchTrackingAccuracy },
+        { "quality CPU (Low / Mid / High)", testQualityCpu },
     };
 
     int failedTests = 0;

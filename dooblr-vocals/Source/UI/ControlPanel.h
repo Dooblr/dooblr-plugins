@@ -23,7 +23,7 @@ namespace dooblrvocals::ui
     class ControlPanel final : public juce::Component
     {
     public:
-        enum class Kind { knob, toggle, combo };
+        enum class Kind { knob, toggle, combo, heroKnob };
 
         struct Spec
         {
@@ -77,6 +77,7 @@ namespace dooblrvocals::ui
         juce::Rectangle<int> getSlotBounds (int slot) const;
 
         static constexpr int titleHeight = 20, knobWidth = 70, knobHeight = 84, compactKnobHeight = 68, comboWidth = 128, toggleWidth = 104;
+        static constexpr int heroKnobWidth = 136, heroKnobHeight = 152, heroKnobDiameter = 100;
 
     private:
         struct Item

@@ -35,5 +35,5 @@ outside the markers are never touched; keep them current with any behaviour chan
 | dooblr-sub | 0.1.0 | JUCE effect VST3 | 19 | 2026-11-11 | [design/plugins/dooblr-sub.md](plugins/dooblr-sub.md) |
 | dooblr-throat | 0.3.0 | JUCE instrument VST3 | 27 | 2026-11-12 | [design/plugins/dooblr-throat.md](plugins/dooblr-throat.md) |
 | dooblr-titan | 0.1.0 | Max for Live MIDI effect that tightens MIDI clips and writes musical variations into Session View clip slots. | 31 | 2026-11-11 | [design/plugins/dooblr-titan.md](plugins/dooblr-titan.md) |
-| dooblr-vocals | 0.2.0 | JUCE effect VST3, Standalone | ~133 | 2026-11-01 | [design/plugins/dooblr-vocals.md](plugins/dooblr-vocals.md) |
+| dooblr-vocals | 0.3.0 | JUCE effect VST3, Standalone | ~134 | 2026-11-12 | [design/plugins/dooblr-vocals.md](plugins/dooblr-vocals.md) |
 <!-- END AUTO-GENERATED -->

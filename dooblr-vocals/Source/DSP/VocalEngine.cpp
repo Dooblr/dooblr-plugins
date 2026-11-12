@@ -72,6 +72,7 @@ namespace dooblrvocals::dsp
         const auto& f = to.eq;
         e.lowFreq = lerp (from.eq.lowFreq, f.lowFreq, a);
         e.lowGainDb = lerp (from.eq.lowGainDb, f.lowGainDb, a);
+        e.lowQ = lerp (from.eq.lowQ, f.lowQ, a);
         e.midFreq = lerp (from.eq.midFreq, f.midFreq, a);
         e.midGainDb = lerp (from.eq.midGainDb, f.midGainDb, a);
         e.midQ = lerp (from.eq.midQ, f.midQ, a);

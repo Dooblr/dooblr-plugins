@@ -25,23 +25,25 @@ Plugin code `Dbvx` · bundle id `com.dooblr.vocals` · manufacturer `Dblr`
   - YIN pitch detection with a confidence / RMS voicing gate: unvoiced
     consonants, breaths and gaps pass through (delayed) without being snapped.
   - TD-PSOLA grains with formant on; resampled grains with formant off.
-- **Live vs HQ.**
-  - **Live** (default): hop 64, YIN window ~2.5 periods of the lowest F0 the
+- **Quality (Low / Mid / High).**
+  - **Low**: hop 128 in Mix (64 in Tracking), a 2-period window, a looser YIN threshold and linear
+    interpolation in the shifter. About half of Mid's CPU in Mix; a little more hop-to-hop jitter.
+  - **Mid** (default; was **Live**): hop 64, YIN window ~2.5 periods of the lowest F0 the
     detector must cover (70 Hz), latency = next power of two of two periods at
     70 Hz. At 48 kHz that is **2048 samples (~42.7 ms)**. Usable while tracking.
-  - **HQ**: hop 32, a larger analysis window, a stricter YIN threshold, latency
+  - **High** (was **HQ**): hop 32, a larger analysis window, a stricter YIN threshold, latency
     **4× Live** (8192 samples / ~171 ms at 48 kHz). Better tracking and cleaner
     shifting; the host is told via `setLatencySamples`.
   - **Offline render:** when the host calls `isNonRealtime()` (bounce / freeze),
-    the HQ path is used even if the Quality control is Live, so a mixdown is
+    the High-quality path is used even if the Quality control is Low, so a mixdown is
     the high-quality version without changing the session's live setting.
-  - Changing Live ↔ HQ updates the reported latency. Input type does **not**
+  - Changing Mid ↔ High updates the reported latency. Input type does **not**
     change latency, so switching soprano/bass never makes the DAW's PDC jump.
 - **Vocal chain** (copied from dooblr-kick, minus the synth / samples / drive /
   transient shaper):
   - **Gate** (new): threshold, attack, hold, release, range. Stereo-linked peak
     detector. View matches the other dynamics graphs.
-  - **EQ**: low shelf, mid peak with Q, high shelf, live FFT behind the curve.
+  - **EQ**: high-pass (12/24/48 dB/oct), two peaking bands (Band 1, Band 2, each with Q) and an Air high shelf, every band optionally dynamic; live FFT behind the curve.
   - **Compressor**: threshold, ratio, attack, release, makeup, transfer curve.
   - **Limiter / clipper**, ceiling, release, output gain. Always the last
     stage: it runs after the delay / reverb and the output gain, so the final
@@ -75,8 +77,8 @@ Plugin code `Dbvx` · bundle id `com.dooblr.vocals` · manufacturer `Dblr`
 
 | Mode | Hop | YIN window | Latency at 48 kHz | When |
 |---|---|---|---|---|
-| Live | 64 | ~2.5 periods of 70 Hz | 2048 samples, 42.7 ms | Tracking, low-latency monitoring |
-| HQ | 32 | 2× Live, stricter threshold | 8192 samples, 170.7 ms | Mixing, or Quality = HQ |
+| Mid (Low: hop 128, 2 periods) | 64 | ~2.5 periods of 70 Hz | 2048 samples, 42.7 ms | Tracking, low-latency monitoring |
+| High | 32 | 2× Mid, stricter threshold, cubic shifter | 8192 samples, 170.7 ms | Mixing, or Quality = High |
 | Host offline | HQ path | HQ | HQ latency, reported | Bounce / freeze (`isNonRealtime`) |
 
 The delay is also the dry path, so Live/HQ mix stays time-aligned. Amount = 0
@@ -97,10 +99,10 @@ or Pitch off still delays by the reported latency (the host compensates).
 | `a4_hz` | A4 | 440 Hz |
 | `formant` | Formant | on |
 | `input_type` | Range | Tenor |
-| `quality` | Quality | Live |
+| `quality` | Quality | Mid (was Live); Low (new, cheaper); High (was HQ). Pre-0.3.0 sessions migrate Live→Mid, HQ→High |
 | `gate_on` | Gate On | off |
 | `gate_threshold` / `gate_attack` / `gate_hold` / `gate_release` / `gate_range` | Gate | −40 dB, 1 ms, 50 ms, 80 ms, 60 dB |
-| `eq_on` plus low/mid/high freq, gain, mid Q | EQ | off, 80 / 1 k / 8 kHz |
+| `eq_on` plus `eq_low_*` (Band 1: freq, gain, Q), `eq_mid_*` (Band 2), `eq_high_*` (Air shelf) | EQ | off, 80 Hz / 1 kHz / 11 kHz |
 | `comp_on` plus threshold, ratio, attack, release, makeup | Comp | off, −18 dB, 3:1 |
 | `lim_mode` / `lim_ceiling` / `lim_release` | Limiter | Limiter, −0.3 dB, 60 ms |
 | `output_gain` | Output | 0 dB |
@@ -152,7 +154,7 @@ standalone build are meant to run here. The shipping bundle is macOS arm64.
    It is an effect, not an instrument.
 3. Set Key / Scale (or Chromatic), Range to the singer, and Retune. Turn on
    Gate / EQ / Comp / Limiter as needed. Drag the tab handles to reorder
-   Gate / EQ / Comp (the limiter always runs last, after the delay and reverb). Switch Quality to HQ when mixing if you can spare the latency.
+   Gate / EQ / Comp (the limiter always runs last, after the delay and reverb). Switch Quality to High when mixing if you can spare the latency.
 
 ## Tests
 

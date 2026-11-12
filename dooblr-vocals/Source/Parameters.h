@@ -53,7 +53,7 @@ namespace dooblrvocals::params
         Value retune = nullptr, humanize = nullptr, amount = nullptr, a4 = nullptr, formant = nullptr;
         Value inputType = nullptr, quality = nullptr;
         Value gateOn = nullptr, gateThreshold = nullptr, gateAttack = nullptr, gateHold = nullptr, gateRelease = nullptr, gateRange = nullptr;
-        Value eqOn = nullptr, eqLowFreq = nullptr, eqLowGain = nullptr, eqMidFreq = nullptr, eqMidGain = nullptr, eqMidQ = nullptr;
+        Value eqOn = nullptr, eqLowFreq = nullptr, eqLowGain = nullptr, eqLowQ = nullptr, eqMidFreq = nullptr, eqMidGain = nullptr, eqMidQ = nullptr;
         Value eqHighFreq = nullptr, eqHighGain = nullptr;
         Value eqHpfOn = nullptr, eqHpfFreq = nullptr, eqHpfSlope = nullptr;
         struct EqDynIds { Value on = nullptr, range = nullptr, threshold = nullptr, attack = nullptr, release = nullptr; };

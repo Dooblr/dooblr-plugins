@@ -27,15 +27,15 @@ namespace dooblrvocals::dsp
     struct EqSettings
     {
         bool enabled = false;
-        float lowFreq = 80.0f, lowGainDb = 0.0f;
-        float midFreq = 1000.0f, midGainDb = 0.0f, midQ = 1.0f;
-        float highFreq = 8000.0f, highGainDb = 0.0f;
+        float lowFreq = 80.0f, lowGainDb = 0.0f, lowQ = 1.0f;   // Band 1, peaking (was a low shelf before 0.3.0)
+        float midFreq = 1000.0f, midGainDb = 0.0f, midQ = 1.0f; // Band 2, peaking
+        float highFreq = 11000.0f, highGainDb = 0.0f;           // Air, high shelf (was 8 kHz before 0.3.0)
         bool hpfOn = false;      // high-pass (low cut), off by default so existing sessions are unchanged
         float hpfFreq = 80.0f;
         int hpfSlope = 1;        // 0 = 12, 1 = 24, 2 = 48 dB/oct
 
-        /** Per-band dynamic EQ (low shelf, mid bell, high shelf), off by default so existing sessions
-            and presets are unchanged. Same law and ranges as dooblr-q's dynamic bands. */
+        /** Per-band dynamic EQ (Band 1 bell, Band 2 bell, Air high shelf), off by default so existing
+            sessions and presets are unchanged. Same law and ranges as dooblr-q's dynamic bands. */
         struct BandDynamics
         {
             bool on = false;

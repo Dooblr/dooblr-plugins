@@ -23,7 +23,7 @@ namespace dooblrvocals::presets
                 ValueList v;
                 add (v, { { "corr_mode", 0 }, { "corr_key", 0 }, { "corr_scale", 0 }, { "retune_speed", 8 },
                           { "humanize", 0.08f }, { "corr_amount", 1 }, { "formant", 1 }, { "input_type", 2 },
-                          { "quality", 0 }, { "gate_on", 1 }, { "gate_threshold", -42 }, { "gate_attack", 0.8f },
+                          { "quality", 1 }, { "gate_on", 1 }, { "gate_threshold", -42 }, { "gate_attack", 0.8f },
                           { "gate_hold", 40 }, { "gate_release", 60 }, { "gate_range", 50 },
                           { "eq_on", 1 }, { "eq_low_freq", 90 }, { "eq_low_gain", -1.5f },
                           { "eq_mid_freq", 3000 }, { "eq_mid_gain", 2.0f }, { "eq_mid_q", 0.9f },
@@ -42,7 +42,7 @@ namespace dooblrvocals::presets
             {
                 ValueList v;
                 add (v, { { "corr_mode", 0 }, { "retune_speed", 80 }, { "humanize", 0.45f }, { "corr_amount", 0.7f },
-                          { "formant", 1 }, { "quality", 0 }, { "gate_on", 0 }, { "eq_on", 0 }, { "comp_on", 0 },
+                          { "formant", 1 }, { "quality", 1 }, { "gate_on", 0 }, { "eq_on", 0 }, { "comp_on", 0 },
                           { "lim_mode", 2 } });
                 presets.push_back ({ "Natural", std::move (v) });
             }
@@ -50,7 +50,7 @@ namespace dooblrvocals::presets
             {
                 ValueList v;
                 add (v, { { "corr_mode", 1 }, { "retune_speed", 4 }, { "humanize", 0.05f }, { "corr_amount", 1 },
-                          { "formant", 1 }, { "quality", 0 }, { "gate_on", 1 }, { "gate_threshold", -48 },
+                          { "formant", 1 }, { "quality", 1 }, { "gate_on", 1 }, { "gate_threshold", -48 },
                           { "comp_on", 1 }, { "comp_threshold", -16 }, { "comp_ratio", 2.5f },
                           { "lim_mode", 2 } });
                 presets.push_back ({ "Chromatic Track", std::move (v) });
@@ -76,7 +76,7 @@ namespace dooblrvocals::presets
             {
                 ValueList v;
                 add (v, { { "corr_mode", 0 }, { "retune_speed", 25 }, { "humanize", 0.2f }, { "corr_amount", 1 },
-                          { "formant", 1 }, { "quality", 1 }, { "gate_on", 0 },
+                          { "formant", 1 }, { "quality", 2 }, { "gate_on", 0 }, // High (was HQ = 1 before 0.3.0)
                           { "eq_on", 1 }, { "eq_high_freq", 12000 }, { "eq_high_gain", 1 },
                           { "comp_on", 1 }, { "comp_threshold", -20 }, { "comp_ratio", 2.5f },
                           { "comp_attack", 15 }, { "comp_release", 140 }, { "lim_mode", 2 },
@@ -122,7 +122,7 @@ namespace dooblrvocals::presets
             {
                 ValueList v;
                 add (v, { { "corr_mode", 0 }, { "retune_speed", 30 }, { "humanize", 0.3f }, { "corr_amount", 0.9f },
-                          { "formant", 1 }, { "quality", 0 },
+                          { "formant", 1 }, { "quality", 1 },
                           { "eq_on", 1 }, { "eq_low_freq", 100 }, { "eq_low_gain", -2 }, { "eq_high_freq", 11000 }, { "eq_high_gain", 1.5f },
                           { "comp_on", 1 }, { "comp_threshold", -20 }, { "comp_ratio", 2.5f }, { "lim_mode", 2 },
                           { "dly_on", 1 }, { "dly_mode", 1 }, { "dly_sync", 1 }, { "dly_note", 13 }, { "dly_feedback", 0.45f },
@@ -144,7 +144,7 @@ namespace dooblrvocals::presets
                 ValueList v;
                 add (v, { { "corr_mode", 0 }, { "corr_key", 0 }, { "corr_scale", 0 },
                           { "retune_speed", 5 }, { "humanize", 0.05f }, { "corr_amount", 1 }, { "formant", 1 },
-                          { "quality", 0 },
+                          { "quality", 1 },
                           { "harm_on", 1 }, { "harm_level", -4 }, { "harm_formant", 0 }, { "harm_lofi", 0.55f },
                           { "harm1_on", 1 }, { "harm1_mode", 0 }, { "harm1_degree", 2 }, { "harm1_level", -4 },
                           { "harm1_pan", -0.75f }, { "harm1_detune", 6 }, { "harm1_delay", 4 },
