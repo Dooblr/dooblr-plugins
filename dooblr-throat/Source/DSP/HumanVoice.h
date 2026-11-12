@@ -1,12 +1,12 @@
 #pragma once
 // Real-time human voice: lungs → glottis → articulated airway.
-// Ported from CHIMERA (MIT, Copyright 2026 Jameson Hodge). Gesture-score scheduling is
-// omitted in this instrument: MIDI and the vowel pad drive the articulators and source directly.
+// Ported from CHIMERA (MIT, Copyright 2026 Jameson Hodge).
 
 #include "Articulation.h"
 #include "Decimator.h"
 #include "Glottis.h"
 #include "HumanAirway.h"
+#include "Phonetics/Score.h"
 
 namespace dooblrthroat::dsp
 {
@@ -42,12 +42,32 @@ namespace dooblrthroat::dsp
         int64_t ctrl_every = 0, ctrl_counter = 0, lim_hold = 0, lim_hold_n = 0;
         double base_abduction = 0.0, base_closure = 0.0;
 
+        // Phrase / gesture score. The gesture pointer is into a PublishedPhrase
+        // owned off the audio thread; the voice never allocates or frees it.
+        const phonetics::Gesture* scoreGestures = nullptr;
+        size_t scoreCount = 0;
+        double scoreT = 0, scoreRate = 1, scoreF0Scale = 1, scoreF0Override = 0;
+        float scoreNasal = -1.0f;
+        bool scoreActive = false;
+
         HumanVoice (double fs_out, HumanBody body, size_t oversample);
         static HumanVoice with_defaults (double fs_out) { return HumanVoice (fs_out, BODY_MALE, oversample_for (fs_out)); }
 
         void set_articulation (const ArticPatch& values, bool tip_free);
         void set_source (const VoiceSource& s) { source = s; apply_source(); }
         void set_gate (double level) { gate_target = clamp (level, 0.0, 1.5); }
+        void clearScore() noexcept
+        {
+            scoreGestures = nullptr;
+            scoreCount = 0;
+            scoreT = 0;
+            scoreRate = 1;
+            scoreF0Scale = 1;
+            scoreF0Override = 0;
+            scoreNasal = -1.0f;
+            scoreActive = false;
+            for (auto& sp : artic.speed) sp = 1.0;
+        }
         void reset();
         void render (float* out, size_t n);
 
@@ -55,5 +75,6 @@ namespace dooblrthroat::dsp
         void apply_source();
         void control();
         bool enforce_contacts();
+        void applyScore (double dt);
     };
 }

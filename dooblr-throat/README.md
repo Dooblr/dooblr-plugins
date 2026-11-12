@@ -26,18 +26,26 @@ VST3 instrument host). It does not belong on an audio track.
 - **Source** — Breath, Tension, Bright, Fry, Rough, Pressure (cm H2O), Voiced.
 - **Pitch** — Vibrato depth and rate, Glide, pitch-bend range.
 - **Envelope** — ADSR on the glottal gate. Output level is in the header.
+- **Phrase** — type English text and play MIDI. **Sing** advances one syllable
+  per note (pitch from the key, vowel held, coda on release or the next note;
+  wraps; **Reset** restarts). **Speak** says the whole line on one note-on, at
+  **Rate**, around the note's pitch, and stops on release or at the end. The
+  readout shows the current phoneme / syllable. Empty text keeps the vowel-pad
+  behaviour of 0.1.x.
 
 One FDTD voice; legato re-pitches the same airway with glide.
+
 
 ## Factory presets
 
 Init, Close Front, Open Back, Soft Breath, Spoken, Choir Lead, Low Voice,
-Whisper.
+Whisper, Spoken Line, Sung Phrase.
 
-## Limits of v0.1
+## Limits of v0.2
 
-- Human voice only: no text-to-speech, no singing score, no beatbox, no
-  creature models.
+- English text only. Intelligibility is that of a tract model, not a commercial
+  vocoder; some words will be clearer than others.
+- No beatbox and no creature models.
 - Body (Female / Child) rebuilds the airway off the audio thread; a brief
   delay is expected after those knobs move.
 - The C++ port follows the original equations but is not claimed bit-identical

@@ -118,8 +118,8 @@ int main (int argc, char* argv[])
         std::printf ("%s%s", p > 0 ? ", " : "", instance->getProgramName (p).toRawUTF8());
     std::printf (")\n");
 
-    if (instance->getNumPrograms() < 8)
-        return fail ("expected the Init + 7 factory programs");
+    if (instance->getNumPrograms() < 10)
+        return fail ("expected the Init + 9 factory programs");
 
     juce::AudioBuffer<float> buffer (2, blockSize);
     bool finite = true;

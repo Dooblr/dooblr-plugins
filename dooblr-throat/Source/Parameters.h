@@ -7,7 +7,7 @@ namespace dooblrthroat::params
     inline constexpr int stateVersion = 1;
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
-        Every ID below was added in 0.1.0. */
+        Every ID through "output" was added in 0.1.0. "mode" and "rate" were added in 0.2.0. */
     namespace id
     {
         inline constexpr const char* vowel      = "vowel";
@@ -32,6 +32,8 @@ namespace dooblrthroat::params
         inline constexpr const char* sustain      = "sustain";
         inline constexpr const char* release      = "release";
         inline constexpr const char* output       = "output";
+        inline constexpr const char* mode         = "mode";
+        inline constexpr const char* rate         = "rate";
     }
 
     /** Choice 0 is the vowel pad; 1..N_VOWELS are the named vowels. */
@@ -45,6 +47,15 @@ namespace dooblrthroat::params
         };
         return names;
     }
+
+    inline const juce::StringArray& modeNames()
+    {
+        static const juce::StringArray names { "Sing", "Speak" };
+        return names;
+    }
+
+    /** ValueTree property (not a parameter) that stores the phrase text. */
+    inline constexpr const char* phraseTextProperty = "phraseText";
 
     juce::AudioProcessorValueTreeState::ParameterLayout createLayout();
 }

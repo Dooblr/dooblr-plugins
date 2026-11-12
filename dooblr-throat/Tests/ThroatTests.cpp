@@ -9,6 +9,8 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Parameters.h"
+#include "DSP/Phonetics/Phrase.h"
+#include <juce_audio_formats/juce_audio_formats.h>
 #include "Presets.h"
 #include "UI/ControlPanel.h"
 #include "UI/Theme.h"
@@ -205,15 +207,16 @@ namespace
         check (p->getName() == "dooblr-throat", "product name");
         check (p->acceptsMidi() && ! p->producesMidi() && p->isMidiEffect() == false, "MIDI instrument");
         check (p->hasEditor(), "has editor");
-        check (p->getNumPrograms() == 8, "Init + 7 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
+        check (p->getNumPrograms() == 10, "Init + 9 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
         check (p->getProgramName (0) == "Init", "first program is Init");
         check (juce::String (JucePlugin_VersionString) == DOOBLRTHROAT_PROJECT_VERSION, "JUCE version string matches CMake");
-        check (p->getParameters().size() == 22, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
+        check (p->getParameters().size() == 24, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
 
         for (auto* expected : { id::vowel, id::height, id::back, id::nasal, id::female, id::child,
                                 id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
                                 id::vibratoDepth, id::vibratoRate, id::glide, id::bendRange,
-                                id::attack, id::decay, id::sustain, id::release, id::output })
+                                id::attack, id::decay, id::sustain, id::release, id::output,
+                                id::mode, id::rate })
             check (p->getState().getParameter (expected) != nullptr, std::string ("parameter id ") + expected);
     }
 
@@ -303,7 +306,7 @@ namespace
             return;
 
         check (editor->getWidth() >= 940 && editor->getHeight() >= 600, "minimum editor size");
-        check (editor->getPanels().size() == 5, "five control panels");
+        check (editor->getPanels().size() == 6, "six control panels");
         check (editor->getVowelPad().isVisible(), "vowel pad is visible");
         if (auto* status = dynamic_cast<juce::Label*> (editor->findChildWithID ("status")))
         {
@@ -591,6 +594,239 @@ namespace
                "engine body-swap stress stayed finite (" + std::to_string (faults.load())
                + " non-finite, " + std::to_string (blocks.load()) + " blocks)");
     }
+
+    // ----- 0.2.0 phrase / G2P tests (appended) -----
+
+    std::string joinIpas (const std::vector<dsp::phonetics::Segment>& segs)
+    {
+        std::string o;
+        for (const auto& s : segs) { if (! o.empty()) o += " "; o += s.ipa; }
+        return o;
+    }
+
+    dsp::phonetics::EnglishG2P& testG2P()
+    {
+        static dsp::phonetics::EnglishG2P g;
+        static bool once = false;
+        if (! once)
+        {
+            loadBundledCmudict (g);
+            dsp::phonetics::initInventory();
+            once = true;
+        }
+        return g;
+    }
+
+    void testGraphemeToPhoneme()
+    {
+        auto& g = testG2P();
+        check (g.isLoaded(), "CMUdict loaded");
+        const auto hello = joinIpas (g.word ("hello", false));
+        check (hello.find ("h") != std::string::npos && hello.find ("oʊ") != std::string::npos,
+               "hello contains h and oʊ (" + hello + ")");
+        const auto world = joinIpas (g.word ("world", false));
+        check (world.find ("w") != std::string::npos && world.find ("ɝ") != std::string::npos,
+               "world contains w and ɝ (" + world + ")");
+        const auto the = joinIpas (g.word ("the", true));
+        check (the.find ("ə") != std::string::npos || the.find ("ð") != std::string::npos,
+               "the reduces or keeps a dental (" + the + ")");
+        check (! g.toPhrases ("water").empty(), "water phrases");
+        const auto water = joinIpas (g.toPhrases ("water")[0].segments);
+        check (water.find ("ɾ") != std::string::npos, "water flaps t (" + water + ")");
+        const auto cat = joinIpas (g.word ("cat", false));
+        check (cat.find ("k") != std::string::npos && cat.find ("æ") != std::string::npos && cat.find ("t") != std::string::npos,
+               "cat is k ae t (" + cat + ")");
+        const auto madeup = joinIpas (dsp::phonetics::letterToSound ("blorpt"));
+        check (! madeup.empty(), "letter-to-sound returns phones for blorpt (" + madeup + ")");
+        const auto twelve = g.toPhrases ("12");
+        check (! twelve.empty() && ! twelve[0].segments.empty(), "number 12 expands to speech");
+    }
+
+    void testSingSyllableAdvance()
+    {
+        Processor p;
+        p.setPhraseText ("hello world");
+        p.setNonRealtime (true);
+        p.prepareToPlay (48000.0, 512);
+        auto* mode = p.getState().getParameter (id::mode);
+        check (mode != nullptr, "mode parameter exists");
+        mode->setValueNotifyingHost (mode->convertTo0to1 (0.0f));
+        p.applyBodyOnMessageThread();
+
+        juce::AudioBuffer<float> buf (2, 2048);
+        juce::MidiBuffer midi;
+        buf.clear();
+        midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        p.processBlock (buf, midi);
+        check (p.getEngine().syllableIndex() == 0, "first note-on is syllable 0");
+        check (p.getEngine().syllableCount() >= 2, "hello world has at least two syllables");
+
+        buf.clear(); midi.clear();
+        midi.addEvent (juce::MidiMessage::noteOff (1, 60), 0);
+        p.processBlock (buf, midi);
+
+        buf.clear(); midi.clear();
+        midi.addEvent (juce::MidiMessage::noteOn (1, 62, (juce::uint8) 100), 0);
+        p.processBlock (buf, midi);
+        check (p.getEngine().syllableIndex() == 1, "second note-on advances to syllable 1 (got "
+               + std::to_string (p.getEngine().syllableIndex()) + ")");
+        p.releaseResources();
+    }
+
+    void testSpeakRendersFinite()
+    {
+        Processor p;
+        p.setPhraseText ("hello world");
+        p.getState().getParameter (id::mode)->setValueNotifyingHost (
+            p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
+        p.getState().getParameter (id::rate)->setValueNotifyingHost (
+            p.getState().getParameter (id::rate)->convertTo0to1 (1.2f));
+        p.setNonRealtime (true);
+        p.prepareToPlay (48000.0, 512);
+        p.applyBodyOnMessageThread();
+
+        juce::AudioBuffer<float> buf (2, 512);
+        juce::MidiBuffer first;
+        first.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 100), 0);
+        double peak = 0;
+        bool finite = true, ended = false;
+        const int blocks = int (48000 * 3 / 512) + 8;
+        for (int i = 0; i < blocks; ++i)
+        {
+            buf.clear();
+            juce::MidiBuffer m;
+            if (i == 0) m = first;
+            p.processBlock (buf, m);
+            for (int n = 0; n < buf.getNumSamples(); ++n)
+            {
+                const auto x = buf.getSample (0, n);
+                if (! std::isfinite (x)) finite = false;
+                peak = std::max (peak, double (std::abs (x)));
+            }
+            if (! p.getEngine().isSounding() && i > 4) { ended = true; break; }
+        }
+        check (finite, "Speak render stays finite");
+        check (peak > 1.0e-4, "Speak render is not silent (peak " + std::to_string (peak) + ")");
+        check (ended || ! p.getEngine().phraseActive(), "Speak ends in finite time");
+        p.releaseResources();
+    }
+
+    void testPhraseStateRoundTrip()
+    {
+        Processor a;
+        a.setPhraseText ("hello world");
+        juce::MemoryBlock block;
+        a.getStateInformation (block);
+        Processor b;
+        b.setStateInformation (block.getData(), int (block.getSize()));
+        check (b.getPhraseText() == "hello world", "phrase text survives state round-trip (got '"
+               + b.getPhraseText().toStdString() + "')");
+
+        Processor fresh;
+        auto tree = fresh.getState().copyState();
+        tree.removeProperty (params::phraseTextProperty, nullptr);
+        juce::MemoryBlock empty;
+        if (auto xml = tree.createXml())
+            juce::AudioProcessor::copyXmlToBinary (*xml, empty);
+        Processor c;
+        c.setStateInformation (empty.getData(), int (empty.getSize()));
+        check (c.getPhraseText().isEmpty(), "missing phraseText loads as empty (got '"
+               + c.getPhraseText().toStdString() + "')");
+    }
+
+    void testEditTextWhileNotesPlay()
+    {
+        Processor p;
+        p.setPhraseText ("hello world");
+        p.getState().getParameter (id::mode)->setValueNotifyingHost (
+            p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
+        p.setNonRealtime (true);
+        p.prepareToPlay (48000.0, 256);
+        juce::AudioBuffer<float> buf (2, 256);
+        const char* phrases[] = { "hello world", "come and go", "a", "", "testing one two", "hello world" };
+        bool finite = true;
+        for (int i = 0; i < 200; ++i)
+        {
+            juce::MidiBuffer midi;
+            if (i % 20 == 0)
+                midi.addEvent (juce::MidiMessage::noteOn (1, 48 + (i % 24), (juce::uint8) 90), 0);
+            if (i % 20 == 12)
+                midi.addEvent (juce::MidiMessage::noteOff (1, 48 + (i % 24)), 0);
+            if (i % 15 == 7)
+                p.setPhraseText (phrases[(i / 15) % 6]);
+            buf.clear();
+            p.processBlock (buf, midi);
+            for (int n = 0; n < buf.getNumSamples(); ++n)
+                if (! std::isfinite (buf.getSample (0, n))) finite = false;
+        }
+        check (finite, "editing text while notes play stays finite");
+        p.releaseResources();
+    }
+
+    void testWriteHelloWavAndScreenshot()
+    {
+        const char* wavEnv = std::getenv ("DOOBLRTHROAT_HELLO_WAV");
+        const char* shotEnv = std::getenv ("DOOBLRTHROAT_SCREENSHOT");
+        if (wavEnv != nullptr && wavEnv[0] != 0)
+        {
+            Processor p;
+            p.setPhraseText ("hello world");
+            p.getState().getParameter (id::mode)->setValueNotifyingHost (
+                p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
+            p.setNonRealtime (true);
+            p.prepareToPlay (48000.0, 512);
+            p.applyBodyOnMessageThread();
+            const int n = 48000 * 2;
+            juce::AudioBuffer<float> all (1, n);
+            all.clear();
+            int done = 0;
+            bool on = false;
+            while (done < n)
+            {
+                juce::AudioBuffer<float> buf (2, 512);
+                buf.clear();
+                juce::MidiBuffer midi;
+                if (! on)
+                {
+                    midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), 0);
+                    on = true;
+                }
+                p.processBlock (buf, midi);
+                const int take = std::min (512, n - done);
+                all.copyFrom (0, done, buf, 0, 0, take);
+                done += take;
+            }
+            p.releaseResources();
+            juce::File f (wavEnv);
+            f.getParentDirectory().createDirectory();
+            f.deleteFile();
+            juce::WavAudioFormat wavFmt;
+            auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream());
+            check (os != nullptr, "open hello wav for write");
+            std::unique_ptr<juce::AudioFormatWriter> w (
+                wavFmt.createWriterFor (os.release(), 48000.0, 1u, 16, {}, 0));
+            check (w != nullptr, "wav writer");
+            check (w->writeFromAudioSampleBuffer (all, 0, n), "write hello wav");
+        }
+        if (shotEnv != nullptr && shotEnv[0] != 0)
+        {
+            Processor p;
+            p.setPhraseText ("hello world");
+            p.getState().getParameter (id::mode)->setValueNotifyingHost (
+                p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
+            std::unique_ptr<juce::AudioProcessorEditor> ed (p.createEditor());
+            check (ed != nullptr, "editor for screenshot");
+            ed->setSize (980, 720);
+            const auto img = ed->createComponentSnapshot (ed->getLocalBounds());
+            juce::File f (shotEnv);
+            f.getParentDirectory().createDirectory();
+            f.deleteFile();
+            juce::FileOutputStream os (f);
+            juce::PNGImageFormat png;
+            check (os.openedOk() && png.writeImageToStream (img, os), "write UI screenshot");
+        }
+    }
+
 }
 
 int main()
@@ -607,6 +843,12 @@ int main()
         { "no third-party brand names",  testNoChimeraName },
         { "editor",                      testEditor },
         { "param extremes and MIDI",     testParamExtremesAndMidi },
+        { "G2P common words",            testGraphemeToPhoneme },
+        { "Sing syllable advance",       testSingSyllableAdvance },
+        { "Speak render finite",         testSpeakRendersFinite },
+        { "phrase state round-trip",     testPhraseStateRoundTrip },
+        { "edit text while notes play",  testEditTextWhileNotesPlay },
+        { "hello wav / screenshot",      testWriteHelloWavAndScreenshot },
         { "sample rates and block sizes", testSampleRatesAndBlockSizes },
         { "stress automation and body swap", testStressAutomationAndBodySwap },
     };

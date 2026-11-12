@@ -43,6 +43,18 @@ namespace dooblrthroat::presets
             { "Whisper", {
                 { vowel, 14.0f }, { voiced, 0.0f }, { breath, 0.85f }, { pressure, 6.0f },
                 { brightness, 0.15f }, { attack, 0.06f }, { release, 0.2f } } },
+            { "Spoken Line", {
+                { vowel, 14.0f }, { mode, 1.0f }, { rate, 1.0f },
+                { breath, 0.2f }, { tension, 0.65f }, { brightness, 0.3f },
+                { roughness, 0.18f }, { vibratoDepth, 0.0f }, { glide, 0.03f },
+                { attack, 0.015f }, { decay, 0.12f }, { sustain, 0.8f }, { release, 0.08f } },
+                "hello world" },
+            { "Sung Phrase", {
+                { vowel, 14.0f }, { mode, 0.0f }, { rate, 1.0f },
+                { breath, 0.12f }, { tension, 0.5f }, { brightness, 0.28f },
+                { vibratoDepth, 0.05f }, { vibratoRate, 5.5f }, { glide, 0.06f },
+                { attack, 0.03f }, { release, 0.15f } },
+                "come and go" },
         };
         return patches;
     }
@@ -54,6 +66,8 @@ namespace dooblrthroat::presets
 
         for (const auto& [id, value] : patch.values)
             setReal (state, id, value);
+
+        state.state.setProperty (params::phraseTextProperty, patch.phraseText, nullptr);
     }
 
     juce::File userDirectory()
@@ -76,6 +90,7 @@ namespace dooblrthroat::presets
         juce::XmlElement xml ("DooblrThroatPreset");
         xml.setAttribute ("name", name);
         xml.setAttribute ("stateVersion", params::stateVersion);
+        xml.setAttribute (params::phraseTextProperty, state.state.getProperty (params::phraseTextProperty).toString());
 
         for (auto* p : state.processor.getParameters())
             if (auto* withId = dynamic_cast<juce::RangedAudioParameter*> (p))
@@ -102,6 +117,8 @@ namespace dooblrthroat::presets
             if (auto* p = state.getParameter (child->getStringAttribute ("id")))
                 p->setValueNotifyingHost (p->convertTo0to1 ((float) child->getDoubleAttribute ("value")));
 
+        state.state.setProperty (params::phraseTextProperty,
+                                 xml->getStringAttribute (params::phraseTextProperty), nullptr);
         return {};
     }
 }

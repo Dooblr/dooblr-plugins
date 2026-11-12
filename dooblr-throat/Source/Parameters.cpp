@@ -39,6 +39,11 @@ namespace dooblrthroat::params
             return juce::String (v, 1) + " cm";
         }
 
+        juce::String formatRate (float v, int)
+        {
+            return juce::String (v, 2) + " x";
+        }
+
         void addPercent (Layout& layout, const char* id, const juce::String& name, float def,
                          float lo = 0.0f, float hi = 1.0f)
         {
@@ -95,6 +100,11 @@ namespace dooblrthroat::params
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::output), "Output",
             juce::NormalisableRange<float> (-24.0f, 6.0f), -6.0f,
             Attributes().withStringFromValueFunction (formatDb).withLabel ("dB")));
+
+        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::mode), "Mode", modeNames(), 0));
+        layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::rate), "Rate",
+            juce::NormalisableRange<float> (0.25f, 2.5f, 0.0f, 0.6f), 1.0f,
+            Attributes().withStringFromValueFunction (formatRate).withLabel ("x")));
 
         return layout;
     }

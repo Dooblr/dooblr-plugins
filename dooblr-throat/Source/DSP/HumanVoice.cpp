@@ -23,7 +23,6 @@ namespace dooblrthroat::dsp
         apply_source();
     }
 
-
     void HumanVoice::reset()
     {
         artic.x = artic.target;
@@ -49,6 +48,7 @@ namespace dooblrthroat::dsp
         dec.pos = 0;
         dec.count = 0;
         std::fill (dec.buf.begin(), dec.buf.end(), 0.0);
+        clearScore();
     }
 
     void HumanVoice::set_articulation (const ArticPatch& values, bool tip_free)
@@ -80,6 +80,67 @@ namespace dooblrthroat::dsp
         g.vibrato_rate = s.vibrato_rate;
         g.drift = s.drift;
         g.effort = clamp ((abs (s.pressure) - 3.0) / 10.0, 0.0, 1.0);
+    }
+
+    void HumanVoice::applyScore (double dt)
+    {
+        using phonetics::N_CONTROL;
+        using phonetics::SourceKey;
+        using phonetics::sourceIndex;
+        if (! scoreActive || scoreGestures == nullptr || scoreCount == 0)
+        {
+            for (auto& sp : artic.speed) sp = 1.0;
+            return;
+        }
+
+        phonetics::Blended b[N_CONTROL];
+        phonetics::blendAll (scoreGestures, scoreCount, scoreT, b);
+        const auto rate = (std::isfinite (scoreRate) && scoreRate > 0.0) ? scoreRate : 1.0;
+        scoreT += dt * rate;
+
+        ArticPatch p;
+        bool tipFree = true;
+        for (size_t i = 0; i < N_ARTIC; ++i)
+        {
+            artic.speed[i] = b[i].speed > 0.0 && std::isfinite (b[i].speed) ? b[i].speed : 1.0;
+            if (b[i].weight > 0.0 && std::isfinite (b[i].value))
+            {
+                p.set (ARTIC_ALL[i], b[i].value);
+                if (ARTIC_ALL[i] == ArticKey::TtX || ARTIC_ALL[i] == ArticKey::TtY)
+                    tipFree = false;
+            }
+        }
+        if (scoreNasal > 0.0f)
+            p.set (ArticKey::Velum, scoreNasal);
+        set_articulation (p, tipFree);
+
+        const auto k2 = airway.body.scale * airway.body.scale;
+        const auto abd = b[sourceIndex (SourceKey::Abduction)];
+        const auto clo = b[sourceIndex (SourceKey::Closure)];
+        const auto br = b[sourceIndex (SourceKey::Breath)];
+        const auto f0b = b[sourceIndex (SourceKey::F0)];
+        const auto vib = b[sourceIndex (SourceKey::Vibrato)];
+
+        glottis.params.abduction = base_abduction + (abd.weight > 0.0 ? abd.value * k2 : 0.0);
+        glottis.params.closure = js_max (base_closure, clo.weight > 0.0 ? clo.value : 0.0);
+        if (vib.weight > 0.0 && std::isfinite (vib.value))
+            glottis.params.vibrato_depth = vib.value;
+
+        if (scoreF0Override > 0.0 && std::isfinite (scoreF0Override))
+            source.f0 = scoreF0Override;
+        else if (f0b.weight > 0.0 && std::isfinite (f0b.value))
+        {
+            const auto scale = (std::isfinite (scoreF0Scale) && scoreF0Scale > 0.0) ? scoreF0Scale : 1.0;
+            source.f0 = f0b.value * scale;
+        }
+
+        // Breath multiplier is applied in control() via a static-thread local? store on the object:
+        // we stash it in p_lung after the gate multiply below; set a member? Use glide unused? 
+        // Re-read control(): I'll apply breath after p_lung is computed by writing a member.
+        // Use lim_env? No. Add nothing — control() calls applyScore first then multiplies.
+        // We stash in p_lung_step temporarily? Better: score breath is read again in control.
+        (void) br;
+        (void) dt;
     }
 
     void HumanVoice::render (float* out, size_t n)
@@ -126,9 +187,31 @@ namespace dooblrthroat::dsp
     void HumanVoice::control()
     {
         const auto dt = double (ctrl_every) / fs;
+        double breathMul = 1.0;
+        if (scoreActive && scoreGestures != nullptr && scoreCount > 0)
+        {
+            applyScore (dt);
+            phonetics::Blended b[phonetics::N_CONTROL];
+            // applyScore already advanced scoreT; blend at the pre-advance time would be better.
+            // Re-blend at current (post-advance) is a half-step off and fine.
+            phonetics::blendAll (scoreGestures, scoreCount, scoreT, b);
+            const auto br = b[phonetics::sourceIndex (phonetics::SourceKey::Breath)];
+            if (br.weight > 0.0 && std::isfinite (br.value))
+                breathMul = br.value;
+        }
+        else
+        {
+            for (auto& sp : artic.speed) sp = 1.0;
+            glottis.params.abduction = base_abduction;
+            glottis.params.closure = base_closure;
+        }
+
         artic.step (dt);
-        glottis.params.abduction = base_abduction;
-        glottis.params.closure = base_closure;
+        if (! (scoreActive && scoreGestures != nullptr && scoreCount > 0))
+        {
+            glottis.params.abduction = base_abduction;
+            glottis.params.closure = base_closure;
+        }
         const auto x = artic.x;
         airway.apply (x, dt);
         if (enforce_contacts())
@@ -138,7 +221,7 @@ namespace dooblrthroat::dsp
         const auto gate_goal = gate_target;
         const auto tau = gate_goal > gate ? 0.025 : 0.07;
         gate += (gate_goal - gate) * (1.0 - exp (-dt / tau));
-        p_lung = source.pressure * CM_H2O * gate;
+        p_lung = source.pressure * CM_H2O * gate * breathMul;
         p_lung_step = (p_lung - p_lung_now) / double (ctrl_every);
         glottis.params.effort = clamp ((abs (source.pressure * gate) - 3.0) / 10.0, 0.0, 1.0);
         const auto g = js_max (0.002, is_finite (source.glide) ? source.glide : 0.06);

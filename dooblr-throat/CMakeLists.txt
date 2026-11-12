@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-throat VERSION 0.1.1 LANGUAGES C CXX)
+project(dooblr-throat VERSION 0.2.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -45,7 +45,7 @@ juce_add_plugin(DooblrThroat
     NEEDS_MIDI_INPUT            TRUE
     NEEDS_MIDI_OUTPUT           FALSE
     IS_MIDI_EFFECT              FALSE
-    EDITOR_WANTS_KEYBOARD_FOCUS FALSE
+    EDITOR_WANTS_KEYBOARD_FOCUS TRUE
     COPY_PLUGIN_AFTER_BUILD     FALSE
     VST3_CATEGORIES             Instrument Synth
     AU_MAIN_TYPE                kAudioUnitType_MusicDevice)
@@ -62,6 +62,13 @@ target_sources(DooblrThroat
         Source/DSP/HumanVoice.cpp
         Source/DSP/ThroatEngine.cpp
         Source/DSP/Vowels.cpp
+        Source/DSP/Phonetics/Inventory.cpp
+        Source/DSP/Phonetics/English.cpp
+        Source/DSP/Phonetics/Durations.cpp
+        Source/DSP/Phonetics/Syllables.cpp
+        Source/DSP/Phonetics/Planner.cpp
+        Source/DSP/Phonetics/Phrase.cpp
+        Source/DSP/Phonetics/Cmudict.cpp
         Source/Parameters.cpp
         Source/Presets.cpp
         Source/UndoHistory.cpp
@@ -72,6 +79,10 @@ target_sources(DooblrThroat
         Source/UI/OutputMeter.cpp
         Source/UI/VowelPad.cpp)
 
+juce_add_binary_data(DooblrThroatData
+    SOURCES
+        Resources/cmudict.txt.gz)
+
 target_compile_definitions(DooblrThroat
     PUBLIC
         JUCE_WEB_BROWSER=0
@@ -80,6 +91,7 @@ target_compile_definitions(DooblrThroat
 
 target_link_libraries(DooblrThroat
     PRIVATE
+        DooblrThroatData
         juce::juce_audio_processors
         juce::juce_audio_formats
         juce::juce_dsp

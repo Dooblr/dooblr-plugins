@@ -5,6 +5,7 @@
 #include "DSP/OutputPeakTap.h"
 #include "DSP/ThroatEngine.h"
 #include "UndoHistory.h"
+#include "DSP/Phonetics/Phrase.h"
 
 namespace dooblrthroat
 {
@@ -53,10 +54,15 @@ namespace dooblrthroat
         juce::String saveUserPreset (const juce::File& file);
         juce::String loadUserPreset (const juce::File& file);
 
+        juce::String getPhraseText() const;
+        void setPhraseText (const juce::String& text, bool force = false);
+        void requestPhraseRestart();
+
         juce::ChangeBroadcaster presetChanged;
 
     private:
         void handleAsyncUpdate() override;
+        void publishPhraseFromState();
         struct RawParameters;
 
         juce::AudioProcessorValueTreeState state;
@@ -66,6 +72,10 @@ namespace dooblrthroat
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;
         int bendRangeCached = 2;
+        dsp::phonetics::EnglishG2P g2p;
+        juce::String publishedText;
+        dsp::BodyMix publishedBody {};
+        bool bodyPublishPending = false;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrThroatProcessor)
     };

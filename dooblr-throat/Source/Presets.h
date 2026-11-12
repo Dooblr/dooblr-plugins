@@ -11,6 +11,7 @@ namespace dooblrthroat::presets
     {
         juce::String name;
         std::vector<std::pair<juce::String, float>> values;
+        juce::String phraseText;
     };
 
     const std::vector<Factory>& factory();

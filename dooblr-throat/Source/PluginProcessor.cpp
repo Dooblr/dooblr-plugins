@@ -10,7 +10,8 @@ namespace dooblrthroat
     X(vowel) X(height) X(back) X(nasal) X(female) X(child) \
     X(breath) X(tension) X(brightness) X(fry) X(roughness) X(pressure) X(voiced) \
     X(vibratoDepth) X(vibratoRate) X(glide) X(bendRange) \
-    X(attack) X(decay) X(sustain) X(release) X(output)
+    X(attack) X(decay) X(sustain) X(release) X(output) \
+    X(mode) X(rate)
 
     struct DooblrThroatProcessor::RawParameters
     {
@@ -39,6 +40,10 @@ namespace dooblrthroat
     {
         state.state.setProperty ("stateVersion", params::stateVersion, nullptr);
         state.state.setProperty ("presetName", presets::factory().front().name, nullptr);
+        state.state.setProperty (params::phraseTextProperty, "", nullptr);
+        loadBundledCmudict (g2p);
+        dsp::phonetics::initInventory();
+        publishPhraseFromState();
     }
 
     bool DooblrThroatProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
@@ -90,12 +95,49 @@ namespace dooblrthroat
         s.release = f (r.release);
         s.outputDb = f (r.output);
         s.tipFree = true;
+        s.speechMode = i (r.mode);
+        s.speechRate = f (r.rate);
         return s;
+    }
+
+    void DooblrThroatProcessor::publishPhraseFromState()
+    {
+        const auto text = state.state.getProperty (params::phraseTextProperty).toString();
+        const auto settings = readSettings();
+        const bool bodyChanged = std::abs (publishedBody.female - settings.body.female) > 1.0e-6f
+                              || std::abs (publishedBody.child - settings.body.child) > 1.0e-6f;
+        if (text == publishedText && ! bodyChanged)
+            return;
+        auto plan = dsp::phonetics::buildPhrase (g2p, text.toStdString(), settings.body);
+        engine.publishPhrase (std::move (plan));
+        publishedText = text;
+        publishedBody = settings.body;
+    }
+
+    juce::String DooblrThroatProcessor::getPhraseText() const
+    {
+        return state.state.getProperty (params::phraseTextProperty).toString();
+    }
+
+    void DooblrThroatProcessor::setPhraseText (const juce::String& text, bool force)
+    {
+        state.state.setProperty (params::phraseTextProperty, text, nullptr);
+        if (force)
+            publishedText.clear();
+        publishPhraseFromState();
+        presetChanged.sendChangeMessage();
+    }
+
+    void DooblrThroatProcessor::requestPhraseRestart()
+    {
+        engine.requestRestart();
     }
 
     void DooblrThroatProcessor::applyBodyOnMessageThread()
     {
         engine.rebuildVoiceOffAudioThread (readSettings());
+        publishedText.clear();
+        publishPhraseFromState();
     }
 
     void DooblrThroatProcessor::handleAsyncUpdate()

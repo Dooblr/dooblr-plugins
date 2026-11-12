@@ -25,6 +25,7 @@ namespace dooblrthroat
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
         constexpr int headerHeight = 60, margin = 12, panelGap = 6;
+        constexpr int phraseStripH = 72;
         constexpr int meterWidth = 34;
     }
 
@@ -45,8 +46,10 @@ namespace dooblrthroat
         styleLabel (statusLabel, {}, 12.0f, Palette::textMuted, juce::Justification::centredLeft);
         statusLabel.setComponentID ("status");
         styleLabel (vowelCaption, "Vowel", 11.0f, Palette::textMuted, juce::Justification::centredLeft, true);
+        styleLabel (phraseCaption, "Phrase", 11.0f, Palette::textMuted, juce::Justification::centredLeft, true);
+        styleLabel (phraseReadout, {}, 11.0f, Palette::textMuted, juce::Justification::centredRight);
 
-        for (auto* label : { &titleLabel, &subtitleLabel, &outputCaption, &statusLabel, &vowelCaption })
+        for (auto* label : { &titleLabel, &subtitleLabel, &outputCaption, &statusLabel, &vowelCaption, &phraseCaption, &phraseReadout })
             addAndMakeVisible (label);
 
         undoButton.setComponentID ("undo");
@@ -77,6 +80,26 @@ namespace dooblrthroat
         vowelPad.setComponentID ("vowelPad");
         addAndMakeVisible (vowelPad);
 
+        phraseEditor.setComponentID ("phraseText");
+        phraseEditor.setMultiLine (false);
+        phraseEditor.setReturnKeyStartsNewLine (false);
+        phraseEditor.setEscapeAndReturnKeysConsumed (true);
+        phraseEditor.setJustification (juce::Justification::centredLeft);
+        phraseEditor.setTextToShowWhenEmpty ("type a phrase, then play a MIDI note", Palette::textMuted);
+        phraseEditor.setColour (juce::TextEditor::backgroundColourId, Palette::panel);
+        phraseEditor.setColour (juce::TextEditor::outlineColourId, Palette::divider);
+        phraseEditor.setColour (juce::TextEditor::focusedOutlineColourId, Palette::accent);
+        phraseEditor.setColour (juce::TextEditor::textColourId, Palette::textPrimary);
+        phraseEditor.setFont (juce::Font (juce::FontOptions (14.0f)));
+        phraseEditor.onReturnKey = [this] { commitPhraseText(); };
+        phraseEditor.onFocusLost = [this] { commitPhraseText(); };
+        addAndMakeVisible (phraseEditor);
+
+        restartButton.setComponentID ("phraseReset");
+        restartButton.setTooltip ("Restart the phrase from the first syllable");
+        restartButton.onClick = [this] { synth.requestPhraseRestart(); updatePhraseReadout(); };
+        addAndMakeVisible (restartButton);
+
         for (juce::Component* c : { (juce::Component*) &undoButton, (juce::Component*) &redoButton, (juce::Component*) &presetBox,
                                     (juce::Component*) &saveButton, (juce::Component*) &loadButton,
                                     (juce::Component*) &outputSlider, (juce::Component*) &outputMeter })
@@ -88,10 +111,12 @@ namespace dooblrthroat
         refreshPresetBox();
         updateUndoButtons();
         updateStatus();
+        refreshPhraseEditor();
+        updatePhraseReadout();
 
         setResizable (true, true);
-        setResizeLimits (940, 600, 2400, 1400);
-        setSize (980, 640);
+        setResizeLimits (940, 660, 2400, 1600);
+        setSize (980, 720);
         startTimerHz (15);
     }
 
@@ -137,6 +162,9 @@ namespace dooblrthroat
             { id::decay, "Decay" },
             { id::sustain, "Sustain" },
             { id::release, "Release" } });
+        addPanel ("Phrase", Palette::accent, {
+            { id::mode, "Mode", Kind::combo, 96 },
+            { id::rate, "Rate" } });
     }
 
     void DooblrThroatEditor::setStatus (const juce::String& text)
@@ -270,12 +298,15 @@ namespace dooblrthroat
 
         if (synth.getPresetName() != shownPresetName && ! presetBox.isPopupActive())
             refreshPresetBox();
+            updatePhraseReadout();
     }
 
     void DooblrThroatEditor::changeListenerCallback (juce::ChangeBroadcaster*)
     {
         if (! presetBox.isPopupActive())
             refreshPresetBox();
+            refreshPhraseEditor();
+        updatePhraseReadout();
     }
 
     void DooblrThroatEditor::updateUndoButtons()
@@ -369,11 +400,30 @@ namespace dooblrthroat
         auto* source = panels[2].get();
         auto* pitch = panels[3].get();
         auto* env = panels[4].get();
+        auto* phrase = panels.size() > 5 ? panels[5].get() : nullptr;
 
         const int statusH = 22;
         auto status = area.removeFromBottom (statusH);
         statusLabel.setBounds (status.reduced (4, 0));
         area.removeFromBottom (panelGap);
+
+        {
+            auto strip = area.removeFromTop (phraseStripH);
+            phraseCaption.setBounds (strip.removeFromTop (16));
+            if (phrase != nullptr)
+            {
+                const int phraseW = juce::jmax (200, phrase->getPreferredHeight (220) > 0 ? 240 : 240);
+                auto controls = strip.removeFromRight (phraseW);
+                phrase->setBounds (controls);
+                strip.removeFromRight (panelGap);
+            }
+            restartButton.setBounds (strip.removeFromRight (56).withSizeKeepingCentre (56, 24));
+            strip.removeFromRight (6);
+            phraseReadout.setBounds (strip.removeFromRight (140));
+            strip.removeFromRight (6);
+            phraseEditor.setBounds (strip.reduced (0, 8));
+        }
+        area.removeFromTop (panelGap);
 
         const auto width = area.getWidth();
         const int padSize = juce::jlimit (ui::VowelPad::minSize, 240, juce::jmin (area.getHeight() / 2, width / 3));
@@ -403,5 +453,32 @@ namespace dooblrthroat
         pitch->setBounds (mid.removeFromLeft (midW));
         mid.removeFromLeft (panelGap);
         env->setBounds (mid);
+    }
+
+    void DooblrThroatEditor::commitPhraseText()
+    {
+        const auto text = phraseEditor.getText();
+        if (text == synth.getPhraseText())
+            return;
+        synth.setPhraseText (text);
+    }
+
+    void DooblrThroatEditor::refreshPhraseEditor()
+    {
+        const auto text = synth.getPhraseText();
+        if (phraseEditor.getText() != text && ! phraseEditor.hasKeyboardFocus (true))
+            phraseEditor.setText (text, false);
+    }
+
+    void DooblrThroatEditor::updatePhraseReadout()
+    {
+        char buf[64] {};
+        synth.getEngine().copyReadout (buf, sizeof (buf));
+        juce::String text (buf);
+        const int n = synth.getEngine().syllableCount();
+        if (text.isEmpty() && n > 0 && synth.getPhraseText().isNotEmpty())
+            text = juce::String (synth.getEngine().syllableIndex() + 1) + "/" + juce::String (n);
+        if (phraseReadout.getText() != text)
+            phraseReadout.setText (text, juce::dontSendNotification);
     }
 }

@@ -2,6 +2,7 @@
 // Monophonic / legato instrument wrapper around HumanVoice.
 
 #include "HumanVoice.h"
+#include "Phonetics/Phrase.h"
 #include "Vowels.h"
 #include <atomic>
 #include <cstdint>
@@ -24,6 +25,8 @@ namespace dooblrthroat::dsp
         float attack = 0.03f, decay = 0.08f, sustain = 0.85f, release = 0.12f;
         float outputDb = -6.0f;
         bool voiced = true, tipFree = true;
+        int speechMode = 0;     // 0 Sing, 1 Speak
+        float speechRate = 1.0f;
     };
 
     class ThroatEngine
@@ -36,9 +39,6 @@ namespace dooblrthroat::dsp
         void setSettings (const ThroatSettings& s);
         const ThroatSettings& settings() const { return settings_; }
 
-        /** Build or replace the airway. Message thread / tests only.
-            The previous voice is published with an atomic pointer swap and is freed
-            only after the audio callback is no longer using it. */
         /** Build or replace the airway from a settings snapshot. Message thread / tests only.
             Does not write settings_ (that stays audio-thread-only). The previous voice
             is freed only after the audio callback is no longer using it. */
@@ -47,6 +47,22 @@ namespace dooblrthroat::dsp
         float appliedFemale() const noexcept { return appliedFemale_.load (std::memory_order_acquire); }
         float appliedChild() const noexcept { return appliedChild_.load (std::memory_order_acquire); }
 
+        /** Publish a parsed phrase (or empty to restore vowel-pad behaviour).
+            Message thread / tests only. Freed only after the audio callback is done. */
+        void publishPhrase (std::unique_ptr<phonetics::PublishedPhrase> next);
+
+        /** Reset syllable index / stop a spoken phrase. Safe on any thread. */
+        void requestRestart() noexcept { restartFlag_.store (1u, std::memory_order_release); }
+
+        const phonetics::PublishedPhrase* livePhrase() const noexcept
+        {
+            return livePhrase_.load (std::memory_order_acquire);
+        }
+
+        int syllableIndex() const noexcept { return sylIndex_.load (std::memory_order_acquire); }
+        int syllableCount() const noexcept { return sylCount_.load (std::memory_order_acquire); }
+        void copyReadout (char* buf, size_t cap) const noexcept;
+
         void noteOn (int midiNote, float velocity);
         void noteOff (int midiNote);
         void allNotesOff();
@@ -54,22 +70,31 @@ namespace dooblrthroat::dsp
 
         void process (float* left, float* right, int n);
 
-        /** Wrap a processBlock (or a test audio loop) so a concurrent rebuild cannot
-            free the live voice until the callback returns. */
         void beginAudioCallback() noexcept;
         void endAudioCallback() noexcept;
 
         float lastPeak() const { return lastPeak_; }
-        bool isSounding() const { return gate_ > 1e-4f || ! held_.empty(); }
+        bool isSounding() const { return gate_ > 1e-4f || ! held_.empty() || talk_ != Talk::Off; }
         const HumanVoice* voice() const { return live_.load (std::memory_order_acquire); }
+        bool phraseActive() const noexcept { return talk_ != Talk::Off; }
 
     private:
+        enum class Talk { Off, Speak, Hold, Coda, CodaThenNext };
+
         void applySource (HumanVoice& voice, const ThroatSettings& s, bool useLiveNote = true);
         void applyVowel (HumanVoice& voice, const ThroatSettings& s);
         void publishVoice (std::unique_ptr<HumanVoice> next);
         static void sanitizeSettings (ThroatSettings& s);
         HumanVoice* live() const noexcept { return live_.load (std::memory_order_acquire); }
         void applyToLive();
+        void handleRestart();
+        void startSpeak (HumanVoice& v, const phonetics::PublishedPhrase& ph, int midi);
+        void startHold (HumanVoice& v, const phonetics::PublishedPhrase& ph, int syl, int midi);
+        void startCoda (HumanVoice& v, const phonetics::PublishedPhrase& ph, int syl, int midi);
+        void clearTalk (HumanVoice* v);
+        void updateReadout (const phonetics::PublishedPhrase* ph);
+        void tickPhrase (HumanVoice& v, const phonetics::PublishedPhrase* ph);
+        double currentHz() const;
 
         double sampleRate_ = 48000.0;
         ThroatSettings settings_;
@@ -77,7 +102,10 @@ namespace dooblrthroat::dsp
         std::atomic<float> appliedChild_ { 0.0f };
         std::unique_ptr<HumanVoice> owned_;
         std::atomic<HumanVoice*> live_ { nullptr };
+        std::unique_ptr<phonetics::PublishedPhrase> ownedPhrase_;
+        std::atomic<const phonetics::PublishedPhrase*> livePhrase_ { nullptr };
         std::atomic<uint32_t> audioBusy_ { 0 };
+        std::atomic<uint32_t> restartFlag_ { 0 };
         std::mutex swapMutex_;
         std::vector<int> held_;
         int currentNote_ = -1;
@@ -85,6 +113,13 @@ namespace dooblrthroat::dsp
         float gate_ = 0.0f, env_ = 0.0f, lastPeak_ = 0.0f;
         enum class Stage { idle, attack, decay, sustain, release } stage_ = Stage::idle;
         std::vector<float> tmp_;
+
+        Talk talk_ = Talk::Off;
+        int syl_ = -1, nextSyl_ = 0, codaSyl_ = 0;
+        std::atomic<int> sylIndex_ { 0 };
+        std::atomic<int> sylCount_ { 0 };
+        std::atomic<uint32_t> readoutSeq_ { 0 };
+        char readout_[64] {};
     };
 
     struct AudioCallbackScope
