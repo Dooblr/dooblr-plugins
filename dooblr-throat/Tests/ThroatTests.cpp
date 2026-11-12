@@ -214,7 +214,7 @@ namespace
         check (p->getNumPrograms() == 10, "Init + 9 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
         check (p->getProgramName (0) == "Init", "first program is Init");
         check (juce::String (JucePlugin_VersionString) == DOOBLRTHROAT_PROJECT_VERSION, "JUCE version string matches CMake");
-        check (p->getParameters().size() == 26, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
+        check (p->getParameters().size() == 27, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
 
         for (auto* expected : { id::vowel, id::height, id::back, id::nasal, id::female, id::child,
                                 id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
@@ -874,9 +874,19 @@ namespace
         return e;
     }
 
-    juce::AudioBuffer<float> renderPhraseWav (const juce::String& text, double sr, double seconds)
+    void setEngineChoice (Processor& p, int index)
+    {
+        auto* e = p.getState().getParameter (id::engine);
+        if (e != nullptr)
+            e->setValueNotifyingHost (e->convertTo0to1 (float (index)));
+    }
+
+    juce::AudioBuffer<float> renderPhraseWav (const juce::String& text, double sr, double seconds,
+                                              int engine = -1)
     {
         Processor p;
+        if (engine >= 0)
+            setEngineChoice (p, engine);
         p.setPhraseText (text);
         p.getState().getParameter (id::mode)->setValueNotifyingHost (
             p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
@@ -940,7 +950,7 @@ namespace
                "planned funk phones include f ʌ ŋ k (" + seq + ")");
 
         const double sr = 48000.0;
-        auto buf = renderPhraseWav ("funk", sr, 1.5);
+        auto buf = renderPhraseWav ("funk", sr, 1.5, 1); // Tract: these checks are of the waveguide
         const auto* fSeg = findSeg (phrase->speak.segments, "f");
         const auto* ngSeg = findSeg (phrase->speak.segments, "ŋ");
         const auto* kSeg = findSeg (phrase->speak.segments, "k");
@@ -1279,6 +1289,125 @@ namespace
         }
     }
 
+
+    void writeBufWav (const juce::File& f, const juce::AudioBuffer<float>& all, double sr)
+    {
+        f.getParentDirectory().createDirectory();
+        f.deleteFile();
+        juce::WavAudioFormat wavFmt;
+        auto os = std::unique_ptr<juce::FileOutputStream> (f.createOutputStream());
+        check (os != nullptr, "open wav " + f.getFileName().toStdString());
+        std::unique_ptr<juce::AudioFormatWriter> w (
+            wavFmt.createWriterFor (os.release(), sr, 1u, 16, {}, 0));
+        check (w != nullptr, "wav writer " + f.getFileName().toStdString());
+        check (w->writeFromAudioSampleBuffer (all, 0, all.getNumSamples()),
+               "write wav " + f.getFileName().toStdString());
+    }
+
+    juce::AudioBuffer<float> renderHeldVowel (double sr, double seconds)
+    {
+        Processor p;
+        // Sing mode, no phrase, /a/ (choice 0 is the pad, 6 is "a" / patte), vibrato off.
+        p.getState().getParameter (id::mode)->setValueNotifyingHost (
+            p.getState().getParameter (id::mode)->convertTo0to1 (0.0f));
+        p.getState().getParameter (id::vowel)->setValueNotifyingHost (
+            p.getState().getParameter (id::vowel)->convertTo0to1 (6.0f));
+        p.getState().getParameter (id::vibratoDepth)->setValueNotifyingHost (
+            p.getState().getParameter (id::vibratoDepth)->convertTo0to1 (0.0f));
+        p.setNonRealtime (true);
+        p.prepareToPlay (sr, 512);
+        p.applyBodyOnMessageThread();
+        const int n = int (sr * seconds);
+        juce::AudioBuffer<float> all (1, n);
+        all.clear();
+        int done = 0;
+        bool on = false;
+        while (done < n)
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            buf.clear();
+            juce::MidiBuffer midi;
+            if (! on)
+            {
+                midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), 0);
+                on = true;
+            }
+            p.processBlock (buf, midi);
+            const int take = std::min (512, n - done);
+            all.copyFrom (0, done, buf, 0, 0, take);
+            done += take;
+        }
+        p.releaseResources();
+        return all;
+    }
+
+    void testWriteAbAndHeldWavs()
+    {
+        if (std::getenv ("DOOBLRTHROAT_KLATT_DEBUG"))
+        {
+            dsp::KlattSynth synth;
+            synth.setFs (48000.0);
+            synth.reset();
+            const dsp::BodyMix body {};
+            auto fr = dsp::klattVowelFrame ("ɑ", body);
+            std::cout << "klattVowel ɑ av=" << fr.av << " ah=" << fr.ah << " af=" << fr.af
+                      << " f1=" << fr.f1 << " f2=" << fr.f2 << " f3=" << fr.f3
+                      << " oq=" << fr.oq << " tilt=" << fr.tilt << "\n";
+            synth.setFrame (fr);
+            double pk = 0, acc = 0, ugAcc = 0;
+            int nz = 0;
+            for (int i = 0; i < 48000; ++i)
+            {
+                const auto y = synth.tick (220.0, 1.0);
+                if (std::abs (y) > 1e-6) ++nz;
+                pk = std::max (pk, std::abs (y));
+                acc += y * y;
+            }
+            std::cout << "KlattSynth 1s /ɑ/ 220Hz peak=" << pk
+                      << " rms=" << std::sqrt (acc / 48000.0)
+                      << " nonzero=" << nz << "\n";
+
+            auto phrase = dsp::phonetics::buildPhrase (testG2P(), "hello world", body);
+            const auto& tr = phrase->speak.klatt;
+            std::cout << "hello track n=" << tr.frames.size() << " t0=" << tr.t0
+                      << " end=" << tr.end << " hop=" << tr.hop << "\n";
+            for (size_t i = 0; i < tr.frames.size(); i += 2)
+            {
+                const auto& f = tr.frames[i];
+                const auto t = tr.t0 + double (i) * tr.hop;
+                if (f.av < 0.01 && f.ah < 0.01 && f.af < 0.01 && i > 4 && t > 0.05 && t < tr.end - 0.08)
+                    continue;
+                std::cout << "  t=" << t << " av=" << f.av << " ah=" << f.ah << " af=" << f.af
+                          << " f1=" << f.f1 << " f2=" << f.f2 << " f3=" << f.f3 << "\n";
+            }
+        }
+        if (const char* held = std::getenv ("DOOBLRTHROAT_HELD_WAV"); held != nullptr && held[0] != 0)
+        {
+            auto buf = renderHeldVowel (48000.0, 1.5);
+            writeBufWav (juce::File (held), buf, 48000.0);
+        }
+        if (const char* dir = std::getenv ("DOOBLRTHROAT_AB_DIR"); dir != nullptr && dir[0] != 0)
+        {
+            const char* tag = std::getenv ("DOOBLRTHROAT_AB_TAG");
+            const std::string prefix = (tag != nullptr && tag[0] != 0) ? std::string (tag) : std::string ("X");
+            const char* phrases[][2] = {
+                { "hello world", "hello_world" },
+                { "funky monkey", "funky_monkey" },
+                { "the quick brown fox", "quick_brown_fox" },
+                { "I love you", "i_love_you" },
+                { "good morning", "good_morning" },
+            };
+            juce::File d (dir);
+            d.createDirectory();
+            for (auto& ph : phrases)
+            {
+                auto buf = renderPhraseWav (ph[0], 48000.0, 3.0);
+                writeBufWav (d.getChildFile (juce::String (prefix) + "_" + ph[1] + ".wav"), buf, 48000.0);
+            }
+        }
+    }
+
+
 }
 
 int main()
@@ -1305,13 +1434,19 @@ int main()
         { "coarticulation and TA",         testCoarticulationAndTargetApproximation },
         { "editor layout no clip",        testEditorLayoutNoClipOrOverlap },
         { "diction wavs",                 testWriteDictionWavs },
+        { "AB / held wavs",              testWriteAbAndHeldWavs },
         { "sample rates and block sizes", testSampleRatesAndBlockSizes },
         { "stress automation and body swap", testStressAutomationAndBodySwap },
     };
 
+    const bool abOnly = (std::getenv ("DOOBLRTHROAT_HELD_WAV") != nullptr && std::getenv ("DOOBLRTHROAT_HELD_WAV")[0] != 0)
+                     || (std::getenv ("DOOBLRTHROAT_AB_DIR") != nullptr && std::getenv ("DOOBLRTHROAT_AB_DIR")[0] != 0);
+
     int failedTests = 0;
     for (const auto& t : tests)
     {
+        if (abOnly && std::string (t.name) != "AB / held wavs")
+            continue;
         const auto beforeFail = failedChecks, beforePass = passedChecks;
         std::cout << t.name << "\n";
         t.run();

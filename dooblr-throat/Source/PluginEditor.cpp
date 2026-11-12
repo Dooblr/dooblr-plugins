@@ -102,16 +102,23 @@ namespace dooblrthroat
 
         styleLabel (modeCaption, "Mode", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         styleLabel (rateCaption, "Rate", 11.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (engineCaption, "Engine", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         modeBox.setComponentID (id::mode);
         modeBox.setTooltip ("Sing: one syllable per note. Speak: the whole phrase on a single note.");
         modeBox.addItemList (params::modeNames(), 1);
         modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, id::mode, modeBox);
+        engineBox.setComponentID (id::engine);
+        engineBox.setTooltip ("Natural: pre-rendered singing voice, retuned to the MIDI note. Tract: the physical-model fallback.");
+        engineBox.addItemList (params::engineNames(), 1);
+        engineAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, id::engine, engineBox);
         rateSlider.setComponentID (id::rate);
         rateSlider.setTooltip ("Speak-mode rate (does not change MIDI pitch).");
         rateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
         rateSlider.setColour (juce::Slider::trackColourId, Palette::accent.withAlpha (0.7f));
         rateSlider.setColour (juce::Slider::backgroundColourId, Palette::divider);
         rateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, id::rate, rateSlider);
+        addAndMakeVisible (engineCaption);
+        addAndMakeVisible (engineBox);
         for (juce::Component* c : { (juce::Component*) &modeCaption, (juce::Component*) &modeBox,
                                     (juce::Component*) &rateCaption, (juce::Component*) &rateSlider })
             addAndMakeVisible (c);
@@ -425,21 +432,25 @@ namespace dooblrthroat
 
         {
             auto strip = area.removeFromTop (phraseRowH);
-            phraseCaption.setBounds (strip.removeFromLeft (52).withSizeKeepingCentre (52, 16));
-            strip.removeFromLeft (6);
+            phraseCaption.setBounds (strip.removeFromLeft (48).withSizeKeepingCentre (48, 16));
+            strip.removeFromLeft (4);
 
-            auto rateArea = strip.removeFromRight (168);
-            rateCaption.setBounds (rateArea.removeFromLeft (36).withSizeKeepingCentre (36, 16));
+            auto rateArea = strip.removeFromRight (140);
+            rateCaption.setBounds (rateArea.removeFromLeft (32).withSizeKeepingCentre (32, 16));
             rateSlider.setBounds (rateArea.withSizeKeepingCentre (rateArea.getWidth(), 24));
-            strip.removeFromRight (8);
-            modeBox.setBounds (strip.removeFromRight (96).withSizeKeepingCentre (96, 26));
+            strip.removeFromRight (6);
+            modeBox.setBounds (strip.removeFromRight (80).withSizeKeepingCentre (80, 26));
             strip.removeFromRight (4);
-            modeCaption.setBounds (strip.removeFromRight (40).withSizeKeepingCentre (40, 16));
-            strip.removeFromRight (8);
-            restartButton.setBounds (strip.removeFromRight (56).withSizeKeepingCentre (56, 24));
+            modeCaption.setBounds (strip.removeFromRight (36).withSizeKeepingCentre (36, 16));
             strip.removeFromRight (6);
-            phraseReadout.setBounds (strip.removeFromRight (108).withSizeKeepingCentre (108, 22));
+            engineBox.setBounds (strip.removeFromRight (84).withSizeKeepingCentre (84, 26));
+            strip.removeFromRight (4);
+            engineCaption.setBounds (strip.removeFromRight (48).withSizeKeepingCentre (48, 16));
             strip.removeFromRight (6);
+            restartButton.setBounds (strip.removeFromRight (52).withSizeKeepingCentre (52, 24));
+            strip.removeFromRight (4);
+            phraseReadout.setBounds (strip.removeFromRight (96).withSizeKeepingCentre (96, 22));
+            strip.removeFromRight (4);
             phraseEditor.setBounds (strip.reduced (0, 6));
         }
         area.removeFromTop (panelGap);

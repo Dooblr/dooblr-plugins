@@ -68,6 +68,8 @@ namespace dooblrthroat
         juce::AudioProcessorValueTreeState state;
         ParameterUndoHistory undoHistory;
         dsp::ThroatEngine engine;
+        int preparedClarity_ = -1;
+        float preparedRate_ = -1.0f;
         dsp::OutputPeakTap peakTap;
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;

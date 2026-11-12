@@ -1,4 +1,6 @@
 #include "ThroatEngine.h"
+#include "Vowels.h"
+#include "Klatt.h"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -35,6 +37,8 @@ namespace dooblrthroat::dsp
         if (next == nullptr)
             return;
 
+        attachProven (*next);
+        proven_.setOutputRate (sampleRate_);
         auto* raw = next.get();
         std::unique_ptr<HumanVoice> old;
         {
@@ -69,6 +73,7 @@ namespace dooblrthroat::dsp
             std::this_thread::yield();
         old.reset();
         restartFlag_.store (1u, std::memory_order_release);
+        prepareProven (offline_.load (std::memory_order_acquire));
     }
 
     void ThroatEngine::rebuildVoiceOffAudioThread (const ThroatSettings& incoming, bool force)
@@ -94,6 +99,7 @@ namespace dooblrthroat::dsp
 
     void ThroatEngine::prepare (double sampleRate, int maxBlock)
     {
+        proven_.setOutputRate (sampleRate);
         if (! is_finite (sampleRate) || sampleRate < 8000.0)
             sampleRate = 8000.0;
         if (sampleRate > 192000.0)
@@ -103,6 +109,7 @@ namespace dooblrthroat::dsp
         tmp_.assign (size_t (cap), 0.0f);
         rebuildVoiceOffAudioThread (settings_, true);
         reset();
+        prepareProven (offline_.load (std::memory_order_acquire));
     }
 
     void ThroatEngine::reset()
@@ -159,6 +166,8 @@ namespace dooblrthroat::dsp
         s.speechRate = float (clamp (double (fin (s.speechRate, 1.0f)), 0.25, 2.5));
         s.effort = float (clamp (double (fin (s.effort, 0.5f)), 0.0, 1.0));
         s.formantTune = float (clamp (double (fin (s.formantTune, 0.0f)), 0.0, 1.0));
+        if (s.clarityMode < 0) s.clarityMode = 0;
+        if (s.clarityMode > 7) s.clarityMode = 7;
     }
 
     void ThroatEngine::setSettings (const ThroatSettings& incoming)
@@ -199,6 +208,7 @@ namespace dooblrthroat::dsp
         if (useLiveNote && currentNote_ >= 0)
             src.f0 = safeHz (double (currentNote_) + double (bendSemis_));
         voice.set_source (src);
+        voice.clarityMode = s.clarityMode;
     }
 
     void ThroatEngine::applyVowel (HumanVoice& voice, const ThroatSettings& s)
@@ -214,6 +224,16 @@ namespace dooblrthroat::dsp
             voice.snap_articulation (p, s.tipFree);
         else
             voice.set_articulation (p, s.tipFree);
+        if (! voice.scoreActive)
+        {
+            const char* ipa = "ə";
+            if (s.vowelIndex >= 0 && s.vowelIndex < int (N_VOWELS))
+                ipa = VOWELS[size_t (s.vowelIndex)].ipa;
+            voice.klattPad = klattVowelFrame (ipa, s.body);
+            voice.klattPadOn = true;
+            voice.klattFrames = nullptr;
+            voice.klattCount = 0;
+        }
     }
 
     double ThroatEngine::currentHz() const
@@ -229,10 +249,56 @@ namespace dooblrthroat::dsp
             v->clearScore();
     }
 
+    ProvenKind ThroatEngine::provenKind (int mode) noexcept
+    {
+        if (mode == 5) return ProvenKind::Espeak;
+        if (mode == 6) return ProvenKind::Piper;
+        if (mode == 7) return ProvenKind::Mbrola;
+        return ProvenKind::None;
+    }
+
+    ThroatEngine::~ThroatEngine()
+    {
+        proven_.shutdown();
+    }
+
+    void ThroatEngine::prepareProven (bool wait)
+    {
+        proven_.setOutputRate (sampleRate_);
+        proven_.setOffline (offline_.load (std::memory_order_acquire));
+        const auto kind = provenKind (settings_.clarityMode);
+        auto* ph = livePhrase();
+        if (kind == ProvenKind::None || ph == nullptr || ph->text.empty())
+        {
+            proven_.disengage();
+            proven_.clear();
+            return;
+        }
+        std::vector<std::string> syls;
+        syls.reserve (ph->plans.size());
+        for (const auto& plan : ph->plans)
+            syls.push_back (plan.text);
+        const double length = (settings_.speechRate > 1.0e-3f) ? (1.0 / double (settings_.speechRate)) : 1.0;
+        proven_.requestPrepare (kind, ph->text, syls, length, wait);
+    }
+
+    void ThroatEngine::startProven (HumanVoice& v, int midi, bool syllable)
+    {
+        attachProven (v);
+        const auto hz = (midi >= 0) ? currentHz() : 261.626;
+        // Audio thread: only arm playback of the already-published cache.
+        if (syllable)
+            proven_.startSyllablePlayback (syl_, hz);
+        else
+            proven_.startSpeakPlayback (hz);
+    }
+
     void ThroatEngine::startSpeak (HumanVoice& v, const phonetics::PublishedPhrase& ph, int midi)
     {
         (void) midi;
         talk_ = Talk::Speak;
+        if (settings_.clarityMode >= 5)
+            startProven (v, midi, false);
         v.scoreGestures = ph.speak.gestures.data();
         v.scoreCount = ph.speak.gestures.size();
         v.scoreT = 0.0;
@@ -241,6 +307,11 @@ namespace dooblrthroat::dsp
         v.scoreF0Override = 0.0;
         v.scoreNasal = settings_.nasal;
         v.scoreActive = ! ph.speak.gestures.empty();
+        v.klattFrames = ph.speak.klatt.frames.empty() ? nullptr : ph.speak.klatt.frames.data();
+        v.klattCount = ph.speak.klatt.frames.size();
+        v.klattHop = ph.speak.klatt.hop;
+        v.klattT0 = ph.speak.klatt.t0;
+        v.klattPadOn = false;
         syl_ = 0;
         sylIndex_.store (0, std::memory_order_release);
     }
@@ -254,14 +325,24 @@ namespace dooblrthroat::dsp
         syl_ = syl;
         const auto& plan = ph.plans[size_t (syl)];
         talk_ = Talk::Hold;
+        if (settings_.clarityMode >= 5)
+            startProven (v, midi, true);
         v.scoreGestures = plan.hold.data();
         v.scoreCount = plan.hold.size();
-        v.scoreT = phonetics::kLiveT0;
+        // Vowel-on-beat: Klatt hold tracks have t0 <= 0 (consonants before the
+        // note). Start at t0 so the vowel lands when scoreT reaches 0. Gesture
+        // scores still use the small kLiveT0 pre-roll when no Klatt track exists.
+        v.scoreT = plan.klattHold.frames.empty() ? phonetics::kLiveT0 : plan.klattHold.t0;
         v.scoreRate = 1.0;
         v.scoreF0Scale = 1.0;
         v.scoreF0Override = currentHz();
         v.scoreNasal = settings_.nasal;
         v.scoreActive = ! plan.hold.empty();
+        v.klattFrames = plan.klattHold.frames.empty() ? nullptr : plan.klattHold.frames.data();
+        v.klattCount = plan.klattHold.frames.size();
+        v.klattHop = plan.klattHold.hop;
+        v.klattT0 = plan.klattHold.t0;
+        v.klattPadOn = false;
         sylIndex_.store (syl, std::memory_order_release);
     }
 
@@ -288,6 +369,11 @@ namespace dooblrthroat::dsp
         v.scoreF0Override = currentHz();
         v.scoreNasal = settings_.nasal;
         v.scoreActive = true;
+        v.klattFrames = plan.klattCoda.frames.empty() ? nullptr : plan.klattCoda.frames.data();
+        v.klattCount = plan.klattCoda.frames.size();
+        v.klattHop = plan.klattCoda.hop;
+        v.klattT0 = plan.klattCoda.t0;
+        v.klattPadOn = false;
         sylIndex_.store (syl, std::memory_order_release);
     }
 
@@ -360,7 +446,9 @@ namespace dooblrthroat::dsp
             return;
         if (talk_ == Talk::Speak)
         {
-            if (v.scoreT >= ph->speak.end)
+            const auto provenDone = (settings_.clarityMode >= 5 && (v.proven == nullptr || v.proven->finished()));
+            const auto scoreDone = v.scoreT >= ph->speak.end;
+            if ((settings_.clarityMode >= 5) ? provenDone : scoreDone)
             {
                 // Speak stops at the end of the phrase, even if the key is still held.
                 clearTalk (&v);
@@ -413,6 +501,8 @@ namespace dooblrthroat::dsp
 
         auto* ph = livePhrase();
         auto* v = live();
+        if (ph == nullptr || ph->empty() || settings_.clarityMode < 5)
+            proven_.disengage();
         if (ph != nullptr && v != nullptr && ! ph->empty())
         {
             if (settings_.speechMode == 1) // Speak

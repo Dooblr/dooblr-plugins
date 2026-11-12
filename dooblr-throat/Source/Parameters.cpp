@@ -109,6 +109,8 @@ namespace dooblrthroat::params
         addPercent (layout, id::effort, "Effort", 0.5f);
         addPercent (layout, id::formantTune, "Tuning", 0.0f);
 
+        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::engine), "Engine", engineNames(), 0));
+
         return layout;
     }
 }

@@ -6,6 +6,7 @@
 #include "English.h"
 #include "Planner.h"
 #include "Syllables.h"
+#include "../Klatt.h"
 #include <atomic>
 #include <memory>
 #include <string>
@@ -28,6 +29,7 @@ namespace dooblrthroat::dsp::phonetics
         std::vector<Gesture> coda;  // off-glide + coda, relative time (LIVE_T0)
         std::vector<PlannedSegment> holdSegments;
         std::vector<PlannedSegment> codaSegments;
+        KlattTrack klattHold, klattCoda;
         double holdEnd = 0;
         double codaEnd = 0;
         bool wordEnd = false;
@@ -39,6 +41,7 @@ namespace dooblrthroat::dsp::phonetics
     {
         std::vector<Gesture> gestures;
         std::vector<PlannedSegment> segments;
+        KlattTrack klatt;
         double end = 0;
         double f0Ref = kSpeakF0Ref;
     };

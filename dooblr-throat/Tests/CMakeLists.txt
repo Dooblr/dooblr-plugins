@@ -17,4 +17,9 @@ target_link_libraries(DooblrThroatTests
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
 
+if(APPLE AND DEFINED DOOBLRTHROAT_ONNXRUNTIME_ROOT)
+    set_property(TARGET DooblrThroatTests APPEND PROPERTY
+        BUILD_RPATH "${DOOBLRTHROAT_ONNXRUNTIME_ROOT}/lib")
+endif()
+
 add_test(NAME DooblrThroatTests COMMAND DooblrThroatTests)

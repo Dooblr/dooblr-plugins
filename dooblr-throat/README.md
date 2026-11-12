@@ -1,10 +1,11 @@
 # dooblr-throat
 
-A monophonic / legato VST3 vocal instrument. MIDI in, audio out. It is a
-physical model of the human airway: lungs and a parametric glottis drive a
-branched transmission-line tract (pharynx, oral, nasal) stepped with a
-staggered-grid FDTD, then decimated back to the host rate. There are no
-samples and no neural vocoder.
+A monophonic / legato VST3 vocal instrument. MIDI in, audio out. From 0.3.0
+the default **Natural** engine is a pre-rendered singing voice (Piper, retuned
+with WORLD to the MIDI note). The 0.2.x physical model — lungs and a parametric
+glottis driving a branched FDTD tract — remains the **Tract** fallback and is
+still used when the phrase box is empty. Licenses for the bundled engines are
+in `LICENSES.md`; this build is for personal use.
 
 The real-time C++ core is a port of the human-voice engine from
 [CHIMERA](https://github.com/jamesondh/chimera-vocal-synth) (MIT, Copyright
@@ -12,11 +13,11 @@ The real-time C++ core is a port of the human-voice engine from
 The editor and factory presets are original dooblr work and do not use that
 project's name.
 
-Expressivity on the source (spectral tilt with effort and pitch, residual
-jitter plus a slightly wandering vibrato, and optional formant tuning at high
-pitch) follows ideas from the CHANT singing-synthesis project (Rodet, Potard
-and Barrière 1984), used only as a guide. The waveguide airway remains the
-core; the paper is not a source of code or of copied text.
+On the Tract engine, expressivity on the source (spectral tilt with effort and
+pitch, residual jitter plus a slightly wandering vibrato, and optional formant
+tuning at high pitch) follows ideas from the CHANT singing-synthesis project
+(Rodet, Potard and Barrière 1984), used only as a guide. The paper is not a
+source of code or of copied text.
 
 Consonant shapes are context-sensitive after Birkholz (2013): each consonant
 is a weighted blend of its /a/, /i/ and /u/ context targets, with weights from
@@ -55,14 +56,18 @@ VST3 instrument host). It does not belong on an audio track.
 - **Source** — Breath, Tension, Bright, Fry, Rough, Pressure (cm H2O), Voiced.
 - **Pitch** — Vibrato depth and rate, Glide, pitch-bend range.
 - **Envelope** — ADSR on the glottal gate. Output level is in the header.
-- **Phrase** — type English text and play MIDI. **Sing** advances one syllable
-  per note (pitch from the key, vowel held, coda on release or the next note;
-  wraps; **Reset** restarts). **Speak** says the whole line on one note-on, at
-  **Rate**, around the note's pitch, and stops on release or at the end. The
-  readout shows the current phoneme / syllable. Empty text keeps the vowel-pad
-  behaviour of 0.1.x.
+- **Phrase** — type English text and play MIDI. **Engine** chooses **Natural**
+  (default) or **Tract**. **Sing** advances one syllable per note (wraps;
+  **Reset** restarts). On Natural, each syllable is pre-rendered off the audio
+  thread at a C4 reference and played back at the note's pitch by resampling;
+  the syllable plays once, then stays quiet if you hold the key longer.
+  Duration shortens as pitch rises; this is not a full independent time-stretch
+  to the note length. **Speak** says the whole pre-rendered line on one
+  note-on, at **Rate**, pitched the same way, and stops on release or at the
+  end. The readout shows the current phoneme / syllable. Empty text keeps the
+  vowel-pad behaviour of 0.1.x (always the Tract model).
 
-One FDTD voice; legato re-pitches the same airway with glide.
+On Tract, one FDTD voice; legato re-pitches the same airway with glide.
 
 
 ## Factory presets
@@ -70,15 +75,21 @@ One FDTD voice; legato re-pitches the same airway with glide.
 Init, Close Front, Open Back, Soft Breath, Spoken, Choir Lead, Low Voice,
 Whisper, Spoken Line, Sung Phrase.
 
-## Limits of v0.2.1
+## Limits of v0.3.0
 
-- English text only. Intelligibility is that of a tract model, not a commercial
-  vocoder; some words will be clearer than others.
+- English text only. Natural uses a low-quality en_US Piper voice; the first
+  render after a phrase edit takes a fraction of a second to about a second.
+- Natural Sing resamples a C4 reference take to the MIDI note, so formants
+  shift with pitch and longer holds than the rendered syllable go quiet.
+- Voice / Source / Effort / Tuning colour the Tract model; they do not
+  reshape the Natural recording.
+- The Lessac-trained voice is for personal, non-commercial use (see
+  `LICENSES.md`).
 - No beatbox and no creature models.
-- Body (Female / Child) rebuilds the airway off the audio thread; a brief
+- Body (Female / Child) rebuilds the Tract airway off the audio thread; a brief
   delay is expected after those knobs move.
-- The C++ port follows the original equations but is not claimed bit-identical
-  to the Rust engine.
+- The C++ tract port follows the original equations but is not claimed
+  bit-identical to the Rust engine.
 
 ## Build
 
@@ -91,4 +102,4 @@ JUCE 8.0.15, C++20, arm64. From this directory:
 Default build directory: `~/dooblr-build/dooblr-throat`. JUCE is reused from
 `~/dooblr-build/_deps/juce-src` when present. After tests and LoadCheck pass,
 the bundle is installed to `/Library/Audio/Plug-Ins/VST3/dooblr-throat.vst3`
-(no sudo). Version 0.2.1.
+(no sudo). Version 0.3.0.

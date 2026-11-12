@@ -7,13 +7,15 @@
 #include "Glottis.h"
 #include "HumanAirway.h"
 #include "Phonetics/Score.h"
+#include "Klatt.h"
+#include "ProvenVoice.h"
 
 namespace dooblrthroat::dsp
 {
     struct VoiceSource
     {
         double f0 = 110.0, glide = 0.06, pressure = 8.0, breathiness = 0.15, tension = 0.5;
-        double fry = 0.0, roughness = 0.1, vibrato_depth = 0.0, vibrato_rate = 6.0, drift = 5.0;
+        double fry = 0.0, roughness = 0.1, vibrato_depth = 0.0, vibrato_rate = 6.0, drift = 0.0;
         bool voiced = true;
         double brightness = 0.25;
         double effort = 0.5;          // 0.5 matches the 0.2.0 pressure-derived default
@@ -44,6 +46,14 @@ namespace dooblrthroat::dsp
         int64_t ctrl_every = 0, ctrl_counter = 0, lim_hold = 0, lim_hold_n = 0;
         double base_abduction = 0.0, base_closure = 0.0;
         double effort_body = 0.0;
+        int clarityMode = 0; // 0 default, 1 A, 2 B, 3 C, 4 K, 5 E espeak, 6 P piper, 7 M mbrola
+        ArticPatch schwaRef {};
+        LfGlottis lf;
+        // Hybrid consonant layer (mode B): allocation-free biquad + burst envelope.
+        Rng consRng { 991 };
+        double consX1 = 0, consX2 = 0, consY1 = 0, consY2 = 0;
+        double consB0 = 0, consB1 = 0, consB2 = 0, consA1 = 0, consA2 = 0;
+        double consFc = 0, burstEnv = 0, prevLip = 1, prevMinA = 1, consHpX = 0, consHpY = 0;
 
         // Phrase / gesture score. The gesture pointer is into a PublishedPhrase
         // owned off the audio thread; the voice never allocates or frees it.
@@ -52,6 +62,13 @@ namespace dooblrthroat::dsp
         double scoreT = 0, scoreRate = 1, scoreF0Scale = 1, scoreF0Override = 0;
         float scoreNasal = -1.0f;
         bool scoreActive = false;
+        const KlattFrame* klattFrames = nullptr;
+        size_t klattCount = 0;
+        double klattHop = 0.005, klattT0 = 0;
+        KlattFrame klattPad {};
+        bool klattPadOn = false;
+        KlattSynth klatt;
+        ProvenEngine* proven = nullptr;
 
         HumanVoice (double fs_out, HumanBody body, size_t oversample);
         static HumanVoice with_defaults (double fs_out) { return HumanVoice (fs_out, BODY_MALE, oversample_for (fs_out)); }
@@ -70,6 +87,10 @@ namespace dooblrthroat::dsp
             scoreF0Override = 0;
             scoreNasal = -1.0f;
             scoreActive = false;
+            klattFrames = nullptr;
+            klattCount = 0;
+            klattHop = 0.005;
+            klattT0 = 0;
             for (auto& sp : artic.speed) sp = 1.0;
         }
         void reset();
@@ -80,5 +101,9 @@ namespace dooblrthroat::dsp
         void control();
         bool enforce_contacts();
         void applyScore (double dt);
+        double hybridConsonant (double dt) noexcept;
+        void setConsBand (double fc, double bw) noexcept;
+        void renderKlatt (float* out, size_t n);
+        void syncKlattFrame();
     };
 }

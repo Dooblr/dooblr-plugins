@@ -1,0 +1,7 @@
+# Fetched at build time; see scripts/fetch-third-party.sh and checksums.txt.
+onnxruntime/
+piper-voices/
+espeak-ng/
+# Don't vendor World's git metadata if a clone is used for development.
+World/.git/
+**/*.dSYM/

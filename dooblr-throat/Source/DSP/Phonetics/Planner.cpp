@@ -458,17 +458,21 @@ namespace dooblrthroat::dsp::phonetics
             else
             {
                 const auto prog = (t0 - o.t0) / total;
-                const auto decl = 1.0 - 0.18 * prog;
+                const auto decl = 1.0 - 0.06 * prog;
                 const bool isNuclear = ssize_t (i) == nuclear;
-                const auto acc = s.stress == 1 ? 1.0 + (isNuclear ? accent * 2.1 : accent * 1.15)
-                                : s.stress == 2 ? 1.0 + accent * 0.55 : 1.0 - accent * 0.15;
+                const auto acc = s.stress == 1 ? 1.0 + (isNuclear ? accent * 0.9 : accent * 0.5)
+                                : s.stress == 2 ? 1.0 + accent * 0.25 : 1.0 - accent * 0.08;
                 target = f0 * decl * acc;
+                // Deterministic Speak contour, held within about +/- 2 semitones of the note.
+                const auto lo = f0 * 0.890898718; // 2^(-2/12)
+                const auto hi = f0 * 1.122462048; // 2^(+2/12)
+                target = clamp (target, lo, hi);
                 const bool last = n + 1 == vIdx.size();
                 if (last && o.intonation == Intonation::Question)
-                    target = f0 * 1.35;
+                    target = f0 * 1.109569442; // +180 cents
                 if (last && o.intonation == Intonation::Statement)
                 {
-                    const auto fall = f0 * 0.76;
+                    const auto fall = f0 * 0.90125046; // -180 cents
                     if (t1 - t0 > 0.06)
                     {
                         gestures.push_back (Gesture::make (t0, t0 + 0.35 * (t1 - t0), 0.05, 0.05, 1.0, Targets::one (SourceKey::F0, target))

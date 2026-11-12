@@ -80,6 +80,7 @@ namespace dooblrthroat::dsp::phonetics
             auto hold = planUtterance (holdSegs, ho);
             sp.hold = std::move (hold.gestures);
             sp.holdSegments = std::move (hold.segments);
+            sp.klattHold = buildKlattTrack (sp.holdSegments, body, true);
             sp.holdEnd = hold.end;
 
             auto codaSegs = tailOf (syl, body, hz);
@@ -93,6 +94,7 @@ namespace dooblrthroat::dsp::phonetics
                 auto coda = planUtterance (codaSegs, co);
                 sp.coda = std::move (coda.gestures);
                 sp.codaSegments = std::move (coda.segments);
+                sp.klattCoda = buildKlattTrack (sp.codaSegments, body);
                 sp.codaEnd = coda.end;
             }
             return sp;
@@ -137,6 +139,7 @@ namespace dooblrthroat::dsp::phonetics
             out->speak.end = plan.end;
         }
         out->speak.f0Ref = kSpeakF0Ref;
+        out->speak.klatt = buildKlattTrack (out->speak.segments, body);
         return out;
     }
 }

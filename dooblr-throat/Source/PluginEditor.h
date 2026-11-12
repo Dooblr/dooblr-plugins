@@ -57,15 +57,16 @@ namespace dooblrthroat
         ui::DooblrLookAndFeel lookAndFeel;
 
         juce::Label titleLabel, subtitleLabel, outputCaption, statusLabel, vowelCaption;
-        juce::Label phraseCaption, phraseReadout, modeCaption, rateCaption;
+        juce::Label phraseCaption, phraseReadout, modeCaption, rateCaption, engineCaption;
         juce::TextEditor phraseEditor;
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, saveButton { "Save" }, loadButton { "Load" };
         juce::TextButton restartButton { "Reset" };
-        juce::ComboBox presetBox, modeBox;
+        juce::ComboBox presetBox, modeBox, engineBox;
         juce::Slider outputSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
         juce::Slider rateSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> modeAttachment;
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> engineAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> rateAttachment;
         ui::OutputMeter outputMeter;
         ui::VowelPad vowelPad;

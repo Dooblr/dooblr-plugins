@@ -8,7 +8,7 @@ namespace dooblrthroat::params
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
         Every ID through "output" was added in 0.1.0. "mode" and "rate" were added in 0.2.0.
-        "effort" and "formantTune" were added in 0.2.1. */
+        "effort" and "formantTune" were added in 0.2.1. "engine" was added in 0.3.0. */
     namespace id
     {
         inline constexpr const char* vowel      = "vowel";
@@ -37,6 +37,7 @@ namespace dooblrthroat::params
         inline constexpr const char* rate         = "rate";
         inline constexpr const char* effort       = "effort";
         inline constexpr const char* formantTune  = "formantTune";
+        inline constexpr const char* engine       = "engine";
     }
 
     /** Choice 0 is the vowel pad; 1..N_VOWELS are the named vowels. */
@@ -54,6 +55,13 @@ namespace dooblrthroat::params
     inline const juce::StringArray& modeNames()
     {
         static const juce::StringArray names { "Sing", "Speak" };
+        return names;
+    }
+
+    /** 0 Natural (Piper+WORLD, default), 1 Tract (waveguide fallback). Original names only. */
+    inline const juce::StringArray& engineNames()
+    {
+        static const juce::StringArray names { "Natural", "Tract" };
         return names;
     }
 

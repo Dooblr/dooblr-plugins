@@ -4,6 +4,8 @@
 #include "PluginEditor.h"
 #include "Presets.h"
 
+#include <cstdlib>
+
 namespace dooblrthroat
 {
 #define DOOBLRTHROAT_PARAMETERS(X) \
@@ -11,7 +13,7 @@ namespace dooblrthroat
     X(breath) X(tension) X(brightness) X(fry) X(roughness) X(pressure) X(voiced) \
     X(vibratoDepth) X(vibratoRate) X(glide) X(bendRange) \
     X(attack) X(decay) X(sustain) X(release) X(output) \
-    X(mode) X(rate) X(effort) X(formantTune)
+    X(mode) X(rate) X(effort) X(formantTune) X(engine)
 
     struct DooblrThroatProcessor::RawParameters
     {
@@ -30,6 +32,7 @@ namespace dooblrthroat
     DooblrThroatProcessor::~DooblrThroatProcessor()
     {
         cancelPendingUpdate();
+        engine.proven().shutdown();
     }
 
     DooblrThroatProcessor::DooblrThroatProcessor()
@@ -55,7 +58,11 @@ namespace dooblrthroat
 
     void DooblrThroatProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
     {
-        engine.setSettings (readSettings());
+        engine.setOffline (isNonRealtime());
+        auto settings = readSettings();
+        engine.setSettings (settings);
+        preparedClarity_ = settings.clarityMode;
+        preparedRate_ = settings.speechRate;
         engine.prepare (sampleRate, samplesPerBlock);
     }
 
@@ -99,6 +106,23 @@ namespace dooblrthroat
         s.speechRate = f (r.rate);
         s.effort = f (r.effort);
         s.formantTune = f (r.formantTune);
+        // 0.3.0 default is Natural (Piper). Old sets that lack the engine param
+        // also get this default (stateVersion stays 1). Tract is the waveguide fallback.
+        s.clarityMode = (i (r.engine) == 1) ? 0 : 6;
+        if (const char* c = std::getenv ("DOOBLRTHROAT_CLARITY"); c != nullptr && c[0] != 0)
+        {
+            switch (c[0])
+            {
+                case 'A': case 'a': case '1': s.clarityMode = 1; break;
+                case 'B': case 'b': case '2': s.clarityMode = 2; break;
+                case 'C': case 'c': case '3': s.clarityMode = 3; break;
+                case 'K': case 'k': case '4': s.clarityMode = 4; break;
+                case 'E': case 'e': case '5': s.clarityMode = 5; break;
+                case 'P': case 'p': case '6': s.clarityMode = 6; break;
+                case 'M': case 'm': case '7': s.clarityMode = 7; break;
+                default: break;
+            }
+        }
         return s;
     }
 
@@ -150,6 +174,9 @@ namespace dooblrthroat
     void DooblrThroatProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midi)
     {
         juce::ScopedNoDenormals noDenormals;
+        engine.setOffline (isNonRealtime());
+        if (isNonRealtime())
+            engine.waitProvenReady();
         dsp::AudioCallbackScope audioScope (engine);
 
         auto settings = readSettings();
@@ -167,6 +194,12 @@ namespace dooblrthroat
         else
         {
             engine.setSettings (settings);
+        }
+        if (settings.clarityMode != preparedClarity_ || std::abs (settings.speechRate - preparedRate_) > 0.01f)
+        {
+            preparedClarity_ = settings.clarityMode;
+            preparedRate_ = settings.speechRate;
+            triggerAsyncUpdate();
         }
 
         const auto numSamples = buffer.getNumSamples();

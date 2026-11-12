@@ -29,11 +29,15 @@ namespace dooblrthroat::dsp
         float speechRate = 1.0f;
         float effort = 0.5f;
         float formantTune = 0.0f;
+        int clarityMode = 6; // 0 waveguide, 1 A, 2 B, 3 C, 4 K, 5 E espeak, 6 P piper (default), 7 M
     };
 
     class ThroatEngine
     {
     public:
+        ThroatEngine() = default;
+        ~ThroatEngine();
+
         void prepare (double sampleRate, int maxBlock);
         void reset();
 
@@ -69,6 +73,10 @@ namespace dooblrthroat::dsp
         void noteOff (int midiNote);
         void allNotesOff();
         void pitchBend (float semis);
+        void setOffline (bool offline) noexcept { offline_.store (offline, std::memory_order_release); proven_.setOffline (offline); }
+        ProvenEngine& proven() noexcept { return proven_; }
+        void prepareProven (bool wait);
+        bool waitProvenReady() { return proven_.waitReady(); }
 
         void process (float* left, float* right, int n);
 
@@ -76,7 +84,10 @@ namespace dooblrthroat::dsp
         void endAudioCallback() noexcept;
 
         float lastPeak() const { return lastPeak_; }
-        bool isSounding() const { return gate_ > 1e-4f || ! held_.empty() || talk_ != Talk::Off; }
+        bool isSounding() const {
+            if (gate_ > 1e-4f || ! held_.empty() || talk_ != Talk::Off) return true;
+            return settings_.clarityMode >= 5 && proven_.engaged() && ! proven_.finished();
+        }
         const HumanVoice* voice() const { return live_.load (std::memory_order_acquire); }
         bool phraseActive() const noexcept { return talk_ != Talk::Off; }
 
@@ -122,6 +133,11 @@ namespace dooblrthroat::dsp
         std::atomic<int> sylCount_ { 0 };
         std::atomic<uint32_t> readoutSeq_ { 0 };
         char readout_[64] {};
+        ProvenEngine proven_;
+        std::atomic<bool> offline_ { false };
+        void attachProven (HumanVoice& v) noexcept { v.proven = &proven_; }
+        static ProvenKind provenKind (int mode) noexcept;
+        void startProven (HumanVoice& v, int midi, bool syllable);
     };
 
     struct AudioCallbackScope

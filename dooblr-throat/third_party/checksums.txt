@@ -1,0 +1,6 @@
+# SHA-256 of fetched artefacts (not committed). Verified by scripts/fetch-third-party.sh.
+# piper en_US-lessac-low v1.0.0
+f7d01dde371555732c4c314111ac79672b1a5ce2fc19266ab42178fd8df7f375  en_US-lessac-low.onnx
+45754dfdebb3b8661c3fc564713772deec6e064feeb5b4e9594857dc7305193a  en_US-lessac-low.onnx.json
+# ONNX Runtime 1.31.1 osx-arm64 dylib (after unpacking the official release tarball)
+17500d6b1e37e70f43a2c57d94233a1bc29fbcb297be0a5f8c7c13184f3307ba  libonnxruntime.1.31.1.dylib
