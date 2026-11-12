@@ -6,8 +6,6 @@
 
 namespace dooblrrhythm::ui
 {
-    namespace Palette = dooblrrhythm::ui::Palette;
-
     SequencerGrid::SequencerGrid (DooblrRhythmProcessor& p) : proc (p)
     {
         setComponentID ("sequencer");
@@ -84,7 +82,8 @@ namespace dooblrrhythm::ui
         const auto p = lastPattern;
         const int steps = juce::jmax (1, p.totalSteps());
         const float w = (float) gridArea.getWidth() / (float) steps;
-        const int s = (int) std::floor ((pos.x - gridArea.getX()) / juce::jmax (0.001f, w));
+        const float x = (float) (pos.x - gridArea.getX());
+        const int s = (int) std::floor (x / juce::jmax (0.001f, w));
         return juce::jlimit (0, steps - 1, s);
     }
 

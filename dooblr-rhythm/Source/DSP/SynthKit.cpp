@@ -18,7 +18,7 @@ namespace dooblrrhythm::dsp
 
         float noiseSample (uint32_t& s) noexcept
         {
-            return ((int32_t) lcg (s) / 2147483648.0f);
+            return (float) (int32_t) lcg (s) * (1.0f / 2147483648.0f);
         }
 
         float dbToGain (float db) noexcept
