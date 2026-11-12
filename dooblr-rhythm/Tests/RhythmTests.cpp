@@ -149,7 +149,7 @@ namespace
         check (p->getMainBusNumOutputChannels() == 2, "stereo out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRRHYTHM_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check ((int) p->getParameters().size() == numHostParameters,
                "host parameter count " + std::to_string (p->getParameters().size())
                    + " expected " + std::to_string (numHostParameters));
@@ -559,6 +559,40 @@ namespace
         {
             editor->setSize (size.x, size.y);
             const auto label = std::to_string (size.x) + "x" + std::to_string (size.y);
+
+            if (auto* meter = editor->findChildWithID ("outputMeter"))
+            {
+                const auto r = editor->getLocalArea (meter->getParentComponent(), meter->getBounds());
+                check (r.getWidth() >= 32, label + ": output meter width " + r.toString().toStdString());
+                check (editor->getWidth() - r.getRight() >= 24,
+                       label + ": output meter right padding " + r.toString().toStdString());
+            }
+            else
+                check (false, label + ": output meter is present");
+
+            if (auto* caption = editor->findChildWithID ("outputCaption"))
+            {
+                const auto r = editor->getLocalArea (caption->getParentComponent(), caption->getBounds());
+                check (r.getWidth() >= 48, label + ": Output caption width " + r.toString().toStdString());
+                if (auto* slider = editor->findChildWithID ("output"))
+                {
+                    const auto s = editor->getLocalArea (slider->getParentComponent(), slider->getBounds());
+                    check (r.getIntersection (s).isEmpty(),
+                           label + ": Output caption does not overlap the slider "
+                           + r.toString().toStdString() + " / " + s.toString().toStdString());
+                }
+            }
+            else
+                check (false, label + ": Output caption is present");
+
+            if (auto* variation = editor->findChildWithID ("variation"))
+            {
+                const auto r = editor->getLocalArea (variation->getParentComponent(), variation->getBounds());
+                check (r.getWidth() >= 100 && r.getHeight() >= 24,
+                       label + ": Variation button large enough (" + r.toString().toStdString() + ")");
+            }
+            else
+                check (false, label + ": Variation button is present");
             std::vector<std::pair<juce::Component*, juce::Rectangle<int>>> rects;
             forEachVisible (*editor, [&] (juce::Component& c)
             {

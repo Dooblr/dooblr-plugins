@@ -6,7 +6,7 @@ world-influenced electronic music. It generates a cohesive percussion *ensemble*
 Part of Dan Feinstein's **dooblr** suite. VST3 instrument, macOS 11+ (arm64 /
 x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
 
-Version **0.1.0**.
+Version **0.1.1**.
 
 ## What it does
 

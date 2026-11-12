@@ -23,7 +23,7 @@ namespace dooblrrhythm
         }
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
-        constexpr int headerHeight = 60, margin = 12, panelGap = 8;
+        constexpr int headerHeight = 60, margin = 12, panelGap = 8, meterWidth = 34;
 
         void forEachComponent (juce::Component& root, const std::function<void (juce::Component&)>& fn)
         {
@@ -67,6 +67,8 @@ namespace dooblrrhythm
         styleLabel (statusLabel, {}, 12.0f, Palette::textMuted, juce::Justification::centredLeft);
         statusLabel.setComponentID ("status");
         styleLabel (outputCaption, "Output", 13.0f, Palette::textMuted, juce::Justification::centredRight);
+        outputCaption.setComponentID ("outputCaption");
+        outputCaption.setMinimumHorizontalScale (1.0f);
         styleLabel (bpmLabel, "Tempo", 11.0f, Palette::textMuted, juce::Justification::centred);
         styleLabel (bpmValue, "120", 18.0f, Palette::textPrimary, juce::Justification::centred, true);
         bpmValue.setComponentID ("bpm");
@@ -448,7 +450,7 @@ namespace dooblrrhythm
         auto bounds = getLocalBounds();
         headerArea = bounds.removeFromTop (headerHeight);
         {
-            auto header = headerArea.reduced (24, 10);
+            auto header = headerArea.reduced (32, 10);
             auto titleColumn = header.removeFromLeft (juce::jlimit (148, 220, header.getWidth() / 6));
             titleLabel.setBounds (titleColumn.removeFromTop (titleColumn.getHeight() * 3 / 5));
             subtitleLabel.setBounds (titleColumn);
@@ -459,10 +461,10 @@ namespace dooblrrhythm
             redoButton.setBounds (header.removeFromLeft (50).withSizeKeepingCentre (50, 24));
             header.removeFromLeft (8);
 
-            meter.setBounds (header.removeFromRight (20));
-            header.removeFromRight (8);
-            outputSlider.setBounds (header.removeFromRight (juce::jlimit (88, 150, header.getWidth() / 5))
-                                          .withSizeKeepingCentre (juce::jlimit (88, 150, header.getWidth()), 24));
+            meter.setBounds (header.removeFromRight (meterWidth));
+            header.removeFromRight (10);
+            const auto sliderWidth = juce::jlimit (88, 150, header.getWidth() / 5);
+            outputSlider.setBounds (header.removeFromRight (sliderWidth).withSizeKeepingCentre (sliderWidth, 24));
             outputCaption.setBounds (header.removeFromRight (52).withSizeKeepingCentre (52, 24));
             header.removeFromRight (8);
             loadButton.setBounds (header.removeFromRight (46).withSizeKeepingCentre (46, 24));
@@ -487,10 +489,12 @@ namespace dooblrrhythm
 
         {
             auto g = generateArea.reduced (8, 6);
-            auto hero = g.removeFromRight (juce::jlimit (108, 140, g.getWidth() / 4));
-            generateButton.setBounds (hero.removeFromTop (44).reduced (4, 0));
-            auto row = hero.removeFromTop (26);
-            variationButton.setBounds (row.removeFromLeft (row.getWidth() / 2).reduced (2, 1));
+            auto hero = g.removeFromRight (juce::jlimit (200, 248, g.getWidth() / 3));
+            generateButton.setBounds (hero.removeFromTop (48).reduced (4, 0));
+            hero.removeFromTop (4);
+            auto row = hero.removeFromTop (28);
+            const int varyW = juce::jmax (112, row.getWidth() * 5 / 8);
+            variationButton.setBounds (row.removeFromLeft (varyW).reduced (2, 1));
             regenButton.setBounds (row.reduced (2, 1));
             auto bpmCol = g.removeFromRight (64);
             bpmLabel.setBounds (bpmCol.removeFromTop (16));
