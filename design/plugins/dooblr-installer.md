@@ -11,6 +11,8 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Spec and decisions so far: `design/dooblr-design-system.md` §14 dooblr installer (I).
 - `dooblr-installer/README.md`
+- **0.1.6**: suite list adds **dooblr-rhythm** (Mac and Windows VST3; kit is synthesised
+  in-plugin, no bundled samples).
 - **0.1.5**: suite list is q, kick, vocals, prophet, prophet-panel, bass, m, soothe, feedback,
   distressor, 0coast, generate, sub, chords, titan. New since 0.1.4: **dooblr-0coast**,
   **dooblr-generate**, **dooblr-sub** (generate existed in the repo but had no installer entry).
@@ -25,9 +27,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE app (target `DooblrInstaller`, product "dooblr installer")
-- Version: 0.1.5
+- Version: 0.1.6
 - Last source change: 2026-11-11
-- Source tree: `d58b268f9ed1` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-installer`)
+- Source tree: `6092dc75d776` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-installer`)
 - Window: resize limits 720x520..1400x1000
 - Build/test: `dooblr-installer/scripts/build.sh`
 - Build/test: target `DooblrInstallerTests` (CMakeLists.txt)
