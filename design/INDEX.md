@@ -26,11 +26,12 @@ outside the markers are never touched; keep them current with any behaviour chan
 | dooblr-distressor | 0.1.2 | JUCE effect VST3 | 14 | 2026-11-07 | [design/plugins/dooblr-distressor.md](plugins/dooblr-distressor.md) |
 | dooblr-feedback | 0.1.3 | JUCE effect VST3 | 22 | 2026-11-06 | [design/plugins/dooblr-feedback.md](plugins/dooblr-feedback.md) |
 | dooblr-generate | 0.3.1 | JUCE instrument VST3 | 10 | 2026-11-11 | [design/plugins/dooblr-generate.md](plugins/dooblr-generate.md) |
-| dooblr-installer | 0.1.5 | JUCE app |  | 2026-11-11 | [design/plugins/dooblr-installer.md](plugins/dooblr-installer.md) |
+| dooblr-installer | 0.1.6 | JUCE app |  | 2026-11-11 | [design/plugins/dooblr-installer.md](plugins/dooblr-installer.md) |
 | dooblr-kick | 0.3.8 | JUCE instrument VST3 | ~143 | 2026-11-11 | [design/plugins/dooblr-kick.md](plugins/dooblr-kick.md) |
 | dooblr-m | 0.1.5 | JUCE instrument VST3 | 50 | 2026-11-11 | [design/plugins/dooblr-m.md](plugins/dooblr-m.md) |
 | dooblr-prophet | 0.3.1 | JUCE instrument VST3; plus a Max for Live companion in `m4l/` | ~88 | 2026-10-31 | [design/plugins/dooblr-prophet.md](plugins/dooblr-prophet.md) |
 | dooblr-q | 0.9.5 | JUCE effect VST3 | 99 | 2026-10-28 | [design/plugins/dooblr-q.md](plugins/dooblr-q.md) |
+| dooblr-rhythm | 0.1.1 | JUCE instrument VST3 | 284 | 2026-11-12 | [design/plugins/dooblr-rhythm.md](plugins/dooblr-rhythm.md) |
 | dooblr-soothe | 0.1.3 | JUCE effect VST3 | 58 | 2026-10-31 | [design/plugins/dooblr-soothe.md](plugins/dooblr-soothe.md) |
 | dooblr-sub | 0.1.0 | JUCE effect VST3 | 19 | 2026-11-11 | [design/plugins/dooblr-sub.md](plugins/dooblr-sub.md) |
 | dooblr-throat | 0.2.1 | JUCE instrument VST3 | 26 | 2026-11-12 | [design/plugins/dooblr-throat.md](plugins/dooblr-throat.md) |

@@ -35,6 +35,7 @@ env:
     dooblr-0coast:DOOBLR0COAST:Dooblr0Coast
     dooblr-generate:DOOBLRGENERATE:DooblrGenerate
     dooblr-sub:DOOBLRSUB:DooblrSub
+    dooblr-rhythm:DOOBLRRHYTHM:DooblrRhythm
 
 jobs:
   mac:
