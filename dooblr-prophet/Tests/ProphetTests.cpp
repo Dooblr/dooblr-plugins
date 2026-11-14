@@ -24,6 +24,7 @@
 #include "DSP/SynthEngine.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cfloat>
 #include <cmath>
@@ -833,6 +834,52 @@ namespace
                         check (! blocks[i].intersects (blocks[j]), label + "blocks " + std::to_string (i) + " and " + std::to_string (j) + " do not overlap");
                 }
             }
+
+            // Tab buttons keep the same width on every page (FX has no mode switch, so they used
+            // to stretch). Status sits in the leftover gap: one line, never overlapping tabs or switches.
+            editor->selectPage (Editor::soundPage);
+            std::array<int, Editor::numPages> tabWidths {};
+            for (int i = 0; i < Editor::numPages; ++i)
+            {
+                auto* tab = editor->findChildWithID ("page_" + juce::String (Editor::pageName (i)));
+                tabWidths[(size_t) i] = tab != nullptr ? tab->getWidth() : 0;
+                check (tabWidths[(size_t) i] >= 84 && tabWidths[(size_t) i] <= 108,
+                       sizeLabel + "tab width capped: " + Editor::pageName (i)
+                           + " (" + std::to_string (tabWidths[(size_t) i]) + ")");
+            }
+            for (int page = 0; page < Editor::numPages; ++page)
+            {
+                editor->selectPage (page);
+                const auto label = sizeLabel + Editor::pageName (page) + ": ";
+                auto* status = editor->findChildWithID ("status");
+                for (int i = 0; i < Editor::numPages; ++i)
+                {
+                    auto* tab = editor->findChildWithID ("page_" + juce::String (Editor::pageName (i)));
+                    check (tab != nullptr && tab->getWidth() == tabWidths[(size_t) i],
+                           label + "tab width matches Sound: " + Editor::pageName (i)
+                               + " (" + std::to_string (tab != nullptr ? tab->getWidth() : 0)
+                               + " vs " + std::to_string (tabWidths[(size_t) i]) + ")");
+                    for (auto& t : editor->getModeToggles (page))
+                        check (tab == nullptr || ! tab->getBounds().intersects (t->getBounds()),
+                               label + "tab does not overlap mode switch: " + Editor::pageName (i));
+                    if (status != nullptr && status->isVisible() && tab != nullptr)
+                        check (! status->getBounds().intersects (tab->getBounds()),
+                               label + "status does not overlap tab: " + Editor::pageName (i));
+                }
+                if (status != nullptr && status->isVisible())
+                {
+                    check (status->getHeight() <= 18, label + "status is one line ("
+                                                          + std::to_string (status->getHeight()) + " px)");
+                    for (auto& t : editor->getModeToggles (page))
+                        check (! status->getBounds().intersects (t->getBounds()),
+                               label + "status does not overlap mode switch");
+                }
+            }
+            editor->selectPage (Editor::soundPage);
+            check (editor->getStatusText() == "2x oversampled" || editor->getStatusText() == "4x Poly-Mod FM",
+                   sizeLabel + "Sound status is the oversampling line (" + editor->getStatusText().toStdString() + ")");
+            check (! editor->getStatusText().containsIgnoreCase ("ladder"),
+                   sizeLabel + "Sound status does not repeat the ladder model");
         }
 
         editor->setSize (1080, 660);
@@ -947,24 +994,19 @@ namespace
         set (*p, id::echoOn, 1.0f);
         set (*p, id::reverbOn, 1.0f);
         editor->updateEnablement();
-        // Snapshots: a chord sounding so the live graphs show something. Each tab at 1080x660,
-        // and the Sound (main) page at all three sizes.
+        // Snapshots: a chord sounding so the live graphs show something. Each tab at every size.
         render (*p, 24000, { { 0, on (48) }, { 0, on (55) }, { 0, on (60) }, { 0, on (64) } });
-        editor->setSize (1080, 660);
-        for (int page = 0; page < Editor::numPages; ++page)
-        {
-            editor->selectPage (page);
-            for (auto& graph : editor->getGraphs (page))
-                graph->refresh();
-            saveSnapshot (*editor, juce::String ("-") + Editor::pageName (page) + "-1080x660");
-        }
         for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
         {
             editor->setSize (size.x, size.y);
-            editor->selectPage (Editor::soundPage);
-            for (auto& graph : editor->getGraphs (Editor::soundPage))
-                graph->refresh();
-            saveSnapshot (*editor, juce::String ("-Sound-") + juce::String (size.x) + "x" + juce::String (size.y));
+            for (int page = 0; page < Editor::numPages; ++page)
+            {
+                editor->selectPage (page);
+                for (auto& graph : editor->getGraphs (page))
+                    graph->refresh();
+                saveSnapshot (*editor, juce::String ("-") + Editor::pageName (page) + "-"
+                                       + juce::String (size.x) + "x" + juce::String (size.y));
+            }
         }
 
         // Hover readout last, so the snapshots show the graphs without one.

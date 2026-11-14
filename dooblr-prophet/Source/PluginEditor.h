@@ -16,11 +16,11 @@ namespace dooblrprophet
 {
     /**
         The editor (design/dooblr-design-system.md): a 60 px header (title, version, undo / redo,
-        presets, output), a horizontal tab bar (Sound / Modulation / Voices / FX) with the page's
-        mode switches, then per page a graph strip and the control panels. The Sound tab holds
-        oscillators, mixer, filter envelope, filter, amp envelope and basic modulation. Ignored
-        controls are dimmed, never hidden. Cmd-Z undoes, Cmd-Shift-Z / Cmd-Y redo; every other
-        key goes to the host.
+        presets, output), a horizontal tab bar (Sound / Modulation / Voices / FX) with equal-width
+        tab buttons and the page's mode switches, then per page a graph strip and the control
+        panels. The Sound tab holds oscillators, mixer, filter envelope, filter, amp envelope and
+        basic modulation. Ignored controls are dimmed, never hidden. Cmd-Z undoes, Cmd-Shift-Z /
+        Cmd-Y redo; every other key goes to the host.
     */
     class DooblrProphetEditor final : public juce::AudioProcessorEditor,
                                       private juce::Timer,

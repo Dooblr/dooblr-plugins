@@ -68,8 +68,9 @@ namespace dooblrprophet
         styleLabel (subtitleLabel, "v" JucePlugin_VersionString, 13.0f, Palette::textMuted, juce::Justification::centredLeft);
         subtitleLabel.setComponentID ("version");
         styleLabel (outputCaption, "Output", 13.0f, Palette::textMuted, juce::Justification::centredRight);
-        styleLabel (statusLabel, {}, 12.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (statusLabel, {}, 12.0f, Palette::textMuted, juce::Justification::centredLeft);
         statusLabel.setComponentID ("status");
+        statusLabel.setMinimumHorizontalScale (0.85f);
 
         for (auto* label : { &titleLabel, &subtitleLabel, &outputCaption, &statusLabel })
             addAndMakeVisible (label);
@@ -585,12 +586,21 @@ namespace dooblrprophet
             auto bar = tabBarArea.reduced (margin, 4);
             toggleCaptionAreas.clear();
 
+            const auto toggleSpaceFor = [] (const PageContent& content)
+            {
+                int space = 0;
+                for (int i = 0; i < (int) content.toggles.size(); ++i)
+                    space += juce::jmax (ui::SegmentedToggle::minWidth, content.toggleWidths[(size_t) i]) + 52 + 8;
+                return space;
+            };
+
+            // Tab width ignores this page's mode switches, so Sound and FX stay the same size.
+            int maxToggleSpace = 0;
+            for (const auto& page : pages)
+                maxToggleSpace = juce::jmax (maxToggleSpace, toggleSpaceFor (page));
+
             auto& content = pages[(size_t) selectedPage];
-            int toggleSpace = 0;
-
-            for (int i = 0; i < (int) content.toggles.size(); ++i)
-                toggleSpace += juce::jmax (ui::SegmentedToggle::minWidth, content.toggleWidths[(size_t) i]) + 52 + 8;
-
+            const int toggleSpace = toggleSpaceFor (content);
             auto toggleBar = toggleSpace > 0 && toggleSpace < bar.getWidth()
                                  ? bar.removeFromRight (toggleSpace)
                                  : juce::Rectangle<int>{};
@@ -604,11 +614,15 @@ namespace dooblrprophet
                 toggleBar.removeFromRight (8);
             }
 
-            const auto tabWidth = juce::jmax (88, (bar.getWidth() - 8) / juce::jmax (1, (int) numPages + (bar.getWidth() > 400 ? 1 : 0)));
+            const auto fullBarWidth = tabBarArea.reduced (margin, 4).getWidth();
+            const auto tabsBudget = juce::jmax (0, fullBarWidth - (maxToggleSpace < fullBarWidth ? maxToggleSpace : 0));
+            const auto tabWidth = juce::jlimit (88, 112,
+                                                (tabsBudget - 8) / juce::jmax (1, (int) numPages + (tabsBudget > 200 ? 1 : 0)));
             for (auto& button : pageButtons)
                 button.setBounds (bar.removeFromLeft (tabWidth).reduced (2, 1));
 
-            statusLabel.setBounds (bar.reduced (6, 0));
+            // One line only: a taller box would wrap "2x oversampled" onto two lines.
+            statusLabel.setBounds (bar.reduced (8, 0).withSizeKeepingCentre (juce::jmax (0, bar.getWidth() - 16), 16));
             statusLabel.setVisible (statusLabel.getWidth() >= 80);
         }
 
