@@ -17,9 +17,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: Max for Live MIDI effect that writes chord progressions into Session View clip slots.
-- Version: 0.6.1
+- Version: 0.6.2
 - Last source change: 2026-11-14
-- Source tree: `c49184e3e389` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chords`)
+- Source tree: `2419f94ac03c` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chords`)
 - Build/test: `dooblr-chords/scripts/build.js`
 - Device: device width 640 px
 
@@ -84,7 +84,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | `tests/lead.test.js` |  |
 | `tests/load-engine.js` | Loads the ES5 engine into a fresh VM context, in manifest order, with the post-ES5 built-ins removed so an... |
 | `tests/max-glue.test.js` | Runs the BUILT device scripts (device/dooblr-chords/*.js) in a VM with a mocked Max runtime (outlet, post,... |
-| `tests/notes.test.js` |  |
+| `tests/notes.test.js` | Query once every voice of this chord has attacked (humanize may delay a start slightly). |
 | `tests/smf.js` | Builds Standard MIDI File bytes for tests. |
 | `tests/source.test.js` | Am F C G (one bar each), with a bass note under each chord. |
 | `tests/theory.test.js` | Church modes are rotations of the major scale at their parent offset. |
@@ -96,7 +96,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - `tests/generator.test.js` (11): progression length matches the Length setting (2..16), same seed and settings give identical output; different seeds differ, chromatic 0 is strictly diatonic in every mode and colour, more chromatic means more substitutions, and all four kinds appear, raising Color only adds tones and keeps the roots (chromatic 0), progressions usually start on the tonic and end with a cadence, no diminished opening chord and no immediate repeats of a degree, lock and reroll keeps locked chords exactly, locked chords are stored relative to the key, so they follow a key change, clip name format, newSeed stays in range
 - `tests/lead.test.js` (7): lead output is deterministic for a given seed and settings, lead notes stay in the key when Spice is 0, lead is monophonic: one note at a time, no overlaps, lead lasts the full clip and does not run past the end, strong beats are mostly chord tones, clip names and heading show Lead; default build is still a chord clip, Lead uses locked chords in the harmonic grid
 - `tests/max-glue.test.js` (20): no Live API use before live.thisdevice, then writes into the first empty slot, fills slots in order and reports a full track without creating scenes, falls back to set_notes when add_new_notes adds nothing, finds the track from inside a rack, parameters update the preview without writing, lock and reroll keep locked chords, Reroll is dimmed without locks, Seed is drawn partly ignored when every chord is locked, shrinking Length drops locks beyond the end, a dropped .mid file becomes the source; Generate writes a variation of it, dropped files that are not usable MIDI report a warning and keep the old source, a path re-sent while the Set loads keeps the saved Root, Mode and Length, USE CLIP reads the Detail View clip loop, shifted to start at 0, USE CLIP falls back to the highlighted slot and explains audio or missing clips, with a source, locks survive Reroll and switching VAR/B clears them, display paints 4 and 12 chords and maps clicks to lock messages, display shows the source strip, the VARIATION heading and changed chords, overlay panels start closed, toggle from js, and reset on init, Lead toggle writes a monophonic lead clip and relabels Generate, Lead over a source names the clip Lead · <name> · VAR and keeps the source chords, Notes tab sets the chord type and clip name
-- `tests/notes.test.js` (5): default Notes is Triad (3), and 0.6.0 Auto/2 values fall back to a triad, each Notes setting yields exactly N distinct upper pitch classes, Color and Spice do not change the Notes count, block names and applyNotes spelling match the chord type, Notes forces VAR/B derived chords to N pitch classes
+- `tests/notes.test.js` (6): default Notes is Triad (3), and 0.6.0 Auto/2 values fall back to a triad, each Notes setting writes exactly N unique MIDI notes, including the bass, the clip note list has exactly N unique sounding voices at each chord onset, Color and Spice do not change the Notes count, block names and applyNotes spelling match the chord type, Notes forces VAR/B derived chords to N sounding voices
 - `tests/source.test.js` (12): midifile reads notes in beats, names, running status and note-on 0 offs, midifile reads format 1, other divisions and rounds the length up to whole bars, midifile rejects files that are not SMF with readable errors, analysis finds the chords and key of a block-chord clip, analysis merges repeated chords, ignores muted notes and reports empty clips, analysis round-trips generated progressions (pitch classes match), VAR keeps the key, length, rhythm, first and last chords, and is deterministic, VAR with Chromatic 0 stays in the key; other lengths use uniform slots, VAR keeps locked chords, B section moves away, ends on a chord that leads home, and fills the clip, B section keeps the rhythm plan when asked (locks during Reroll), engine without a source is unchanged by the kind setting
 - `tests/theory.test.js` (5): modes have the expected interval sets, diatonic triad qualities per mode, key spelling follows the key signature, chord building and naming, extensions avoid minor-9th clashes except b9/b13 on dominants
 - `tests/tooling.test.js` (4): amxd: chunk layout and round trip, validator: the source patcher is clean, validator: catches duplicate ids, dangling lines and bad indices, ES5 scanner rejects ES2015+ syntax and accepts ES5
