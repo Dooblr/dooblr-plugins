@@ -2,8 +2,8 @@
 
 A Max for Live MIDI effect that shows the dooblr-prophet controls inside Live's device view, so you
 can play and tweak the synth without opening the plug-in window. It mirrors the editor: same colours,
-section names and order, knob style, the six pages (Oscillators, Filters, Envelopes, Modulation,
-Voices, FX), the header (preset, Undo/Redo, Random, Save/Load, Output, meter) and the live graphs.
+section names and order, knob style, the four tabs (Sound, Modulation, Voices, FX), the header
+(preset, Undo/Redo, Random, Save/Load, Output, meter) and the live graphs.
 It is two-way: automation, presets, Random and edits made in the plug-in window all show up in the
 panel, and edits in the panel go straight to the plug-in.
 
