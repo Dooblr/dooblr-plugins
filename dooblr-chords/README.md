@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.6.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.6.2. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -30,10 +30,12 @@ Version 0.6.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   replaced by #11 in Lydian contexts, or otherwise by 13 (so Cmaj13 or G13,
   but Fmaj9#11 and Am11). The default is Triad. Color and Spice still colour
   the tones (alterations, borrowed chords and substitutions) but they do not
-  change how many notes each chord has. When Bass is on, the bass is a root
-  doubling and is not counted; a slash bass is also extra. Every upper
-  voicing has exactly that many distinct pitch classes — the fifth is never
-  dropped, and octave doublings are not added. The blocks and clip names
+  change how many notes each chord has. Notes N is the number of MIDI notes
+  written for each chord, including the bass. When Bass is on, the bass is
+  one of those N notes and takes the root out of the upper voicing, so a
+  triad still has three sounding voices. A slash bass is also one of the N
+  (a triad inversion stays three notes). Octave doublings are not added, and
+  notes end at or before the next chord starts. The blocks and clip names
   show the resulting type (Cmaj7, Am9, …). Notes is dimmed while Lead is on,
   because a lead line is monophonic.
 * **Voicing** uses voice leading between chords, with Register, Spread (close,
@@ -101,7 +103,7 @@ off-screen, so they cannot be clicked through the overlay.
 | | **Reroll** | Picks a new seed, keeps locked chords and writes a clip. It is dimmed until a chord is locked. |
 | | source badge | When a source is loaded, a small chip such as `VAR · my riff` appears under Reroll, so that state is not hidden in the Source panel. |
 | Main | **Root**, **Mode**, **Length** | Key, scale and number of chords. |
-| | **Notes** | Chord type: TRI (triad, 3 notes), 7TH (4), 9TH (5) or 11TH (6). The default is Triad. Color and Spice colour the tones but do not change the count. Bass, when on, adds a root doubling that is not counted. Dimmed while Lead is on. |
+| | **Notes** | Chord type: TRI (triad, 3 notes), 7TH (4), 9TH (5) or 11TH (6). The default is Triad. Color and Spice colour the tones but do not change the count. Bass, when on, is one of the N sounding notes. Dimmed while Lead is on. |
 | | **Color**, **Spice** | Color adds extensions. Spice is the Chromatic parameter: borrowed chords and substitutions. The Live parameter name is still Chromatic. |
 | | **ADVANCED …** | Opens the Advanced overlay. |
 | | **SOURCE …** | Opens the Source overlay. |
@@ -219,7 +221,7 @@ the files in `device/`, because they are generated.
    notes each chord has. With Notes on TRI, Color 100 still gives 3-note
    chords; Spice still adds borrowed chords and substitutions.
 8. Notes defaults to **TRI**. Every block is a triad (or sus), and the clip
-   name includes `TRI`. Set it to **7TH**: every chord has four pitch classes
+   name includes `TRI`. With Bass on, a triad still has three sounding notes. Set it to **7TH**: every chord has four sounding notes
    and names such as Am7 or Cmaj7. **9TH** gives five (Am9, Cmaj9, G9).
    **11TH** gives six (Am11, Fmaj9#11, G13 — a clashing natural 11 becomes
    #11 or 13). Turn Lead on: Notes dims, with a tooltip saying why.
@@ -327,10 +329,11 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
-* The 0.6.1 Notes tab in Live: the TRI / 7TH / 9TH / 11TH labels fitting the
-  tab, default Triad, Color not changing the count, block and clip names
-  matching the type (Cmaj7, Am9, Fmaj9#11, G13), Bass as an uncounted root
-  doubling, and Notes dimming when Lead is on, with a tooltip that says why.
+* The 0.6.2 Notes count in Live: each chord writing exactly N sounding MIDI
+  notes (Bass included), triad inversions staying three notes, notes not
+  overlapping the next chord, plus the 0.6.1 tab labels, default Triad,
+  Color not changing the count, block and clip names (Cmaj7, Am9, Fmaj9#11,
+  G13), and Notes dimming when Lead is on.
 * The 0.5.0 Lead toggle in Live: the large gold on-state, the Generate label
   changing to "Generate Lead", Density dimming when Lead is off, and the
   monophonic lead clip sounding over the shown chords.

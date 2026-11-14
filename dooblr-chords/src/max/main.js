@@ -53,7 +53,7 @@ var BUTTON_HINTS = {
   clearsource: 'CLEAR forgets the source, so Generate makes fresh progressions again.',
   kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.',
   lead: 'LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.',
-  notes: 'Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones — alterations, borrowed chords and substitutions — but they do not change how many notes each chord has. When Bass is on, the bass is a root doubling and is not counted.'
+  notes: 'Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones — alterations, borrowed chords and substitutions — but they do not change how many notes each chord has. When Bass is on, the bass is one of those notes: it takes the root out of the upper voicing, so a triad still has three sounding voices. A slash bass is also one of the N.'
 };
 
 // Overlay panels. Members are parked off-screen in the saved patcher (x = PARK_X).

@@ -635,17 +635,17 @@ test('Notes tab sets the chord type and clip name', () => {
   t.ctx.write();
   assert.match(t.live.slots[0].clip.name, /TRI/);
   const triad = t.live.slots[0].clip.notes.filter((n) => n.start_time === 0).length;
-  assert.strictEqual(triad, 3 + 1, 'TRI with Bass on: 3 upper + bass');
+  assert.strictEqual(triad, 3, 'TRI with Bass on: 3 sounding notes, bass included');
 
   t.ctx.param('notes', 1); // 7TH
   t.ctx.write();
   assert.match(t.live.slots[1].clip.name, /7th/);
   const sev = t.live.slots[1].clip.notes.filter((n) => n.start_time === 0).length;
-  assert.strictEqual(sev, 4 + 1, '7TH with Bass on: 4 upper + bass');
+  assert.strictEqual(sev, 4, '7TH with Bass on: 4 sounding notes, bass included');
 
   t.ctx.param('notes', 3); // 11TH
   t.ctx.write();
   assert.match(t.live.slots[2].clip.name, /11th/);
   const hex = t.live.slots[2].clip.notes.filter((n) => n.start_time === 0).length;
-  assert.strictEqual(hex, 6 + 1, '11TH with Bass on: 6 upper + bass');
+  assert.strictEqual(hex, 6, '11TH with Bass on: 6 sounding notes, bass included');
 });

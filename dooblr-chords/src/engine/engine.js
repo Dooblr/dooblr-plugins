@@ -5,7 +5,7 @@ DC.engine = (function () {
   var T = DC.theory, C = DC.chords, G = DC.generator, V = DC.voicing, RN = DC.render;
   var A = DC.analysis, DV = DC.derive, MF = DC.midifile, L = DC.lead;
 
-  var VERSION = '0.6.1';
+  var VERSION = '0.6.2';
   var KINDS = [{ id: 'var', label: 'VAR', long: 'Variation' }, { id: 'b', label: 'B', long: 'B section' }];
   var DURATIONS = [
     { label: '1/2', beats: 2 },

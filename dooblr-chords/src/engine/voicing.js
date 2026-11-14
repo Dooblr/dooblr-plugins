@@ -25,19 +25,33 @@ DC.voicing = (function () {
     return iv;
   }
 
-  // Notes 3..6: the chord has already been (or is now) forced to N stacked
-  // thirds. The upper voicing uses every distinct pitch class; the Bass note
-  // (a root doubling) and a slash bass are extra and not counted. The fifth
-  // is never dropped, and octave doublings are not added.
+  // Notes 3..6 is the total number of MIDI notes in the voicing, including
+  // the bass. When Bass is on (or the chord is a slash chord), the bass
+  // carries the root (or the slash tone) and that interval is dropped from
+  // the upper voicing so the total stays N. A triad with a slash bass is a
+  // 3-note inversion. Octave doublings are not added.
   function pickUpper(chord, opts) {
     var target = Math.round(opts.notes || 0);
     if (target >= 3 && target <= 6) { C.applyNotes(chord, target); }
-    return { iv: C.tones(chord), doublings: 0 };
+    var iv = C.tones(chord);
+    if (opts.bass || chord.slash) { iv = removeIv(iv, C.bassInterval(chord)); }
+    return { iv: iv, doublings: 0 };
   }
 
   function removeIv(list, v) {
     var out = [];
     for (var i = 0; i < list.length; i++) { if (list[i] !== v) { out.push(list[i]); } }
+    return out;
+  }
+
+  function pitchIn(list, p) {
+    var i;
+    for (i = 0; i < list.length; i++) { if (list[i] === p) { return true; } }
+    return false;
+  }
+  function uniquePitches(list) {
+    var out = [], i;
+    for (i = 0; i < list.length; i++) { if (!pitchIn(out, list[i])) { out.push(list[i]); } }
     return out;
   }
 
@@ -56,7 +70,9 @@ DC.voicing = (function () {
 
   function applySpread(notes, mode) {
     var n = notes.slice(0), len = n.length;
-    if (mode === 0 || len < 3) { return n; }
+    if (mode === 0 || len < 2) { return n; }
+    // A 2-note upper (TRI + Bass) still opens by an octave; that is not a doubling.
+    if (len === 2) { n[1] += 12; return sortNum(n); }
     if (mode === 1) { n[len - 2] -= 12; return sortNum(n); }
     if (len >= 4) { n[len - 2] -= 12; n[len - 4] -= 12; return sortNum(n); }
     n[1] += 12; // open triad: root, fifth, tenth
@@ -132,7 +148,10 @@ DC.voicing = (function () {
     } else if (chord.slash) {
       bass = upper[0] - 1 - T.mod12(upper[0] - 1 - bassPcV);
     }
-    var all = clampOctaves(bass === null ? upper : [bass].concat(upper));
+    if (bass !== null) {
+      while (pitchIn(upper, bass) && bass - 12 >= 0) { bass -= 12; }
+    }
+    var all = uniquePitches(clampOctaves(bass === null ? upper : [bass].concat(upper)));
     var outBass = bass === null ? null : all[0];
     var outUpper = bass === null ? all : all.slice(1);
     return { upper: outUpper, bass: outBass, notes: sortNum(all.slice(0)), intervals: iv };

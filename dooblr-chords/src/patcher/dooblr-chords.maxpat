@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.6.1",
+					"text": "v0.6.2",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -3871,7 +3871,7 @@
 						1
 					],
 					"annotation_name": "Notes",
-					"annotation": "Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones, but they do not change how many notes each chord has. When Bass is on, the bass is a root doubling and is not counted.",
+					"annotation": "Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones, but they do not change how many notes each chord has. When Bass is on, the bass is one of those notes (it takes the root out of the upper voicing). A slash bass is also one of the N, so a triad inversion stays three notes.",
 					"id": "obj-93",
 					"patching_rect": [
 						196,
