@@ -17,4 +17,9 @@ target_link_libraries(DooblrProphetTests
         juce::juce_recommended_config_flags
         juce::juce_recommended_warning_flags)
 
+if(UNIX AND NOT APPLE)
+    find_package(X11 REQUIRED)
+    target_link_libraries(DooblrProphetTests PRIVATE X11::X11)
+endif()
+
 add_test(NAME DooblrProphetTests COMMAND DooblrProphetTests)

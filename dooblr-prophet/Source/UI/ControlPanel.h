@@ -37,6 +37,8 @@ namespace dooblrprophet::ui
             int hiddenLeadingChoices = 0;
             /** >= 0: the fixed slot this control shares (see the class comment). */
             int slot = -1;
+            /** >= 0: pack this control into a grid cell with others that share the id. */
+            int stack = -1;
         };
 
         ControlPanel (juce::AudioProcessorValueTreeState& state, const juce::String& title, juce::Colour colour,
@@ -65,10 +67,13 @@ namespace dooblrprophet::ui
         /** Height needed for the controls at the given width. */
         int getPreferredHeight (int width) const;
 
+        /** Narrowest width at which the panel stays on one knob row (knobs may shrink to 56 px). */
+        int getMinOneRowWidth() const;
+
         /** The bounds reserved for a slot (empty if there is none); for the editor and tests. */
         juce::Rectangle<int> getSlotBounds (int slot) const;
 
-        static constexpr int titleHeight = 20, knobWidth = 70, knobHeight = 84, comboWidth = 128, toggleWidth = 104;
+        static constexpr int titleHeight = 16, knobWidth = 70, knobHeight = 72, comboWidth = 128, toggleWidth = 104;
 
     private:
         struct Item
@@ -133,7 +138,7 @@ namespace dooblrprophet::ui
         void enablementChanged() override { repaint(); }
         std::unique_ptr<juce::AccessibilityHandler> createAccessibilityHandler() override;
 
-        static constexpr int minWidth = 236, minHeight = 32;
+        static constexpr int minWidth = 180, minHeight = 32;
 
     private:
         int segmentAt (juce::Point<int> position) const;

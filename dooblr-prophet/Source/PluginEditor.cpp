@@ -27,8 +27,20 @@ namespace dooblrprophet
         }
 
         constexpr int factoryIdBase = 1, userIdBase = 1001;
-        constexpr int headerHeight = 60, navWidth = 150, titleBarHeight = 44, margin = 12, panelGap = 8;
+        constexpr int headerHeight = 60, tabBarHeight = 36, margin = 10, panelGap = 6;
         constexpr int meterWidth = 34, minGraphHeight = 120;
+
+        juce::Colour colourForPanel (const juce::String& title, int page)
+        {
+            if (title.containsIgnoreCase ("OSC") || title == "MIXER")
+                return Palette::accent;
+            if (title.containsIgnoreCase ("FILTER") || title.containsIgnoreCase ("HIGH-PASS")
+                || title.containsIgnoreCase ("LOW-PASS") || title.containsIgnoreCase ("AMP"))
+                return title.containsIgnoreCase ("AMP") ? Palette::master : Palette::dynamic;
+            if (title.containsIgnoreCase ("LFO") || title.containsIgnoreCase ("POLY-MOD") || title.containsIgnoreCase ("MOD"))
+                return Palette::frozen;
+            return ui::pageColour (page);
+        }
 
         float valueOf (juce::AudioProcessorValueTreeState& state, const char* pid)
         {
@@ -106,7 +118,7 @@ namespace dooblrprophet
             button.setRadioGroupId (2001);
             button.setClickingTogglesState (true);
             button.setColour (juce::TextButton::buttonOnColourId, ui::pageColour (page).withAlpha (0.35f));
-            button.onClick = [this, page] { if (pageButtons[(size_t) page].getToggleState()) selectPage (page); };
+            button.onClick = [this, page] { selectPage (page); };
             addAndMakeVisible (button);
         }
 
@@ -115,7 +127,7 @@ namespace dooblrprophet
         synth.presetChanged.addChangeListener (this);
         refreshPresetBox();
         updateUndoButtons();
-        selectPage (oscillatorsPage);
+        selectPage (soundPage);
         updateEnablement();
         updatePageStatus();
 
@@ -136,7 +148,7 @@ namespace dooblrprophet
     ui::ControlPanel& DooblrProphetEditor::addPanel (int page, const juce::String& title, const std::vector<Spec>& specs)
     {
         auto& content = pages[(size_t) page];
-        content.panels.push_back (std::make_unique<ui::ControlPanel> (state, title, ui::pageColour (page), specs));
+        content.panels.push_back (std::make_unique<ui::ControlPanel> (state, title, colourForPanel (title, page), specs));
         addChildComponent (*content.panels.back());
         return *content.panels.back();
     }
@@ -162,18 +174,26 @@ namespace dooblrprophet
         const auto source = [&p = synth] { return p.readSettings(); };
         auto& tap = synth.getEngine().getVoiceTap();
 
-        pages[oscillatorsPage].graph = std::make_unique<ui::OscillatorDisplay> (source);
         auto& apvts = synth.getState();
-        pages[filtersPage].graph = std::make_unique<ui::FilterDisplay> (
+        auto& sound = pages[(size_t) soundPage];
+        sound.graphs.push_back (std::make_unique<ui::OscillatorDisplay> (source));
+        sound.graphs.back()->setComponentID ("graph_osc");
+        sound.graphs.push_back (std::make_unique<ui::FilterDisplay> (
             source, ui::FilterDisplay::Parameters { apvts.getParameter (id::lpfCutoff), apvts.getParameter (id::lpfReso),
-                                                    apvts.getParameter (id::hpfCutoff), apvts.getParameter (id::hpfReso) });
-        pages[envelopesPage].graph = std::make_unique<ui::EnvelopeDisplay> (source);
-        pages[modulationPage].graph = std::make_unique<ui::LfoDisplay> (source, tap);
-        pages[voicesPage].graph = std::make_unique<ui::VoiceDisplay> (source, tap);
-        pages[fxPage].graph = std::make_unique<ui::FxDisplay> (source, [&p = synth] { return p.getHostBpm(); });
+                                                    apvts.getParameter (id::hpfCutoff), apvts.getParameter (id::hpfReso) }));
+        sound.graphs.back()->setComponentID ("graph_filter");
+        sound.graphs.push_back (std::make_unique<ui::EnvelopeDisplay> (source));
+        sound.graphs.back()->setComponentID ("graph_env");
+        pages[(size_t) modulationPage].graphs.push_back (std::make_unique<ui::LfoDisplay> (source, tap));
+        pages[(size_t) modulationPage].graphs.back()->setComponentID ("graph_lfo");
+        pages[(size_t) voicesPage].graphs.push_back (std::make_unique<ui::VoiceDisplay> (source, tap));
+        pages[(size_t) voicesPage].graphs.back()->setComponentID ("graph_voices");
+        pages[(size_t) fxPage].graphs.push_back (std::make_unique<ui::FxDisplay> (source, [&p = synth] { return p.getHostBpm(); }));
+        pages[(size_t) fxPage].graphs.back()->setComponentID ("graph_fx");
 
         for (auto& content : pages)
-            addChildComponent (*content.graph);
+            for (auto& graph : content.graphs)
+                addChildComponent (*graph);
 
         // The pages, panels and controls come from layout::pages() (shared with the remote link).
         const auto& layoutPages = layout::pages();
@@ -190,7 +210,7 @@ namespace dooblrprophet
             {
                 std::vector<Spec> specs;
                 for (const auto& c : panelDef.controls)
-                    specs.push_back ({ c.id, c.caption, c.kind });
+                    specs.push_back ({ c.id, c.caption, c.kind, c.width, 0, -1, c.stack });
                 auto& panel = addPanel (page, panelDef.title, specs);
 
                 if (panelDef.voicePresets)
@@ -273,7 +293,9 @@ namespace dooblrprophet
         {
             const bool shown = p == selectedPage;
             auto& content = pages[(size_t) p];
-            content.graph->setVisible (shown);
+
+            for (auto& graph : content.graphs)
+                graph->setVisible (shown);
 
             for (auto& panel : content.panels)
                 panel->setVisible (shown);
@@ -507,19 +529,14 @@ namespace dooblrprophet
 
         g.setColour (Palette::panel);
         g.fillRect (headerArea);
-        g.fillRect (navArea);
+        g.fillRect (tabBarArea);
 
         g.setColour (Palette::divider);
         g.fillRect (headerArea.getX(), headerArea.getBottom() - 1, headerArea.getWidth(), 1);
-        g.fillRect (navArea.getRight() - 1, navArea.getY(), 1, navArea.getHeight());
+        g.fillRect (tabBarArea.getX(), tabBarArea.getBottom() - 1, tabBarArea.getWidth(), 1);
 
         g.setColour (Palette::accent);
         g.fillRect (headerArea.getX() + 20, headerArea.getY() + 14, 3, headerArea.getHeight() - 28);
-
-        const auto colour = ui::pageColour (selectedPage);
-        g.setColour (colour);
-        g.setFont (juce::FontOptions (15.0f, juce::Font::bold));
-        g.drawText (juce::String (pageName (selectedPage)).toUpperCase(), titleBarArea.withWidth (160), juce::Justification::centredLeft);
 
         g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
         g.setColour (Palette::textMuted);
@@ -527,9 +544,6 @@ namespace dooblrprophet
 
         for (size_t i = 0; i < toggleCaptionAreas.size() && (int) i < captions.size(); ++i)
             g.drawText (captions[(int) i], toggleCaptionAreas[i], juce::Justification::centredRight);
-
-        g.setColour (Palette::divider);
-        g.fillRect (titleBarArea.getX(), titleBarArea.getBottom() + 3, titleBarArea.getWidth(), 1);
     }
 
     void DooblrProphetEditor::resized()
@@ -566,75 +580,174 @@ namespace dooblrprophet
             presetBox.setBounds (header.removeFromRight (presetWidth).withSizeKeepingCentre (presetWidth, 26));
         }
 
-        navArea = bounds.removeFromLeft (navWidth);
+        tabBarArea = bounds.removeFromTop (tabBarHeight);
         {
-            auto nav = navArea.reduced (12, 16);
-            const auto pitch = juce::jlimit (28, 44, nav.getHeight() / numPages);
+            auto bar = tabBarArea.reduced (margin, 4);
+            toggleCaptionAreas.clear();
 
+            auto& content = pages[(size_t) selectedPage];
+            int toggleSpace = 0;
+
+            for (int i = 0; i < (int) content.toggles.size(); ++i)
+                toggleSpace += juce::jmax (ui::SegmentedToggle::minWidth, content.toggleWidths[(size_t) i]) + 52 + 8;
+
+            auto toggleBar = toggleSpace > 0 && toggleSpace < bar.getWidth()
+                                 ? bar.removeFromRight (toggleSpace)
+                                 : juce::Rectangle<int>{};
+
+            for (int i = (int) content.toggles.size() - 1; i >= 0; --i)
+            {
+                auto& t = *content.toggles[(size_t) i];
+                const auto width = juce::jmax (ui::SegmentedToggle::minWidth, content.toggleWidths[(size_t) i]);
+                t.setBounds (toggleBar.removeFromRight (width).withSizeKeepingCentre (width, juce::jmin (bar.getHeight(), 32)));
+                toggleCaptionAreas.insert (toggleCaptionAreas.begin(), toggleBar.removeFromRight (52).withTrimmedRight (6));
+                toggleBar.removeFromRight (8);
+            }
+
+            const auto tabWidth = juce::jmax (88, (bar.getWidth() - 8) / juce::jmax (1, (int) numPages + (bar.getWidth() > 400 ? 1 : 0)));
             for (auto& button : pageButtons)
-                button.setBounds (nav.removeFromTop (pitch).reduced (0, 3));
+                button.setBounds (bar.removeFromLeft (tabWidth).reduced (2, 1));
+
+            statusLabel.setBounds (bar.reduced (6, 0));
+            statusLabel.setVisible (statusLabel.getWidth() >= 80);
         }
 
         contentArea = bounds.reduced (margin);
         layoutPage (selectedPage);
     }
 
+    ui::OscillatorDisplay* DooblrProphetEditor::getOscillatorDisplay() const
+    {
+        for (auto& g : pages[(size_t) soundPage].graphs)
+            if (auto* d = dynamic_cast<ui::OscillatorDisplay*> (g.get()))
+                return d;
+        return nullptr;
+    }
+
+    ui::FilterDisplay* DooblrProphetEditor::getFilterDisplay() const
+    {
+        for (auto& g : pages[(size_t) soundPage].graphs)
+            if (auto* d = dynamic_cast<ui::FilterDisplay*> (g.get()))
+                return d;
+        return nullptr;
+    }
+
+    ui::EnvelopeDisplay* DooblrProphetEditor::getEnvelopeDisplay() const
+    {
+        for (auto& g : pages[(size_t) soundPage].graphs)
+            if (auto* d = dynamic_cast<ui::EnvelopeDisplay*> (g.get()))
+                return d;
+        return nullptr;
+    }
+
+    ui::LfoDisplay* DooblrProphetEditor::getLfoDisplay() const
+    {
+        for (auto& g : pages[(size_t) modulationPage].graphs)
+            if (auto* d = dynamic_cast<ui::LfoDisplay*> (g.get()))
+                return d;
+        return nullptr;
+    }
+
     void DooblrProphetEditor::layoutPage (int page)
     {
         auto area = contentArea;
         auto& content = pages[(size_t) page];
+        auto rows = content.rows;
 
-        // Title bar: page title, status, then each mode switch with its caption on the right.
-        titleBarArea = area.removeFromTop (titleBarHeight - 8);
-        area.removeFromTop (8);
-        toggleCaptionAreas.clear();
+        const auto widthsForRow = [&] (const std::vector<int>& row) -> std::vector<int>
         {
-            auto bar = titleBarArea;
-            bar.removeFromLeft (160);
-
-            for (int i = (int) content.toggles.size() - 1; i >= 0; --i)
-            {
-                auto& t = *content.toggles[(size_t) i];
-                const auto width = content.toggleWidths[(size_t) i];
-                t.setBounds (bar.removeFromRight (width).withSizeKeepingCentre (width, juce::jmin (bar.getHeight(), 32)));
-                toggleCaptionAreas.insert (toggleCaptionAreas.begin(), bar.removeFromRight (58).withTrimmedRight (8));
-                bar.removeFromRight (8);
-            }
-
-            // The status line only shows where it has room (it carries no control).
-            statusLabel.setBounds (bar.reduced (4, 0));
-            statusLabel.setVisible (statusLabel.getWidth() >= 120);
-        }
-
-        // Panels from the bottom up, each row sharing its width by the panels' natural widths.
-        std::vector<int> rowHeights;
-        int panelsHeight = 0;
-
-        for (const auto& row : content.rows)
-        {
-            const auto rowWidth = (area.getWidth() - panelGap * ((int) row.size() - 1)) / (int) row.size();
-            int height = 0;
+            std::vector<int> mins, widths (row.size(), 0);
+            int sum = 0;
 
             for (auto index : row)
-                height = juce::jmax (height, content.panels[(size_t) index]->getPreferredHeight (rowWidth));
+            {
+                const auto w = juce::jmax (80, content.panels[(size_t) index]->getMinOneRowWidth());
+                mins.push_back (w);
+                sum += w;
+            }
+
+            const int gaps = panelGap * juce::jmax (0, (int) row.size() - 1);
+            const int avail = juce::jmax (0, area.getWidth() - gaps);
+
+            if (row.empty())
+                return widths;
+
+            if (sum > 0 && sum <= avail)
+            {
+                const int extra = avail - sum;
+
+                for (size_t i = 0; i < row.size(); ++i)
+                    widths[i] = mins[i] + extra / (int) row.size() + ((int) i < extra % (int) row.size() ? 1 : 0);
+            }
+            else if (sum > 0)
+            {
+                int used = 0;
+
+                for (size_t i = 0; i < row.size(); ++i)
+                {
+                    widths[i] = i + 1 == row.size() ? juce::jmax (80, avail - used)
+                                                    : juce::jmax (80, avail * mins[i] / sum);
+                    used += widths[i];
+                }
+            }
+            else
+            {
+                const auto equal = avail / juce::jmax (1, (int) row.size());
+
+                for (size_t i = 0; i < row.size(); ++i)
+                    widths[i] = i + 1 == row.size() ? avail - equal * ((int) row.size() - 1) : equal;
+            }
+
+            return widths;
+        };
+
+        std::vector<int> rowHeights;
+        std::vector<std::vector<int>> widthsPerRow;
+        int panelsHeight = 0;
+
+        for (const auto& row : rows)
+        {
+            auto widths = widthsForRow (row);
+            int height = 0;
+
+            for (size_t i = 0; i < row.size(); ++i)
+                height = juce::jmax (height, content.panels[(size_t) row[i]]->getPreferredHeight (widths[i]));
 
             rowHeights.push_back (height);
             panelsHeight += height + panelGap;
+            widthsPerRow.push_back (std::move (widths));
         }
 
         const auto graphHeight = juce::jmax (minGraphHeight, area.getHeight() - panelsHeight);
-        content.graph->setBounds (area.removeFromTop (graphHeight));
+        auto graphStrip = area.removeFromTop (graphHeight);
+        const auto nGraphs = (int) content.graphs.size();
 
-        for (size_t r = 0; r < content.rows.size(); ++r)
+        if (nGraphs <= 1)
+        {
+            if (nGraphs == 1)
+                content.graphs[0]->setBounds (graphStrip);
+        }
+        else
+        {
+            const auto gw = (graphStrip.getWidth() - panelGap * (nGraphs - 1)) / nGraphs;
+
+            for (int i = 0; i < nGraphs; ++i)
+            {
+                content.graphs[(size_t) i]->setBounds (i + 1 == nGraphs ? graphStrip : graphStrip.removeFromLeft (gw));
+                graphStrip.removeFromLeft (panelGap);
+            }
+        }
+
+        for (size_t r = 0; r < rows.size(); ++r)
         {
             area.removeFromTop (panelGap);
             auto rowArea = area.removeFromTop (rowHeights[r]);
-            const auto& row = content.rows[r];
-            const auto rowWidth = (rowArea.getWidth() - panelGap * ((int) row.size() - 1)) / (int) row.size();
+            const auto& row = rows[r];
+            const auto& widths = widthsPerRow[r];
 
             for (size_t i = 0; i < row.size(); ++i)
             {
-                content.panels[(size_t) row[i]]->setBounds (i + 1 == row.size() ? rowArea : rowArea.removeFromLeft (rowWidth));
+                content.panels[(size_t) row[i]]->setBounds (i + 1 == row.size() ? rowArea : rowArea.removeFromLeft (widths[i]));
                 rowArea.removeFromLeft (panelGap);
             }
         }

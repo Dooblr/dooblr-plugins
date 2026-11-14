@@ -40,6 +40,13 @@
 #include <tuple>
 #include <vector>
 
+#if defined(__linux__)
+#include <X11/Xlib.h>
+#undef KeyPress
+#undef KeyRelease
+#undef FontChange
+#endif
+
 //==============================================================================
 // Counts operator new calls made while a processBlock is being measured (real-time safety).
 namespace
@@ -780,13 +787,25 @@ namespace
                            sizeLabel + "header items do not overlap: " + header[i]->getComponentID().toStdString() + " / " + header[j]->getComponentID().toStdString());
             }
 
+            check (Editor::numPages == 4, sizeLabel + "four tabs");
+            check (std::string (Editor::pageName (Editor::soundPage)) == "Sound"
+                       && std::string (Editor::pageName (Editor::modulationPage)) == "Modulation"
+                       && std::string (Editor::pageName (Editor::voicesPage)) == "Voices"
+                       && std::string (Editor::pageName (Editor::fxPage)) == "FX",
+                   sizeLabel + "tabs are Sound, Modulation, Voices, FX");
+
             for (int page = 0; page < Editor::numPages; ++page)
             {
                 editor->selectPage (page);
                 const auto label = sizeLabel + Editor::pageName (page) + ": ";
                 const auto content = editor->getContentArea();
-                std::vector<juce::Rectangle<int>> blocks { editor->getGraph (page).getBounds() };
-                check (editor->getGraph (page).getHeight() >= 120, label + "graph at least 120 px (" + std::to_string (editor->getGraph (page).getHeight()) + ")");
+                std::vector<juce::Rectangle<int>> blocks;
+                check (! editor->getGraphs (page).empty(), label + "has a graph");
+                for (auto& graph : editor->getGraphs (page))
+                {
+                    blocks.push_back (graph->getBounds());
+                    check (graph->getHeight() >= 120, label + "graph at least 120 px (" + std::to_string (graph->getHeight()) + ")");
+                }
                 for (auto& panel : editor->getPanels (page))
                 {
                     blocks.push_back (panel->getBounds());
@@ -798,10 +817,15 @@ namespace
                 }
                 for (auto& t : editor->getModeToggles (page))
                 {
-                    blocks.push_back (t->getBounds());
+                    check (t->isVisible(), label + "mode switch showing: " + t->getComponentID().toStdString());
                     check (t->getWidth() >= ui::SegmentedToggle::minWidth && t->getHeight() >= ui::SegmentedToggle::minHeight - 4,
                            label + "mode switch full size: " + t->getComponentID().toStdString());
+                    check (editor->getLocalBounds().contains (t->getBounds()) && t->getBounds().getY() >= 60,
+                           label + "mode switch on the tab bar: " + t->getComponentID().toStdString());
                 }
+                auto* tab = editor->findChildWithID ("page_" + juce::String (Editor::pageName (page)));
+                check (tab != nullptr && tab->isVisible() && tab->getBounds().getY() >= 60 && tab->getBounds().getBottom() <= 60 + 40,
+                       label + "tab button on the tab bar");
                 for (size_t i = 0; i < blocks.size(); ++i)
                 {
                     check (content.contains (blocks[i]), label + "block " + std::to_string (i) + " inside the content area");
@@ -833,7 +857,7 @@ namespace
         set (*p, id::voiceMode, 0.0f);
         set (*p, id::lfoSync, 1.0f);
         editor->updateEnablement();
-        check (! enabled (Editor::modulationPage, id::lfoRate) && enabled (Editor::modulationPage, id::lfoDivision), "LFO Sync: Rate dimmed, Division live");
+        check (! enabled (Editor::soundPage, id::lfoRate) && enabled (Editor::modulationPage, id::lfoDivision), "LFO Sync: Rate dimmed, Division live");
         set (*p, id::lfoSync, 0.0f);
         editor->updateEnablement();
 
@@ -879,7 +903,43 @@ namespace
 
         // Graphs: no hint text; readouts only on hover.
         for (int page = 0; page < Editor::numPages; ++page)
-            check (editor->getGraph (page).getReadout().isEmpty(), std::string ("no readout without hover: ") + Editor::pageName (page));
+            for (auto& graph : editor->getGraphs (page))
+                check (graph->getReadout().isEmpty(), std::string ("no readout without hover: ") + Editor::pageName (page)
+                                                          + " " + graph->getComponentID().toStdString());
+
+        const auto onSound = [&] (const char* pid)
+        {
+            for (auto& panel : editor->getPanels (Editor::soundPage))
+                if (panel->findControl (pid) != nullptr) return true;
+            return false;
+        };
+        const auto onModulation = [&] (const char* pid)
+        {
+            for (auto& panel : editor->getPanels (Editor::modulationPage))
+                if (panel->findControl (pid) != nullptr) return true;
+            return false;
+        };
+        check (onSound (id::osc1Shape) && onSound (id::mixOsc1) && onSound (id::lpfCutoff) && onSound (id::hpfCutoff)
+                   && onSound (id::fenvAttack) && onSound (id::aenvAttack) && onSound (id::lfoRate) && onSound (id::lfoWheel)
+                   && onSound (id::pmodFiltEnv) && onSound (id::pmodDestFreq1) && onSound (id::lfoDestFreq1) && onSound (id::lfoDestLpf),
+               "Sound tab holds oscillators, mixer, filter, both envelopes and basic modulation");
+        check (onModulation (id::pmodDestShape1) && onModulation (id::pmodDestFilter) && onModulation (id::lfoDivision)
+                   && onModulation (id::lfoNoiseMix) && onModulation (id::lfoDestShape1) && onModulation (id::lfoDestAmp),
+               "Modulation tab holds extra Poly-Mod and LFO destinations, tempo sync and noise mix");
+        check (! onSound (id::lfoDestAmp) && ! onModulation (id::lfoRate), "basic LFO stays on Sound; extra dests stay on Modulation");
+
+        editor->selectPage (Editor::soundPage);
+        check (editor->getSelectedPage() == Editor::soundPage, "starts on Sound");
+        // Button::triggerClick is asynchronous; call onClick like the rest of the suite.
+        auto* modulationTab = dynamic_cast<juce::Button*> (editor->findChildWithID ("page_Modulation"));
+        auto* soundTab = dynamic_cast<juce::Button*> (editor->findChildWithID ("page_Sound"));
+        check (modulationTab != nullptr && soundTab != nullptr, "Sound and Modulation tab buttons exist");
+        if (modulationTab != nullptr)
+            modulationTab->onClick();
+        check (editor->getSelectedPage() == Editor::modulationPage, "Modulation tab switches the page");
+        if (soundTab != nullptr)
+            soundTab->onClick();
+        check (editor->getSelectedPage() == Editor::soundPage, "Sound tab switches back");
 
         // The FX snapshot shows both modules on (a ping-pong echo into a hall).
         p->applyFxPreset (0, 2);
@@ -887,26 +947,37 @@ namespace
         set (*p, id::echoOn, 1.0f);
         set (*p, id::reverbOn, 1.0f);
         editor->updateEnablement();
-        // Snapshots: a chord sounding so the live graphs show something.
+        // Snapshots: a chord sounding so the live graphs show something. Each tab at 1080x660,
+        // and the Sound (main) page at all three sizes.
         render (*p, 24000, { { 0, on (48) }, { 0, on (55) }, { 0, on (60) }, { 0, on (64) } });
+        editor->setSize (1080, 660);
         for (int page = 0; page < Editor::numPages; ++page)
         {
             editor->selectPage (page);
-            editor->getGraph (page).refresh();
-            saveSnapshot (*editor, juce::String ("-") + Editor::pageName (page));
+            for (auto& graph : editor->getGraphs (page))
+                graph->refresh();
+            saveSnapshot (*editor, juce::String ("-") + Editor::pageName (page) + "-1080x660");
         }
-        editor->setSize (940, 600);
-        editor->selectPage (Editor::oscillatorsPage);
-        editor->getGraph (Editor::oscillatorsPage).refresh();
-        saveSnapshot (*editor, "-Oscillators-940x600");
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor->setSize (size.x, size.y);
+            editor->selectPage (Editor::soundPage);
+            for (auto& graph : editor->getGraphs (Editor::soundPage))
+                graph->refresh();
+            saveSnapshot (*editor, juce::String ("-Sound-") + juce::String (size.x) + "x" + juce::String (size.y));
+        }
 
         // Hover readout last, so the snapshots show the graphs without one.
         editor->setSize (1080, 660);
-        editor->selectPage (Editor::filtersPage);
-        auto& filterGraph = editor->getGraph (Editor::filtersPage);
-        filterGraph.setHoverPoint (filterGraph.getPlotArea().getCentre());
-        check (filterGraph.getReadout().isNotEmpty(), "filter graph hover readout ("
-                                                          + filterGraph.getReadout().toStdString() + ")");
+        editor->selectPage (Editor::soundPage);
+        auto* filterGraph = editor->getFilterDisplay();
+        check (filterGraph != nullptr, "Sound page has the filter graph");
+        if (filterGraph != nullptr)
+        {
+            filterGraph->setHoverPoint (filterGraph->getPlotArea().getCentre());
+            check (filterGraph->getReadout().isNotEmpty(), "filter graph hover readout ("
+                                                              + filterGraph->getReadout().toStdString() + ")");
+        }
         base.reset();
     }
 
@@ -944,14 +1015,14 @@ namespace
         auto* editor = dynamic_cast<Editor*> (base.get());
         check (editor != nullptr, "the editor is a DooblrProphetEditor");
         if (editor == nullptr) return;
-        editor->selectPage (Editor::filtersPage);
-        auto* graph = dynamic_cast<FD*> (&editor->getGraph (Editor::filtersPage));
-        check (graph != nullptr, "the Filters graph is a FilterDisplay");
+        editor->selectPage (Editor::soundPage);
+        auto* graph = editor->getFilterDisplay();
+        check (graph != nullptr, "the Sound page has a FilterDisplay");
         if (graph == nullptr) return;
 
         juce::Slider* lpKnob = nullptr;
         juce::Slider* lpResoKnob = nullptr;
-        for (auto& panel : editor->getPanels (Editor::filtersPage))
+        for (auto& panel : editor->getPanels (Editor::soundPage))
         {
             if (auto* c = dynamic_cast<juce::Slider*> (panel->findControl (id::lpfCutoff))) lpKnob = c;
             if (auto* c = dynamic_cast<juce::Slider*> (panel->findControl (id::lpfReso))) lpResoKnob = c;
@@ -1293,8 +1364,11 @@ namespace
                        && enabled (id::fenvVelAmt) && enabled (id::fenvSync) && enabled (id::aenvAttack),
                    "sync on: filter Attack/Decay/Sustain/Release dimmed, Velocity and the amp ADSR live");
             editor->setSize (1080, 660);
-            editor->selectPage (Editor::envelopesPage);
-            auto& graph = editor->getGraph (Editor::envelopesPage);
+            editor->selectPage (Editor::soundPage);
+            auto* envGraph = editor->getEnvelopeDisplay();
+            check (envGraph != nullptr, "Sound page has the envelope graph");
+            if (envGraph == nullptr) return;
+            auto& graph = *envGraph;
             graph.refresh();
             const auto spanBefore = ui::EnvelopeDisplay::spanSeconds (graph.getShownSettings());
             set (*p, id::aenvRelease, 3.0f);
@@ -2200,7 +2274,7 @@ namespace
         const auto numParams = p->getParameters().size();
         check (device.countOf ("/dp/meta") == numParams, "meta for every parameter (" + std::to_string (device.countOf ("/dp/meta")) + ")");
         check (device.countOf ("/dp/v") == numParams, "a value for every parameter");
-        check (device.countOf ("/dp/page") == 6 && device.countOf ("/dp/layoutdone") == 1, "six pages of layout");
+        check (device.countOf ("/dp/page") == 4 && device.countOf ("/dp/layoutdone") == 1, "four pages of layout");
         for (const auto* g : { "/dp/g/osc", "/dp/g/flt", "/dp/g/env", "/dp/g/lfo", "/dp/g/fx", "/dp/g/voc" })
             check (device.countOf (g) == 1, std::string ("graph sent once: ") + g);
         check (device.last ("/dp/presets") != nullptr && device.last ("/dp/presets")->intArg (0) == (int) presets::factory().size(), "preset list");
@@ -2423,6 +2497,12 @@ namespace
 
 int main()
 {
+#if defined(__linux__)
+    // TestPeer has no native X window (getNativeHandle is nullptr). JUCE still talks to X11
+    // for desktop components; the default handler would abort on BadWindow.
+    XSetErrorHandler ([] (Display*, XErrorEvent*) -> int { return 0; });
+#endif
+
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
 
     const std::vector<TestCase> tests {

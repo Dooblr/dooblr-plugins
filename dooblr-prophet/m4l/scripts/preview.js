@@ -74,7 +74,7 @@ function feed(context, sent) {
 }
 
 const frames = [];
-for (let page = 0; page < 6; ++page) frames.push(render((c, sent) => { feed(c, sent); c.S.page = page; c.S.needsLayout = true; }));
+for (let page = 0; page < 4; ++page) frames.push(render((c, sent) => { feed(c, sent); c.S.page = page; c.S.needsLayout = true; }));
 frames.push(render((c, sent) => { feed(c, sent); c.S.page = 0; c.paint(); c.onclick(c.S.items.find((i) => i.type === 'presetbox').x + 5, 10, 1, 0, 0); }));
 frames.push(render((c) => { c.liveready(); }));
 

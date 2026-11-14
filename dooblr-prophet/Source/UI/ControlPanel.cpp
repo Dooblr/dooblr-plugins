@@ -200,19 +200,35 @@ namespace dooblrprophet::ui
 
     std::vector<juce::Rectangle<int>> ControlPanel::layoutCells (int width, std::vector<std::pair<int, juce::Rectangle<int>>>* slots) const
     {
-        constexpr int gap = 6, minKnobWidth = 56;
+        constexpr int gap = 6, minKnobWidth = 56, stackCol = 70;
 
         // Units of the flow: each shown unslotted item, and each slot (always, shown or not).
-        struct Unit { bool knob = true; int width = 0; int slot = -1; juce::Rectangle<int> bounds; };
+        struct Unit { bool knob = true; int width = 0; int slot = -1; int stack = -1; juce::Rectangle<int> bounds; };
         std::vector<Unit> units;
         std::vector<int> unitOf (items.size(), -1);
-        std::map<int, int> slotUnits;
+        std::map<int, int> slotUnits, stackUnits;
 
         for (size_t i = 0; i < items.size(); ++i)
         {
             const auto& item = items[i];
             const auto isKnob = item.extra == nullptr && item.spec.kind == Kind::knob;
             const auto w = isKnob ? (int) knobWidth : item.width;
+
+            if (item.spec.stack >= 0 && item.shown)
+            {
+                if (auto found = stackUnits.find (item.spec.stack); found != stackUnits.end())
+                {
+                    unitOf[i] = found->second;
+                    auto& unit = units[(size_t) found->second];
+                    unit.knob = false;
+                    continue;
+                }
+
+                stackUnits[item.spec.stack] = (int) units.size();
+                unitOf[i] = (int) units.size();
+                units.push_back ({ false, stackCol * 2 + 2, -1, item.spec.stack, {} });
+                continue;
+            }
 
             if (item.spec.slot >= 0)
             {
@@ -233,11 +249,24 @@ namespace dooblrprophet::ui
             }
 
             unitOf[i] = (int) units.size();
-            units.push_back ({ isKnob, w, item.spec.slot, {} });
+            units.push_back ({ isKnob, w, item.spec.slot, -1, {} });
         }
 
-        // Narrow windows: if slimmer knobs (down to 56 px) keep the panel on one row, use them
-        // rather than wrapping onto a second row.
+        std::map<int, int> stackCount;
+        for (size_t i = 0; i < items.size(); ++i)
+            if (items[i].spec.stack >= 0 && items[i].shown && unitOf[i] >= 0)
+                ++stackCount[unitOf[i]];
+
+        for (const auto& [unitIndex, n] : stackCount)
+        {
+            // 1–3: a vertical strip (full captions). 4: 2×2. 5+: 2×3 so Lo Freq / Key still read.
+            const int cols = n <= 3 ? 1 : 2;
+            const int colW = n <= 3 ? 108 : n == 4 ? stackCol : 100;
+            units[(size_t) unitIndex].width = cols * colW + (cols - 1) * 2;
+        }
+
+        // Slimmer knobs (down to 56 px) when 70 px would wrap — including when even 56 px still
+        // wraps, so a wrapped row packs three 56 px knobs instead of two 70 px ones.
         int fixedWidth = 0, knobs = 0;
         for (const auto& unit : units)
         {
@@ -246,8 +275,8 @@ namespace dooblrprophet::ui
         }
         fixedWidth += gap * std::max (0, (int) units.size() - 1);
         auto knobW = (int) knobWidth;
-        if (knobs > 0 && fixedWidth + knobs * knobW > width && fixedWidth + knobs * minKnobWidth <= width)
-            knobW = (width - fixedWidth) / knobs;
+        if (knobs > 0 && fixedWidth + knobs * knobW > width)
+            knobW = fixedWidth + knobs * minKnobWidth <= width ? (width - fixedWidth) / knobs : minKnobWidth;
 
         int x = 0, y = titleHeight;
         for (auto& unit : units)
@@ -284,6 +313,26 @@ namespace dooblrprophet::ui
             cells.push_back (isKnob ? unit.bounds.withSizeKeepingCentre (w, unit.bounds.getHeight()) : unit.bounds.withWidth (w));
         }
 
+        std::map<int, std::vector<int>> stacked;
+        for (size_t i = 0; i < items.size(); ++i)
+            if (items[i].spec.stack >= 0 && items[i].shown && unitOf[i] >= 0)
+                stacked[unitOf[i]].push_back ((int) i);
+
+        for (const auto& [unitIndex, members] : stacked)
+        {
+            const auto bounds = units[(size_t) unitIndex].bounds;
+            const int n = (int) members.size();
+            const int cols = n <= 3 ? 1 : 2;
+            const int rows = std::max (1, (n + cols - 1) / cols);
+            const int cw = bounds.getWidth() / cols;
+            const int ch = bounds.getHeight() / rows;
+
+            for (int k = 0; k < n; ++k)
+                cells[(size_t) members[(size_t) k]] = { bounds.getX() + (k % cols) * cw,
+                                                       bounds.getY() + (k / cols) * ch,
+                                                       cw, ch };
+        }
+
         return cells;
     }
 
@@ -309,6 +358,26 @@ namespace dooblrprophet::ui
                 bottom = std::max (bottom, cells[i].getBottom());
 
         return bottom;
+    }
+
+    int ControlPanel::getMinOneRowWidth() const
+    {
+        const auto oneRow = titleHeight + knobHeight;
+        int lo = 80, hi = 1600;
+
+        if (getPreferredHeight (hi) > oneRow)
+            return hi;
+
+        while (lo < hi)
+        {
+            const auto mid = (lo + hi) / 2;
+            if (getPreferredHeight (mid) <= oneRow)
+                hi = mid;
+            else
+                lo = mid + 1;
+        }
+
+        return lo;
     }
 
     void ControlPanel::resized()
@@ -344,7 +413,8 @@ namespace dooblrprophet::ui
                     item.control->setBounds (cell.removeFromTop (28).reduced (0, 1));
                     break;
                 case Kind::toggle:
-                    item.control->setBounds (cell.withTrimmedTop (18).withHeight (26));
+                    item.control->setBounds (item.spec.stack >= 0 ? cell.reduced (1, 1)
+                                                                 : cell.withTrimmedTop (18).withHeight (26));
                     break;
             }
         }

@@ -24,7 +24,7 @@ var DIRECT_AFTER_MS = 250;                                  // ping replies are 
 var SET_WALK_LIMIT = 4000;                                  // most devices the set count looks at
 var PAIR_INTERVAL_MS = 1000, HELLO_INTERVAL_MS = 1000, LOST_AFTER_MS = 3500;
 var FX_PRESET_PARAMS = ["echoPreset", "reverbPreset"]; // param shown by each module's preset picker
-var UI_VERSION = "0.3.2"; // this panel's version (posted to the Max window by liveready)
+var UI_VERSION = "0.3.3"; // this panel's version (posted to the Max window by liveready)
 var FIND_DEBOUNCE_MS = 50;
 
 // Palette (Source/UI/Theme.h)
@@ -34,10 +34,10 @@ var C = {
 };
 var FONT = "Lucida Grande";
 
-// Geometry (Live's device height is 169 px)
-var H = 169, HEADER_H = 24, NAV_W = 80, CONTENT_X = 88, TITLE_Y = 26, BODY_Y = 50, BODY_BOTTOM = 166;
+// Geometry (Live's device height is 169 px). Horizontal tab bar matches the plug-in editor.
+var H = 169, HEADER_H = 24, TAB_H = 18, CONTENT_X = 6, TAB_Y = 25, BODY_Y = 44, BODY_BOTTOM = 166;
 var KNOB_W = 46, KNOB_H = 50, SMALL_W = 96, TOGGLE_H = 16, COMBO_H = 34, BUTTONS_H = 52;
-var PANEL_TITLE_H = 12, PANEL_GAP = 14, GRAPH_MIN_W = 200;
+var PANEL_TITLE_H = 12, PANEL_GAP = 14, GRAPH_MIN_W = 160;
 
 //==============================================================================
 var S = {
@@ -417,22 +417,25 @@ function doLayout() {
     S.width = W;
     S.items = [];
     headerItems(W);
-    for (var i = 0; i < S.pages.length; ++i)
-        S.items.push({ type: "tab", page: i, x: 6, y: HEADER_H + 6 + i * 22, w: NAV_W - 12, h: 19 });
+    var nTabs = S.pages.length;
+    var tabW = Math.max(64, (W - 12) / Math.max(1, nTabs));
+    for (var i = 0; i < nTabs; ++i)
+        S.items.push({ type: "tab", page: i, x: 6 + i * tabW, y: TAB_Y, w: tabW - 4, h: TAB_H - 3 });
 
     var page = S.pages[S.page];
     if (!page) return;
 
-    // Mode switches on the title bar, right aligned
+    // Mode switches on the tab bar, right aligned (they sit over the last tabs if the window is tight;
+    // Live's device view is wide enough that they land in the leftover).
     var right = W - 6;
     for (var t = page.toggles.length - 1; t >= 0; --t) {
         var tg = page.toggles[t];
         var segW = 0;
         for (var l = 0; l < tg.labels.length; ++l) segW = Math.max(segW, textWidth(tg.labels[l], 8.5, true) + 18);
-        var w = Math.max(90, segW * tg.labels.length);
+        var w = Math.max(70, segW * tg.labels.length);
         right -= w;
-        S.items.push({ type: "seg", id: tg.id, labels: tg.labels, caption: tg.caption, x: right, y: TITLE_Y + 1, w: w, h: 16 });
-        right -= textWidth(tg.caption, 8, true) + 16;
+        S.items.push({ type: "seg", id: tg.id, labels: tg.labels, caption: tg.caption, x: right, y: TAB_Y, w: w, h: TAB_H - 3 });
+        right -= textWidth(tg.caption, 8, true) + 12;
     }
     S.statusRight = right;
 
@@ -450,7 +453,7 @@ function doLayout() {
     }
     var graphW = Math.max(GRAPH_MIN_W, W - CONTENT_X - 6 - PANEL_GAP - total);
     S.graphRect = { x: CONTENT_X, y: BODY_Y, w: graphW, h: BODY_BOTTOM - BODY_Y };
-    if (S.page === 1) S.items.push({ type: "filtergraph", x: CONTENT_X, y: BODY_Y, w: graphW, h: BODY_BOTTOM - BODY_Y });
+    if (page.name === "Sound") S.items.push({ type: "filtergraph", x: CONTENT_X, y: BODY_Y, w: graphW, h: BODY_BOTTOM - BODY_Y });
 
     var x = CONTENT_X + graphW + PANEL_GAP;
     S.panelBoxes = [];
@@ -598,16 +601,14 @@ function paint() {
 
     if (S.state !== "linked") { paintAbsent(W); return; }
 
-    fillRect(0, HEADER_H, NAV_W, H - HEADER_H, C.panel);
-    fillRect(NAV_W - 1, HEADER_H, 1, H - HEADER_H, C.divider);
+    fillRect(0, HEADER_H, W, TAB_H, C.panel);
+    fillRect(0, HEADER_H + TAB_H - 1, W, 1, C.divider);
 
     var page = S.pages[S.page];
     var pc = pageColour();
-    text(page ? page.name.toUpperCase() : "", CONTENT_X, TITLE_Y, 160, 18, 10.5, true, pc, "left");
     var status = S.status[S.page] || "";
-    var statusX = CONTENT_X + textWidth(page ? page.name.toUpperCase() : "", 10.5, true) + 18;
-    if (status !== "") text(status, statusX, TITLE_Y, Math.max(0, S.statusRight - statusX - 10), 18, 8.5, false, C.muted, "left");
-    fillRect(CONTENT_X, TITLE_Y + 21, W - CONTENT_X - 6, 1, C.divider);
+    var tabRight = 6 + Math.max(1, S.pages.length) * Math.max(64, (W - 12) / Math.max(1, S.pages.length));
+    if (status !== "") text(status, tabRight + 8, TAB_Y, Math.max(0, S.statusRight - tabRight - 16), TAB_H - 3, 8.5, false, C.muted, "left");
 
     paintGraph(S.graphRect, pc);
     for (var b = 0; b < S.panelBoxes.length; ++b)
@@ -824,14 +825,11 @@ function curve(values, from, count, r, toY, hex, lw, fillTo) {
 
 function paintGraph(r, pc) {
     if (!r) return;
-    switch (S.page) {
-    case 0: graphOsc(r, pc); break;
-    case 1: graphFilter(r, pc); break;
-    case 2: graphEnv(r, pc); break;
-    case 3: graphLfo(r, pc); break;
-    case 4: graphVoices(r, pc); break;
-    case 5: graphFx(r, pc); break;
-    }
+    var name = S.pages[S.page] ? S.pages[S.page].name : "";
+    if (name === "Sound") graphFilter(r, pc);
+    else if (name === "Modulation") graphLfo(r, pc);
+    else if (name === "Voices") graphVoices(r, pc);
+    else if (name === "FX") graphFx(r, pc);
 }
 
 function graphOsc(r, pc) {
@@ -971,7 +969,7 @@ function paintMenu(m) {
 
 function openMenu(entries, columnWidth) {
     var W = mgraphics.size[0];
-    var m = { x: NAV_W + 4, y: HEADER_H + 2, w: W - NAV_W - 10, h: H - HEADER_H - 5, cells: [], entries: entries, offset: 0, colW: columnWidth || 130 };
+    var m = { x: CONTENT_X, y: HEADER_H + TAB_H + 2, w: W - CONTENT_X - 6, h: H - HEADER_H - TAB_H - 5, cells: [], entries: entries, offset: 0, colW: columnWidth || 130 };
     S.menu = m;
     layoutMenu(m);
     redraw();
