@@ -585,11 +585,13 @@ test('Lead toggle writes a monophonic lead clip and relabels Generate', () => {
   const t = loadController({ slots: [0, 0, 0] });
   t.ctx.init();
   assert.strictEqual(t.lastActive('density'), 0, 'Density is dimmed while Lead is off');
+  assert.strictEqual(t.lastActive('notes'), 1, 'Notes is available while Lead is off');
   t.ctx.generate();
   assert.strictEqual(t.live.slots[0].clip.name, 'C min \u00B7 4 \u00B7 Col35 Chr10');
 
   t.ctx.param('lead', 1);
   assert.strictEqual(t.lastActive('density'), 1);
+  assert.strictEqual(t.lastActive('notes'), 0, 'Notes is dimmed while Lead is on');
   assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'Generate Lead']);
   assert.deepStrictEqual(t.lastMsg('generate', 'texton'), ['texton', 'Generate Lead']);
   assert.strictEqual(t.lastState().heading, 'LEAD');
@@ -607,6 +609,7 @@ test('Lead toggle writes a monophonic lead clip and relabels Generate', () => {
 
   t.ctx.param('lead', 0);
   assert.strictEqual(t.lastActive('density'), 0);
+  assert.strictEqual(t.lastActive('notes'), 1);
   assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'Generate']);
   assert.strictEqual(t.lastState().heading, 'PROGRESSION');
 });
@@ -621,4 +624,27 @@ test('Lead over a source names the clip Lead · <name> · VAR and keeps the sour
   assert.match(t.live.slots[0].clip.name, /^Lead \u00B7 my riff \u00B7 VAR \u00B7 A min/);
   assert.deepStrictEqual(t.lastState().source.chords, ['Am', 'F', 'C', 'G']);
   assert.match(t.lastState().heading, /LEAD \u00B7 VARIATION/);
+});
+
+test('Notes tab sets the voicing count and Auto keeps the usual clip', () => {
+  const t = loadController({ slots: [0, 0, 0] });
+  t.ctx.init();
+  t.ctx.param('seed', 1);
+  t.ctx.param('root', 9);
+  t.ctx.param('mode', 1);
+  t.ctx.write();
+  const autoName = t.live.slots[0].clip.name;
+  const autoCount = t.live.slots[0].clip.notes.filter((n) => n.start_time === 0).length;
+
+  t.ctx.param('notes', 1); // tab index 1 = 2 notes
+  t.ctx.write();
+  const two = t.live.slots[1].clip.notes.filter((n) => n.start_time === 0).length;
+  assert.strictEqual(two, 2 + 1, 'Notes 2 with Bass on: 2 upper + bass');
+  assert.ok(two !== autoCount || autoCount === 3, 'Auto is not forced to Notes 2');
+
+  t.ctx.param('notes', 5); // tab index 5 = 6 notes
+  t.ctx.write();
+  const six = t.live.slots[2].clip.notes.filter((n) => n.start_time === 0).length;
+  assert.strictEqual(six, 6 + 1, 'Notes 6 with Bass on: 6 upper + bass');
+  assert.ok(autoName.length > 0);
 });

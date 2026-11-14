@@ -104,6 +104,9 @@ def visible(b, state):
         return state.get('panel') == panel
     if b.get('varname') == 'srcbadge':
         return bool(state.get('badge'))
+    # Covered main-view controls are parked off-screen while a panel is open.
+    if b.get('covered') and state.get('panel'):
+        return False
     return True
 
 def draw_box(c, b, state):

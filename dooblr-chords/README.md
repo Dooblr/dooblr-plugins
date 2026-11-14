@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.4.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.6.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -23,6 +23,14 @@ Version 0.4.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 * **Generation** walks a functional Markov chain (tonic, pre-dominant,
   dominant) and ends on a cadence: an authentic V–I, or a turnaround that
   loops back to the start.
+* **Notes**: Auto (the default) keeps the usual number of voices, so existing
+  Sets sound the same. 2 to 6 sets how many upper voices each chord uses.
+  When Bass is on, the bass note is extra and not counted. Fewer notes drop
+  the least essential tones first (keep the root and third, then the seventh,
+  then the fifth). More notes add sevenths, ninths, elevenths or thirteenths
+  in the Color style, then octave doublings. The chord blocks show the
+  resulting voicing. Notes is dimmed while Lead is on, because a lead line
+  is monophonic.
 * **Voicing** uses voice leading between chords, with Register, Spread (close,
   drop-2 or open) and an optional separate bass note.
 * **Seed**: every result comes from the seed shown on the device. The same
@@ -47,8 +55,8 @@ Version 0.4.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
     source's first chord.
   Setting Length to anything other than the source's chord count drops the
   source rhythm and uses Bars per Chord instead. Register, Spread and Bass
-  still set the voicing; the number of upper voices follows the source's
-  thickness (3 to 5).
+  still set the voicing. In Auto the number of upper voices follows the
+  source's thickness (3 to 5); Notes 2 to 6 overrides that count.
 * Incoming MIDI passes straight through.
 
 ## First use
@@ -59,7 +67,8 @@ inside the device (not separate Max windows).
 
 1. Drop the device on a MIDI track that has an instrument after it.
 2. Pick a **Root** and **Mode**, set **Length**, and optionally turn **Color**
-   (richer chords) or **Spice** (more unexpected chords).
+   (richer chords), **Spice** (more unexpected chords) or **Notes** (how many
+   voices each chord uses; Auto is the default).
 3. Press **Generate**. A clip is written to the next empty slot, and the
    chords appear in the blocks.
 4. Click a block to lock it, then press **Reroll** to change the others.
@@ -74,8 +83,8 @@ inside the device (not separate Max windows).
 
 ## Controls
 
-The device is 640 × 169 px. The left rail holds Generate and Reroll. The
-main pane shows the key, length, Color, Spice and the chord blocks, with
+The device is 640 × 169 px. The left rail holds Generate, LEAD and Reroll. The
+main pane shows the key, length, Notes, Color, Spice and the chord blocks, with
 **ADVANCED …** and **SOURCE …** in the corner. Those buttons open an overlay
 that covers the chord display (and the rest of the main pane) until you
 close it. The js moves the panel on-screen and parks the controls underneath
@@ -87,6 +96,7 @@ off-screen, so they cannot be clicked through the overlay.
 | | **Reroll** | Picks a new seed, keeps locked chords and writes a clip. It is dimmed until a chord is locked. |
 | | source badge | When a source is loaded, a small chip such as `VAR · my riff` appears under Reroll, so that state is not hidden in the Source panel. |
 | Main | **Root**, **Mode**, **Length** | Key, scale and number of chords. |
+| | **Notes** | How many voices each chord uses: Auto (the default, usual voicing) or 2 to 6. Bass, when on, adds a bass note on top of that count. Dimmed while Lead is on. |
 | | **Color**, **Spice** | Color adds extensions. Spice is the Chromatic parameter: borrowed chords and substitutions. The Live parameter name is still Chromatic. |
 | | **ADVANCED …** | Opens the Advanced overlay. |
 | | **SOURCE …** | Opens the Source overlay. |
@@ -201,60 +211,65 @@ the files in `device/`, because they are generated.
    appear. At 80 or more, secondary dominants (V/x), subV/x, borrowed chords
    and N show up.
 7. Color 0 gives triads only. Color 100 gives 9ths, 11ths and 13ths.
-8. Click a block. It gets a coloured outline and a padlock, and Reroll
+8. Notes is Auto by default and sounds like previous versions. Set it to 2:
+   each chord has two upper notes (plus the bass if Bass is on), and the
+   blocks show simpler names. Set it to 6: each chord has six upper notes,
+   and triad blocks pick up sevenths and extensions. Turn Lead on: Notes
+   dims, with a tooltip saying why.
+9. Click a block. It gets a coloured outline and a padlock, and Reroll
    lights up. Press **Reroll**. Locked chords stay, the others change, and a
    new clip is written.
-9. Press **LEAD**. It lights up gold and Generate reads **Generate Lead**.
+10. Press **LEAD**. It lights up gold and Generate reads **Generate Lead**.
    Press Generate: the clip is named `Lead · …`, it is monophonic, and the
    blocks still show the underlying chords under a LEAD header. Open
    ADVANCED: Density is available. Turn Lead off: Density dims and Generate
    writes chords again.
-10. Type a Seed you saw earlier, then press **Write**. It writes the identical
+11. Type a Seed you saw earlier, then press **Write**. It writes the identical
    progression.
-11. Fill every slot on the track and press Generate. The status reads "Every
+12. Fill every slot on the track and press Generate. The status reads "Every
     clip slot on this track is full…" and nothing else happens.
-12. Put the device in a MIDI Effect Rack and press Generate. It still writes
+13. Put the device in a MIDI Effect Rack and press Generate. It still writes
     to the track's slots.
-13. Save the Set, reopen it and check that the controls are restored. Locks
+14. Save the Set, reopen it and check that the controls are restored. Locks
     are not restored.
-14. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
+15. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
     send the js the message `ascii 1`.
-15. The device is 640 px wide. The main view shows the left rail (Generate, LEAD,
-    Reroll), Key, Length, Color, Spice and the chord blocks, with ADVANCED …
+16. The device is 640 px wide. The main view shows the left rail (Generate, LEAD,
+    Reroll), Key, Length, Notes, Color, Spice and the chord blocks, with ADVANCED …
     and SOURCE … in the top-right. The Advanced and Source controls are not
     on the main view. Press ADVANCED …: a panel covers the chord display,
     with a title and a close (×). The Max window posts "dooblr-chords: panel
     open advanced". Bars per Chord, the voicing and output dials, Bass, Seed
-    and Write are all inside it and none overlap. The key, tension knobs and
+    and Write are all inside it and none overlap. The key, Notes, tension knobs and
     chord blocks underneath are gone (moved off-screen), not just covered.
     Close it with × or by pressing ADVANCED … again; the Max window posts
     "dooblr-chords: panel closed". Press SOURCE …: the drop zone, USE CLIP,
     CLEAR, VAR/B and the info line are in that panel. VAR/B and CLEAR are
     dimmed. Close it, reload the Set: both panels start closed. Hover over
     the blocks: the hint ends with the full status text.
-16. Drag a `.mid` file with block chords (for example Am F C G, one bar each)
+17. Drag a `.mid` file with block chords (for example Am F C G, one bar each)
     from Finder onto the drop zone. The status reads "Loaded <name>: A Natural
     Minor, 4 chords…", Root/Mode/Length change to A, Natural Minor and 4, the
     SOURCE strip shows `Am F C G`, the heading reads VARIATION, and no clip is
     written. Drop a `.wav` and a damaged `.mid`: each gives a readable warning
     and the old source stays.
-17. Press **Generate**. The clip is named `<name> · VAR · A min · …`, has the
+18. Press **Generate**. The clip is named `<name> · VAR · A min · …`, has the
     source's length and rhythm, starts on Am and ends on G. Changed chords
     have an orange dot. Generate a few times: different inner chords.
-18. Switch to **B** and press Generate. The heading reads B SECTION with a key
+19. Switch to **B** and press Generate. The heading reads B SECTION with a key
     area such as "in C major (III)", the chords differ from the source, and
     playing the B clip then the source clip sounds like a return home.
-19. In B, lock a chord and press Reroll several times. The locked chord and
+20. In B, lock a chord and press Reroll several times. The locked chord and
     the chord count stay the same.
-20. Select a MIDI clip in Session View (Detail View showing its notes),
+21. Select a MIDI clip in Session View (Detail View showing its notes),
     including one with a loop that does not start at 1.1.1, and press **USE
     CLIP**. The source is the looped part. Select an audio clip: the status
     says so. Deselect all clips: "No clip is selected…".
-21. Press **CLEAR**. The heading returns to PROGRESSION and VAR/B dims.
-22. Load a file, save the Set, reopen it. The file source comes back (if the
+22. Press **CLEAR**. The heading returns to PROGRESSION and VAR/B dims.
+23. Load a file, save the Set, reopen it. The file source comes back (if the
     file still exists) and the saved Root/Mode/Length are kept. A USE CLIP
     source is not saved.
-23. Try a source with arpeggios or a melody on top of the chords, and one in
+24. Try a source with arpeggios or a melody on top of the chords, and one in
     3/4. Check the detected chords make sense; fix the key with Root/Mode if
     not (detection reads relative major/minor wrongly in about 1 in 5 plain
     diatonic loops).
@@ -305,6 +320,9 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
+* The 0.6.0 Notes tab in Live: Auto sounding like 0.5.0, counts 2 to 6 (with
+  Bass adding an extra note), chord-block names following the voicing, and
+  Notes dimming when Lead is on, with a tooltip that says why.
 * The 0.5.0 Lead toggle in Live: the large gold on-state, the Generate label
   changing to "Generate Lead", Density dimming when Lead is off, and the
   monophonic lead clip sounding over the shown chords.

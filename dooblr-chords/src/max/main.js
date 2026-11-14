@@ -33,7 +33,7 @@ var self = this;
 var E = DC.engine;
 
 var PARAM_NAMES = ['root', 'mode', 'length', 'duration', 'color', 'chromatic',
-  'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind', 'lead', 'density'];
+  'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind', 'lead', 'density', 'notes'];
 
 var settings = E.normalize(E.DEFAULTS);
 var locks = [];
@@ -52,7 +52,8 @@ var BUTTON_HINTS = {
   useclip: 'USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.',
   clearsource: 'CLEAR forgets the source, so Generate makes fresh progressions again.',
   kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.',
-  lead: 'LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.'
+  lead: 'LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.',
+  notes: 'Notes is how many voices each chord uses. Auto keeps the usual voicing. 2 to 6 sets the count; when Bass is on, the bass note is extra and not counted.'
 };
 
 // Overlay panels. Members are parked off-screen in the saved patcher (x = PARK_X).
@@ -78,6 +79,8 @@ var COVERED_RECTS = {
   color: [326, 18, 70, 76],
   spice_label: [404, 4, 70, 14],
   chromatic: [404, 18, 70, 76],
+  notes_label: [196, 52, 128, 14],
+  notes: [196, 66, 128, 24],
   blocks: [136, 99, 496, 66]
 };
 var PANEL_RECTS = {
@@ -128,6 +131,7 @@ function param(name, value) {
     return;
   }
   var before = settings[name];
+  if (name === 'notes') { value = E.notesFromTab(value); }
   settings[name] = value;
   settings = E.normalize(settings);
   if (name === 'kind' && settings.kind !== before && source) { locks = []; }
@@ -595,6 +599,9 @@ function updateButtons() {
   setActive('density', ready && leadOn, leadOn
     ? 'Density sets how busy the lead line is: higher values use shorter notes and fewer rests.'
     : 'Density sets how busy the lead line is. It is dimmed because Lead is off: turn Lead on to use it.');
+  setActive('notes', ready && !leadOn, leadOn
+    ? BUTTON_HINTS.notes + ' It is dimmed because Lead is on: a lead line is monophonic, so the voicing count does not apply.'
+    : BUTTON_HINTS.notes);
   setGenerateLabel(leadOn);
 }
 

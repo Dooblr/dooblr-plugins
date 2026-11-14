@@ -1,6 +1,5 @@
 node_modules/
 .DS_Store
 *.log
-# Built device lives in ~/dooblr-build/dooblr-chords
 device/
 dist/

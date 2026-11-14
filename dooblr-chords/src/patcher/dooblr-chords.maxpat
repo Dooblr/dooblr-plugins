@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.5.0",
+					"text": "v0.6.0",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -3793,6 +3793,172 @@
 						20
 					]
 				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "notes",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial",
+					"fontsize": 10,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Notes",
+					"annotation": "Notes is how many voices each chord uses. Auto keeps the usual voicing. 2 to 6 sets the count; when Bass is on, the bass note is extra and not counted.",
+					"id": "obj-93",
+					"patching_rect": [
+						196,
+						300,
+						128,
+						24
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						196,
+						66,
+						128,
+						24
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Notes",
+							"parameter_shortname": "Notes",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"Auto",
+								"2",
+								"3",
+								"4",
+								"5",
+								"6"
+							],
+							"parameter_mmax": 5,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					}
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Notes",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-94",
+					"patching_rect": [
+						196,
+						284,
+						128,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						196,
+						52,
+						128,
+						14
+					],
+					"varname": "notes_label"
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param notes",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-95",
+					"patching_rect": [
+						1700,
+						150,
+						150,
+						22
+					]
+				}
 			}
 		],
 		"lines": [
@@ -4592,6 +4758,30 @@
 				"patchline": {
 					"source": [
 						"obj-92",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-93",
+						0
+					],
+					"destination": [
+						"obj-95",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-95",
 						0
 					],
 					"destination": [

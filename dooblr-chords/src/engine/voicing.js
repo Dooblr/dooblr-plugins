@@ -25,6 +25,118 @@ DC.voicing = (function () {
     return iv;
   }
 
+  // Explicit Notes (2..6): upper-voice count. The Bass note (and a slash bass)
+  // is extra and not counted. Drop least essential first: extensions, then the
+  // fifth, then the seventh; always keep the root and third (or sus). If more
+  // notes are needed, add 7, 9, 11 and 13 from the chord scale (Color style),
+  // then octave doublings.
+  function hasIvOrPc(list, v) {
+    var pc = T.mod12(v), i;
+    for (i = 0; i < list.length; i++) { if (list[i] === v || T.mod12(list[i]) === pc) { return true; } }
+    return false;
+  }
+
+  function pickUpper(chord, opts) {
+    var bassOn = !!opts.bass;
+    var target = Math.round(opts.notes || 0);
+    if (!(target >= 2 && target <= 6)) {
+      return { iv: upperIntervals(chord, bassOn, opts.maxUpper), doublings: 0, named: false };
+    }
+    var iv = C.tones(chord), slashIv = C.bassInterval(chord);
+    if (chord.slash) { iv = removeIv(iv, slashIv); }
+    var dropOrder = [];
+    if (chord.thirteen !== null) { dropOrder.push(chord.thirteen); }
+    if (chord.eleven !== null) { dropOrder.push(chord.eleven); }
+    if (chord.nine !== null) { dropOrder.push(chord.nine); }
+    if (chord.fifth !== null) { dropOrder.push(chord.fifth); }
+    if (chord.seventh !== null) { dropOrder.push(chord.seventh); }
+    var k;
+    for (k = 0; k < dropOrder.length && iv.length > target; k++) {
+      iv = removeIv(iv, dropOrder[k]);
+    }
+    while (iv.length > target) {
+      var last = iv[iv.length - 1], keep = last === 0 || last === chord.third ||
+        (chord.sus && last === (chord.sus === 4 ? 5 : 2));
+      if (keep) { break; }
+      iv.pop();
+    }
+    if (iv.length < target) {
+      var extra = neededExtensions(chord, iv, target - iv.length);
+      iv = iv.concat(extra);
+    }
+    return { iv: sortNum(iv.slice(0)), doublings: Math.max(0, target - iv.length), named: true };
+  }
+
+  function neededExtensions(chord, have, n) {
+    var c = C.copy(chord), add = [], s = c.scale;
+    function commit(field, v) {
+      if (n <= 0 || v === null || v === undefined) { return; }
+      if (hasIvOrPc(have, v) || hasIvOrPc(add, v)) { return; }
+      if (field !== 'seventh' && C.avoided(c, v)) { return; }
+      c[field] = v;
+      add.push(v);
+      n--;
+    }
+    if (s && c.seventh === null) { commit('seventh', s[6]); }
+    if (s && c.nine === null) { commit('nine', s[1] + 12); }
+    if (s && c.eleven === null) { commit('eleven', s[3] + 12); }
+    if (s && c.thirteen === null) { commit('thirteen', s[5] + 12); }
+    return add;
+  }
+
+  // Rebuild a naming copy of the chord from the intervals actually voiced,
+  // so the blocks reflect added or dropped extensions.
+  function chordForDisplay(src, iv) {
+    var c = C.copy(src);
+    function has(v) {
+      var i;
+      for (i = 0; i < iv.length; i++) { if (iv[i] === v) { return true; } }
+      return false;
+    }
+    if (c.seventh !== null && !has(c.seventh)) { c.seventh = null; }
+    if (c.nine !== null && !has(c.nine)) { c.nine = null; c.add9 = false; }
+    if (c.eleven !== null && !has(c.eleven)) { c.eleven = null; }
+    if (c.thirteen !== null && !has(c.thirteen)) { c.thirteen = null; }
+    if (c.seventh === null) {
+      if (has(11)) { c.seventh = 11; } else if (has(10)) { c.seventh = 10; } else if (has(9)) { c.seventh = 9; }
+    }
+    if (c.nine === null) {
+      if (has(13)) { c.nine = 13; } else if (has(14)) { c.nine = 14; } else if (has(15)) { c.nine = 15; }
+    }
+    if (c.eleven === null) {
+      if (has(17)) { c.eleven = 17; } else if (has(18)) { c.eleven = 18; }
+    }
+    if (c.thirteen === null) {
+      if (has(20)) { c.thirteen = 20; } else if (has(21)) { c.thirteen = 21; }
+    }
+    c.add9 = c.nine !== null && c.seventh === null;
+    return c;
+  }
+
+  function addDoublings(upper, n, register) {
+    var out = upper.slice(0), guard = 0, i, src, up, down, cand, mid, used;
+    function already(p) {
+      for (var j = 0; j < out.length; j++) { if (out[j] === p) { return true; } }
+      return false;
+    }
+    while (out.length < n && guard < 24) {
+      src = upper[guard % upper.length];
+      up = src + 12;
+      down = src - 12;
+      mid = (out[0] + out[out.length - 1]) / 2;
+      cand = null;
+      if (up <= 127 && !already(up) && down >= 0 && !already(down)) {
+        cand = Math.abs(up - mid) <= Math.abs(down - mid) ? up : down;
+      } else if (up <= 127 && !already(up)) { cand = up; }
+      else if (down >= 0 && !already(down)) { cand = down; }
+      else if (src + 24 <= 127 && !already(src + 24)) { cand = src + 24; }
+      else if (src - 24 >= 0 && !already(src - 24)) { cand = src - 24; }
+      if (cand !== null) { out.push(cand); }
+      guard++;
+    }
+    return sortNum(out);
+  }
+
   function removeIv(list, v) {
     var out = [];
     for (var i = 0; i < list.length; i++) { if (list[i] !== v) { out.push(list[i]); } }
@@ -92,7 +204,8 @@ DC.voicing = (function () {
     var register = Math.round(opts.register), mode = spreadMode(opts.spread);
     var bassOn = !!opts.bass;
     var rootPc = T.mod12(keyRoot + chord.root);
-    var iv = upperIntervals(chord, bassOn, opts.maxUpper);
+    var picked = pickUpper(chord, opts);
+    var iv = picked.iv;
     var pcs = [], i, r, k;
     for (i = 0; i < iv.length; i++) { pcs.push(T.mod12(rootPc + iv[i])); }
 
@@ -116,6 +229,7 @@ DC.voicing = (function () {
       }
     }
     var upper = best;
+    if (picked.doublings) { upper = addDoublings(upper, iv.length + picked.doublings, register); }
     if (bassOn) {
       while (bass >= upper[0] || (upper[0] - bass < 5 && bass - 12 >= register - 30)) { bass -= 12; }
     } else if (chord.slash) {
@@ -124,7 +238,10 @@ DC.voicing = (function () {
     var all = clampOctaves(bass === null ? upper : [bass].concat(upper));
     var outBass = bass === null ? null : all[0];
     var outUpper = bass === null ? all : all.slice(1);
-    return { upper: outUpper, bass: outBass, notes: sortNum(all.slice(0)) };
+    return {
+      upper: outUpper, bass: outBass, notes: sortNum(all.slice(0)),
+      intervals: iv, display: picked.named ? chordForDisplay(chord, iv) : null
+    };
   }
 
   function voiceAll(chords, keyRoot, opts) {
@@ -136,5 +253,6 @@ DC.voicing = (function () {
     return out;
   }
 
-  return { voice: voice, voiceAll: voiceAll, spreadMode: spreadMode, upperIntervals: upperIntervals };
+  return { voice: voice, voiceAll: voiceAll, spreadMode: spreadMode, upperIntervals: upperIntervals,
+    pickUpper: pickUpper, chordForDisplay: chordForDisplay };
 })();
