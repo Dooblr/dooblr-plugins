@@ -87,13 +87,13 @@ test('strong beats are mostly chord tones', () => {
 test('clip names and heading show Lead; default build is still a chord clip', () => {
   const chords = E.build({ seed: 9, length: 4 });
   assert.equal(chords.heading, 'PROGRESSION');
-  assert.equal(chords.clipName, 'C min \u00B7 4 \u00B7 Col35 Chr10');
+  assert.equal(chords.clipName, 'C min \u00B7 4 \u00B7 TRI \u00B7 Col35 Chr10');
   assert.ok(chords.notes.some((n, i) => i > 0 && Math.abs(n.start_time - chords.notes[0].start_time) < 1e-6),
     'chord clip is polyphonic on the first hit');
 
   const lead = E.build({ seed: 9, length: 4, lead: 1 });
   assert.equal(lead.heading, 'LEAD');
-  assert.equal(lead.clipName, 'Lead \u00B7 C min \u00B7 4 \u00B7 Col35 Chr10');
+  assert.equal(lead.clipName, 'Lead \u00B7 C min \u00B7 4 \u00B7 TRI \u00B7 Col35 Chr10');
   assert.equal(lead.chords.length, chords.chords.length);
   assert.deepEqual(DC.plain(lead.display.map((d) => d.name)), DC.plain(chords.display.map((d) => d.name)));
 });

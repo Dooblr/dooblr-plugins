@@ -58,31 +58,31 @@ const STATES = [
     title: 'Main view: no source, one chord locked',
     panel: null,
     inactive: ['density'],
-    values: { open_advanced: 0, open_source: 0, lead: 0, notes: 3 },
+    values: { open_advanced: 0, open_source: 0, lead: 0, notes: 0 },
     badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',
-    blocks: { heading: 'PROGRESSION', status: 'Wrote A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
-      chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
+    blocks: { heading: 'PROGRESSION', status: 'Wrote A min \u00B7 TRI \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
+      chords: [chord('Am', 'i'), chord('F', 'VI', { locked: true }), chord('C', 'III'), chord('G', 'VII')] }
   },
   {
     title: 'Main view: Lead on (Notes dimmed)',
     panel: null,
     inactive: ['notes'],
-    values: { open_advanced: 0, open_source: 0, lead: 1, notes: 3 },
+    values: { open_advanced: 0, open_source: 0, lead: 1, notes: 2 },
     badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',
-    blocks: { heading: 'LEAD', status: 'Wrote Lead \u00B7 A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
-      chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
+    blocks: { heading: 'LEAD', status: 'Wrote Lead \u00B7 A min \u00B7 9th \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
+      chords: [chord('Am9', 'i9'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('Cmaj9', 'IIImaj9'), chord('G9', 'VII9')] }
   },
   {
     title: 'ADVANCED panel open, Lead on (Density available, Notes dimmed)',
     panel: 'advanced',
     inactive: ['notes'],
-    values: { open_advanced: 1, open_source: 0, lead: 1, seed: 48213, density: 50, notes: 3 },
+    values: { open_advanced: 1, open_source: 0, lead: 1, seed: 48213, density: 50, notes: 2 },
     badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',
-    blocks: { heading: 'LEAD', status: 'Wrote Lead \u00B7 A min \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
-      chords: [chord('Am7', 'i7'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('C', 'III'), chord('G6', 'VII6')] }
+    blocks: { heading: 'LEAD', status: 'Wrote Lead \u00B7 A min \u00B7 9th \u00B7 Col35 Chr10 to slot 2.', level: 'ok', locked: 1,
+      chords: [chord('Am9', 'i9'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('Cmaj9', 'IIImaj9'), chord('G9', 'VII9')] }
   },
   {
     title: 'SOURCE panel open, a clip loaded as VAR',
@@ -94,7 +94,7 @@ const STATES = [
     srcinfo: 'my riff \u00B7 A Natural Minor \u00B7 4 chords, 4 bars',
     blocks: { heading: 'VARIATION', status: 'Loaded my riff: A Natural Minor, 4 chords.', level: 'ok', locked: 0,
       source: { name: 'my riff', detectedKey: 'A Natural Minor', chords: ['Am', 'F', 'C', 'G'] },
-      chords: [chord('Am', 'i'), chord('F', 'VI'), chord('Dm7', 'iv7', { changed: true }), chord('G', 'VII')] }
+      chords: [chord('Am', 'i'), chord('F', 'VI'), chord('Dm', 'iv', { changed: true }), chord('G', 'VII')] }
   }
 ];
 

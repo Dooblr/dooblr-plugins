@@ -53,7 +53,7 @@ var BUTTON_HINTS = {
   clearsource: 'CLEAR forgets the source, so Generate makes fresh progressions again.',
   kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.',
   lead: 'LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.',
-  notes: 'Notes is how many voices each chord uses. Auto keeps the usual voicing. 2 to 6 sets the count; when Bass is on, the bass note is extra and not counted.'
+  notes: 'Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones — alterations, borrowed chords and substitutions — but they do not change how many notes each chord has. When Bass is on, the bass is a root doubling and is not counted.'
 };
 
 // Overlay panels. Members are parked off-screen in the saved patcher (x = PARK_X).
@@ -600,7 +600,7 @@ function updateButtons() {
     ? 'Density sets how busy the lead line is: higher values use shorter notes and fewer rests.'
     : 'Density sets how busy the lead line is. It is dimmed because Lead is off: turn Lead on to use it.');
   setActive('notes', ready && !leadOn, leadOn
-    ? BUTTON_HINTS.notes + ' It is dimmed because Lead is on: a lead line is monophonic, so the voicing count does not apply.'
+    ? BUTTON_HINTS.notes + ' It is dimmed because Lead is on: a lead line is monophonic, so the chord-type count does not apply.'
     : BUTTON_HINTS.notes);
   setGenerateLabel(leadOn);
 }

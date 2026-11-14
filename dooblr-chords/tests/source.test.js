@@ -178,5 +178,5 @@ test('engine without a source is unchanged by the kind setting', () => {
   const b = E.build({ seed: 9, kind: 1 });
   assert.deepEqual(DC.plain(a.notes), DC.plain(b.notes));
   assert.equal(a.derived, null);
-  assert.equal(a.clipName, 'C min \u00B7 4 \u00B7 Col35 Chr10');
+  assert.equal(a.clipName, 'C min \u00B7 4 \u00B7 TRI \u00B7 Col35 Chr10');
 });

@@ -5,7 +5,7 @@ DC.engine = (function () {
   var T = DC.theory, C = DC.chords, G = DC.generator, V = DC.voicing, RN = DC.render;
   var A = DC.analysis, DV = DC.derive, MF = DC.midifile, L = DC.lead;
 
-  var VERSION = '0.6.0';
+  var VERSION = '0.6.1';
   var KINDS = [{ id: 'var', label: 'VAR', long: 'Variation' }, { id: 'b', label: 'B', long: 'B section' }];
   var DURATIONS = [
     { label: '1/2', beats: 2 },
@@ -17,26 +17,27 @@ DC.engine = (function () {
   var DEFAULTS = {
     root: 0, mode: 1, length: 4, duration: 1, color: 35, chromatic: 10,
     register: 60, spread: 25, bass: 1, velocity: 100, humanize: 0, seed: 1, kind: 0,
-    lead: 0, density: 50, notes: 0
+    lead: 0, density: 50, notes: 3
   };
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
 
-  // Engine notes: 0 = Auto (today's voicing), 2..6 = upper-voice count.
-  // The live.tab enum is Auto, 2, 3, 4, 5, 6 (indices 0..5).
+  // Engine notes: 3 = triad, 4 = 7th, 5 = 9th, 6 = 11th (or 13 if 11 clashes).
+  // The live.tab enum is TRI, 7TH, 9TH, 11TH (indices 0..3).
+  var NOTES_LABELS = { 3: 'TRI', 4: '7th', 5: '9th', 6: '11th' };
   function notesFromTab(i) {
     i = Math.round(+i || 0);
-    if (i <= 0) { return 0; }
-    if (i > 5) { i = 5; }
-    return i + 1;
+    if (i < 0) { i = 0; }
+    if (i > 3) { i = 3; }
+    return i + 3;
   }
-  function tabFromNotes(n) { return n <= 0 ? 0 : clamp(Math.round(n), 2, 6) - 1; }
+  function tabFromNotes(n) { return clamp(Math.round(n), 3, 6) - 3; }
   function normalizeNotes(v) {
     var n = Math.round(+v || 0);
-    if (n <= 0) { return 0; }
-    if (n === 1) { return 2; }
-    return clamp(n, 2, 6);
+    if (n <= 2) { return 3; }
+    return clamp(n, 3, 6);
   }
+  function notesLabel(n) { return NOTES_LABELS[normalizeNotes(n)] || 'TRI'; }
 
   function normalize(s) {
     var o = {}, k;
@@ -60,24 +61,24 @@ DC.engine = (function () {
     return o;
   }
 
-  // "C min · 4 · Col35 Chr10"  (ASCII key name; the dot is U+00B7)
+  // "C min · 4 · TRI · Col35 Chr10"  (ASCII key name; the dot is U+00B7)
   function clipName(s) {
     var o = normalize(s);
     var name = T.keyNameAscii(o.root, o.mode) + ' ' + T.MODES[o.mode].short + ' \u00B7 ' + o.length +
-      ' \u00B7 Col' + o.color + ' Chr' + o.chromatic;
+      ' \u00B7 ' + notesLabel(o.notes) + ' \u00B7 Col' + o.color + ' Chr' + o.chromatic;
     return o.lead ? ('Lead \u00B7 ' + name) : name;
   }
 
   function newSeed(u) { return 1 + Math.floor(u * SEED_MAX); }
 
-  // Clip name for a derived clip: "riff · VAR · A min · Col35 Chr10" or
-  // "riff · B III · A min · Col35 Chr10". The source name is shortened.
+  // Clip name for a derived clip: "riff · VAR · A min · TRI · Col35 Chr10" or
+  // "riff · B III · A min · 9th · Col35 Chr10". The source name is shortened.
   function derivedClipName(o, source, region) {
     var nm = String((source && source.name) || 'Clip');
     if (nm.length > 18) { nm = nm.substring(0, 17) + '\u2026'; }
     var kind = KINDS[o.kind].label + (o.kind === 1 && region ? ' ' + region.id.replace(/\u266D/g, 'b') : '');
     var name = nm + ' \u00B7 ' + kind + ' \u00B7 ' + T.keyNameAscii(o.root, o.mode) + ' ' + T.MODES[o.mode].short +
-      ' \u00B7 Col' + o.color + ' Chr' + o.chromatic;
+      ' \u00B7 ' + notesLabel(o.notes) + ' \u00B7 Col' + o.color + ' Chr' + o.chromatic;
     return o.lead ? ('Lead \u00B7 ' + name) : name;
   }
 
@@ -119,11 +120,11 @@ DC.engine = (function () {
       var d = DV.derive(source.analysis, o, KINDS[o.kind].id, locks, source.keep || null);
       chords = d.chords; ending = d.ending; slots = d.slots; lengthBeats = d.lengthBeats;
       changed = d.changed; rhythm = d.rhythm; region = d.region;
-      if (!o.notes && source.analysis.voicing) { vopts.maxUpper = source.analysis.voicing.maxUpper; }
     } else {
       var prog = G.generate({ root: o.root, mode: o.mode, length: o.length, color: o.color, chromatic: o.chromatic, seed: o.seed }, locks);
       chords = prog.chords; ending = prog.ending; lengthBeats = beats * o.length;
     }
+    for (i = 0; i < chords.length; i++) { C.applyNotes(chords[i], o.notes); }
     var voicings = V.voiceAll(chords, o.root, vopts);
     var notes = o.lead
       ? L.notes(chords, o, { chordBeats: beats, slots: slots, lengthBeats: lengthBeats })
@@ -131,9 +132,8 @@ DC.engine = (function () {
     var display = [];
     for (i = 0; i < chords.length; i++) {
       var ch = chords[i];
-      var named = (voicings[i] && voicings[i].display) ? voicings[i].display : ch;
       display.push({
-        name: C.name(named, o.root, o.mode), roman: C.roman(ch), func: ch.func, source: ch.source,
+        name: C.name(ch, o.root, o.mode), roman: C.roman(ch), func: ch.func, source: ch.source,
         locked: !!(locks && locks[i]), changed: !!(changed && changed[i]),
         beats: slots ? slots[i].duration : beats
       });
@@ -162,7 +162,7 @@ DC.engine = (function () {
 
   return {
     VERSION: VERSION, DURATIONS: DURATIONS, DEFAULTS: DEFAULTS, SEED_MAX: SEED_MAX, KINDS: KINDS,
-    normalize: normalize, notesFromTab: notesFromTab, tabFromNotes: tabFromNotes,
+    normalize: normalize, notesFromTab: notesFromTab, tabFromNotes: tabFromNotes, notesLabel: notesLabel,
     clipName: clipName, newSeed: newSeed, build: build,
     sourceFromMidi: sourceFromMidi, analyzeSource: analyzeSource, sourceDisplay: sourceDisplay,
     isMidiPath: MF.isMidiPath, baseName: MF.baseName

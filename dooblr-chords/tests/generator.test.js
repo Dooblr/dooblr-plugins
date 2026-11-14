@@ -82,10 +82,10 @@ test('raising Color only adds tones and keeps the roots (chromatic 0)', () => {
       }
       prev = b;
     }
-    const triads = E.build({ length: 8, color: 0, seed });
-    for (const ch of triads.chords) assert.equal(C.tones(ch).length, 3, 'colour 0 gives triads');
-    const rich = E.build({ length: 8, color: 100, seed });
-    for (const ch of rich.chords) assert.ok(ch.seventh !== null, 'colour 100 gives sevenths or more');
+    const triads = E.build({ length: 8, color: 100, seed, notes: 3 });
+    for (const ch of triads.chords) assert.equal(C.tones(ch).length, 3, 'Notes 3 stays a triad even at Color 100');
+    const rich = E.build({ length: 8, color: 0, seed, notes: 6 });
+    for (const ch of rich.chords) assert.ok(C.tones(ch).length === 6 && ch.seventh !== null, 'Notes 6 stacks seven, nine and 11/13 even at Color 0');
   }
 });
 
@@ -147,8 +147,8 @@ test('locked chords are stored relative to the key, so they follow a key change'
 });
 
 test('clip name format', () => {
-  assert.equal(E.clipName({ root: 0, mode: 1, length: 4, color: 35, chromatic: 10 }), 'C min \u00B7 4 \u00B7 Col35 Chr10');
-  assert.equal(E.clipName({ root: 3, mode: 0, length: 8, color: 0, chromatic: 100 }), 'Eb maj \u00B7 8 \u00B7 Col0 Chr100');
+  assert.equal(E.clipName({ root: 0, mode: 1, length: 4, color: 35, chromatic: 10 }), 'C min \u00B7 4 \u00B7 TRI \u00B7 Col35 Chr10');
+  assert.equal(E.clipName({ root: 3, mode: 0, length: 8, color: 0, chromatic: 100 }), 'Eb maj \u00B7 8 \u00B7 TRI \u00B7 Col0 Chr100');
 });
 
 test('newSeed stays in range', () => {

@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.6.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.6.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -15,22 +15,27 @@ Version 0.6.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   Lydian, Mixolydian and Harmonic Minor.
 * **Length** of 2 to 16 chords (default 4). **Bars per Chord** of ½, 1 or 2
   (default 1).
-* **Color** (0 to 100) adds sevenths, then ninths, elevenths and thirteenths,
-  skipping avoid notes. At 0 every chord is a triad.
+* **Color** (0 to 100) colours the tones of the chord type Notes has chosen:
+  sus or add variants, and (when Notes is 9th or 11th) altered tensions,
+  skipping avoid notes. It does not change how many notes each chord has.
 * **Spice** (the Chromatic parameter, 0 to 100) adds borrowed chords, secondary
   dominants, tritone substitutions and the Neapolitan. At 0 the progression
   is strictly diatonic.
 * **Generation** walks a functional Markov chain (tonic, pre-dominant,
   dominant) and ends on a cadence: an authentic V–I, or a turnaround that
   loops back to the start.
-* **Notes**: Auto (the default) keeps the usual number of voices, so existing
-  Sets sound the same. 2 to 6 sets how many upper voices each chord uses.
-  When Bass is on, the bass note is extra and not counted. Fewer notes drop
-  the least essential tones first (keep the root and third, then the seventh,
-  then the fifth). More notes add sevenths, ninths, elevenths or thirteenths
-  in the Color style, then octave doublings. The chord blocks show the
-  resulting voicing. Notes is dimmed while Lead is on, because a lead line
-  is monophonic.
+* **Notes** sets the chord type for every generated chord: **TRI** (triad,
+  3 notes: 1–3–5 or sus), **7TH** (4 notes, +7), **9TH** (5 notes, +9) or
+  **11TH** (6 notes, +11). A natural 11 that clashes with a major third is
+  replaced by #11 in Lydian contexts, or otherwise by 13 (so Cmaj13 or G13,
+  but Fmaj9#11 and Am11). The default is Triad. Color and Spice still colour
+  the tones (alterations, borrowed chords and substitutions) but they do not
+  change how many notes each chord has. When Bass is on, the bass is a root
+  doubling and is not counted; a slash bass is also extra. Every upper
+  voicing has exactly that many distinct pitch classes — the fifth is never
+  dropped, and octave doublings are not added. The blocks and clip names
+  show the resulting type (Cmaj7, Am9, …). Notes is dimmed while Lead is on,
+  because a lead line is monophonic.
 * **Voicing** uses voice leading between chords, with Register, Spread (close,
   drop-2 or open) and an optional separate bass note.
 * **Seed**: every result comes from the seed shown on the device. The same
@@ -55,8 +60,8 @@ Version 0.6.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
     source's first chord.
   Setting Length to anything other than the source's chord count drops the
   source rhythm and uses Bars per Chord instead. Register, Spread and Bass
-  still set the voicing. In Auto the number of upper voices follows the
-  source's thickness (3 to 5); Notes 2 to 6 overrides that count.
+  still set the voicing. Notes forces every derived chord to the same type
+  (triad, 7th, 9th or 11th).
 * Incoming MIDI passes straight through.
 
 ## First use
@@ -66,9 +71,9 @@ sound settings and the variation / B-section tools live in pop-up panels
 inside the device (not separate Max windows).
 
 1. Drop the device on a MIDI track that has an instrument after it.
-2. Pick a **Root** and **Mode**, set **Length**, and optionally turn **Color**
-   (richer chords), **Spice** (more unexpected chords) or **Notes** (how many
-   voices each chord uses; Auto is the default).
+2. Pick a **Root** and **Mode**, set **Length**, and optionally turn **Notes**
+   (triad, 7th, 9th or 11th; triad is the default), **Color** (how those
+   tones are coloured) or **Spice** (more unexpected chords).
 3. Press **Generate**. A clip is written to the next empty slot, and the
    chords appear in the blocks.
 4. Click a block to lock it, then press **Reroll** to change the others.
@@ -96,7 +101,7 @@ off-screen, so they cannot be clicked through the overlay.
 | | **Reroll** | Picks a new seed, keeps locked chords and writes a clip. It is dimmed until a chord is locked. |
 | | source badge | When a source is loaded, a small chip such as `VAR · my riff` appears under Reroll, so that state is not hidden in the Source panel. |
 | Main | **Root**, **Mode**, **Length** | Key, scale and number of chords. |
-| | **Notes** | How many voices each chord uses: Auto (the default, usual voicing) or 2 to 6. Bass, when on, adds a bass note on top of that count. Dimmed while Lead is on. |
+| | **Notes** | Chord type: TRI (triad, 3 notes), 7TH (4), 9TH (5) or 11TH (6). The default is Triad. Color and Spice colour the tones but do not change the count. Bass, when on, adds a root doubling that is not counted. Dimmed while Lead is on. |
 | | **Color**, **Spice** | Color adds extensions. Spice is the Chromatic parameter: borrowed chords and substitutions. The Live parameter name is still Chromatic. |
 | | **ADVANCED …** | Opens the Advanced overlay. |
 | | **SOURCE …** | Opens the Source overlay. |
@@ -114,8 +119,8 @@ off-screen, so they cannot be clicked through the overlay.
 
 Changing a control updates the preview but does not write anything. Only
 Generate, Reroll and Write create clips. Clips are named like
-`C min · 4 · Col35 Chr10`, or `riff · VAR · A min · Col35 Chr10` and
-`riff · B III · A min · Col35 Chr10` when made from a source. Loading a source
+`C min · 4 · TRI · Col35 Chr10`, or `riff · VAR · A min · 9th · Col35 Chr10`
+and `riff · B III · A min · TRI · Col35 Chr10` when made from a source. Loading a source
 never writes a clip.
 
 ## Install
@@ -201,7 +206,7 @@ the files in `device/`, because they are generated.
    window.
 2. Play the keyboard. Notes pass through to the instrument.
 3. Press **Generate**. A clip appears in the first empty slot, named like
-   `C min · 4 · Col35 Chr10`, 4 bars long. It plays the chords shown in the
+   `C min · 4 · TRI · Col35 Chr10`, 4 bars long. It plays the chords shown in the
    blocks, and the Seed changes.
 4. Press **Generate** again. The next empty slot gets a new clip, and earlier
    clips are untouched.
@@ -210,12 +215,14 @@ the files in `device/`, because they are generated.
 6. Set Chromatic to 0 and generate several times. Only diatonic chords
    appear. At 80 or more, secondary dominants (V/x), subV/x, borrowed chords
    and N show up.
-7. Color 0 gives triads only. Color 100 gives 9ths, 11ths and 13ths.
-8. Notes is Auto by default and sounds like previous versions. Set it to 2:
-   each chord has two upper notes (plus the bass if Bass is on), and the
-   blocks show simpler names. Set it to 6: each chord has six upper notes,
-   and triad blocks pick up sevenths and extensions. Turn Lead on: Notes
-   dims, with a tooltip saying why.
+7. Color colours the tones (sus, alterations) but does not change how many
+   notes each chord has. With Notes on TRI, Color 100 still gives 3-note
+   chords; Spice still adds borrowed chords and substitutions.
+8. Notes defaults to **TRI**. Every block is a triad (or sus), and the clip
+   name includes `TRI`. Set it to **7TH**: every chord has four pitch classes
+   and names such as Am7 or Cmaj7. **9TH** gives five (Am9, Cmaj9, G9).
+   **11TH** gives six (Am11, Fmaj9#11, G13 — a clashing natural 11 becomes
+   #11 or 13). Turn Lead on: Notes dims, with a tooltip saying why.
 9. Click a block. It gets a coloured outline and a padlock, and Reroll
    lights up. Press **Reroll**. Locked chords stay, the others change, and a
    new clip is written.
@@ -320,9 +327,10 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
-* The 0.6.0 Notes tab in Live: Auto sounding like 0.5.0, counts 2 to 6 (with
-  Bass adding an extra note), chord-block names following the voicing, and
-  Notes dimming when Lead is on, with a tooltip that says why.
+* The 0.6.1 Notes tab in Live: the TRI / 7TH / 9TH / 11TH labels fitting the
+  tab, default Triad, Color not changing the count, block and clip names
+  matching the type (Cmaj7, Am9, Fmaj9#11, G13), Bass as an uncounted root
+  doubling, and Notes dimming when Lead is on, with a tooltip that says why.
 * The 0.5.0 Lead toggle in Live: the large gold on-state, the Generate label
   changing to "Generate Lead", Density dimming when Lead is off, and the
   monophonic lead clip sounding over the shown chords.

@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.6.0",
+					"text": "v0.6.1",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -3871,7 +3871,7 @@
 						1
 					],
 					"annotation_name": "Notes",
-					"annotation": "Notes is how many voices each chord uses. Auto keeps the usual voicing. 2 to 6 sets the count; when Bass is on, the bass note is extra and not counted.",
+					"annotation": "Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones, but they do not change how many notes each chord has. When Bass is on, the bass is a root doubling and is not counted.",
 					"id": "obj-93",
 					"patching_rect": [
 						196,
@@ -3892,14 +3892,12 @@
 							"parameter_shortname": "Notes",
 							"parameter_type": 2,
 							"parameter_enum": [
-								"Auto",
-								"2",
-								"3",
-								"4",
-								"5",
-								"6"
+								"TRI",
+								"7TH",
+								"9TH",
+								"11TH"
 							],
-							"parameter_mmax": 5,
+							"parameter_mmax": 3,
 							"parameter_initial": [
 								0
 							],

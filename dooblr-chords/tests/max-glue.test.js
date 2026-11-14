@@ -185,7 +185,7 @@ test('no Live API use before live.thisdevice, then writes into the first empty s
   const clip = t.live.slots[1].clip;
   assert.ok(clip, 'clip created in slot index 1 (slot 0 is full)');
   assert.strictEqual(clip.length, 16);
-  assert.strictEqual(clip.name, 'C min \u00B7 4 \u00B7 Col35 Chr10');
+  assert.strictEqual(clip.name, 'C min \u00B7 4 \u00B7 TRI \u00B7 Col35 Chr10');
   assert.ok(clip.notes.length >= 4 * 3);
   clip.notes.forEach((n) => {
     assert.ok(n.pitch >= 0 && n.pitch <= 127);
@@ -587,7 +587,7 @@ test('Lead toggle writes a monophonic lead clip and relabels Generate', () => {
   assert.strictEqual(t.lastActive('density'), 0, 'Density is dimmed while Lead is off');
   assert.strictEqual(t.lastActive('notes'), 1, 'Notes is available while Lead is off');
   t.ctx.generate();
-  assert.strictEqual(t.live.slots[0].clip.name, 'C min \u00B7 4 \u00B7 Col35 Chr10');
+  assert.strictEqual(t.live.slots[0].clip.name, 'C min \u00B7 4 \u00B7 TRI \u00B7 Col35 Chr10');
 
   t.ctx.param('lead', 1);
   assert.strictEqual(t.lastActive('density'), 1);
@@ -599,7 +599,7 @@ test('Lead toggle writes a monophonic lead clip and relabels Generate', () => {
   t.ctx.generate();
   const clip = t.live.slots[1].clip;
   assert.ok(clip);
-  assert.match(clip.name, /^Lead \u00B7 C min \u00B7 4 \u00B7 Col/);
+  assert.match(clip.name, /^Lead \u00B7 C min \u00B7 4 \u00B7 TRI \u00B7 Col/);
   const notes = clip.notes.slice().sort((a, b) => a.start_time - b.start_time);
   assert.ok(notes.length > 0);
   for (let i = 1; i < notes.length; i++) {
@@ -626,25 +626,26 @@ test('Lead over a source names the clip Lead · <name> · VAR and keeps the sour
   assert.match(t.lastState().heading, /LEAD \u00B7 VARIATION/);
 });
 
-test('Notes tab sets the voicing count and Auto keeps the usual clip', () => {
+test('Notes tab sets the chord type and clip name', () => {
   const t = loadController({ slots: [0, 0, 0] });
   t.ctx.init();
   t.ctx.param('seed', 1);
   t.ctx.param('root', 9);
   t.ctx.param('mode', 1);
   t.ctx.write();
-  const autoName = t.live.slots[0].clip.name;
-  const autoCount = t.live.slots[0].clip.notes.filter((n) => n.start_time === 0).length;
+  assert.match(t.live.slots[0].clip.name, /TRI/);
+  const triad = t.live.slots[0].clip.notes.filter((n) => n.start_time === 0).length;
+  assert.strictEqual(triad, 3 + 1, 'TRI with Bass on: 3 upper + bass');
 
-  t.ctx.param('notes', 1); // tab index 1 = 2 notes
+  t.ctx.param('notes', 1); // 7TH
   t.ctx.write();
-  const two = t.live.slots[1].clip.notes.filter((n) => n.start_time === 0).length;
-  assert.strictEqual(two, 2 + 1, 'Notes 2 with Bass on: 2 upper + bass');
-  assert.ok(two !== autoCount || autoCount === 3, 'Auto is not forced to Notes 2');
+  assert.match(t.live.slots[1].clip.name, /7th/);
+  const sev = t.live.slots[1].clip.notes.filter((n) => n.start_time === 0).length;
+  assert.strictEqual(sev, 4 + 1, '7TH with Bass on: 4 upper + bass');
 
-  t.ctx.param('notes', 5); // tab index 5 = 6 notes
+  t.ctx.param('notes', 3); // 11TH
   t.ctx.write();
-  const six = t.live.slots[2].clip.notes.filter((n) => n.start_time === 0).length;
-  assert.strictEqual(six, 6 + 1, 'Notes 6 with Bass on: 6 upper + bass');
-  assert.ok(autoName.length > 0);
+  assert.match(t.live.slots[2].clip.name, /11th/);
+  const hex = t.live.slots[2].clip.notes.filter((n) => n.start_time === 0).length;
+  assert.strictEqual(hex, 6 + 1, '11TH with Bass on: 6 upper + bass');
 });

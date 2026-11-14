@@ -237,12 +237,89 @@ DC.chords = (function () {
     return r;
   }
 
+  // Force a chord to N distinct pitch classes stacked in thirds from its scale:
+  // 3 = 1-3-5 (or sus), 4 = +7, 5 = +9, 6 = +11. A natural 11 that clashes
+  // with a major third (a minor-9th) is replaced by #11 in Lydian contexts
+  // (where the scale has #11) or otherwise by 13. Color/Spice alterations
+  // already on the chord are kept when they fit the count and do not clash.
+  // Octave doublings are not added; the fifth is never dropped to make room.
+  function applyNotes(c, n) {
+    n = Math.round(+n || 0);
+    if (n < 3) { n = 3; }
+    if (n > 6) { n = 6; }
+    var want7 = c.seventh, want9 = c.nine, want11 = c.eleven, want13 = c.thirteen;
+    c.seventh = null;
+    c.nine = null;
+    c.eleven = null;
+    c.thirteen = null;
+    c.add9 = false;
+
+    function hasPc(v) {
+      var iv = tones(c), pc = T.mod12(v), i;
+      for (i = 0; i < iv.length; i++) { if (T.mod12(iv[i]) === pc) { return true; } }
+      return false;
+    }
+    function trySet(field, v) {
+      if (v === null || v === undefined) { return false; }
+      if (hasPc(v)) { return false; }
+      if (field !== 'seventh' && avoided(c, v)) { return false; }
+      c[field] = v;
+      return true;
+    }
+
+    function toneCount() { return tones(c).length; }
+    function addEleventhOrThirteenth() {
+      // Prefer a natural 11 from the scale, then #11 only in Lydian
+      // contexts (scale has #11). If the 11 clashes (typical over a
+      // major third), use 13 instead.
+      if (trySet('eleven', want11)) { return; }
+      if (c.scale && trySet('eleven', c.scale[3] + 12)) { return; }
+      if (c.scale && c.scale[3] === 6 && trySet('eleven', 18)) { return; }
+      if (trySet('thirteen', want13)) { return; }
+      if (c.scale) { trySet('thirteen', c.scale[5] + 12); }
+      if (c.thirteen === null) { trySet('thirteen', 21); }
+      if (c.thirteen === null) { trySet('thirteen', 20); }
+    }
+
+    if (n >= 4) {
+      if (!trySet('seventh', want7) && c.scale) { trySet('seventh', c.scale[6]); }
+    }
+    if (n >= 5) {
+      if (!trySet('nine', want9) && c.scale) { trySet('nine', c.scale[1] + 12); }
+      if (c.nine === null) { trySet('nine', 15); }
+      if (c.nine === null) { trySet('nine', 13); }
+      // Phrygian (and other b2) scales cannot take a 9 without a clash
+      // or doubling the minor third; fill with 11/13 so the count holds.
+      if (toneCount() < n) { addEleventhOrThirteenth(); }
+    }
+    if (n >= 6 && toneCount() < 6) {
+      addEleventhOrThirteenth();
+    }
+    // Last resort (e.g. diminished scales where b9 and 11 clash): keep
+    // adding the next stacked or neighbouring extension that is a new,
+    // non-avoided pitch class so the count still holds.
+    if (toneCount() < n) {
+      var fill = [14, 17, 21, 18, 15, 13, 20, 16], f;
+      for (f = 0; f < fill.length && toneCount() < n; f++) {
+        var iv = fill[f], field;
+        if (iv >= 20) { field = 'thirteen'; }
+        else if (iv >= 17 && iv <= 18) { field = 'eleven'; }
+        else if (iv >= 13 && iv <= 16) { field = 'nine'; }
+        else { continue; }
+        if (c[field] !== null) { continue; }
+        trySet(field, iv);
+      }
+    }
+    return c;
+  }
+
   return {
     SCALES: SCALES,
     copy: copy,
     fromScale: fromScale,
     diatonic: diatonic,
     applyColor: applyColor,
+    applyNotes: applyNotes,
     alterDominant: alterDominant,
     avoided: avoided,
     tones: tones,
