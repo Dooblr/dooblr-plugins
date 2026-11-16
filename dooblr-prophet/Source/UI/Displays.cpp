@@ -12,12 +12,11 @@ namespace dooblrprophet::ui
     {
         switch (page)
         {
-            case 0: return Palette::accent;
-            case 1: return Palette::dynamic;
-            case 2: return Palette::master;
-            case 3: return Palette::frozen;
-            case 5: return juce::Colour (0xffb59be6); // FX
-            default: return Palette::spectrum;
+            case 0: return Palette::accent;                 // Sound
+            case 1: return Palette::frozen;                 // Modulation
+            case 2: return Palette::spectrum;               // Voices
+            case 3: return juce::Colour (0xffb59be6);       // FX
+            default: return Palette::accent;
         }
     }
 

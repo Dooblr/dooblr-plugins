@@ -38,7 +38,7 @@ User Library.
 | dooblr-installer | 0.1.5 | JUCE app |  | 2026-11-11 | [design/plugins/dooblr-installer.md](plugins/dooblr-installer.md) |
 | dooblr-kick | 0.3.9 | JUCE instrument VST3 | ~143 | 2026-11-16 | [design/plugins/dooblr-kick.md](plugins/dooblr-kick.md) |
 | dooblr-m | 0.1.7 | JUCE instrument VST3 | 51 | 2026-11-16 | [design/plugins/dooblr-m.md](plugins/dooblr-m.md) |
-| dooblr-prophet | 0.3.2 | JUCE instrument VST3; plus a Max for Live companion in `m4l/` | ~88 | 2026-11-16 | [design/plugins/dooblr-prophet.md](plugins/dooblr-prophet.md) |
+| dooblr-prophet | 0.3.3 | JUCE instrument VST3; plus a Max for Live companion in `m4l/` | ~88 | 2026-11-16 | [design/plugins/dooblr-prophet.md](plugins/dooblr-prophet.md) |
 | dooblr-q | 0.9.5 | JUCE effect VST3 | 99 | 2026-10-28 | [design/plugins/dooblr-q.md](plugins/dooblr-q.md) |
 | dooblr-soothe | 0.1.4 | JUCE effect VST3 | 58 | 2026-11-16 | [design/plugins/dooblr-soothe.md](plugins/dooblr-soothe.md) |
 | dooblr-sub | 0.1.1 | JUCE effect VST3 | 19 | 2026-11-16 | [design/plugins/dooblr-sub.md](plugins/dooblr-sub.md) |

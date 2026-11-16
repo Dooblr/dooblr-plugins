@@ -12,7 +12,22 @@ Read `design/INDEX.md` first. This file has two parts:
 - Suite-wide rules: `design/dooblr-design-system.md` (sections 1-10 and 12).
 - `dooblr-prophet/README.md`
 - `dooblr-prophet/ROADMAP.md`
-- Add plugin-specific notes here (behaviour, UX decisions, known limits).
+- **0.3.2 editor tabs.** A horizontal tab bar under the 60 px header (Sound / Modulation /
+  Voices / FX) replaces the 150 px left page column. Sound is the main page: oscillators,
+  then filter envelope / high-pass / low-pass / amp envelope (envelope, filter, envelope),
+  then mixer with basic Poly-Mod and LFO. Mixer sits on the bottom row so OSC 1 | OSC 2 stay
+  one knob high at 940×600. Advanced LFO/Poly-Mod routings live on Modulation; voice and
+  MIDI/performance settings on Voices; Echo and Reverb on FX. Nothing was removed; parameter IDs
+  are unchanged. The Sound graph strip shows oscillator, filter (with handles) and envelope
+  views side by side. Oscillator wave switches share a 2×2 cell (Osc 2 Lo Freq / Key join that
+  grid). Basic LFO destinations share a cell. The Max for Live panel uses the same
+  `layout::pages()` table.
+- **0.3.3 tab bar polish.** Tab button width is computed as if the hungriest page's mode
+  switches were always present, then capped (88–112 px), so Sound and FX stay the same size.
+  Sound's status is the oversampling line only (`2x oversampled` / `4x Poly-Mod FM`); the
+  ladder model is already the LOW-PASS Model combo. Status is one line in the leftover gap
+  and hides when that gap is under 80 px (940×600). The Max for Live panel is unchanged
+  (still 0.3.3).
 
 - **User presets (0.3.2):** `common/PresetPaths` — macOS `~/Library/Audio/Presets/dooblr/dooblr-prophet/`, Windows `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-prophet\`. Legacy `~/Music/dooblr-prophet/Presets` is copied on first run, not deleted. The M4L panel's Save/Load still opens the plug-in's own dialogs.
 
@@ -20,7 +35,7 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrProphet`, product "dooblr-prophet", code Dbp5); plus a Max for Live companion in `m4l/`
-- Version: 0.3.2
+- Version: 0.3.3
 - Last source change: 2026-11-16
 - Source tree: `dccd1f0c55b4` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-prophet`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660

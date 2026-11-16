@@ -25,7 +25,7 @@ in its own folder and has its own README.
 | [`dooblr-q/`](dooblr-q/) | dooblr-q | 0.9.5 | Dynamic parametric EQ (VST3 effect) | Mature; most features, see its README |
 | [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.9 | Layered kick drum designer (VST3 instrument) | Active |
 | [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.3.1 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
-| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.2 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
+| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.3 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.3** | Active; Sound / Modulation / Voices / FX tabs; panel 0.3.3 follows the same layout |
 | [`dooblr-bass/`](dooblr-bass/) | dooblr-bass | 0.1.1 | Analog-modelled monophonic bass synth (VST3 instrument), one-page Mini-style board: two main oscillators, sub, optional third/lo-freq osc, mixer drive/overload, 24 dB/oct transistor ladder | New; its tests pass in this repo |
 | [`dooblr-m/`](dooblr-m/) | dooblr-m | 0.1.7 | All-purpose Model D-style monophonic synth (VST3 instrument): three BLIT oscillators, Huovilainen ladder, ADS contours, wheels, mixer feedback, Osc 3 LFO mode, cutoff contour indicator | New; its tests pass in this repo |
 | [`dooblr-generate/`](dooblr-generate/) | dooblr-generate | 0.3.2 | Text-to-sample generator (VST3 instrument): type "909 kick", a local model (Stable Audio Open Small, or AudioLDM for non-commercial use) runs in a separate worker process on the Mac's GPU, then the result plays as a one-shot sampler from MIDI; monophonic playback with a Stop All button; Variation is a new seed then generate; Sync locks length to bars/beats at host tempo (up to 30 s); drag the WAV into Ableton; history of every generation. Model weights are downloaded on request, never bundled | New; tests pass; in the installer (Mac VST3; worker script embedded, weights and Python runtime never bundled); Stable Audio Open Small and AudioLDM generate on the Mac (Stable Audio needs your own Hugging Face access); not yet tested in Live |
@@ -46,7 +46,7 @@ and dooblr-titan: `package.json` / device). Status is as of the last commit; see
 
 VST3 plug-ins (each with `scripts/build.sh`): dooblr-q, dooblr-kick, dooblr-vocals,
 dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor, dooblr-0coast, dooblr-sub, dooblr-generate. Max for Live devices: dooblr-chords and dooblr-titan (see their READMEs) and the
-dooblr-prophet panel 0.3.2 (`dooblr-prophet/m4l/`).
+dooblr-prophet panel 0.3.3 (`dooblr-prophet/m4l/`).
 
 Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
 host-style LoadCheck, and installs the VST3 bundle (never with sudo). Build directories live

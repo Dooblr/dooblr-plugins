@@ -10,49 +10,55 @@ namespace dooblrprophet::layout
         using Kind = ui::ControlPanel::Kind;
 
         Control knob (const char* pid, const char* caption) { return { pid, caption, Kind::knob }; }
-        Control toggle (const char* pid, const char* caption) { return { pid, caption, Kind::toggle }; }
-        Control combo (const char* pid, const char* caption) { return { pid, caption, Kind::combo }; }
+        Control toggle (const char* pid, const char* caption, int stack = -1)
+        {
+            Control c { pid, caption, Kind::toggle };
+            c.stack = stack;
+            return c;
+        }
+        Control combo (const char* pid, const char* caption, int width = 0)
+        {
+            Control c { pid, caption, Kind::combo };
+            c.width = width;
+            return c;
+        }
 
         std::vector<Page> build()
         {
             std::vector<Page> all;
 
-            all.push_back ({ "Oscillators",
-                             { { "OSC 1", id::osc1Mode, { "Variable", "Switched" } }, { "OSC 2", id::osc2Mode, { "Variable", "Switched" } } },
+            // Sound: oscillators on top, envelope / filter / envelope in the middle, mixer with
+            // basic Poly-Mod and LFO on the bottom so the oscillator row stays one knob high.
+            all.push_back ({ "Sound",
+                             { { "OSC 1", id::osc1Mode, { "Variable", "Switched" } },
+                               { "OSC 2", id::osc2Mode, { "Variable", "Switched" } } },
                              { { "OSCILLATOR 1", { knob (id::osc1Coarse, "Coarse"), knob (id::osc1Fine, "Fine"), knob (id::osc1Shape, "Shape"),
-                                                   knob (id::osc1PW, "Pulse Width"), toggle (id::osc1Saw, "Saw"), toggle (id::osc1Tri, "Triangle"),
-                                                   toggle (id::osc1Pulse, "Pulse"), toggle (id::osc1Sync, "Sync") } },
+                                                   knob (id::osc1PW, "Pulse Width"), toggle (id::osc1Saw, "Saw", 0), toggle (id::osc1Tri, "Tri", 0),
+                                                   toggle (id::osc1Pulse, "Pulse", 0), toggle (id::osc1Sync, "Sync", 0) } },
                                { "OSCILLATOR 2", { knob (id::osc2Coarse, "Coarse"), knob (id::osc2Fine, "Fine"), knob (id::osc2Shape, "Shape"),
-                                                   knob (id::osc2PW, "Pulse Width"), toggle (id::osc2Saw, "Saw"), toggle (id::osc2Tri, "Triangle"),
-                                                   toggle (id::osc2Pulse, "Pulse"), toggle (id::osc2LowFreq, "Low Freq"),
-                                                   toggle (id::osc2KeyTrack, "Key Track") } },
-                               { "MIXER", { knob (id::mixOsc1, "Osc 1"), knob (id::mixOsc2, "Osc 2"), knob (id::mixSub, "Sub"), knob (id::mixNoise, "Noise") } } },
-                             { { 0 }, { 1 }, { 2 } } });
-
-            all.push_back ({ "Filters",
-                             { { "LOW-PASS", id::lpfModel, params::lpfModelNames() } },
-                             { { "HIGH-PASS (2-POLE)", { knob (id::hpfCutoff, "Cutoff"), knob (id::hpfReso, "Resonance"), knob (id::hpfEnvAmt, "Env Amount") } },
-                               { "LOW-PASS (4-POLE LADDER)", { knob (id::lpfCutoff, "Cutoff"), knob (id::lpfReso, "Resonance"), knob (id::lpfDrive, "Drive"),
-                                                               knob (id::lpfEnvAmt, "Env Amount"), knob (id::lpfKeyTrack, "Key Track") } } },
-                             { { 0, 1 } } });
-
-            all.push_back ({ "Envelopes",
-                             {},
-                             { { "FILTER ENVELOPE", { knob (id::fenvAttack, "Attack"), knob (id::fenvDecay, "Decay"), knob (id::fenvSustain, "Sustain"),
+                                                   knob (id::osc2PW, "Pulse Width"), toggle (id::osc2Saw, "Saw", 0), toggle (id::osc2Tri, "Tri", 0),
+                                                   toggle (id::osc2Pulse, "Pulse", 0), toggle (id::osc2LowFreq, "Lo Freq", 0),
+                                                   toggle (id::osc2KeyTrack, "Key", 0) } },
+                               { "MIXER", { knob (id::mixOsc1, "Osc 1"), knob (id::mixOsc2, "Osc 2"), knob (id::mixSub, "Sub"), knob (id::mixNoise, "Noise") } },
+                               { "FILTER ENVELOPE", { knob (id::fenvAttack, "Attack"), knob (id::fenvDecay, "Decay"), knob (id::fenvSustain, "Sustain"),
                                                       knob (id::fenvRelease, "Release"), knob (id::fenvVelAmt, "Velocity"), toggle (id::fenvSync, "Sync to Amp") } },
+                               { "HIGH-PASS", { knob (id::hpfCutoff, "Cutoff"), knob (id::hpfReso, "Resonance"), knob (id::hpfEnvAmt, "Env Amount") } },
+                               { "LOW-PASS", { combo (id::lpfModel, "Model", 100), knob (id::lpfCutoff, "Cutoff"), knob (id::lpfReso, "Resonance"),
+                                               knob (id::lpfDrive, "Drive"), knob (id::lpfEnvAmt, "Env Amount"), knob (id::lpfKeyTrack, "Key Track") } },
                                { "AMP ENVELOPE", { knob (id::aenvAttack, "Attack"), knob (id::aenvDecay, "Decay"), knob (id::aenvSustain, "Sustain"),
-                                                   knob (id::aenvRelease, "Release"), knob (id::aenvVelAmt, "Velocity") } } },
-                             { { 0 }, { 1 } } });
+                                                   knob (id::aenvRelease, "Release"), knob (id::aenvVelAmt, "Velocity") } },
+                               { "POLY-MOD", { knob (id::pmodFiltEnv, "Filter Env"), knob (id::pmodOsc2, "Osc 2"), toggle (id::pmodDestFreq1, "Osc 1 Freq") } },
+                               { "LFO", { combo (id::lfoWave, "Wave", 100), knob (id::lfoRate, "Rate"), knob (id::lfoInitial, "Initial"),
+                                          knob (id::lfoWheel, "Wheel"), toggle (id::lfoDestFreq1, "Osc 1 Freq", 1), toggle (id::lfoDestFreq2, "Osc 2 Freq", 1),
+                                          toggle (id::lfoDestLpf, "Low-Pass", 1) } } },
+                             { { 0, 1 }, { 3, 4, 5, 6 }, { 2, 7, 8 } } });
 
             all.push_back ({ "Modulation",
                              { { "LFO", id::lfoSync, { "Free", "Tempo Sync" } } },
-                             { { "POLY-MOD", { knob (id::pmodFiltEnv, "Filter Env"), knob (id::pmodOsc2, "Osc 2"), toggle (id::pmodDestFreq1, "Osc 1 Freq"),
-                                               toggle (id::pmodDestShape1, "Osc 1 Shape"), toggle (id::pmodDestFilter, "Filter") } },
-                               { "LFO", { combo (id::lfoWave, "Wave"), knob (id::lfoRate, "Rate"), combo (id::lfoDivision, "Division"),
-                                          knob (id::lfoInitial, "Initial"), knob (id::lfoWheel, "Wheel"), knob (id::lfoNoiseMix, "Noise Mix") } },
-                               { "LFO DESTINATIONS", { toggle (id::lfoDestFreq1, "Osc 1 Freq"), toggle (id::lfoDestFreq2, "Osc 2 Freq"),
-                                                       toggle (id::lfoDestShape1, "Osc 1 Shape"), toggle (id::lfoDestShape2, "Osc 2 Shape"),
-                                                       toggle (id::lfoDestLpf, "Low-Pass"), toggle (id::lfoDestHpf, "High-Pass"), toggle (id::lfoDestAmp, "Amp") } } },
+                             { { "POLY-MOD DESTINATIONS", { toggle (id::pmodDestShape1, "Osc 1 Shape"), toggle (id::pmodDestFilter, "Filter") } },
+                               { "LFO", { combo (id::lfoDivision, "Division"), knob (id::lfoNoiseMix, "Noise Mix") } },
+                               { "LFO DESTINATIONS", { toggle (id::lfoDestShape1, "Osc 1 Shape"), toggle (id::lfoDestShape2, "Osc 2 Shape"),
+                                                       toggle (id::lfoDestHpf, "High-Pass"), toggle (id::lfoDestAmp, "Amp") } } },
                              { { 0 }, { 1 }, { 2 } } });
 
             Page voicesPage { "Voices",
