@@ -62,7 +62,21 @@ namespace dooblrsub
               { id::monoFreq, "Mono Hz", Kind::knob },
               { id::infraHpf, "Infra", Kind::toggle },
               { id::infraFreq, "Infra Hz", Kind::knob },
+              { id::infraSlope, "Slope", Kind::combo, 96 },
               { id::subLimit, "Limit", Kind::toggle },
+          }),
+          lowEndPanel (p.getState(), "Low End", Palette::master, {
+              { id::eqShelfGain, "Shelf", Kind::knob },
+              { id::eqShelfFreq, "Shelf Hz", Kind::knob },
+              { id::eqPeakGain, "Peak", Kind::knob },
+              { id::eqPeakFreq, "Peak Hz", Kind::knob },
+              { id::eqPeakQ, "Peak Q", Kind::knob },
+              { id::eqPresenceGain, "Presence", Kind::knob },
+              { id::eqPresenceFreq, "Air Hz", Kind::knob },
+              { id::eqPresenceQ, "Air Q", Kind::knob },
+              { id::harmAmount, "Harmonic", Kind::knob },
+              { id::phaseInvert, "Invert", Kind::toggle },
+              { id::phaseDelay, "Align", Kind::knob },
           }),
           meter (&p.getEngine().getPeakTap())
     {
@@ -118,20 +132,19 @@ namespace dooblrsub
         addAndMakeVisible (subPanel);
         addAndMakeVisible (tonePanel);
         addAndMakeVisible (systemPanel);
+        addAndMakeVisible (lowEndPanel);
         addAndMakeVisible (display);
         addAndMakeVisible (verdict);
+
+        verdict.setFixHandler ([this] (dsp::CheckId id) { applyFix (id); });
+        verdict.setFixAllHandler ([this] { applyFixAll(); });
+        verdict.setUndoFixHandler ([this] { undoFix(); });
 
         proc.presetChanged.addChangeListener (this);
         refreshPresetBox();
         updateUndoButtons();
 
-        vblank = std::make_unique<juce::VBlankAttachment> (this, [this]
-        {
-            const auto snap = proc.getEngine().display();
-            display.setFrame (snap.spectrum, snap.bands, snap.trackedHz);
-            verdict.setState (snap.verdict, snap.reasons, snap.trackedHz,
-                              proc.getLatencySamples(), proc.getSampleRate());
-        });
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { updateMeters(); });
 
         setResizable (true, true);
         setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
@@ -145,6 +158,15 @@ namespace dooblrsub
         vblank.reset();
         proc.presetChanged.removeChangeListener (this);
         setLookAndFeel (nullptr);
+    }
+
+    void DooblrSubEditor::updateMeters()
+    {
+        const auto snap = proc.getEngine().display();
+        display.setFrame (snap.spectrum, snap.bands, snap.trackedHz);
+        verdict.setState (snap.verdict, snap.reasons, snap.trackedHz,
+                          proc.getLatencySamples(), proc.getSampleRate());
+        verdict.setUndoEnabled (proc.getFixActions().canUndo());
     }
 
     juce::Component* DooblrSubEditor::findControl (const juce::String& parameterId) const
@@ -181,6 +203,37 @@ namespace dooblrsub
         auto& history = proc.getUndoHistory();
         undoButton.setEnabled (history.canUndo());
         redoButton.setEnabled (history.canRedo());
+        verdict.setUndoEnabled (proc.getFixActions().canUndo());
+    }
+
+    void DooblrSubEditor::applyFix (dsp::CheckId id)
+    {
+        if (proc.getFixActions().apply (id))
+        {
+            setStatus ("Fixed " + juce::String (dsp::checkShortName (id)));
+            updateUndoButtons();
+            updateMeters();
+        }
+    }
+
+    void DooblrSubEditor::applyFixAll()
+    {
+        if (proc.getFixActions().applyAll())
+        {
+            setStatus ("Fixed all checks");
+            updateUndoButtons();
+            updateMeters();
+        }
+    }
+
+    void DooblrSubEditor::undoFix()
+    {
+        if (proc.getFixActions().undoLast())
+        {
+            setStatus ("Undid last Fix");
+            updateUndoButtons();
+            updateMeters();
+        }
     }
 
     void DooblrSubEditor::setStatus (const juce::String& text)
@@ -308,6 +361,7 @@ namespace dooblrsub
         fillPanel (subArea);
         fillPanel (toneArea);
         fillPanel (systemArea);
+        fillPanel (lowEndArea);
     }
 
     void DooblrSubEditor::resized()
@@ -343,7 +397,7 @@ namespace dooblrsub
         }
 
         auto body = bounds.reduced (margin, 12);
-        const auto displayH = juce::jlimit (150, 240, body.getHeight() / 3);
+        const auto displayH = juce::jlimit (130, 220, body.getHeight() / 4);
         auto top = body.removeFromTop (displayH);
         body.removeFromTop (panelGap);
         const auto verdictW = juce::jlimit (220, 340, top.getWidth() / 3);
@@ -352,6 +406,11 @@ namespace dooblrsub
         displayArea = top;
         display.setBounds (displayArea);
         verdict.setBounds (verdictArea);
+
+        const auto lowH = juce::jlimit (124, 150, body.getHeight() / 5);
+        lowEndArea = body.removeFromBottom (lowH);
+        body.removeFromBottom (panelGap);
+        lowEndPanel.setBounds (lowEndArea.reduced (10, 8));
 
         const auto colW = (body.getWidth() - 2 * panelGap) / 3;
         subArea = body.removeFromLeft (colW);
