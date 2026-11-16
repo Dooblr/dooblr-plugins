@@ -11,7 +11,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Suite-wide rules: `design/dooblr-design-system.md`. User docs: `dooblr-generate/README.md`.
 - **What it is**: text prompt -> local text-to-audio model -> one-shot sample, played by a
-  16-voice one-shot sampler (root key C3 = MIDI 60, note-offs ignored). Offline generation only.
+  monophonic one-shot sampler (root key C3 = MIDI 60, note-offs ignored). Offline generation only.
 - **Process model (the key decision)**: models never load inside the DAW. `GenerationService`
   (its own thread) spawns the worker (`worker/dooblr_generate_worker.py`, embedded with
   `juce_add_binary_data` and written to `<support>/runtime/`) with `posix_spawn`: own process
@@ -49,12 +49,20 @@ Read `design/INDEX.md` first. This file has two parts:
 - **UI** (one page, 940x600..2400x1400, default 1080x660): header (title, version, Model box);
   prompt bar with captions above (Prompt, Seed, Length or bars/beats, Sync, Generate/Cancel, Variation) and a progress
   line; waveform (no text on it; Start shown as a `dynamic`-coloured line; test samples drawn in
-  textMuted) with Play / Drag WAV / info line, using the leftover width left of HISTORY at every
+  textMuted) with Play / Stop All / Drag WAV / info line, using the leftover width left of HISTORY at every
   size; HISTORY list (right); PLAYBACK ControlPanel and MODEL panel (status, Download/Cancel,
   Token..., Folder..., Copy, read-only selectable details). Drag-out: waveform and Drag WAV call
   `performExternalDragDropOfFiles`; history rows go through `shouldDropFilesWhenDraggedExternally`
   on the editor. There is no SOURCE drop zone (removed in 0.3.0); Variation Amount has no editor
   control (the parameter stays in the APVTS for old sessions).
+- **Monophonic playback and Stop All (0.3.2)**: one playing voice. MIDI, Play, history
+  double-click and source preview all go through `Sampler::noteOn`, which fades the sounding voice
+  over 5 ms (linear, equal-gain crossfade into the new attack so the cut is click-free) and starts
+  the new one. Internally two slots: one playing, one releasing. **Stop All** (waveform row, after
+  Play) requests a fade on the audio thread; it is accent-coloured and enabled while
+  `isPlaying()` is true (atomic flag written at the end of `processBlock`, polled by the 20 Hz
+  editor timer) and greyed/disabled otherwise. No tooltip. All Notes Off still cuts immediately.
+  Old saved sets load unchanged (no new parameters).
 - **Source Variation (0.2.0, UI removed in 0.3.0)**: the left SOURCE drop zone is gone, so the
   editor has no way to load an audio-to-audio source. Variation in the editor is always a new
   random seed then text-to-audio (needs a prompt). Saved `sourceWav` / `sourceName` /
@@ -89,9 +97,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrGenerate`, product "dooblr-generate", code Dbgn)
-- Version: 0.3.1
+- Version: 0.3.2
 - Last source change: 2026-11-11
-- Source tree: `9a7d7894bdf5` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
+- Source tree: `18c9d22f05ff` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-generate/scripts/build.sh` (build dir `~/dooblr-build/dooblr-generate`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrGenerateTests` (Tests/CMakeLists.txt)

@@ -357,7 +357,12 @@ void DooblrGenerateProcessor::processBlock (juce::AudioBuffer<float>& buffer, ju
     if (previewRequested.exchange (false))
         sampler.noteOn (engine::Sampler::rootNote, 1.0f, sample, settings);
 
+    // After Play / source preview so Stop All wins if both were requested in the same block.
+    if (stopRequested.exchange (false))
+        sampler.stopAll();
+
     sampler.process (buffer, midi, sample, settings, source);
+    sounding.store (sampler.isSounding(), std::memory_order_relaxed);
 }
 
 //==============================================================================
