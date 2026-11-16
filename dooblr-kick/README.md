@@ -5,7 +5,7 @@ uses the same look as dooblr-q. The design ideas come from layered kick synths s
 PunchBox and Sonic Academy Kick 3. The code, artwork, presets and sounds are all original. No
 D16 or Sonic Academy material is used.
 
-Version 0.3.8 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
+Version 0.3.9 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm64 macOS 11+
 
 ## Features
 
@@ -113,7 +113,10 @@ Version 0.3.8 · JUCE 8 · C++20 · VST3 instrument (MIDI in, stereo out) · arm
   The preview renders on a background thread (latest change wins), so turning knobs keeps the
   UI at the display frame rate.
 - **Presets:** Init plus six factory kicks: Hardstyle, Techno Rumble, Dubstep Punch, House
-  Thump, Trap 808-ish and DnB. User presets are saved and loaded as `.dkick` files. Random
+  Thump, Trap 808-ish and DnB. User presets are saved and loaded as `.dkick` files in
+  `~/Library/Audio/Presets/dooblr/dooblr-kick/` on Mac,
+  `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-kick\` on Windows
+  (older `~/Music/dooblr-kick/Presets` files are copied there on first run). Random
   creates a new kick within musical ranges, as one undo step. It rolls the whole Click and
   Body layers (Synth or Sample source, sample choice, click type, pitch and length, body wave,
   tune, harmonics and drive, levels and filters), the pitch and amp envelopes, Sub, Tail, Noise

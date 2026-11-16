@@ -105,7 +105,8 @@ in the toolbar.
 
 **Presets.** Default plus 5 original factory presets (Speech / Lectern, Vocal in a Band,
 Monitor Wedge, Theatre Lav, Ring-out Start). These set only the detection settings; they leave the room's
-notes and notches alone. **Room presets** (`.dfeedback`, in `~/Music/dooblr-feedback/Presets`)
+notes and notches alone. **Room presets** (`.dfeedback`, in `~/Library/Audio/Presets/dooblr/dooblr-feedback/`
+on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-feedback\` on Windows)
 save everything: parameters, notes and the current notches, fixed and floating. Save,
 load and rename are in the preset menu. The session state holds the same things. Undo / Redo
 (Cmd-Z, Cmd-Shift-Z) cover parameter gestures, A / B compares two complete settings

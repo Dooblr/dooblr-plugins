@@ -10,6 +10,7 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "Presets.h"
+#include "PresetPaths.h"
 #include "DSP/Effects.h"
 #include "DSP/KeyDetector.h"
 #include "DSP/PitchEngine.h"
@@ -848,6 +849,8 @@ namespace
         check (std::abs (getPlain (*r, "corr_amount") - 0.55f) < 0.02f, "user preset restores amount");
         file.deleteFile();
         folder.deleteRecursively();
+        check (dooblrvocals::presets::getUserPresetFolder() == dooblr::preset_paths::userDirectory ("dooblr-vocals"),
+               "user presets use the shared VST3 location");
     }
 
     double bufferDiff (const juce::AudioBuffer<float>& a, const juce::AudioBuffer<float>& b, int from)

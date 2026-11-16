@@ -75,7 +75,10 @@ On Tract, one FDTD voice; legato re-pitches the same airway with glide.
 Init, Close Front, Open Back, Soft Breath, Spoken, Choir Lead, Low Voice,
 Whisper, Spoken Line, Sung Phrase.
 
-## Limits of v0.3.0
+User presets (`.dthroat`) live in `~/Library/Audio/Presets/dooblr/dooblr-throat/`
+on Mac and `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-throat\` on Windows.
+
+## Limits of v0.3.1
 
 - English text only. Natural uses a low-quality en_US Piper voice; the first
   render after a phrase edit takes a fraction of a second to about a second.
