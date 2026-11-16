@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-sub VERSION 0.1.1 LANGUAGES C CXX)
+project(dooblr-sub VERSION 0.2.0 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -37,7 +37,7 @@ juce_add_plugin(DooblrSub
     PRODUCT_NAME                "dooblr-sub"
     COMPANY_NAME                "dooblr"
     BUNDLE_ID                   "com.dooblr.dooblrsub"
-    DESCRIPTION                 "Sub-harmonic generator, tone shift and big-system check"
+    DESCRIPTION                 "Sub-harmonic generator, tone shift, big-system check and one-click Fix"
     PLUGIN_MANUFACTURER_CODE    Dblr
     PLUGIN_CODE                 Dbsb
     FORMATS                     ${DOOBLRSUB_PLUGIN_FORMATS}
@@ -59,9 +59,13 @@ target_sources(DooblrSub
         Source/DSP/SubGenerator.cpp
         Source/DSP/ToneShift.cpp
         Source/DSP/SystemCheck.cpp
+        Source/DSP/LowEndEQ.cpp
+        Source/DSP/HarmonicExciter.cpp
+        Source/DSP/PhaseAlign.cpp
         Source/DSP/SubEngine.cpp
         Source/Parameters.cpp
         Source/Presets.cpp
+        Source/FixActions.cpp
         Source/UndoHistory.cpp
         Source/PluginProcessor.cpp
         Source/PluginEditor.cpp
@@ -83,9 +87,9 @@ target_link_libraries(DooblrSub
         juce::juce_audio_processors
         juce::juce_dsp
         juce::juce_gui_basics
+        juce::juce_recommended_lto_flags
     PUBLIC
         juce::juce_recommended_config_flags
-        juce::juce_recommended_lto_flags
         juce::juce_recommended_warning_flags)
 
 if(TARGET DooblrSub_VST3)

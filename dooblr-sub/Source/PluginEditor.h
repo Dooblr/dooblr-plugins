@@ -26,6 +26,7 @@ namespace dooblrsub
         bool keyPressed (const juce::KeyPress& key) override;
 
         juce::Component* findControl (const juce::String& parameterId) const;
+        void updateMeters();
 
         static constexpr int defaultWidth = 1080, defaultHeight = 660;
         static constexpr int minWidth = 940, minHeight = 600, maxWidth = 2400, maxHeight = 1400;
@@ -39,6 +40,9 @@ namespace dooblrsub
         void loadPreset();
         void setStatus (const juce::String& text);
         void updateUndoButtons();
+        void applyFix (dsp::CheckId id);
+        void applyFixAll();
+        void undoFix();
 
         DooblrSubProcessor& proc;
         juce::AudioProcessorValueTreeState& state;
@@ -52,12 +56,12 @@ namespace dooblrsub
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> outputAttachment;
 
-        ui::ControlPanel subPanel, tonePanel, systemPanel;
+        ui::ControlPanel subPanel, tonePanel, systemPanel, lowEndPanel;
         ui::SubDisplay display;
         ui::VerdictPanel verdict;
         ui::OutputMeter meter;
 
-        juce::Rectangle<int> headerArea, displayArea, verdictArea, subArea, toneArea, systemArea;
+        juce::Rectangle<int> headerArea, displayArea, verdictArea, subArea, toneArea, systemArea, lowEndArea;
 
         std::unique_ptr<juce::FileChooser> fileChooser;
         juce::Array<juce::File> userPresetFiles;
