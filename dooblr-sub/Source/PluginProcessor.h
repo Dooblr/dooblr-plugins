@@ -3,6 +3,7 @@
 #include <juce_audio_processors/juce_audio_processors.h>
 
 #include "DSP/SubEngine.h"
+#include "FixActions.h"
 #include "UndoHistory.h"
 
 namespace dooblrsub
@@ -41,6 +42,7 @@ namespace dooblrsub
         juce::AudioProcessorValueTreeState& getState() noexcept { return state; }
         ParameterUndoHistory& getUndoHistory() noexcept { return undoHistory; }
         dsp::SubEngine& getEngine() noexcept { return engine; }
+        FixActions& getFixActions() noexcept { return fixActions; }
 
         juce::String getPresetName() const;
         void setPresetName (const juce::String& name);
@@ -57,6 +59,7 @@ namespace dooblrsub
         juce::AudioProcessorValueTreeState state;
         ParameterUndoHistory undoHistory;
         dsp::SubEngine engine;
+        FixActions fixActions;
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;
 

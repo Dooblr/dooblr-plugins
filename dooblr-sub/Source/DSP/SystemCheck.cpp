@@ -24,6 +24,11 @@ namespace dooblrsub::dsp
                 t.limiterCeiling = 0.80f;
                 t.infraHzBias = 4.0f;
                 t.sustainedFailDb = -6.0f;
+                t.generatedMinHz = 28.0f;
+                t.harmonicMin = 0.26f;
+                t.subWeakRatio = 0.28f;
+                t.subStrongRatio = 5.0f;
+                t.mudPeakiness = 2.2f;
                 break;
             case Target::home:
                 t.infraRatio = 0.40f;
@@ -36,6 +41,11 @@ namespace dooblrsub::dsp
                 t.limiterCeiling = 0.98f;
                 t.infraHzBias = -4.0f;
                 t.sustainedFailDb = -1.0f;
+                t.generatedMinHz = 20.0f;
+                t.harmonicMin = 0.08f;
+                t.subWeakRatio = 0.12f;
+                t.subStrongRatio = 9.0f;
+                t.mudPeakiness = 3.2f;
                 break;
             case Target::club:
             default:
@@ -55,6 +65,72 @@ namespace dooblrsub::dsp
         return "Check";
     }
 
+    const char* checkReasonText (CheckId id) noexcept
+    {
+        switch (id)
+        {
+            case CheckId::infra:           return "Too much energy below 30 Hz";
+            case CheckId::stereoLows:      return "Stereo low end below 120 Hz";
+            case CheckId::clipping:        return "Sub peaks clipping headroom";
+            case CheckId::cancellation:    return "Sub cancels fundamental";
+            case CheckId::dcOffset:        return "DC offset";
+            case CheckId::unstablePitch:   return "Unstable sub pitch";
+            case CheckId::sustained:       return "Excessive sustained low end";
+            case CheckId::subWeak:         return "Sub too weak against the mids";
+            case CheckId::subStrong:       return "Sub too strong against the mids";
+            case CheckId::mud:             return "Resonant buildup / mud";
+            case CheckId::fundamentalLow:  return "Fundamental too low for big rigs";
+            case CheckId::harmonicThin:    return "Missing harmonic presence";
+            case CheckId::none: break;
+            case CheckId::numChecks: break;
+        }
+        return "";
+    }
+
+    const char* checkFixComponentId (CheckId id) noexcept
+    {
+        switch (id)
+        {
+            case CheckId::infra:           return "fix_infra";
+            case CheckId::stereoLows:      return "fix_stereoLows";
+            case CheckId::clipping:        return "fix_clipping";
+            case CheckId::cancellation:    return "fix_cancellation";
+            case CheckId::dcOffset:        return "fix_dcOffset";
+            case CheckId::unstablePitch:   return "fix_unstablePitch";
+            case CheckId::sustained:       return "fix_sustained";
+            case CheckId::subWeak:         return "fix_subWeak";
+            case CheckId::subStrong:       return "fix_subStrong";
+            case CheckId::mud:             return "fix_mud";
+            case CheckId::fundamentalLow:  return "fix_fundamentalLow";
+            case CheckId::harmonicThin:    return "fix_harmonicThin";
+            case CheckId::none: break;
+            case CheckId::numChecks: break;
+        }
+        return "fix_none";
+    }
+
+    const char* checkShortName (CheckId id) noexcept
+    {
+        switch (id)
+        {
+            case CheckId::infra:           return "infra";
+            case CheckId::stereoLows:      return "stereo lows";
+            case CheckId::clipping:        return "headroom";
+            case CheckId::cancellation:    return "phase";
+            case CheckId::dcOffset:        return "DC";
+            case CheckId::unstablePitch:   return "tracking";
+            case CheckId::sustained:       return "sustain";
+            case CheckId::subWeak:         return "sub level";
+            case CheckId::subStrong:       return "sub level";
+            case CheckId::mud:             return "mud";
+            case CheckId::fundamentalLow:  return "fundamental";
+            case CheckId::harmonicThin:    return "harmonics";
+            case CheckId::none: break;
+            case CheckId::numChecks: break;
+        }
+        return "check";
+    }
+
     Verdict evaluate (const Analysis& a, Target target, ReasonList& reasons) noexcept
     {
         reasons = {};
@@ -65,64 +141,101 @@ namespace dooblrsub::dsp
         const auto infraRatio = a.infraRms / sub;
         if (infraRatio > th.infraRatio || a.bandRms[0] > 0.65f * sub)
         {
-            reasons.add ("Too much energy below 30 Hz");
+            reasons.add (CheckId::infra, checkReasonText (CheckId::infra));
             ++fails;
         }
         else if (infraRatio > th.infraRatioWarn)
         {
-            reasons.add ("Too much energy below 30 Hz");
+            reasons.add (CheckId::infra, checkReasonText (CheckId::infra));
             ++warns;
         }
 
         if (a.lrCorrelation < th.minCorrelation || a.sideRms > 0.45f * sub)
         {
-            reasons.add ("Stereo low end below 120 Hz");
+            reasons.add (CheckId::stereoLows, checkReasonText (CheckId::stereoLows));
             ++fails;
         }
         else if (a.lrCorrelation < th.minCorrelationWarn && a.sideRms > 0.12f * sub)
         {
-            reasons.add ("Stereo low end below 120 Hz");
+            reasons.add (CheckId::stereoLows, checkReasonText (CheckId::stereoLows));
             ++warns;
         }
 
         if (a.headroomPeak >= th.clipPeak || a.subPeak >= th.clipPeak)
         {
-            reasons.add ("Sub peaks clipping headroom");
+            reasons.add (CheckId::clipping, checkReasonText (CheckId::clipping));
             ++fails;
         }
         else if (a.headroomPeak >= th.clipPeakWarn || a.subPeak >= th.clipPeakWarn)
         {
-            reasons.add ("Sub peaks clipping headroom");
+            reasons.add (CheckId::clipping, checkReasonText (CheckId::clipping));
             ++warns;
         }
 
         if (a.cancellation < th.cancelFail)
         {
-            reasons.add ("Sub cancels fundamental");
+            reasons.add (CheckId::cancellation, checkReasonText (CheckId::cancellation));
             ++fails;
         }
         else if (a.cancellation < th.cancelWarn)
         {
-            reasons.add ("Sub cancels fundamental");
+            reasons.add (CheckId::cancellation, checkReasonText (CheckId::cancellation));
             ++warns;
         }
 
         if (std::abs (a.dc) > th.dcFail)
         {
-            reasons.add ("DC offset");
+            reasons.add (CheckId::dcOffset, checkReasonText (CheckId::dcOffset));
             ++fails;
         }
 
         if (a.pitchHz > 1.0f && a.pitchStd / a.pitchHz > th.pitchRelStdFail)
         {
-            reasons.add ("Unstable sub pitch");
+            reasons.add (CheckId::unstablePitch, checkReasonText (CheckId::unstablePitch));
             ++warns;
         }
 
         if (a.sustainedDb > th.sustainedFailDb)
         {
-            reasons.add ("Excessive sustained low end");
+            reasons.add (CheckId::sustained, checkReasonText (CheckId::sustained));
             ++fails;
+        }
+
+        // Spectral balance vs mids: only when the mid band is actually present, so a
+        // lone 50 Hz sine (the existing "works" fixture) is not flagged.
+        if (a.midRms > 0.008f)
+        {
+            const auto ratio = a.subRms / a.midRms;
+            if (ratio < th.subWeakRatio)
+            {
+                reasons.add (CheckId::subWeak, checkReasonText (CheckId::subWeak));
+                ++warns;
+            }
+            else if (ratio > th.subStrongRatio && a.subRms > 0.12f)
+            {
+                reasons.add (CheckId::subStrong, checkReasonText (CheckId::subStrong));
+                ++fails;
+            }
+        }
+
+        const auto neighbour = std::max (a.bandRms[1], std::max (a.bandRms[2], 1.0e-8f));
+        if (a.mudRms > 0.06f && a.mudRms > th.mudPeakiness * neighbour && a.mudRms > 0.30f * sub)
+        {
+            reasons.add (CheckId::mud, checkReasonText (CheckId::mud));
+            ++warns;
+        }
+
+        if (a.generatedHz > 1.0f && a.generatedHz < th.generatedMinHz)
+        {
+            reasons.add (CheckId::fundamentalLow, checkReasonText (CheckId::fundamentalLow));
+            ++warns;
+        }
+
+        if (a.pitchHz > 1.0f && a.pitchHz < 70.0f && a.subRms > 0.04f
+            && a.harmonicRatio < th.harmonicMin)
+        {
+            reasons.add (CheckId::harmonicThin, checkReasonText (CheckId::harmonicThin));
+            ++warns;
         }
 
         if (fails > 0) return Verdict::wont;
@@ -158,7 +271,8 @@ namespace dooblrsub::dsp
     }
 
     Analysis analyseBuffer (const float* left, const float* right, int n, double sr,
-                            float subVsFundCorrelation, float trackedHz, float trackedStd) noexcept
+                            float subVsFundCorrelation, float trackedHz, float trackedStd,
+                            float generatedHz) noexcept
     {
         Analysis a;
         if (n <= 0 || left == nullptr) return a;
@@ -219,9 +333,29 @@ namespace dooblrsub::dsp
         for (int b = 0; b < numSubBands; ++b)
             a.bandRms[(size_t) b] = rangeRms (mid.data(), subBandLoHz[b], subBandHiHz[b]);
 
+        a.midRms = rangeRms (mid.data(), 200.0f, 800.0f);
+        a.mudRms = rangeRms (mid.data(), 80.0f, 180.0f);
+        a.presenceRms = rangeRms (mid.data(), 160.0f, 250.0f);
+        const auto fundBand = rangeRms (mid.data(), 30.0f, 70.0f);
+        const auto harmBand = rangeRms (mid.data(), 80.0f, 160.0f);
+        a.harmonicRatio = fundBand > 1.0e-8f ? harmBand / fundBand : 0.0f;
+
+        float mudPeak = a.mudRms, mudCentre = 90.0f;
+        for (float hz = 70.0f; hz <= 180.0f; hz += 10.0f)
+        {
+            const auto e = rangeRms (mid.data(), hz - 8.0f, hz + 8.0f);
+            if (e > mudPeak)
+            {
+                mudPeak = e;
+                mudCentre = hz;
+            }
+        }
+        a.mudHz = mudCentre;
+
         a.cancellation = juce::jlimit (-1.0f, 1.0f, subVsFundCorrelation);
         a.pitchHz = trackedHz;
         a.pitchStd = trackedStd;
+        a.generatedHz = generatedHz;
         a.sustainedDb = a.subRms > 1.0e-12f ? juce::Decibels::gainToDecibels (a.subRms) : -120.0f;
         return a;
     }
@@ -236,10 +370,12 @@ namespace dooblrsub::dsp
     void SystemCheck::reset() noexcept
     {
         infraL = infraR = lowL = lowR = dcL = dcR = {};
+        midLo = midHi = mudLo = mudHi = presLo = presHi = fundLo = fundHi = harmLo = harmHi = {};
         for (auto& b : band) b[0] = b[1] = {};
         std::fill (std::begin (accBand), std::end (accBand), 0.0);
         accSub = accPeak = accMid = accSide = accDc = accInfra = 0.0;
         accLowL = accLowR = accLowLR = accGen = accFund = accGenFund = 0.0;
+        accMidBand = accMud = accPresence = accFundBand = accHarmBand = 0.0;
         accN = hop = pitchWrite = pitchFilled = specWrite = 0;
         pitchHist.fill (0.0f);
         published = {};
@@ -252,6 +388,14 @@ namespace dooblrsub::dsp
         const auto infraA = 1.0f - std::exp (-twoPi * 25.0f / (float) sampleRate);
         const auto lowA = 1.0f - std::exp (-twoPi * 120.0f / (float) sampleRate);
         const auto dcA = 1.0f - std::exp (-twoPi * 2.0f / (float) sampleRate);
+        const auto a200 = 1.0f - std::exp (-twoPi * 200.0f / (float) sampleRate);
+        const auto a800 = 1.0f - std::exp (-twoPi * 800.0f / (float) sampleRate);
+        const auto a80 = 1.0f - std::exp (-twoPi * 80.0f / (float) sampleRate);
+        const auto a180 = 1.0f - std::exp (-twoPi * 180.0f / (float) sampleRate);
+        const auto a160 = 1.0f - std::exp (-twoPi * 160.0f / (float) sampleRate);
+        const auto a250 = 1.0f - std::exp (-twoPi * 250.0f / (float) sampleRate);
+        const auto a30 = 1.0f - std::exp (-twoPi * 30.0f / (float) sampleRate);
+        const auto a70 = 1.0f - std::exp (-twoPi * 70.0f / (float) sampleRate);
 
         const auto iL = infraL.process (l, infraA);
         const auto iR = infraR.process (r, infraA);
@@ -274,6 +418,31 @@ namespace dooblrsub::dsp
         accGen += (double) genSub * genSub;
         accFund += (double) origLow * origLow;
         accGenFund += (double) genSub * origLow;
+
+        const auto midHiZ = midHi.process (mid, a800);
+        const auto midLoZ = midLo.process (mid, a200);
+        const auto midBand = midHiZ - midLoZ;
+        accMidBand += (double) midBand * midBand;
+
+        const auto mudHiZ = mudHi.process (mid, a180);
+        const auto mudLoZ = mudLo.process (mid, a80);
+        const auto mudBand = mudHiZ - mudLoZ;
+        accMud += (double) mudBand * mudBand;
+
+        const auto presHiZ = presHi.process (mid, a250);
+        const auto presLoZ = presLo.process (mid, a160);
+        const auto presBand = presHiZ - presLoZ;
+        accPresence += (double) presBand * presBand;
+
+        const auto fundHiZ = fundHi.process (mid, a70);
+        const auto fundLoZ = fundLo.process (mid, a30);
+        const auto fundBand = fundHiZ - fundLoZ;
+        accFundBand += (double) fundBand * fundBand;
+
+        const auto harmHiZ = harmHi.process (mid, a160);
+        const auto harmLoZ = harmLo.process (mid, a80);
+        const auto harmBand = harmHiZ - harmLoZ;
+        accHarmBand += (double) harmBand * harmBand;
 
         for (int b = 0; b < numSubBands; ++b)
         {
@@ -307,6 +476,22 @@ namespace dooblrsub::dsp
         const auto gden = std::sqrt (accGen * accFund);
         a.cancellation = gden > 1.0e-20 ? (float) (accGenFund / gden) : 0.0f;
         a.sustainedDb = a.subRms > 1.0e-12f ? juce::Decibels::gainToDecibels (a.subRms) : -120.0f;
+        a.midRms = (float) std::sqrt (accMidBand * inv);
+        a.mudRms = (float) std::sqrt (accMud * inv);
+        a.presenceRms = (float) std::sqrt (accPresence * inv);
+        const auto fundBand = (float) std::sqrt (accFundBand * inv);
+        const auto harmBand = (float) std::sqrt (accHarmBand * inv);
+        a.harmonicRatio = fundBand > 1.0e-8f ? harmBand / fundBand : 0.0f;
+        a.generatedHz = generatedHz;
+
+        float mudPeak = a.bandRms[3], mudCentre = 75.0f;
+        for (int b = 2; b < numSubBands; ++b)
+            if (a.bandRms[(size_t) b] >= mudPeak)
+            {
+                mudPeak = a.bandRms[(size_t) b];
+                mudCentre = 0.5f * (subBandLoHz[b] + subBandHiHz[b]);
+            }
+        a.mudHz = mudCentre;
 
         if (pitchFilled > 2)
         {
@@ -331,27 +516,24 @@ namespace dooblrsub::dsp
         published = a;
         accSub = accPeak = accMid = accSide = accDc = accInfra = 0.0;
         accLowL = accLowR = accLowLR = accGen = accFund = accGenFund = 0.0;
+        accMidBand = accMud = accPresence = accFundBand = accHarmBand = 0.0;
         std::fill (std::begin (accBand), std::end (accBand), 0.0);
         accN = 0;
         seq.fetch_add (1, std::memory_order_release);
     }
 
-    void SystemCheck::process (const float* left, const float* right, int numSamples, int numChannels,
-                               float generatedSub, float originalLow, float trackedHz) noexcept
+    void SystemCheck::pushSample (float left, float right, float generatedSub, float originalLow) noexcept
     {
-        if (left == nullptr || numSamples <= 0) return;
-        const auto* r = (numChannels > 1 && right != nullptr) ? right : left;
-
-        for (int i = 0; i < numSamples; ++i)
+        tickFilters (left, right, generatedSub, originalLow);
+        if (! specRing.empty())
         {
-            tickFilters (left[i], r[i], generatedSub, originalLow);
-            if (! specRing.empty())
-            {
-                specRing[(size_t) specWrite] = 0.5f * (left[i] + r[i]);
-                specWrite = (specWrite + 1) % (int) specRing.size();
-            }
+            specRing[(size_t) specWrite] = 0.5f * (left + right);
+            specWrite = (specWrite + 1) % (int) specRing.size();
         }
+    }
 
+    void SystemCheck::finishBlock (int numSamples, float trackedHz) noexcept
+    {
         if (trackedHz > 1.0f)
         {
             pitchHist[(size_t) pitchWrite] = trackedHz;
@@ -386,6 +568,18 @@ namespace dooblrsub::dsp
                 }
             }
         }
+    }
+
+    void SystemCheck::process (const float* left, const float* right, int numSamples, int numChannels,
+                               float generatedSub, float originalLow, float trackedHz) noexcept
+    {
+        if (left == nullptr || numSamples <= 0) return;
+        const auto* r = (numChannels > 1 && right != nullptr) ? right : left;
+
+        for (int i = 0; i < numSamples; ++i)
+            pushSample (left[i], r[i], generatedSub, originalLow);
+
+        finishBlock (numSamples, trackedHz);
     }
 
     Analysis SystemCheck::snapshot() const noexcept { return published; }

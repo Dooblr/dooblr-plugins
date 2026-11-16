@@ -11,6 +11,9 @@ namespace dooblrsub::dsp
         toneLeft.prepare (sampleRate);
         toneRight.prepare (sampleRate);
         sub.prepare (sampleRate);
+        phase.prepare (sampleRate);
+        eq.prepare (sampleRate);
+        harm.prepare (sampleRate);
         check.prepare (sampleRate);
         toneL.assign ((size_t) maxChunk, 0.0f);
         toneR.assign ((size_t) maxChunk, 0.0f);
@@ -28,38 +31,78 @@ namespace dooblrsub::dsp
         toneLeft.reset();
         toneRight.reset();
         sub.reset();
+        phase.reset();
+        eq.reset();
+        harm.reset();
         check.reset();
         std::fill (dryDelayL.begin(), dryDelayL.end(), 0.0f);
         std::fill (dryDelayR.begin(), dryDelayR.end(), 0.0f);
         dryWrite = 0;
-        infraZL = infraZR = monoZL = monoZR = 0.0f;
+        for (auto& ch : infraZ)
+            ch[0] = ch[1] = ch[2] = ch[3] = 0.0f;
+        sideHpZ[0] = sideHpZ[1] = sideHpZ[2] = sideHpZ[3] = 0.0f;
+        infraHzZ = settings.infraHz;
+        monoHzZ = settings.monoHz;
+        infraMixZ = settings.infraHpf ? 1.0f : 0.0f;
+        monoMixZ = settings.monoBelow ? 1.0f : 0.0f;
         limitEnv = 0.0f;
         bypassMix = settings.bypass ? 1.0f : 0.0f;
         outGain = juce::Decibels::decibelsToGain (settings.outputDb);
     }
 
+    float SubEngine::generatedHz() const noexcept
+    {
+        const auto tracked = sub.getTrackedHz();
+        if (! (tracked > 1.0f))
+            return 0.0f;
+        // Lowest generated tone: -1 oct or Both still produce the octave-down.
+        return settings.sub.octaveMode == 1 ? tracked : tracked * 0.5f;
+    }
+
     void SubEngine::processSafety (float& l, float& r) noexcept
     {
         const auto th = thresholdsFor (settings.target);
+        const auto a = 0.002f;
 
-        if (settings.infraHpf)
+        infraMixZ += a * ((settings.infraHpf ? 1.0f : 0.0f) - infraMixZ);
+        monoMixZ += a * ((settings.monoBelow ? 1.0f : 0.0f) - monoMixZ);
+        infraHzZ += a * (settings.infraHz - infraHzZ);
+        monoHzZ += a * (settings.monoHz - monoHzZ);
+
+        auto fourPoleHp = [] (float x, float* z, float coeff) noexcept
         {
-            const auto hz = juce::jlimit (12.0f, 50.0f, settings.infraHz + th.infraHzBias);
-            const auto a = 1.0f - std::exp (-6.28318530718f * hz / (float) sampleRate);
-            infraZL += a * (l - infraZL);
-            infraZR += a * (r - infraZR);
-            l -= infraZL;
-            r -= infraZR;
+            for (int i = 0; i < 4; ++i)
+            {
+                z[i] += coeff * (x - z[i]);
+                x -= z[i];
+            }
+            return x;
+        };
+
+        {
+            const auto hz = juce::jlimit (12.0f, 50.0f, infraHzZ + th.infraHzBias);
+            const auto coeff = 1.0f - std::exp (-6.28318530718f * hz / (float) sampleRate);
+            const int poles = settings.infraSlope >= 2 ? 4 : (settings.infraSlope >= 1 ? 2 : 1);
+            auto hpL = l, hpR = r;
+            for (int i = 0; i < poles; ++i)
+            {
+                infraZ[0][i] += coeff * (hpL - infraZ[0][i]);
+                hpL -= infraZ[0][i];
+                infraZ[1][i] += coeff * (hpR - infraZ[1][i]);
+                hpR -= infraZ[1][i];
+            }
+            l += infraMixZ * (hpL - l);
+            r += infraMixZ * (hpR - r);
         }
 
-        if (settings.monoBelow)
         {
-            const auto a = 1.0f - std::exp (-6.28318530718f * settings.monoHz / (float) sampleRate);
-            monoZL += a * (l - monoZL);
-            monoZR += a * (r - monoZR);
-            const auto midLow = 0.5f * (monoZL + monoZR);
-            l = (l - monoZL) + midLow;
-            r = (r - monoZR) + midLow;
+            const auto coeff = 1.0f - std::exp (-6.28318530718f * monoHzZ / (float) sampleRate);
+            const auto mid = 0.5f * (l + r);
+            auto side = 0.5f * (l - r);
+            const auto hpSide = fourPoleHp (side, sideHpZ, coeff);
+            side += monoMixZ * (hpSide - side);
+            l = mid + side;
+            r = mid - side;
         }
 
         if (settings.subLimit)
@@ -78,6 +121,13 @@ namespace dooblrsub::dsp
                 l *= gain;
                 r *= gain;
             }
+            const auto absPeak = std::max (std::abs (l), std::abs (r));
+            if (absPeak > 0.98f)
+            {
+                const auto clip = 0.98f / absPeak;
+                l *= clip;
+                r *= clip;
+            }
         }
     }
 
@@ -89,7 +139,11 @@ namespace dooblrsub::dsp
         toneLeft.setSettings (settings.tone);
         toneRight.setSettings (settings.tone);
         sub.setSettings (settings.sub);
+        phase.set (settings.phaseInvert, settings.phaseDelayMs);
+        eq.setSettings (settings.eq);
+        harm.setAmount (juce::jlimit (0.0f, 1.0f, settings.harmAmount));
         check.setTarget (settings.target);
+        check.setGeneratedHz (generatedHz());
 
         const auto mixT = juce::jlimit (0.0f, 1.0f, settings.mix);
         const auto bypassT = settings.bypass ? 1.0f : 0.0f;
@@ -120,7 +174,6 @@ namespace dooblrsub::dsp
             else
                 std::copy (toneL.begin(), toneL.begin() + n, toneR.begin());
 
-            float lastSub = 0.0f, lastFund = 0.0f;
             for (int i = 0; i < n; ++i)
             {
                 auto l = toneL[(size_t) i];
@@ -128,12 +181,13 @@ namespace dooblrsub::dsp
                 const auto mid = 0.5f * (l + r);
 
                 float generated = 0.0f;
-                const auto add = sub.process (mid, generated);
+                auto add = sub.process (mid, generated);
+                add = phase.process (add);
                 l += add;
                 r += add;
-                lastSub = generated;
-                lastFund = mid;
 
+                harm.process (l, r);
+                eq.process (l, r);
                 processSafety (l, r);
 
                 bypassMix += 0.002f * (bypassT - bypassMix);
@@ -151,10 +205,11 @@ namespace dooblrsub::dsp
                     right[start + i] = r;
                 peaks[0] = std::max (peaks[0], std::abs (l));
                 peaks[1] = std::max (peaks[1], std::abs (r));
+
+                check.pushSample (l, stereo ? r : l, add, mid);
             }
 
-            check.process (left + start, stereo ? right + start : left + start, n, stereo ? 2 : 1,
-                           lastSub, lastFund, sub.getTrackedHz());
+            check.finishBlock (n, sub.getTrackedHz());
         }
 
         peakTap.push (peaks[0], stereo ? peaks[1] : peaks[0]);
