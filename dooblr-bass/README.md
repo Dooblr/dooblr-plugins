@@ -34,7 +34,8 @@ Rate when the LFO is synced, Release when Shared Decay is on). Dimmed controls s
 clickable and editable.
 
 Header: Undo / Redo, preset menu (factory and user), Random, Save / Load (`.dbass` files in
-`~/Music/dooblr-bass/Presets`), Output level and meter.
+`~/Library/Audio/Presets/dooblr/dooblr-bass/` on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-bass\`
+on Windows), Output level and meter.
 
 Random makes a new playable bass patch in one undo step and shows "Random" as the preset
 name. It never touches Output, Bend Range, Note Priority or the LFO sync settings.

@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "PresetPaths.h"
 
 #include "Parameters.h"
 
@@ -364,6 +365,11 @@ namespace dooblrvocals::presets
 
     juce::File getUserPresetFolder()
     {
-        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("dooblr-vocals/Presets");
+        return dooblr::preset_paths::userDirectory ("dooblr-vocals");
+    }
+
+    juce::Array<juce::File> userPresets()
+    {
+        return dooblr::preset_paths::listUserPresets ("dooblr-vocals", juce::String ("*") + userPresetExtension);
     }
 }

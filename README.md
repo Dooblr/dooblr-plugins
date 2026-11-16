@@ -23,17 +23,17 @@ in its own folder and has its own README.
 | Folder | Plug-in | Version | Type | Status |
 | --- | --- | --- | --- | --- |
 | [`dooblr-q/`](dooblr-q/) | dooblr-q | 0.9.5 | Dynamic parametric EQ (VST3 effect) | Mature; most features, see its README |
-| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.8 | Layered kick drum designer (VST3 instrument) | Active |
-| [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.2.0 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
-| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.1 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
-| [`dooblr-bass/`](dooblr-bass/) | dooblr-bass | 0.1.0 | Analog-modelled monophonic bass synth (VST3 instrument), one-page Mini-style board: two main oscillators, sub, optional third/lo-freq osc, mixer drive/overload, 24 dB/oct transistor ladder | New; its tests pass in this repo |
-| [`dooblr-m/`](dooblr-m/) | dooblr-m | 0.1.5 | All-purpose Model D-style monophonic synth (VST3 instrument): three BLIT oscillators, Huovilainen ladder, ADS contours, wheels, mixer feedback, Osc 3 LFO mode, cutoff contour indicator | New; its tests pass in this repo |
+| [`dooblr-kick/`](dooblr-kick/) | dooblr-kick | 0.3.9 | Layered kick drum designer (VST3 instrument) | Active |
+| [`dooblr-vocals/`](dooblr-vocals/) | dooblr-vocals | 0.3.1 | Pitch correction and vocal chain (VST3 effect + Standalone) | In development; limiter moved to a fixed last stage after the time FX (2026-10-31) |
+| [`dooblr-prophet/`](dooblr-prophet/) | dooblr-prophet | 0.3.2 | Analog-modelled polyphonic synth, Prophet-5 / 6 / 10 style (VST3 instrument) with a Max for Live panel **0.3.2** | Active; panel 0.3.2 pairs without MIDI when Live drops the token CCs |
+| [`dooblr-bass/`](dooblr-bass/) | dooblr-bass | 0.1.1 | Analog-modelled monophonic bass synth (VST3 instrument), one-page Mini-style board: two main oscillators, sub, optional third/lo-freq osc, mixer drive/overload, 24 dB/oct transistor ladder | New; its tests pass in this repo |
+| [`dooblr-m/`](dooblr-m/) | dooblr-m | 0.1.7 | All-purpose Model D-style monophonic synth (VST3 instrument): three BLIT oscillators, Huovilainen ladder, ADS contours, wheels, mixer feedback, Osc 3 LFO mode, cutoff contour indicator | New; its tests pass in this repo |
 | [`dooblr-generate/`](dooblr-generate/) | dooblr-generate | 0.3.1 | Text-to-sample generator (VST3 instrument): type "909 kick", a local model (Stable Audio Open Small, or AudioLDM for non-commercial use) runs in a separate worker process on the Mac's GPU, then the result plays as a one-shot sampler from MIDI; Variation is a new seed then generate; Sync locks length to bars/beats at host tempo (up to 30 s); drag the WAV into Ableton; history of every generation. Model weights are downloaded on request, never bundled | New; tests pass; in the installer (Mac VST3; worker script embedded, weights and Python runtime never bundled); Stable Audio Open Small and AudioLDM generate on the Mac (Stable Audio needs your own Hugging Face access); not yet tested in Live |
-| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.3 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display, Analyzer speed setting | Early; its tests and LoadCheck pass, not yet tested in a DAW |
-| [`dooblr-feedback/`](dooblr-feedback/) | dooblr-feedback | 0.1.3 | Automatic live feedback suppressor (VST3 effect, optional reference-mic sidechain): optional 12 dB/oct HPF, zero-latency notches (one per howl, up to 20 kHz, Max cut to ∞), calm markers on the spectrum with lock / clear, Safety duck, notch table, room notes and room presets | Early; its tests and LoadCheck pass, not yet tested live or in a DAW |
-| [`dooblr-distressor/`](dooblr-distressor/) | dooblr-distressor | 0.1.2 | EL8-style compressor (VST3 effect): eight ratio curves, Dist 2 / Dist 3, detector HP / band / link, audio HP, headroom, phase-aligned mix, Gain Match, interactive GR display; independently designed approximation, not an emulation | New; its tests pass in this repo |
-| [`dooblr-0coast/`](dooblr-0coast/) | dooblr-0coast | 0.1.0 | No-coast monophonic synth (VST3 instrument): triangle-core oscillator, Overtone / Multiply, cycling Slope, Contour, LPG Dynamics, host-tempo arp, virtual patch bay; independently designed approximation of the 0-Coast architecture, not an emulation | New; its tests pass in this repo |
-| [`dooblr-sub/`](dooblr-sub/) | dooblr-sub | 0.1.0 | Sub-harmonic generator, duration-preserving tone shift and big-system translation check (VST3 effect) | New; its tests pass in this repo |
+| [`dooblr-soothe/`](dooblr-soothe/) | dooblr-soothe | 0.1.4 | Dynamic resonance reducer (VST3 effect): Amount hero knob, weighting curve over the spectrum, A / B, Advanced panel, smooth low-end display, Analyzer speed setting | Early; its tests and LoadCheck pass, not yet tested in a DAW |
+| [`dooblr-feedback/`](dooblr-feedback/) | dooblr-feedback | 0.1.4 | Automatic live feedback suppressor (VST3 effect, optional reference-mic sidechain): optional 12 dB/oct HPF, zero-latency notches (one per howl, up to 20 kHz, Max cut to ∞), calm markers on the spectrum with lock / clear, Safety duck, notch table, room notes and room presets | Early; its tests and LoadCheck pass, not yet tested live or in a DAW |
+| [`dooblr-distressor/`](dooblr-distressor/) | dooblr-distressor | 0.1.3 | EL8-style compressor (VST3 effect): eight ratio curves, Dist 2 / Dist 3, detector HP / band / link, audio HP, headroom, phase-aligned mix, Gain Match, interactive GR display; independently designed approximation, not an emulation | New; its tests pass in this repo |
+| [`dooblr-0coast/`](dooblr-0coast/) | dooblr-0coast | 0.1.1 | No-coast monophonic synth (VST3 instrument): triangle-core oscillator, Overtone / Multiply, cycling Slope, Contour, LPG Dynamics, host-tempo arp, virtual patch bay; independently designed approximation of the 0-Coast architecture, not an emulation | New; its tests pass in this repo |
+| [`dooblr-sub/`](dooblr-sub/) | dooblr-sub | 0.1.1 | Sub-harmonic generator, duration-preserving tone shift and big-system translation check (VST3 effect) | New; its tests pass in this repo |
 | [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.5.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
 | [`dooblr-titan/`](dooblr-titan/) | dooblr-titan | 0.1.0 | MIDI clip tightener and variation writer (Max for Live MIDI effect, Live 11.3 / Max 8.5) | New; `npm test` suite |
 | [`dooblr-installer/`](dooblr-installer/) | dooblr installer | 0.1.5 | Installer / updater app for the whole suite (macOS dmg, Windows exe): picks what to install or update (All / None / Updates), one progress wheel with a summary at the end, sha256-checked downloads from the latest GitHub Release; while the repository is private, "Get access on GitHub" opens a pre-filled token page and the copied token is checked with GitHub before it is saved; errors can be selected and copied | New; Mac tests and a local end-to-end install pass; Windows built and tested in CI (not yet on a real PC) |
@@ -65,6 +65,15 @@ dooblr-distressor/scripts/build.sh # builds in ~/dooblr-build/dooblr-distressor
 dooblr-0coast/scripts/build.sh   # builds in ~/dooblr-build/dooblr-0coast
 dooblr-sub/scripts/build.sh      # builds in ~/dooblr-build/dooblr-sub
 dooblr-generate/scripts/build.sh # builds in ~/dooblr-build/dooblr-generate
+```
+
+Shared VST3 preset-path tests (`common/PresetPaths`):
+
+```sh
+cmake -S common -B ~/dooblr-build/dooblr-preset-paths -DCMAKE_BUILD_TYPE=Release \
+  -DFETCHCONTENT_SOURCE_DIR_JUCE="$HOME/dooblr-build/_deps/juce-src"
+cmake --build ~/dooblr-build/dooblr-preset-paths --config Release
+~/dooblr-build/dooblr-preset-paths/DooblrPresetPathTests_artefacts/Release/DooblrPresetPathTests
 ```
 
 Useful environment variables (see the top of each `build.sh`):

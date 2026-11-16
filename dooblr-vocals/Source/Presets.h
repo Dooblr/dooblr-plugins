@@ -30,5 +30,6 @@ namespace dooblrvocals::presets
     ValueList randomise (juce::AudioProcessorValueTreeState& state, juce::Random& random);
 
     juce::File getUserPresetFolder();
+    juce::Array<juce::File> userPresets();
     inline constexpr const char* userPresetExtension = ".dvocal";
 }

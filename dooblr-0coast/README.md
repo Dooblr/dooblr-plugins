@@ -37,7 +37,8 @@ Window 1080×660, resizable 940×600–2400×1400.
 Factory patches: Init, Default Voice, Drone, Simple Bass, Flutter Arp, Percussion,
 Wobble, Pitched Noise, Arcade. All original.
 
-User presets: `~/Music/dooblr-0coast/Presets`, extension `.dcoast`.
+User presets: `~/Library/Audio/Presets/dooblr/dooblr-0coast/` on Mac,
+`%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-0coast\` on Windows, extension `.dcoast`.
 Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
 
 ## Sound

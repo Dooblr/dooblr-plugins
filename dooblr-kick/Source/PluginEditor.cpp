@@ -453,7 +453,7 @@ DooblrKickAudioProcessorEditor::DooblrKickAudioProcessorEditor (DooblrKickAudioP
     redoButton.onClick = [this] { audioProcessor.getUndoHistory().redo(); updateUndoButtons(); };
 
     presetBox.setComponentID ("preset");
-    presetBox.setTooltip ("Factory and user presets (user presets live in ~/Music/dooblr-kick/Presets)");
+    presetBox.setTooltip ("Factory and user presets (user presets live in " + dooblrkick::presets::getUserPresetFolder().getFullPathName() + ")");
     presetBox.onChange = [this] { presetChosen(); };
 
     saveButton.setComponentID ("savePreset");
@@ -1001,24 +1001,17 @@ void DooblrKickAudioProcessorEditor::refreshPresetBox()
         presetBox.addItem (factory[(size_t) i].name, factoryIdBase + i);
 
     userPresetFiles.clear();
-    const auto folder = dooblrkick::presets::getUserPresetFolder();
+    const auto files = dooblrkick::presets::userPresets();
 
-    if (folder.isDirectory())
+    if (! files.isEmpty())
     {
-        auto files = folder.findChildFiles (juce::File::findFiles, false, juce::String ("*") + dooblrkick::presets::userPresetExtension);
-        std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
-                   { return a.getFileName().compareIgnoreCase (b.getFileName()) < 0; });
+        presetBox.addSeparator();
+        presetBox.addSectionHeading ("User");
 
-        if (! files.isEmpty())
+        for (int i = 0; i < files.size(); ++i)
         {
-            presetBox.addSeparator();
-            presetBox.addSectionHeading ("User");
-
-            for (int i = 0; i < files.size(); ++i)
-            {
-                userPresetFiles.push_back (files[i]);
-                presetBox.addItem (files[i].getFileNameWithoutExtension(), userIdBase + i);
-            }
+            userPresetFiles.push_back (files.getReference (i));
+            presetBox.addItem (files[i].getFileNameWithoutExtension(), userIdBase + i);
         }
     }
 

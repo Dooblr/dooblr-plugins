@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "PresetPaths.h"
 
 #include "Parameters.h"
 
@@ -45,17 +46,12 @@ namespace dooblrfeedback::presets
 
     juce::File userDirectory()
     {
-        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("dooblr-feedback/Presets");
+        return dooblr::preset_paths::userDirectory ("dooblr-feedback");
     }
 
     juce::Array<juce::File> userPresets()
     {
-        auto files = userDirectory().findChildFiles (juce::File::findFiles, false, juce::String ("*") + fileExtension);
-        std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
-        {
-            return a.getFileNameWithoutExtension().compareIgnoreCase (b.getFileNameWithoutExtension()) < 0;
-        });
-        return files;
+        return dooblr::preset_paths::listUserPresets ("dooblr-feedback", juce::String ("*") + fileExtension);
     }
 
     juce::ValueTree notchesToTree (const dsp::NotchArray& notches)

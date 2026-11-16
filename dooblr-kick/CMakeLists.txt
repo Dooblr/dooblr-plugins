@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.22)
 # Must be set before project() so it applies to every target, including JUCE's helper tools.
 set(CMAKE_OSX_DEPLOYMENT_TARGET "11.0" CACHE STRING "Minimum macOS version")
 
-project(dooblr-kick VERSION 0.3.8 LANGUAGES C CXX)
+project(dooblr-kick VERSION 0.3.9 LANGUAGES C CXX)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
@@ -50,6 +50,9 @@ juce_add_plugin(DooblrKick
     COPY_PLUGIN_AFTER_BUILD     FALSE
     VST3_CATEGORIES             Instrument Drum
     AU_MAIN_TYPE                kAudioUnitType_MusicDevice)
+
+include("${CMAKE_CURRENT_SOURCE_DIR}/../common/AddPresetPaths.cmake")
+dooblr_add_preset_paths(DooblrKick)
 
 target_sources(DooblrKick
     PRIVATE
