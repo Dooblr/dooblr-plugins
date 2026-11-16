@@ -6,8 +6,8 @@ namespace dooblrm::params
 {
     /** State-tree version written with every saved state (bump when a migration is needed).
         1: 0.1.0–0.1.1. 2: 0.1.2 dropped the A-440 parameter (old sessions that still store
-        it load; the extra PARAM is ignored). 0.1.5 adds Osc 3 LFO parameters; missing PARAM
-        children are filled with defaults, so the version stays 2. */
+        it load; the extra PARAM is ignored). 0.1.5 adds Osc 3 LFO parameters and 0.1.6 adds
+        Polyphony; missing PARAM children are filled with defaults, so the version stays 2. */
     inline constexpr int stateVersion = 2;
 
     /** Parameter IDs. Never rename. a440 was removed in 0.1.2 (old states/presets that still
@@ -70,6 +70,7 @@ namespace dooblrm::params
         inline constexpr const char* volume       = "volume";
 
         // Voice (plugin extras that the original panel does not name)
+        inline constexpr const char* polyphony    = "polyphony";
         inline constexpr const char* notePriority = "notePriority";
         inline constexpr const char* legato       = "legato";
         inline constexpr const char* bendRange    = "bendRange";
@@ -81,7 +82,7 @@ namespace dooblrm::params
         inline constexpr const char* pitchBend    = "pitchBend";
     }
 
-    inline constexpr int parameterCount = 50;
+    inline constexpr int parameterCount = 51;
 
     enum class Wave
     {
