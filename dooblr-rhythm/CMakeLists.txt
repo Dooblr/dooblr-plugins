@@ -53,7 +53,7 @@ juce_add_plugin(DooblrRhythm
 include("${CMAKE_CURRENT_SOURCE_DIR}/../common/AddPresetPaths.cmake")
 dooblr_add_preset_paths(DooblrRhythm)
 
-target_sources(DooblrRhythm)
+target_sources(DooblrRhythm
     PRIVATE
         Source/Engine/Pattern.cpp
         Source/Engine/Clave.cpp

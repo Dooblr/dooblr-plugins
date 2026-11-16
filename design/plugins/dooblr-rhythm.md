@@ -60,8 +60,8 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE instrument VST3 (target `DooblrRhythm`, product "dooblr-rhythm", code Dbrh)
 - Version: 0.1.2
-- Last source change: 2026-11-12
-- Source tree: `10ae619835bd` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-rhythm`)
+- Last source change: 2026-11-16
+- Source tree: `03026a8ef909` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-rhythm`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-rhythm/scripts/build.sh` (build dir `~/dooblr-build/dooblr-rhythm`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrRhythmTests` (Tests/CMakeLists.txt)
