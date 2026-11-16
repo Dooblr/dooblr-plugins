@@ -11,6 +11,8 @@
 #include "PluginEditor.h"
 #include "PluginProcessor.h"
 #include "Parameters.h"
+#include "Presets.h"
+#include "PresetPaths.h"
 #include "Engine/Clave.h"
 #include "Engine/RhythmEngine.h"
 
@@ -149,7 +151,9 @@ namespace
         check (p->getMainBusNumOutputChannels() == 2, "stereo out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRRHYTHM_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
+        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
+        check (presets::userDirectory() == dooblr::preset_paths::userDirectory ("dooblr-rhythm"),
+               "user presets use the shared VST3 location");
         check ((int) p->getParameters().size() == numHostParameters,
                "host parameter count " + std::to_string (p->getParameters().size())
                    + " expected " + std::to_string (numHostParameters));

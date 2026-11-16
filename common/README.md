@@ -20,8 +20,8 @@ Non-preset data is out of scope: dooblr-generate history and model settings stay
 `~/Library/Application Support/dooblr/generate/` (never read `hf_token` from here). Kick's
 WAV export folder stays `~/Music/dooblr-kick`.
 
-dooblr-rhythm (open PR, branch `cursor/dooblr-rhythm-plugin-3f0c`) still uses the Music path
-on that branch. Rebase it onto this helper the same way as bass / prophet.
+dooblr-rhythm uses the same helper; files previously saved under
+`~/Music/dooblr-rhythm/Presets` are copied on first run.
 
 ## Tests
 

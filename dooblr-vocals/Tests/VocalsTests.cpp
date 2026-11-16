@@ -332,7 +332,7 @@ namespace
         check (p->getTotalNumInputChannels() == 2, "stereo input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRVOCALS_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.0", "version 0.3.0");
+        check (juce::String (JucePlugin_VersionString) == "0.3.1", "version 0.3.1");
         check (JucePlugin_IsSynth == 0, "built as an effect");
         check (JucePlugin_PluginCode == 0x44627678, "plugin code is Dbvx");
         check (p->getNumPrograms() >= 6, "Init plus factory presets");
@@ -1158,7 +1158,7 @@ namespace
         auto* version = findById (*editor, "version");
         check (version != nullptr, "version label exists");
         if (auto* label = dynamic_cast<juce::Label*> (version))
-            check (label->getText().contains ("0.3.0"), "header shows v0.3.0 (got " + label->getText().toStdString() + ")");
+            check (label->getText().contains ("0.3.1"), "header shows v0.3.1 (got " + label->getText().toStdString() + ")");
 
         check (findById (*editor, "pitchDisplay") != nullptr, "pitch display is in the tree");
         check (findById (*editor, "power_pitch") != nullptr, "pitch power toggle");

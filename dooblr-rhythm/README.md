@@ -6,7 +6,7 @@ world-influenced electronic music. It generates a cohesive percussion *ensemble*
 Part of Dan Feinstein's **dooblr** suite. VST3 instrument, macOS 11+ (arm64 /
 x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
 
-Version **0.1.1**.
+Version **0.1.2**.
 
 ## What it does
 
@@ -75,7 +75,10 @@ Selected instrument: Density, Complexity, Syncopation, Velocity, Humanize,
 Timing, Volume, Pan, Pitch, Decay. Load WAV replaces that instrument's open
 articulation.
 
-User presets: `~/Music/dooblr-rhythm/Presets`, extension `.drhythm`.
+User presets: `~/Library/Audio/Presets/dooblr/dooblr-rhythm/` on Mac,
+`%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-rhythm\` on Windows,
+extension `.drhythm`. Files previously saved under `~/Music/dooblr-rhythm/Presets`
+are copied on first run, not deleted.
 Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
 
 Window 1080×660, resizable 940×600–2400×1400.

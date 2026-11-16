@@ -25,7 +25,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE instrument VST3 (target `DooblrKick`, product "dooblr-kick", code Dbkk)
 - Version: 0.3.9
 - Last source change: 2026-11-16
-- Source tree: `a015f54baaf0` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-kick`)
+- Source tree: `d6bb02b221be` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-kick`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-kick/scripts/build.sh` (build dir `~/dooblr-build/dooblr-kick`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrKickTests` (Tests/CMakeLists.txt)

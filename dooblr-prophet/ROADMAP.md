@@ -74,6 +74,11 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Tested headlessly: link codec, pairing, loopback session, layout parity; device JSON, cords,
   ES5 syntax, .amxd round trip and a rendered preview. Next: a first run in Live.
 
+## 0.3.4: tabs plus VST3 preset folders
+
+- Combines the 0.3.3 tabbed editor with the shared `common/PresetPaths` helper. User presets
+  live in the VST3 folders; `~/Music/dooblr-prophet/Presets` is copied on first run. Panel stays 0.3.3.
+
 ## 0.3.3: tab bar polish
 
 - Tab buttons keep the same width on every page (they no longer stretch on FX, which has no

@@ -58,7 +58,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE effect VST3 (target `DooblrDistressor`, product "dooblr-distressor", code Dbdt)
 - Version: 0.1.3
 - Last source change: 2026-11-16
-- Source tree: `845687f2a03b` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-distressor`)
+- Source tree: `58fd09e84bd7` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-distressor`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-distressor/scripts/build.sh` (build dir `~/dooblr-build/dooblr-distressor`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrDistressorTests` (Tests/CMakeLists.txt)

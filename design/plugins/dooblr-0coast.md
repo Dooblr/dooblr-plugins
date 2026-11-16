@@ -46,7 +46,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE instrument VST3 (target `Dooblr0Coast`, product "dooblr-0coast", code Dbnc)
 - Version: 0.1.1
 - Last source change: 2026-11-16
-- Source tree: `5a52fb7aee98` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-0coast`)
+- Source tree: `28ba94db5031` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-0coast`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-0coast/scripts/build.sh` (build dir `~/dooblr-build/dooblr-0coast`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `Dooblr0CoastTests` (Tests/CMakeLists.txt)

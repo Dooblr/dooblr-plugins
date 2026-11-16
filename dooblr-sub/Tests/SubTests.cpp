@@ -237,7 +237,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRSUB_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.2.0", "version 0.2.0");
+        check (juce::String (JucePlugin_VersionString) == "0.2.1", "version 0.2.1");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check (p->getLatencySamples() == dsp::ToneShift::latencySamples,
                "reported latency is the tone-shift STFT size (" + std::to_string (p->getLatencySamples()) + ")");

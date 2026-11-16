@@ -4,7 +4,7 @@ Sub-harmonic generator, duration-preserving tone shift, and a big-system
 translation check. Part of Dan Feinstein's **dooblr** suite. VST3 effect, macOS
 11+ (arm64 / x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
 
-Version **0.2.0**.
+Version **0.2.1**.
 
 ## What it does
 

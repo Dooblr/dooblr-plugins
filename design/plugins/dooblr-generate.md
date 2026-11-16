@@ -98,7 +98,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE instrument VST3 (target `DooblrGenerate`, product "dooblr-generate", code Dbgn)
 - Version: 0.3.2
-- Last source change: 2026-11-11
+- Last source change: 2026-11-14
 - Source tree: `18c9d22f05ff` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-generate`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-generate/scripts/build.sh` (build dir `~/dooblr-build/dooblr-generate`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`

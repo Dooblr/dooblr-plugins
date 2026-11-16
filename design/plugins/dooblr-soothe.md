@@ -22,7 +22,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE effect VST3 (target `DooblrSoothe`, product "dooblr-soothe", code Dbso)
 - Version: 0.1.4
 - Last source change: 2026-11-16
-- Source tree: `c2f4a68c9d00` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-soothe`)
+- Source tree: `ce8e77ba8cb6` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-soothe`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-soothe/scripts/build.sh` (build dir `~/dooblr-build/dooblr-soothe`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrSootheTests` (Tests/CMakeLists.txt)

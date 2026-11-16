@@ -43,6 +43,7 @@ Read `design/INDEX.md` first. This file has two parts:
   wide with 10 px to the Output slider, so it is not a 20 px sliver on the window edge.
   Generate sits in a 200–248 px hero column; Variation gets at least 112 px (5/8 of that
   row) so the label is not flush with the button edges.
+- **User presets (0.1.2):** `common/PresetPaths` — macOS `~/Library/Audio/Presets/dooblr/dooblr-rhythm/`, Windows `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-rhythm\`. Legacy `~/Music/dooblr-rhythm/Presets` is copied on first run, not deleted.
 - **Linux (this environment)**: `DooblrRhythmTests` 12/12 passed including clave, tumbao,
   stacking, monotonic density/complexity/syncopation, pattern lock, fills, seed, MIDI
   round-trip, state round-trip, processBlock 0 allocations, and editor layout at all three
@@ -58,9 +59,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrRhythm`, product "dooblr-rhythm", code Dbrh)
-- Version: 0.1.1
+- Version: 0.1.2
 - Last source change: 2026-11-12
-- Source tree: `884e3fa0ecea` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-rhythm`)
+- Source tree: `10ae619835bd` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-rhythm`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-rhythm/scripts/build.sh` (build dir `~/dooblr-build/dooblr-rhythm`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrRhythmTests` (Tests/CMakeLists.txt)
