@@ -113,6 +113,9 @@ namespace dooblrfeedback::ui
             dsp::Notch shown {};           // the numbers on the label (refreshed calmly)
             juce::String line1, line2, line3; // the label text for shown (built when it refreshes, not per frame)
             float labelAlpha = 0.0f, dotAlpha = 0.0f, markerAlpha = 0.0f;
+            juce::Image chipImage; // rounded chip + text + buttons, rebuilt when the numbers change
+            float chipImageScale = 0.0f;
+            int chipImageW = 0, chipImageH = 0, chipImageFlags = -1;
         };
 
         double clockMs() const noexcept;
@@ -128,7 +131,11 @@ namespace dooblrfeedback::ui
         void snapDrawnNotches() noexcept { drawnNotches = notches; }
         const dsp::Notch* drawnById (int notchId) const noexcept;
         static void setLabelText (Label&);
-        void drawBackground();
+        void drawStaticLayer (juce::Graphics&);
+        void ensureStaticLayer (float scale);
+        void ensureChipImage (Label&, float scale, bool selected, juce::Colour colour, bool fixed, bool ringing);
+        void paintMarkers (juce::Graphics&, float scale);
+        static void fillColumns (juce::Graphics&, const float* xs, const float* ys, int n, float top, float bottom, bool hangDown);
         int notchAt (juce::Point<float> position) const;
         const dsp::Notch* notchById (int notchId) const noexcept;
         juce::String readoutText() const;
@@ -155,14 +162,18 @@ namespace dooblrfeedback::ui
 
         juce::Rectangle<float> plot;
         float baselineY = 0.0f;
-        juce::Image background;
-        float backgroundScale = 0.0f;
+        juce::Image staticLayer; // grid + spectrum; rebuilt when those change, not when notches ease
+        float staticLayerScale = 0.0f;
+        bool staticLayerDirty = true, destHasStatic = false;
+        juce::Path lastOverlay; // previous curve + markers, to restore from staticLayer on a retained dest
 
         std::array<float, dsp::DisplayFrame::numPoints> drawnInput {}, drawnOutput {}, pointX {}, inputY {}, outputY {};
-        juce::Path inputPath, outputPath, curveFill, curveEdge, hpfFill, hpfEdge;
+        juce::Path inputPath, outputPath, curveEdge, hpfEdge;
+        static constexpr int maxCurvePoints = 257;
+        std::array<float, maxCurvePoints> curveX {}, curveY {}, hpfXs {}, hpfYs {};
+        int curvePoints = 0, hpfPoints = 0;
         bool hpfOn = false;
         float hpfHz = 80.0f;
-        juce::Path scratchLine, scratchDashed, scratchDiamond; // reused by paint (no per-frame allocation once grown)
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FeedbackGraph)
     };

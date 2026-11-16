@@ -45,7 +45,7 @@ namespace dooblrsub
               { id::subAmount, "Sub", Kind::knob },
               { id::loAmount, "Lo", Kind::knob },
               { id::frequency, "Freq", Kind::knob },
-              { id::octaveMode, "Octave", Kind::combo, 118 },
+              { id::octaveMode, "Octave", Kind::combo, 90 },
               { id::trackingSpeed, "Track", Kind::knob },
               { id::drive, "Drive", Kind::knob },
               { id::mix, "Mix", Kind::knob },

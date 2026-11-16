@@ -236,35 +236,55 @@ namespace dooblrsub::ui
             units.push_back ({ isKnob, w, item.spec.slot, {} });
         }
 
-        // Narrow windows: if slimmer knobs (down to 56 px) keep the panel on one row, use them
-        // rather than wrapping onto a second row.
-        int fixedWidth = 0, knobs = 0;
-        for (const auto& unit : units)
+        // Pack left-to-right, wrapping only when even slimmer knobs (down to 56 px) cannot keep
+        // the next unit on the current row. That stops Mix dropping onto a third row whose
+        // value box sits on the panel edge at 1080×660.
+        std::vector<int> rowOf (units.size(), 0);
+        int row = 0, rowStart = 0;
+        const auto knobWidthFor = [&] (int from, int toInclusive) -> int
         {
-            knobs += unit.knob ? 1 : 0;
-            fixedWidth += unit.knob ? 0 : unit.width;
-        }
-        fixedWidth += gap * std::max (0, (int) units.size() - 1);
-        auto knobW = (int) knobWidth;
-        if (knobs > 0 && fixedWidth + knobs * knobW > width && fixedWidth + knobs * minKnobWidth <= width)
-            knobW = (width - fixedWidth) / knobs;
-
-        int x = 0, y = titleHeight;
-        for (auto& unit : units)
-        {
-            const auto w = unit.knob ? knobW : unit.width;
-
-            if (x > 0 && x + w > width)
+            int nKnobs = 0, fixed = 0, n = toInclusive - from + 1;
+            for (int i = from; i <= toInclusive; ++i)
             {
-                x = 0;
-                y += knobHeight + gap;
+                if (units[(size_t) i].knob) ++nKnobs;
+                else fixed += units[(size_t) i].width;
             }
+            fixed += gap * std::max (0, n - 1);
+            if (nKnobs == 0) return fixed <= width ? (int) knobWidth : 0;
+            if (fixed + nKnobs * (int) knobWidth <= width) return (int) knobWidth;
+            if (fixed + nKnobs * minKnobWidth <= width) return (width - fixed) / nKnobs;
+            return 0;
+        };
+        for (size_t i = 0; i < units.size(); ++i)
+        {
+            if (i > (size_t) rowStart && knobWidthFor (rowStart, (int) i) <= 0)
+            {
+                ++row;
+                rowStart = (int) i;
+            }
+            rowOf[i] = row;
+        }
 
-            unit.bounds = { x, y, w, knobHeight };
-            x += w + gap;
-
-            if (slots != nullptr && unit.slot >= 0)
-                slots->emplace_back (unit.slot, unit.bounds);
+        int y = titleHeight;
+        for (int r = 0, i = 0; r <= row; ++r)
+        {
+            const auto from = i;
+            while (i < (int) units.size() && rowOf[(size_t) i] == r) ++i;
+            const auto to = i - 1;
+            if (to < from) continue;
+            const auto knobW = std::max (minKnobWidth, knobWidthFor (from, to));
+            int x = 0;
+            for (int u = from; u <= to; ++u)
+            {
+                auto& unit = units[(size_t) u];
+                const auto w = unit.knob ? knobW : unit.width;
+                unit.bounds = { x, y, w, knobHeight };
+                x += w + gap;
+                if (slots != nullptr && unit.slot >= 0)
+                    slots->emplace_back (unit.slot, unit.bounds);
+            }
+            if (r < row)
+                y += knobHeight + gap;
         }
 
         std::vector<juce::Rectangle<int>> cells;
@@ -308,7 +328,7 @@ namespace dooblrsub::ui
             if (items[i].shown || items[i].spec.slot >= 0)
                 bottom = std::max (bottom, cells[i].getBottom());
 
-        return bottom;
+        return bottom + 4;
     }
 
     void ControlPanel::resized()
@@ -338,6 +358,8 @@ namespace dooblrsub::ui
                 case Kind::knob:
                     item.caption->setBounds (cell.removeFromTop (16));
                     item.control->setBounds (cell);
+                    if (auto* slider = dynamic_cast<juce::Slider*> (item.control.get()))
+                        slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, cell.getWidth(), 16);
                     break;
                 case Kind::combo:
                     item.caption->setBounds (cell.removeFromTop (16));

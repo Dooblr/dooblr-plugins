@@ -237,7 +237,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRSUB_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.2.1", "version 0.2.1");
+        check (juce::String (JucePlugin_VersionString) == "0.2.2", "version 0.2.2");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check (p->getLatencySamples() == dsp::ToneShift::latencySamples,
                "reported latency is the tone-shift STFT size (" + std::to_string (p->getLatencySamples()) + ")");
@@ -1164,6 +1164,25 @@ namespace
                 }
             }
             check (overlaps == 0 && outside == 0 && tooSmall == 0, label + " layout fit (" + std::to_string (rects.size()) + " controls)");
+
+            auto* mix = editor->findControl (id::mix);
+            check (mix != nullptr, label + ": Mix control exists");
+            if (mix != nullptr && mix->getParentComponent() != nullptr)
+            {
+                auto* panel = mix->getParentComponent();
+                const auto mixInPanel = panel->getLocalArea (mix, mix->getLocalBounds());
+                check (panel->getLocalBounds().contains (mixInPanel),
+                       label + ": Mix slider inside the Sub panel (" + mixInPanel.toString().toStdString()
+                       + " in " + panel->getLocalBounds().toString().toStdString() + ")");
+                for (auto* child : mix->getChildren())
+                {
+                    if (dynamic_cast<juce::Label*> (child) == nullptr) continue;
+                    const auto box = panel->getLocalArea (child, child->getLocalBounds());
+                    check (panel->getLocalBounds().contains (box),
+                           label + ": Mix value box inside the Sub panel (" + box.toString().toStdString()
+                           + " in " + panel->getLocalBounds().toString().toStdString() + ")");
+                }
+            }
         }
 
         auto* fixAll = editor->findControl ("fixAll");
