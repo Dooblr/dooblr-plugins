@@ -11,6 +11,7 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "Presets.h"
+#include "PresetPaths.h"
 #include "DSP/KickEngine.h"
 #include "DSP/Effects.h"
 #include "DSP/ProcessingChain.h"
@@ -531,7 +532,7 @@ namespace
         check (p->getTotalNumInputChannels() == 0, "no audio input");
         check (p->getTotalNumOutputChannels() == 2, "stereo output");
         check (juce::String (JucePlugin_VersionString) == DOOBLRKICK_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.3.8", "version 0.3.8");
+        check (juce::String (JucePlugin_VersionString) == "0.3.9", "version 0.3.9");
         check (JucePlugin_IsSynth == 1, "built as a synth / instrument");
 
         juce::AudioProcessor::BusesLayout stereo, mono, withInput;
@@ -1412,6 +1413,8 @@ namespace
         check (! q->loadUserPreset (garbage, error) && error.isNotEmpty(), "a broken preset file is refused with a message");
         file.deleteFile();
         garbage.deleteFile();
+        check (dooblrkick::presets::getUserPresetFolder() == dooblr::preset_paths::userDirectory ("dooblr-kick"),
+               "user presets use the shared VST3 location");
     }
 
     void testStateRoundTrip()
@@ -5024,8 +5027,8 @@ namespace
         auto& editor = *h.editor;
 
         auto* version = dynamic_cast<juce::Label*> (editor.findChildWithID ("version"));
-        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.8",
-               "header subtitle is the build version (v0.3.8)");
+        check (version != nullptr && version->getText() == "v" + juce::String (JucePlugin_VersionString) && version->getText() == "v0.3.9",
+               "header subtitle is the build version (v0.3.9)");
         juce::StringArray texts;
         collectLabels (editor, texts);
         bool tagLine = false;
@@ -5391,7 +5394,7 @@ namespace
             }
             else
                 check (false, size + ": Time Scale, Depth and the point Time knobs found");
-            saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.8-timescale-" + juce::String (size));
+            saveSnapshot (editor.createComponentSnapshot (editor.getLocalBounds()), "-v0.3.9-timescale-" + juce::String (size));
         }
 
         editor.setSize (1080, 660);

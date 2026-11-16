@@ -30,10 +30,23 @@ namespace dooblrsub::params
         return (rounded > 0.0 ? "+" : "") + formatValue (rounded, 0) + " c";
     }
 
-    void migrateParameterTree (juce::ValueTree&, int) {}
+    juce::String formatMs (double ms)
+    {
+        if (! std::isfinite (ms)) ms = 0.0;
+        if (std::abs (ms) < 0.005) return "0 ms";
+        return formatValue (ms, 2) + " ms";
+    }
+
+    void migrateParameterTree (juce::ValueTree&, int)
+    {
+        // v1 → v2 appended EQ / harmonic / phase-align / infra-slope parameters.
+        // A fresh instance already has their defaults, so a v1 session (which never
+        // wrote them) loads with those stages still neutral (6 dB/oct HPF, 0 dB EQ).
+    }
 
     juce::StringArray octaveNames() { return { "-1 oct", "Unison", "Both" }; }
     juce::StringArray targetNames() { return { "Club", "Festival / PA", "Home / Studio" }; }
+    juce::StringArray infraSlopeNames() { return { "6 dB", "12 dB", "24 dB" }; }
 
     namespace
     {
@@ -105,10 +118,42 @@ namespace dooblrsub::params
         layout.add (freqParam (id::monoFreq, "Mono freq", monoMinHz, monoMaxHz, monoDefaultHz));
         layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::infraHpf, 1 }, "Infra HPF", true));
         layout.add (freqParam (id::infraFreq, "Infra freq", infraMinHz, infraMaxHz, infraDefaultHz));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::infraSlope, 1 },
+                                                                 "Infra slope", infraSlopeNames(), 0));
         layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::subLimit, 1 }, "Sub limit", true));
         layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::target, 1 },
                                                                  "Target", targetNames(), 0));
         layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::bypass, 1 }, "Bypass", false));
+
+        layout.add (floatParam (id::eqShelfGain, "Shelf", { eqGainMinDb, eqGainMaxDb, 0.1f }, 0.0f, "dB", 1));
+        layout.add (freqParam (id::eqShelfFreq, "Shelf Hz", eqShelfMinHz, eqShelfMaxHz, eqShelfDefaultHz));
+        layout.add (floatParam (id::eqPeakGain, "Peak", { eqGainMinDb, eqGainMaxDb, 0.1f }, 0.0f, "dB", 1));
+        layout.add (freqParam (id::eqPeakFreq, "Peak Hz", eqPeakMinHz, eqPeakMaxHz, eqPeakDefaultHz));
+        {
+            juce::NormalisableRange<float> qRange (eqQMin, eqQMax, 0.01f);
+            qRange.setSkewForCentre (1.0f);
+            layout.add (floatParam (id::eqPeakQ, "Peak Q", qRange, eqQDefault, "", 2));
+        }
+        layout.add (floatParam (id::eqPresenceGain, "Presence", { eqGainMinDb, eqGainMaxDb, 0.1f }, 0.0f, "dB", 1));
+        layout.add (freqParam (id::eqPresenceFreq, "Presence Hz", eqPresenceMinHz, eqPresenceMaxHz, eqPresenceDefaultHz));
+        {
+            juce::NormalisableRange<float> qRange (eqQMin, eqQMax, 0.01f);
+            qRange.setSkewForCentre (1.0f);
+            layout.add (floatParam (id::eqPresenceQ, "Presence Q", qRange, eqQDefault, "", 2));
+        }
+
+        layout.add (floatParam (id::harmAmount, "Harmonic", { 0.0f, 100.0f, 0.1f }, 0.0f, "%", 0));
+
+        layout.add (std::make_unique<juce::AudioParameterBool> (juce::ParameterID { id::phaseInvert, 1 }, "Invert", false));
+        layout.add (std::make_unique<juce::AudioParameterFloat> (
+            juce::ParameterID { id::phaseDelay, 1 }, "Align",
+            juce::NormalisableRange<float> (0.0f, phaseDelayMaxMs, 0.01f), 0.0f,
+            Attributes().withLabel ("ms")
+                        .withStringFromValueFunction ([] (float v, int) { return formatMs (v); })
+                        .withValueFromStringFunction ([] (const juce::String& text)
+                        {
+                            return text.retainCharacters ("0123456789.").getFloatValue();
+                        })));
         return layout;
     }
 }

@@ -10,8 +10,9 @@
 
 /**
     One page: a prompt bar (prompt, seed, length, Sync, Generate, Variation) with the job's progress
-    under it; the current sample's waveform (drag it out to Ableton) with Play and its details;
-    the history of generations on the right; PLAYBACK knobs and the MODEL panel along the bottom.
+    under it; the current sample's waveform (drag it out to Ableton) with Play, Stop All and its
+    details; the history of generations on the right; PLAYBACK knobs and the MODEL panel along the
+    bottom.
 */
 class DooblrGenerateEditor final : public juce::AudioProcessorEditor,
                                    public juce::DragAndDropContainer,
@@ -45,6 +46,7 @@ public:
     juce::TextButton& getGenerateButton() noexcept { return generateButton; }
     juce::TextButton& getVariationButton() noexcept { return variationButton; }
     juce::TextButton& getPlayButton() noexcept { return playButton; }
+    juce::TextButton& getStopAllButton() noexcept { return stopAllButton; }
     juce::TextButton& getDragButton() noexcept { return dragButton; }
     juce::ComboBox& getModelBox() noexcept { return modelBox; }
     juce::TextButton& getDownloadButton() noexcept { return downloadButton; }
@@ -72,6 +74,7 @@ private:
     void showTokenEntry (bool);
     void chooseFolder();
     void refreshLengthUi();
+    void refreshStopAll();
     void paintPanel (juce::Graphics&, juce::Rectangle<int>, const juce::String& title, juce::Colour) const;
 
     DooblrGenerateProcessor& generator;
@@ -92,7 +95,7 @@ private:
     juce::Label progressLabel;
 
     dooblrgenerate::ui::WaveformView waveform;
-    juce::TextButton playButton { "Play" }, dragButton { "Drag WAV" };
+    juce::TextButton playButton { "Play" }, stopAllButton { "Stop All" }, dragButton { "Drag WAV" };
     juce::Label infoLabel;
 
     dooblrgenerate::ui::HistoryList historyList;

@@ -5,7 +5,7 @@ and a text-to-audio model running on your own Mac makes a one-shot sample. The p
 it as a sampler from MIDI, and you can drag the WAV straight into Ableton. Every generation is kept
 in a history you can go back to.
 
-- VST3 instrument (MIDI in, stereo out), version **0.3.1**, plug-in code `Dbgn`, bundle
+- VST3 instrument (MIDI in, stereo out), version **0.3.2**, plug-in code `Dbgn`, bundle
   `com.dooblr.dooblrgenerate`.
 - Generation is **offline**: press Generate, wait a few seconds, then play. It never runs on, or
   waits for, the audio thread.
@@ -88,7 +88,8 @@ and `settings.json`. The plug-in never deletes a generated WAV.
 - The line under the prompt bar shows the stage and elapsed time, then "Generated in x s".
 - **Waveform**: the current sample, with the Start point as a line. **Drag the waveform** (or the
   **Drag WAV** button) into an Ableton track, Simpler or Finder to drop a copy of the WAV; a click
-  on Drag WAV shows the file in Finder. **Play** auditions it at the root key.
+  on Drag WAV shows the file in Finder. **Play** auditions it at the root key. **Stop All** is
+  lit while a sample is sounding and fades it out; it is greyed out when nothing is playing.
 - **HISTORY**: newest first; click to load (restores its prompt and seed), double-click to load and
   play, drag a row out to drag its WAV.
 - **MODEL**: status (Ready / Not installed / Downloading x% / Needs Hugging Face access / Python
@@ -115,9 +116,11 @@ automated, mapped to Macro / MIDI controls and are saved with the set.
 | Sync | `sync` | Off / On | Off | Length in bars/beats at host (or manual) tempo. |
 | Tempo | `tempo` | 40..240 BPM | 120 BPM | Used when Sync is on and the host has no tempo. Hidden otherwise. |
 
-Playback: 16-voice one-shot sampler (note-offs are ignored, like a drum sampler; All Notes Off
-stops everything; the oldest voice is stolen). The root key is **C3 (MIDI 60)**: C3 plays the
-sample at its own pitch and speed, other keys repitch it. Sample-rate conversion is automatic.
+Playback: monophonic one-shot sampler (note-offs are ignored, like a drum sampler; a new MIDI
+note, Play, or history preview fades out the sounding voice over a few milliseconds). **Stop All**
+does the same fade from the editor. All Notes Off / All Sound Off cuts immediately. The root key
+is **C3 (MIDI 60)**: C3 plays the sample at its own pitch and speed, other keys repitch it.
+Sample-rate conversion is automatic.
 
 Saved with the set but not automatable: prompt, seed, length (seconds), length unit (bars/beats),
 model, and the current sample (by its history id, falling back to the WAV path). A source path
@@ -136,14 +139,14 @@ Same environment variables as the other plug-ins' `build.sh` (`BUILD_DIR`, `JUCE
 
 Tests (`Tests/GenerateTests.cpp`, 15 tests) cover metadata and parameters, value text, the
 sampler (timing, pitch, sample-rate conversion, Start, Attack, Decay, Velocity, Output, one-shot
-behaviour, voice stealing), MIDI playback through the processor, the lock-free sample hand-over,
+behaviour, monophonic retrigger fade, Stop All), MIDI playback through the processor, the lock-free sample hand-over,
 the history, state save / restore (legacy source path ignored), model status states, token storage, worker-script embedding,
 generation end to end, worker crash / error / hang / cancel, a partial model, source-sample conversion
 (mono→stereo, sample-rate conversion, trim, non-audio / unresolved .alc rejection, worker
 `--init-audio` / `--init-noise` via the processor API), beat-sync math and aligned WAV length, the 30 s clamp (including
 legacy state), the audio thread
 during generation (no allocation, timing) and the editor at 940x600, 1080x660 and 2400x1400 (no source column;
-Sync label width >= text width; bars/beats selector and Tempo fit with Sync on).
+Sync label width >= text width; bars/beats selector and Tempo fit with Sync on; Stop All on the waveform row).
 **The tests never start Python**: a stub shell script stands in for the worker. Set
 `DOOBLRGENERATE_EDITOR_SNAPSHOT=/path/prefix` to write editor PNGs, and
 `DOOBLRGENERATE_LIVE_PROMPTS="a|b"` to generate with the real model (not counted as a test).

@@ -4,7 +4,7 @@ Sub-harmonic generator, duration-preserving tone shift, and a big-system
 translation check. Part of Dan Feinstein's **dooblr** suite. VST3 effect, macOS
 11+ (arm64 / x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
 
-Version **0.1.0**.
+Version **0.2.2**.
 
 ## What it does
 
@@ -24,31 +24,39 @@ Three sections on one page:
 3. **System check** — a live translation analyser for club / festival / home
    sub systems: sub-band energy, crest, low-frequency mono compatibility,
    infrasonic waste, DC, cancellation of the generated sub against the original
-   fundamental, and pitch stability. The verdict is green / amber / red with
-   the specific reasons. Sub safety: mono-below (default on, 100 Hz), infrasonic
-   high-pass (default 25 Hz), and a soft limiter on the sub path. Target
-   (Club, Festival / PA, Home / Studio) changes both the verdict thresholds and
-   the limiter / infra bias.
+   fundamental, pitch stability, sub-vs-mid balance, mud, a too-low generated
+   fundamental, and missing harmonic presence. The verdict is green / amber / red
+   with the specific reasons. Each failing or warning reason has a **Fix**
+   button; **Fix All** runs every recipe as one undoable gesture, and **Undo Fix**
+   restores the pre-fix snapshot. Fixes are conservative and ramp so they do not
+   click. Sub safety: mono-below (default on, 100 Hz), infrasonic high-pass
+   (default 25 Hz), and a soft limiter on the sub path. Target (Club, Festival /
+   PA, Home / Studio) changes both the verdict thresholds and the limiter / infra
+   bias. Internal low-end stages (parametric EQ 20–250 Hz, harmonic exciter,
+   phase-align) default to neutral so v0.1.0 sessions load unchanged.
 
 No third-party names, logos or branding appear in the UI or the code.
 
 ## Controls
 
-Every control is an automatable VST parameter (19 total).
+Every control is an automatable VST parameter (31 total).
 
 **Sub:** Sub, Lo, Freq (30–120 Hz), Octave (−1 oct / Unison / Both), Track,
 Drive, Mix.
 
 **Tone Shift:** Shift (−1200…+1200 cents), Transient, Body, Shift Mix.
 
-**System Check:** Target, Mono, Mono Hz, Infra, Infra Hz, Limit.
+**System Check:** Target, Mono, Mono Hz, Infra, Infra Hz, Slope (6 / 12 / 24 dB), Limit.
+
+**Low End:** Shelf / Peak / Presence EQ (20–250 Hz), Harmonic, Invert, Align.
 
 Header: Bypass, Output (−24…+12 dB), factory / user presets.
 
 Factory presets: Init, 808 Weight, Kick Sub, Bass Guitar Sub, Tom Retune Down,
 Snare Tone Up, Club Safe, Festival Safe.
 
-User presets: `~/Music/dooblr-sub/Presets`, extension `.dsub`.
+User presets: `~/Library/Audio/Presets/dooblr/dooblr-sub/` on Mac,
+`%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-sub\` on Windows, extension `.dsub`.
 Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
 
 Window 1080×660, resizable 940×600–2400×1400.

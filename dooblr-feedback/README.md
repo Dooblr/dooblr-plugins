@@ -9,7 +9,7 @@ it came back, and can be locked or cleared. Rooms keep their own notes and prese
 last resort, a feedback-gated **Safety duck** pulls the whole output down when a howl gets
 past the notches.
 
-Version 0.1.3. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
+Version 0.1.5. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
 
 ## How it works
 
@@ -105,7 +105,8 @@ in the toolbar.
 
 **Presets.** Default plus 5 original factory presets (Speech / Lectern, Vocal in a Band,
 Monitor Wedge, Theatre Lav, Ring-out Start). These set only the detection settings; they leave the room's
-notes and notches alone. **Room presets** (`.dfeedback`, in `~/Music/dooblr-feedback/Presets`)
+notes and notches alone. **Room presets** (`.dfeedback`, in `~/Library/Audio/Presets/dooblr/dooblr-feedback/`
+on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-feedback\` on Windows)
 save everything: parameters, notes and the current notches, fixed and floating. Save,
 load and rename are in the preset menu. The session state holds the same things. Undo / Redo
 (Cmd-Z, Cmd-Shift-Z) cover parameter gestures, A / B compares two complete settings

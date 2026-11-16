@@ -74,6 +74,28 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Tested headlessly: link codec, pairing, loopback session, layout parity; device JSON, cords,
   ES5 syntax, .amxd round trip and a rendered preview. Next: a first run in Live.
 
+## 0.3.4: tabs plus VST3 preset folders
+
+- Combines the 0.3.3 tabbed editor with the shared `common/PresetPaths` helper. User presets
+  live in the VST3 folders; `~/Music/dooblr-prophet/Presets` is copied on first run. Panel stays 0.3.3.
+
+## 0.3.3: tab bar polish
+
+- Tab buttons keep the same width on every page (they no longer stretch on FX, which has no
+  right-side mode switch). Sound's tab-bar caption is the oversampling line only; the ladder
+  model lives on the LOW-PASS Model combo. Checked at 940×600, 1080×660 and 2400×1400.
+  Max for Live panel unchanged (still 0.3.3).
+
+## 0.3.2: Sound tab (envelope, filter, envelope) plus settings/FX tabs
+
+- The editor is four tabs under the header: Sound, Modulation, Voices, FX (no left page column).
+- Sound is the main page: oscillators, then filter envelope / filter / amp envelope, then mixer
+  with basic Poly-Mod (amounts to Osc 1 Freq) and LFO (wave, rate, initial, wheel, osc/filter dests).
+  Three graphs share a strip: oscillators, filter (handles) and envelopes.
+- Extra modulation (tempo sync, noise mix, shape/HPF/amp dests, extra Poly-Mod dests) is on
+  Modulation; voice/performance settings stay on Voices; Echo and Reverb stay on FX.
+- Parameter IDs are unchanged. The Max for Live panel follows the same layout table (panel 0.3.3).
+
 ## 0.3.1: Max for Live panel crash fix (panel only; the VST3 stays 0.3.0)
 
 - The panel's Live API watcher recursed on load (synchronous LiveAPI callbacks) and crashed

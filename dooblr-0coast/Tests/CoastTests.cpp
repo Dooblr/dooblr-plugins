@@ -249,7 +249,7 @@ namespace
         check (p->getNumPrograms() == 9, "Init + 8 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
         check (p->getProgramName (0) == "Init", "first program is Init");
         check (juce::String (JucePlugin_VersionString) == DOOBLR0COAST_PROJECT_VERSION, "JUCE version string matches CMake");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check ((int) p->getParameters().size() == params::parameterCount,
                "parameter count " + std::to_string (p->getParameters().size()));
 

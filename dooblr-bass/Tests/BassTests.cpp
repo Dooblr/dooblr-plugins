@@ -10,6 +10,7 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "Presets.h"
+#include "PresetPaths.h"
 #include "Randomiser.h"
 #include "UI/ControlPanel.h"
 #include "UI/Theme.h"
@@ -398,6 +399,9 @@ namespace
         check (std::abs (get (*p, id::lpfCutoff) - 1234.0f) < 1.0f, "user preset restores cutoff");
         file.deleteFile();
         dir.deleteRecursively();
+
+        check (presets::userDirectory() == dooblr::preset_paths::userDirectory ("dooblr-bass"),
+               "user presets use the shared VST3 location");
     }
 
     void testNoDeadParameters()

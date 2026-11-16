@@ -16,16 +16,28 @@ namespace dooblrprophet
 {
     /**
         The editor (design/dooblr-design-system.md): a 60 px header (title, version, undo / redo,
-        presets, output), a 150 px page column, and per page a title bar with the page's mode
-        switches, a graph and the control panels. Ignored controls are dimmed (disabled), never
-        hidden. Cmd-Z undoes, Cmd-Shift-Z / Cmd-Y redo; every other key goes to the host.
+        presets, output), a horizontal tab bar (Sound / Modulation / Voices / FX) with equal-width
+        tab buttons and the page's mode switches, then per page a graph strip and the control
+        panels. The Sound tab holds oscillators, mixer, filter envelope, filter, amp envelope and
+        basic modulation. Ignored controls are dimmed, never hidden. Cmd-Z undoes, Cmd-Shift-Z /
+        Cmd-Y redo; every other key goes to the host.
     */
     class DooblrProphetEditor final : public juce::AudioProcessorEditor,
                                       private juce::Timer,
                                       private juce::ChangeListener
     {
     public:
-        enum Page { oscillatorsPage = 0, filtersPage, envelopesPage, modulationPage, voicesPage, fxPage, numPages };
+        enum Page
+        {
+            soundPage = 0,
+            modulationPage,
+            voicesPage,
+            fxPage,
+            numPages,
+            oscillatorsPage = soundPage,
+            filtersPage = soundPage,
+            envelopesPage = soundPage
+        };
 
         /** An FX module's preset box with its caption. Picking one sets the preset and the macros it
             starts from, as one undo step (DooblrProphetProcessor::applyFxPreset). */
@@ -51,7 +63,12 @@ namespace dooblrprophet
         void selectPage (int page);
         const std::vector<std::unique_ptr<ui::ControlPanel>>& getPanels (int page) const { return pages[(size_t) page].panels; }
         const std::vector<std::unique_ptr<ui::SegmentedToggle>>& getModeToggles (int page) const { return pages[(size_t) page].toggles; }
-        ui::GraphView& getGraph (int page) const { return *pages[(size_t) page].graph; }
+        const std::vector<std::unique_ptr<ui::GraphView>>& getGraphs (int page) const { return pages[(size_t) page].graphs; }
+        ui::GraphView& getGraph (int page) const { return *pages[(size_t) juce::jlimit (0, (int) numPages - 1, page)].graphs.front(); }
+        ui::OscillatorDisplay* getOscillatorDisplay() const;
+        ui::FilterDisplay* getFilterDisplay() const;
+        ui::EnvelopeDisplay* getEnvelopeDisplay() const;
+        ui::LfoDisplay* getLfoDisplay() const;
         juce::TextButton& getRandomButton() noexcept { return randomButton; }
         /** 0 Echo, 1 Reverb. */
         FxPresetPicker& getFxPresetPicker (int module) { return fxPresetPickers[(size_t) juce::jlimit (0, 1, module)]; }
@@ -64,7 +81,7 @@ namespace dooblrprophet
     private:
         struct PageContent
         {
-            std::unique_ptr<ui::GraphView> graph;
+            std::vector<std::unique_ptr<ui::GraphView>> graphs;
             std::vector<std::unique_ptr<ui::ControlPanel>> panels;
             std::vector<std::vector<int>> rows;      // panel indices per row
             std::vector<std::unique_ptr<ui::SegmentedToggle>> toggles;
@@ -105,7 +122,7 @@ namespace dooblrprophet
         std::array<FxPresetPicker, 2> fxPresetPickers;
         int selectedPage = oscillatorsPage;
 
-        juce::Rectangle<int> headerArea, navArea, titleBarArea, contentArea;
+        juce::Rectangle<int> headerArea, tabBarArea, contentArea;
         std::vector<juce::Rectangle<int>> toggleCaptionAreas;
 
         std::unique_ptr<juce::FileChooser> fileChooser;

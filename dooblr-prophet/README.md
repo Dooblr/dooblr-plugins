@@ -7,17 +7,18 @@ high-pass into a switchable 4-pole ladder low-pass, and 1–10 voices with uniso
 Original design, code and sounds. "Prophet" describes the instrument family it emulates;
 see the disclaimer below.
 
-Version 0.3.1 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, Echo and Reverb, and a Max for Live panel; 0.3.1 with panel 0.3.2 fixes a Live crash on load). See [ROADMAP.md](ROADMAP.md) for what is next and
+Version 0.3.4 (milestone 1 plus Random, draggable filter handles, filter env Sync to Amp, Echo and Reverb, a Max for Live panel, a tabbed editor: Sound / Modulation / Voices / FX, and VST3-standard user preset folders). See [ROADMAP.md](ROADMAP.md) for what is next and
 [docs/analog-reference.md](docs/analog-reference.md) for the circuit reference the DSP follows.
 
 ## Pages and controls
 
-| Page | Controls |
+A horizontal tab bar under the header. Every control from 0.3.1 is still there; only the
+pages moved.
+
+| Tab | Controls |
 | --- | --- |
-| **Oscillators** | Per oscillator: Variable (continuous Shape, P6) or Switched (Saw / Triangle / Pulse, P5) mode, Coarse, Fine, Shape, Pulse Width. Osc 1 Sync (slaved to osc 2). Osc 2 Low Freq and Key Track. Mixer: Osc 1, Osc 2, Sub (one octave below osc 1), Noise. The graph shows both live waveforms. |
-| **Filters** | High-pass (2-pole, resonant): Cutoff, Resonance, Env Amount. Low-pass (4-pole ladder): Cutoff, Resonance, Drive, Env Amount, Key Track. Low-pass model: 3320 (P5 Rev3) or 2040 (P5 Rev1/2, P6). The graph shows the combined response, with a draggable handle per filter: drag left/right for Cutoff, up/down for Resonance (Shift for fine, mouse wheel for Resonance, double-click to reset that filter; one drag is one undo step). |
-| **Envelopes** | Filter and amp ADSR, each with a velocity amount. Sync to Amp (filter envelope panel, automatable, off by default): the filter envelope follows the amp ADSR while keeping its own velocity, env amounts and Poly-Mod; its own ADSR knobs are dimmed but keep their values, and the graph shows the envelope in effect. |
-| **Modulation** | Poly-Mod: Filter Env and Osc 2 amounts to Osc 1 Freq, Osc 1 Shape, Filter (both cutoffs). LFO: Wave (triangle, saw, reverse saw, square, sample & hold), Free Rate or Tempo Sync Division, Initial amount, Wheel amount, Noise Mix, and seven destinations. |
+| **Sound** | Oscillators, mixer, filter envelope, high-pass, low-pass (with model), amp envelope, and basic modulation, in that visual order: oscillators on top, then envelope / filter / envelope, then mixer with Poly-Mod and LFO. Per oscillator: Variable (continuous Shape, P6) or Switched (Saw / Tri / Pulse, P5) mode, Coarse, Fine, Shape, Pulse Width. Osc 1 Sync (slaved to osc 2). Osc 2 Lo Freq and Key Track. Mixer: Osc 1, Osc 2, Sub (one octave below osc 1), Noise. Filter envelope and amp ADSR, each with a velocity amount; Sync to Amp on the filter envelope. High-pass (2-pole): Cutoff, Resonance, Env Amount. Low-pass (4-pole ladder): Model 3320 (P5 Rev3) or 2040 (P5 Rev1/2, P6), Cutoff, Resonance, Drive, Env Amount, Key Track. Basic Poly-Mod: Filter Env and Osc 2 amounts to Osc 1 Freq. Basic LFO: Wave, Rate, Initial, Wheel, and destinations Osc 1 Freq, Osc 2 Freq, Low-Pass. The graph strip shows both oscillator waves, the filter response (draggable handles: drag left/right for Cutoff, up/down for Resonance; Shift for fine, mouse wheel for Resonance, double-click to reset that filter; one drag is one undo step), and both envelopes. |
+| **Modulation** | Extra Poly-Mod destinations (Osc 1 Shape, Filter), LFO Free / Tempo Sync and Division, Noise Mix, and extra LFO destinations (Osc 1 / 2 Shape, High-Pass, Amp). The graph shows the LFO. |
 | **Voices** | Poly / Unison / Mono. Voices (1–10, quick 5 / 6 / 10), Unison voices and Detune, Glide (mono), Vintage (per-voice variance). Bend Range, aftertouch to filter and to LFO amount. |
 | **FX** | A global stereo stage after the voice mix: Echo, then Reverb. Each has an automatable On switch (off by default), a Preset menu (10 each) and Mix. Echo: Time (20–2000 ms) or tempo Sync with Division (1/32 to 1/1, dotted and triplet), Feedback (up to 95%), and Ping-Pong (automatable; the mono-summed input starts on the left and each repeat crosses sides). Reverb: Size / Decay and Tone. Choosing a preset sets its character and the macros it starts from (one undo step); the macros and Ping-Pong then move freely. The graph shows the echo taps (left above, right below) and the reverb decay. |
 
@@ -26,7 +27,8 @@ Variable mode, Rate when the LFO is synced). Dimmed controls stay clickable and 
 you can set them up before switching mode (0.1.4 fixes 0.1.0–0.1.3, where they ignored clicks).
 
 Header: Undo / Redo, preset menu (factory and user), Random, Save / Load (.dprophet files in
-`~/Music/dooblr-prophet/Presets`), Output level and meter.
+`~/Library/Audio/Presets/dooblr/dooblr-prophet/` on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-prophet\`
+on Windows), Output level and meter.
 
 Random makes a new playable patch in one undo step and shows "Random" as the preset name;
 undo also brings back the previous preset name.

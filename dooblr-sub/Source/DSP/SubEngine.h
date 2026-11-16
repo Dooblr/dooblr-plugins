@@ -1,6 +1,9 @@
 #pragma once
 
+#include "HarmonicExciter.h"
+#include "LowEndEQ.h"
 #include "OutputPeakTap.h"
+#include "PhaseAlign.h"
 #include "PitchTracker.h"
 #include "SubGenerator.h"
 #include "SystemCheck.h"
@@ -19,11 +22,16 @@ namespace dooblrsub::dsp
         float monoHz = 100.0f;
         bool infraHpf = true;
         float infraHz = 25.0f;
+        int infraSlope = 0; // 0=6 dB/oct, 1=12, 2=24. Default 6 dB matches v0.1.0.
         bool subLimit = true;
         Target target = Target::club;
         float mix = 1.0f;
         float outputDb = 0.0f;
         bool bypass = false;
+        LowEndEQSettings eq;
+        float harmAmount = 0.0f;
+        bool phaseInvert = false;
+        float phaseDelayMs = 0.0f;
     };
 
     struct DisplaySnapshot
@@ -38,7 +46,9 @@ namespace dooblrsub::dsp
     };
 
     /**
-        Full dooblr-sub path: tone shift (latency) -> sub generator -> safety -> mix / output.
+        Full dooblr-sub path: tone shift (latency) -> sub generator -> phase-align ->
+        harmonic exciter -> low-end EQ -> safety (infra HPF, 4-pole mono-below,
+        limiter) -> mix / output.
         Latency is the tone-shift STFT size and is always reported, including on bypass
         (bypass is the delayed dry signal so host delay compensation stays correct).
     */
@@ -64,18 +74,24 @@ namespace dooblrsub::dsp
 
     private:
         void processSafety (float& l, float& r) noexcept;
+        float generatedHz() const noexcept;
 
         double sampleRate = 44100.0;
         EngineSettings settings;
         ToneShift toneLeft, toneRight;
         SubGenerator sub;
+        PhaseAlign phase;
+        LowEndEQ eq;
+        HarmonicExciter harm;
         SystemCheck check;
         OutputPeakTap peakTap;
 
         std::vector<float> toneL, toneR, inL, inR, delayedL, delayedR;
         std::vector<float> dryDelayL, dryDelayR;
         int dryWrite = 0;
-        float infraZL = 0.0f, infraZR = 0.0f, monoZL = 0.0f, monoZR = 0.0f;
+        float infraZ[2][4] {};
+        float sideHpZ[4] {};
+        float infraHzZ = 25.0f, monoHzZ = 100.0f, infraMixZ = 1.0f, monoMixZ = 1.0f;
         float limitEnv = 0.0f;
         float bypassMix = 0.0f, outGain = 1.0f;
     };

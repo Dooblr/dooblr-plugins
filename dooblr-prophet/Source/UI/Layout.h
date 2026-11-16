@@ -19,6 +19,8 @@ namespace dooblrprophet::layout
         const char* id;
         const char* caption;
         ui::ControlPanel::Kind kind;
+        int width = 0; // 0: the kind's standard width
+        int stack = -1; // >= 0: share a grid cell with other controls of this stack
     };
 
     struct ModeToggle

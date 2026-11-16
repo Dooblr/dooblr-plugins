@@ -42,7 +42,8 @@ namespace dooblrkick::presets
 
     ValueList randomise (juce::AudioProcessorValueTreeState& state, juce::Random& random);
 
-    /** ~/Music/dooblr-kick/Presets */
+    /** VST3 user-preset folder (macOS Library/Audio/Presets, Windows Documents/VST3 Presets). */
     juce::File getUserPresetFolder();
+    juce::Array<juce::File> userPresets();
     inline constexpr const char* userPresetExtension = ".dkick";
 }

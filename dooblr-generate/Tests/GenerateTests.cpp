@@ -471,7 +471,7 @@ namespace
         out = renderNote (*constantSample (48000), loud, 60, 1.0f, 0, 6000);
         check (std::abs (out.getSample (0, 5000)) < 1e-6f, "Output at min is silent");
 
-        // One-shot: note-off is ignored; all-notes-off stops; polyphony and stealing.
+        // One-shot: note-off is ignored; all-notes-off stops; monophonic stealing with a short fade.
         {
             engine::Sampler sampler;
             sampler.prepare (48000.0, 256);
@@ -485,7 +485,8 @@ namespace
             for (int n = 0; n < 20; ++n)
                 midi.addEvent (juce::MidiMessage::noteOn (1, 40 + n, 1.0f), n);
             sampler.process (buf, midi, sample.get(), flat);
-            check (sampler.numActiveVoices() == engine::Sampler::numVoices, "20 notes use all 16 voices (oldest stolen)");
+            check (sampler.numActiveVoices() == engine::Sampler::maxPolyphony,
+                   "20 notes stay monophonic (1 playing voice), got " + std::to_string (sampler.numActiveVoices()));
             midi.clear();
             midi.addEvent (juce::MidiMessage::allNotesOff (1), 0);
             sampler.process (buf, midi, sample.get(), flat);
@@ -502,6 +503,54 @@ namespace
             midi.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
             sampler.process (buf, midi, nullptr, flat);
             check (buf.getMagnitude (0, 256) == 0.0f && sampler.numActiveVoices() == 0, "no sample: notes are silent");
+        }
+
+        // Retrigger fades the old voice (no click) and leaves one playing voice.
+        {
+            const auto longRamp = rampSample (48000);
+            engine::Sampler sampler;
+            sampler.prepare (48000.0, 256);
+            juce::AudioBuffer<float> buf (2, 256);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
+            sampler.process (buf, midi, longRamp.get(), flat);
+            midi.clear();
+            for (int i = 0; i < 93; ++i) // 94 * 256 = 24064 samples, ramp ~ 0.5
+                sampler.process (buf, midi, longRamp.get(), flat);
+            const auto before = buf.getSample (0, 255);
+            check (std::abs (before - 0.5f) < 0.02f, "ramp is around halfway before retrigger, got " + std::to_string (before));
+
+            midi.clear();
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
+            sampler.process (buf, midi, longRamp.get(), flat);
+            check (sampler.numActiveVoices() == 1, "retrigger keeps one playing voice");
+            check (sampler.isSounding(), "retrigger still sounds during the fade");
+            const auto jump = std::abs (buf.getSample (0, 0) - before);
+            check (jump < 0.05f, "retrigger does not click (level jump " + std::to_string (jump) + ")");
+            const auto fadeN = juce::jmax (1, (int) std::lround (engine::Sampler::stealFadeMs * 0.001 * 48000.0));
+            check (fadeN < buf.getNumSamples(), "fade fits in the test block");
+            const auto after = buf.getSample (0, juce::jmin (buf.getNumSamples() - 1, fadeN + 8));
+            check (after < 0.05f, "after the fade only the new voice remains (ramp near start), got " + std::to_string (after));
+        }
+
+        // Stop All fades to silence instead of cutting.
+        {
+            engine::Sampler sampler;
+            sampler.prepare (48000.0, 256);
+            juce::AudioBuffer<float> buf (2, 256);
+            juce::MidiBuffer midi;
+            midi.addEvent (juce::MidiMessage::noteOn (1, 60, 1.0f), 0);
+            sampler.process (buf, midi, sample.get(), flat);
+            check (sampler.isSounding() && std::abs (buf.getSample (0, 200) - 0.5f) < 1e-4f, "playing before Stop All");
+            sampler.stopAll();
+            midi.clear();
+            sampler.process (buf, midi, sample.get(), flat);
+            check (sampler.numActiveVoices() == 0, "Stop All leaves no playing voice");
+            const auto fadeN = juce::jmax (1, (int) std::lround (engine::Sampler::stealFadeMs * 0.001 * 48000.0));
+            check (std::abs (buf.getSample (0, 0) - 0.5f) < 0.02f, "Stop All starts from the current level");
+            check (std::abs (buf.getSample (0, fadeN / 2) - 0.25f) < 0.08f, "Stop All is fading at half the window");
+            check (buf.getMagnitude (0, fadeN, buf.getNumSamples() - fadeN) < 1e-6f, "Stop All is silent after the fade");
+            check (! sampler.isSounding(), "Stop All ends with nothing sounding");
         }
     }
 
@@ -539,6 +588,43 @@ namespace
         midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 127), 0);
         p.processBlock (buf, midi);
         check (buf.getMagnitude (0, 512) < 1e-6f, "Output parameter applies");
+        setParam (p, "output", 0.0f);
+        for (int i = 0; i < 20; ++i) p.processBlock (idle, midi);
+
+        // Playing flag tracks the audio thread; Stop All fades to silence.
+        midi.clear();
+        midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 127), 0);
+        p.processBlock (buf, midi);
+        check (p.isPlaying() && p.getActiveVoicesForTests() == 1, "playing flag true after MIDI");
+        p.requestStop();
+        midi.clear();
+        p.processBlock (buf, midi);
+        check (! p.isPlaying() && p.getActiveVoicesForTests() == 0, "playing flag false after Stop All fade");
+        check (buf.getMagnitude (0, 240, 272) < 1e-5f, "Stop All silences the processor output");
+
+        p.requestPreview();
+        p.processBlock (buf, midi);
+        check (p.isPlaying(), "playing flag true after Play");
+        for (int i = 0; i < 20; ++i) p.processBlock (idle, midi);
+        check (! p.isPlaying(), "playing flag false after the sample ends");
+
+        // Every trigger path (MIDI, Play, source preview) shares the one voice.
+        juce::AudioBuffer<float> sourceAudio (2, 4800);
+        for (int i = 0; i < 4800; ++i) { sourceAudio.setSample (0, i, 0.4f); sourceAudio.setSample (1, i, 0.4f); }
+        const auto sourceWav = rig.home.root.getChildFile ("src.wav");
+        writeWav (sourceWav, sourceAudio, 48000.0);
+        juce::String srcErr;
+        check (p.loadSourceFile (sourceWav, srcErr), "loaded a source for preview: " + str (srcErr));
+        midi.addEvent (juce::MidiMessage::noteOn (1, 64, (juce::uint8) 127), 10);
+        p.requestPreview();
+        p.requestSourcePreview();
+        p.processBlock (buf, midi);
+        check (p.getActiveVoicesForTests() == 1, "MIDI + Play + source preview still one playing voice");
+        check (p.isPlaying(), "mixed triggers still report playing");
+        midi.clear();
+        p.requestStop();
+        p.processBlock (idle, midi);
+        check (! p.isPlaying(), "Stop All clears mixed triggers");
     }
 
     void testSampleSlot()
@@ -1177,7 +1263,7 @@ namespace
         check (p.getService().isBusy(), "the worker job was still running throughout");
         check (allocationCount == 0, "processBlock never allocated during generation and swaps (" + std::to_string (allocationCount.load()) + ")");
         check (worstMs < 2.0, "worst block " + std::to_string (worstMs) + " ms (< 2 ms for a 5.3 ms block)");
-        note ("4000 blocks of 256 at 48 kHz with 16 voices: mean " + std::to_string (totalMs / blocks) + " ms, worst "
+        note ("4000 blocks of 256 at 48 kHz, monophonic: mean " + std::to_string (totalMs / blocks) + " ms, worst "
               + std::to_string (worstMs) + " ms while a worker job ran and samples were swapped");
         p.getService().cancel();
         check (p.getService().waitUntilIdle (3000), "cleanup");
@@ -1306,7 +1392,8 @@ namespace
                 { "prompt", &editor->getPromptEditor() }, { "seed", &editor->getSeedEditor() }, { "length", &editor->getLengthSlider() },
                 { "generate", &editor->getGenerateButton() }, { "variation", &editor->getVariationButton() },
                 { "sync", &editor->getSyncButton() },
-                { "waveform", &editor->getWaveform() }, { "play", &editor->getPlayButton() }, { "drag", &editor->getDragButton() },
+                { "waveform", &editor->getWaveform() }, { "play", &editor->getPlayButton() },
+                { "stop all", &editor->getStopAllButton() }, { "drag", &editor->getDragButton() },
                 { "history", &editor->getHistoryList() }, { "playback", &editor->getPlaybackPanel() },
                 { "model box", &editor->getModelBox() }, { "status", &editor->getStatusLabel() },
                 { "download", &editor->getDownloadButton() }, { "token", &editor->getTokenButton() },
@@ -1332,6 +1419,19 @@ namespace
             check (editor->getHistoryList().getHeight() >= 120, label + ": history at least 120 px tall");
             check (editor->getGenerateButton().getWidth() >= 100 && editor->getGenerateButton().getHeight() >= 26, label + ": Generate button size");
             check (editor->getDetails().getHeight() >= 30, label + ": details box at least 30 px tall");
+            {
+                auto& stop = editor->getStopAllButton();
+                const auto stopTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                               stop.getButtonText());
+                check (stop.getButtonText() == "Stop All" && stop.getTooltip().isEmpty() && ! stop.isEnabled(),
+                       label + ": Stop All label, no hint text, disabled while idle");
+                check ((float) stop.getWidth() + 1.0f >= stopTextW,
+                       label + ": Stop All not truncated (" + std::to_string (stopTextW) + " px text in "
+                           + std::to_string (stop.getWidth()) + " px)");
+                check (stop.getBounds().getY() == editor->getPlayButton().getBounds().getY()
+                           && stop.getBounds().getX() >= editor->getPlayButton().getRight(),
+                       label + ": Stop All sits on the waveform row after Play");
+            }
 
             {
                 auto& cap = editor->getSyncCaption();
@@ -1473,6 +1573,26 @@ namespace
         check (editor->getInfoLabel().getText().contains ("seed 4242"), "info shows the seed");
         check (editor->getHistoryList().getNumEntries() == 1, "history list shows the generation");
         check (editor->getPlayButton().isEnabled() && editor->getDragButton().isEnabled(), "Play and Drag WAV enabled with a sample");
+        check (! editor->getStopAllButton().isEnabled(), "Stop All disabled while nothing is playing");
+        click (editor->getPlayButton());
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer midi;
+            p.processBlock (buf, midi);
+        }
+        editor->refresh();
+        check (editor->getStopAllButton().isEnabled(), "Stop All enabled while a sample is playing");
+        check (editor->getStopAllButton().findColour (juce::TextButton::buttonColourId) == ui::Palette::accent,
+               "Stop All is accent-coloured while playing");
+        click (editor->getStopAllButton());
+        {
+            juce::AudioBuffer<float> buf (2, 512);
+            juce::MidiBuffer midi;
+            p.processBlock (buf, midi);
+        }
+        editor->refresh();
+        check (! editor->getStopAllButton().isEnabled(), "Stop All disabled again after it stops playback");
+        check (! p.isPlaying(), "Stop All from the editor clears the playing flag");
 
         type (editor->getPromptEditor(), {});
         editor->refresh();

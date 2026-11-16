@@ -66,7 +66,8 @@ Plugin code `Dbvx` · bundle id `com.dooblr.vocals` · manufacturer `Dblr`
   (`harm_lofi`: band-limited, reduced-rate, reduced-bit harmony voices; 0 = off,
   bit-identical) and a small room. Set Key / Scale, or turn on Key Follow (session
   setting, not stored in presets), to choose the key the voices follow.
-  User presets are `.dvocal` files in `~/Music/dooblr-vocals/Presets`.
+  User presets are `.dvocal` files in `~/Library/Audio/Presets/dooblr/dooblr-vocals/`
+  on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-vocals\` on Windows.
 - **Undo/redo** (Cmd-Z / Cmd-Shift-Z) keeps 50 steps. One drag or preset load is
   one step.
 - **Resizable UI** from 940×600 to 2400×1400 (default 1080×660).

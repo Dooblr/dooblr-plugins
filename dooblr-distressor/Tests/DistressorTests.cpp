@@ -183,7 +183,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRDISTRESSOR_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
+        check (juce::String (JucePlugin_VersionString) == "0.1.3", "version 0.1.3");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check (p->getLatencySamples() == 0, "zero latency");
 

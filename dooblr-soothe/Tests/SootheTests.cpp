@@ -376,7 +376,7 @@ namespace
         check (p->getBusCount (true) == 2 && p->getBus (true, 1) != nullptr && ! p->getBus (true, 1)->isEnabled(), "a sidechain input bus, off by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRSOOTHE_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.3", "version 0.1.3");
+        check (juce::String (JucePlugin_VersionString) == "0.1.4", "version 0.1.4");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
 
         auto layout = p->getBusesLayout();

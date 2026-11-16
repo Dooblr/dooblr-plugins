@@ -6,6 +6,8 @@
 #include "DisplayBallistics.h"
 #include "Theme.h"
 
+#include <cmath>
+
 namespace dooblrfeedback::ui
 {
     namespace
@@ -64,6 +66,33 @@ namespace dooblrfeedback::ui
             p.addPath (shackle);
             return p;
         }
+
+        struct CurveBand
+        {
+            float centreHz = 1.0f, lo = 0.0f, hi = 1.0e7f;
+            float bellK = 0.0f, bellG = 0.0f, notchK = 0.0f, notchG = 0.0f;
+            bool bell = false, notch = false;
+
+            float at (float freq) const noexcept
+            {
+                if (freq < lo || freq > hi) return 0.0f;
+                const auto w = freq / centreHz;
+                const auto re = 1.0f - w * w;
+                const auto re2 = re * re;
+                auto total = 0.0f;
+                const auto add = [&] (float k, float g)
+                {
+                    const auto wk = w * k;
+                    const auto num = re2 + (wk * g) * (wk * g);
+                    const auto den = re2 + wk * wk;
+                    total += 10.0f * std::log10 ((num + 1.0e-20f) / (den + 1.0e-20f));
+                };
+                if (bell) add (bellK, bellG);
+                if (notch) add (notchK, notchG);
+                return total;
+            }
+        };
+
     }
 
     FeedbackGraph::FeedbackGraph (DooblrFeedbackProcessor& p) : processor (p)
@@ -118,7 +147,23 @@ namespace dooblrfeedback::ui
         if (animateLabels (nowMs)) dirty = true;
         buildMarkers();
 
-        if (dirty) repaint();
+        if (dirty)
+        {
+            // Leaders run from each chip/dot down to the handle, so the plot is always in the
+            // damage rect while markers are moving. Static grid/spectrum live in `staticLayer`.
+            auto damage = plot.toNearestInt();
+            for (const auto& l : labels)
+            {
+                if (l.markerAlpha <= 0.001f) continue;
+                damage = damage.getUnion (l.drawn.toNearestInt());
+                damage = damage.getUnion (l.dotDrawn.toNearestInt());
+            }
+            damage = damage.expanded (8).getIntersection (getLocalBounds());
+            if (damage == getLocalBounds())
+                repaint();
+            else
+                repaint (damage);
+        }
         return dirty;
     }
 
@@ -288,7 +333,10 @@ namespace dooblrfeedback::ui
         area.removeFromBottom (2.0f);
         plot = area;
         baselineY = plot.getY() + juce::jlimit (70.0f, 210.0f, plot.getHeight() * 0.45f);
-        background = {};
+        staticLayer = {};
+        staticLayerDirty = true;
+        destHasStatic = false;
+        lastOverlay.clear();
         const auto nowMs = clockMs();
         updateLabels (nowMs);
         layoutMarkers (nowMs, true);
@@ -505,6 +553,8 @@ namespace dooblrfeedback::ui
         l.line2 = cutText (v.cutDb) + "  Q " + params::formatValue (v.q, 0);
         l.line3 = juce::String (juce::CharPointer_UTF8 ("\xc3\x97")) + juce::String (v.hits) + "  " + timeText (v.detectedMs)
                 + (v.fixed ? "  FIX" : "  FLT");
+        l.chipImage = {};
+        l.chipImageFlags = -1;
     }
 
     bool FeedbackGraph::animateLabels (double nowMs)
@@ -583,32 +633,20 @@ namespace dooblrfeedback::ui
 
     void FeedbackGraph::addSmoothCurve (juce::Path& path, const float* xs, const float* ys, int n, bool startNewSubPath)
     {
+        // 256 log-spaced analyser points are already dense on the plot; a polyline tessellates
+        // and fills much cheaper than a cubic per segment, and looks the same at graph sizes.
         if (n <= 0) return;
         if (startNewSubPath) path.startNewSubPath (xs[0], ys[0]);
         else                 path.lineTo (xs[0], ys[0]);
-        const auto secant = [&] (int i) { const auto h = xs[i + 1] - xs[i]; return h > 1.0e-6f ? (ys[i + 1] - ys[i]) / h : 0.0f; };
-        const auto tangent = [&] (int i)
-        {
-            if (n < 2) return 0.0f;
-            if (i == 0) return secant (0);
-            if (i == n - 1) return secant (n - 2);
-            const auto a = secant (i - 1), b = secant (i);
-            return a * b <= 0.0f ? 0.0f : 2.0f * a * b / (a + b);
-        };
-        auto m0 = tangent (0);
-        for (int i = 0; i + 1 < n; ++i)
-        {
-            const auto m1 = tangent (i + 1);
-            const auto h = (xs[i + 1] - xs[i]) / 3.0f;
-            path.cubicTo (xs[i] + h, ys[i] + m0 * h, xs[i + 1] - h, ys[i + 1] - m1 * h, xs[i + 1], ys[i + 1]);
-            m0 = m1;
-        }
+        for (int i = 1; i < n; ++i)
+            path.lineTo (xs[i], ys[i]);
     }
 
     void FeedbackGraph::rebuildSpectrumPaths()
     {
         inputPath.clear();
         outputPath.clear();
+        staticLayerDirty = true;
         if (! hasFrame || plot.isEmpty()) return;
 
         constexpr int n = dsp::DisplayFrame::numPoints;
@@ -620,66 +658,121 @@ namespace dooblrfeedback::ui
             inputY[(size_t) i] = yForLevel (drawnInput[(size_t) i]);
             outputY[(size_t) i] = yForLevel (drawnOutput[(size_t) i]);
         }
-        inputPath.startNewSubPath (plot.getX(), plot.getBottom());
-        addSmoothCurve (inputPath, pointX.data(), inputY.data(), n, false);
-        inputPath.lineTo (plot.getRight(), plot.getBottom());
-        inputPath.closeSubPath();
+        addSmoothCurve (inputPath, pointX.data(), inputY.data(), n, true);
         addSmoothCurve (outputPath, pointX.data(), outputY.data(), n, true);
     }
 
     void FeedbackGraph::rebuildCurve()
     {
-        // Both paths are cleared and refilled in place (no reallocation once grown).
+        // Edge path is cleared and refilled in place (no reallocation once grown).
         curveBellQ = processor.getState().getRawParameterValue (params::id::bellQ)->load();
-        curveFill.clear();
         curveEdge.clear();
+        curvePoints = 0;
         if (plot.isEmpty()) return;
-        const auto steps = std::max (2, (int) plot.getWidth() / 2);
+
+        using Engine = dsp::FeedbackEngine;
+        CurveBand bands[dsp::maxNotches];
+        int nBands = 0;
+        for (const auto& n : drawnNotches)
+        {
+            if (! n.active || n.cutDb <= 0.0f || n.freq <= 0.0f) continue;
+            auto& b = bands[nBands++];
+            b.centreHz = n.freq;
+            auto qForSpan = 1.0e6f;
+            if (curveBellQ > 0.0f)
+            {
+                const auto bellCut = std::min (n.cutDb, Engine::bellShareDb);
+                if (bellCut > 0.0f)
+                {
+                    const auto a = std::pow (10.0f, -std::min (bellCut, Engine::bellCapDb) / 40.0f);
+                    b.bellG = Engine::isFullCut (bellCut) ? 0.0f : std::pow (10.0f, -bellCut / 20.0f);
+                    b.bellK = 1.0f / (curveBellQ * a);
+                    b.bell = true;
+                    qForSpan = std::min (qForSpan, curveBellQ);
+                }
+            }
+            if (n.cutDb > Engine::bellShareDb && n.q > 0.0f)
+            {
+                const auto notchCut = Engine::isFullCut (n.cutDb) ? Engine::fullCutDb : n.cutDb - Engine::bellShareDb;
+                const auto a = std::pow (10.0f, -std::min (notchCut, Engine::bellCapDb) / 40.0f);
+                b.notchG = Engine::isFullCut (notchCut) ? 0.0f : std::pow (10.0f, -notchCut / 20.0f);
+                b.notchK = 1.0f / (n.q * a);
+                b.notch = true;
+                qForSpan = std::min (qForSpan, n.q);
+            }
+            const auto span = std::max (4.0f, 24.0f / std::max (0.35f, qForSpan));
+            b.lo = n.freq / span;
+            b.hi = n.freq * span;
+        }
+
+        const auto steps = juce::jlimit (64, 256, (int) plot.getWidth() / 3);
+        curvePoints = steps + 1;
         for (int i = 0; i <= steps; ++i)
         {
             const auto x = plot.getX() + plot.getWidth() * (float) i / (float) steps;
-            const auto y = yForCut (-dsp::FeedbackEngine::bankResponseDb (drawnNotches, frequencyForX (x), curveBellQ));
-            if (i == 0) { curveEdge.startNewSubPath (x, y); curveFill.startNewSubPath (x, y); }
-            else        { curveEdge.lineTo (x, y); curveFill.lineTo (x, y); }
+            const auto f = frequencyForX (x);
+            auto db = 0.0f;
+            for (int b = 0; b < nBands; ++b)
+                db += bands[b].at (f);
+            const auto y = yForCut (-db);
+            curveX[(size_t) i] = x;
+            curveY[(size_t) i] = y;
+            if (i == 0) curveEdge.startNewSubPath (x, y);
+            else        curveEdge.lineTo (x, y);
         }
-        curveFill.lineTo (plot.getRight(), baselineY);
-        curveFill.lineTo (plot.getX(), baselineY);
-        curveFill.closeSubPath();
     }
 
     void FeedbackGraph::rebuildHpf()
     {
-        hpfFill.clear();
         hpfEdge.clear();
+        hpfPoints = 0;
         hpfOn = processor.getState().getRawParameterValue (params::id::hpf)->load() > 0.5f;
         hpfHz = processor.getState().getRawParameterValue (params::id::hpfFreq)->load();
         if (! hpfOn || plot.isEmpty())
             return;
 
-        const auto steps = std::max (2, (int) plot.getWidth() / 2);
+        const auto steps = juce::jlimit (64, 256, (int) plot.getWidth() / 3);
         const auto cutoff = juce::jlimit (dsp::HighPass::minHz, dsp::HighPass::maxHz, hpfHz);
+        hpfPoints = steps + 1;
         for (int i = 0; i <= steps; ++i)
         {
             const auto x = plot.getX() + plot.getWidth() * (float) i / (float) steps;
             const auto cut = -dsp::HighPass::analogResponseDb (frequencyForX (x), cutoff);
             const auto y = yForCut (cut);
-            if (i == 0) { hpfEdge.startNewSubPath (x, y); hpfFill.startNewSubPath (x, y); }
-            else        { hpfEdge.lineTo (x, y); hpfFill.lineTo (x, y); }
+            hpfXs[(size_t) i] = x;
+            hpfYs[(size_t) i] = y;
+            if (i == 0) hpfEdge.startNewSubPath (x, y);
+            else        hpfEdge.lineTo (x, y);
         }
-        hpfFill.lineTo (plot.getRight(), baselineY);
-        hpfFill.lineTo (plot.getX(), baselineY);
-        hpfFill.closeSubPath();
     }
 
-    void FeedbackGraph::drawBackground()
+    void FeedbackGraph::fillColumns (juce::Graphics& g, const float* xs, const float* ys, int n, float top, float bottom, bool hangDown)
     {
-        const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
-        backgroundScale = scale;
-        background = juce::Image (juce::Image::ARGB, std::max (1, juce::roundToInt ((float) getWidth() * scale)),
-                                  std::max (1, juce::roundToInt ((float) getHeight() * scale)), true);
-        juce::Graphics g (background);
-        g.addTransform (juce::AffineTransform::scale (scale));
+        if (n < 2) return;
+        juce::RectangleList<float> bars;
+        bars.ensureStorageAllocated (n);
+        for (int i = 0; i + 1 < n; ++i)
+        {
+            const auto x0 = xs[i], x1 = xs[i + 1];
+            if (x1 <= x0) continue;
+            if (hangDown)
+            {
+                const auto y = juce::jmax (ys[i], ys[i + 1]);
+                if (y > top)
+                    bars.addWithoutMerging ({ x0, top, x1 - x0, juce::jmin (y, bottom) - top });
+            }
+            else
+            {
+                const auto y = juce::jmin (ys[i], ys[i + 1]);
+                if (y < bottom)
+                    bars.addWithoutMerging ({ x0, juce::jmax (y, top), x1 - x0, bottom - juce::jmax (y, top) });
+            }
+        }
+        g.fillRectList (bars);
+    }
 
+    void FeedbackGraph::drawStaticLayer (juce::Graphics& g)
+    {
         g.fillAll (Palette::panel);
         g.setColour (Palette::background);
         g.fillRoundedRectangle (plot, 4.0f);
@@ -695,7 +788,6 @@ namespace dooblrfeedback::ui
             g.drawText (label, juce::Rectangle<float> (x - 20.0f, plot.getY() - 17.0f, 40.0f, 14.0f).toNearestInt(), juce::Justification::centred);
         }
 
-        // Cut scale (right edge) below the 0 dB baseline.
         for (float db : { 0.0f, 6.0f, 12.0f, 18.0f, 24.0f, 30.0f })
         {
             const auto y = yForCut (db);
@@ -706,7 +798,6 @@ namespace dooblrfeedback::ui
             g.drawText (text, juce::Rectangle<float> (plot.getRight() + 4.0f, y - 7.0f, 28.0f, 14.0f).toNearestInt(), juce::Justification::centredLeft);
         }
         {
-            // Full notches (Max cut at infinity) sit on their own line at the bottom.
             const auto y = yForCut (dsp::FeedbackEngine::fullCutDb);
             const auto dashLengths = std::array<float, 2> { 2.0f, 4.0f };
             g.setColour (Palette::grid);
@@ -715,46 +806,91 @@ namespace dooblrfeedback::ui
             g.drawText (params::formatCut (dsp::FeedbackEngine::fullCutDb, true).upToFirstOccurrenceOf (" ", false, false),
                         juce::Rectangle<float> (plot.getRight() + 4.0f, y - 7.0f, 28.0f, 14.0f).toNearestInt(), juce::Justification::centredLeft);
         }
-    }
 
-    //==============================================================================
-    void FeedbackGraph::paint (juce::Graphics& g)
-    {
-        const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
-        if (! background.isValid() || std::abs (scale - backgroundScale) > 1.0e-4f)
-            drawBackground();
-        g.drawImage (background, getLocalBounds().toFloat());
-
+        if (! hasFrame || plot.isEmpty())
+            return;
         {
             juce::Graphics::ScopedSaveState save (g);
             g.reduceClipRegion (plot.toNearestInt());
-            if (hasFrame)
-            {
-                g.setColour (Palette::spectrum.withAlpha (0.10f));
-                g.fillPath (inputPath);
-                g.setColour (Palette::spectrum.withAlpha (0.28f));
-                g.strokePath (inputPath, juce::PathStrokeType (1.0f));
-                g.setColour (Palette::textPrimary.withAlpha (0.45f));
-                g.strokePath (outputPath, juce::PathStrokeType (1.1f));
-            }
-            if (hpfOn)
-            {
-                const auto xCut = xForFrequency (hpfHz);
-                g.setColour (Palette::accent.withAlpha (0.10f));
-                g.fillRect (plot.getX(), plot.getY(), std::max (0.0f, xCut - plot.getX()), plot.getHeight());
-                g.setColour (Palette::accent.withAlpha (0.20f));
-                g.fillPath (hpfFill);
-                g.setColour (Palette::accent.withAlpha (0.80f));
-                g.strokePath (hpfEdge, juce::PathStrokeType (1.2f));
-            }
-            g.setColour (Palette::dynamic.withAlpha (0.24f));
-            g.fillPath (curveFill);
-            g.setColour (Palette::dynamic.withAlpha (0.9f));
-            g.strokePath (curveEdge, juce::PathStrokeType (1.4f));
+            g.setColour (Palette::spectrum.withAlpha (0.10f));
+            fillColumns (g, pointX.data(), inputY.data(), dsp::DisplayFrame::numPoints, plot.getY(), plot.getBottom(), false);
+            g.setColour (Palette::spectrum.withAlpha (0.28f));
+            g.strokePath (inputPath, juce::PathStrokeType (1.0f));
+            g.setColour (Palette::textPrimary.withAlpha (0.45f));
+            g.strokePath (outputPath, juce::PathStrokeType (1.1f));
         }
+    }
 
-        const auto dash = std::array<float, 2> { 3.0f, 3.0f };
-        for (const auto& l : labels)
+    void FeedbackGraph::ensureStaticLayer (float scale)
+    {
+        if (staticLayer.isValid() && ! staticLayerDirty && std::abs (scale - staticLayerScale) < 1.0e-4f)
+            return;
+        staticLayerScale = scale;
+        staticLayer = juce::Image (juce::Image::ARGB,
+                                   std::max (1, juce::roundToInt ((float) getWidth() * scale)),
+                                   std::max (1, juce::roundToInt ((float) getHeight() * scale)),
+                                   true, juce::SoftwareImageType());
+        juce::Graphics g (staticLayer);
+        g.addTransform (juce::AffineTransform::scale (scale));
+        drawStaticLayer (g);
+        staticLayerDirty = false;
+    }
+
+    void FeedbackGraph::ensureChipImage (Label& l, float scale, bool selected, juce::Colour colour, bool fixed, bool ringing)
+    {
+        const auto w = std::max (1, juce::roundToInt (l.drawn.getWidth()));
+        const auto h = std::max (1, juce::roundToInt (l.drawn.getHeight()));
+        const auto chipFlags = (selected ? 1 : 0) | (fixed ? 2 : 0) | (ringing ? 4 : 0)
+                             | (int) (colour.getARGB() >> 8);
+        if (l.chipImage.isValid() && l.chipImageW == w && l.chipImageH == h && l.chipImageFlags == chipFlags
+            && std::abs (l.chipImageScale - scale) < 1.0e-4f)
+            return;
+
+        l.chipImageW = w;
+        l.chipImageH = h;
+        l.chipImageFlags = chipFlags;
+        l.chipImageScale = scale;
+        l.chipImage = juce::Image (juce::Image::ARGB,
+                                   std::max (1, juce::roundToInt ((float) w * scale)),
+                                   std::max (1, juce::roundToInt ((float) h * scale)),
+                                   true, juce::SoftwareImageType());
+        juce::Graphics g (l.chipImage);
+        g.addTransform (juce::AffineTransform::scale (scale));
+
+        const auto chip = juce::Rectangle<float> (0.0f, 0.0f, (float) w, (float) h);
+        g.setColour (Palette::panelRaised.withAlpha (0.94f));
+        g.fillRoundedRectangle (chip, 4.0f);
+        g.setColour (colour.withAlpha (selected ? 1.0f : (ringing ? 0.9f : 0.55f)));
+        g.drawRoundedRectangle (chip.reduced (0.5f), 4.0f, selected ? 1.8f : 1.0f);
+        g.fillRect (chip.getX() + 1.0f, chip.getY() + 5.0f, 2.5f, chip.getHeight() - 10.0f);
+
+        auto text = chip.withTrimmedRight (22.0f).reduced (7.0f, 3.0f).withTrimmedLeft (1.0f);
+        const auto lineHeight = text.getHeight() / 3.0f;
+        g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
+        g.setColour (Palette::textPrimary);
+        g.drawText (l.line1, text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
+        g.setFont (juce::FontOptions (10.5f));
+        g.setColour (colour.brighter (0.2f));
+        g.drawText (l.line2, text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
+        g.setColour (Palette::textMuted);
+        g.drawText (l.line3, text.toNearestInt(), juce::Justification::centredLeft, false);
+
+        auto buttons = chip.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);
+        const auto lockButton = buttons.removeFromTop (buttons.getHeight() * 0.5f).reduced (0.0f, 1.0f);
+        const auto clearButton = buttons.reduced (0.0f, 1.0f);
+        g.setColour (fixed ? Palette::accent : Palette::textMuted);
+        const auto lockBox = lockButton.withSizeKeepingCentre (11.0f, 12.0f);
+        if (fixed) g.fillPath (padlock (lockBox, true));
+        else       g.strokePath (padlock (lockBox, false), juce::PathStrokeType (1.2f));
+        g.setColour (Palette::textMuted);
+        const auto x = clearButton.withSizeKeepingCentre (8.0f, 8.0f);
+        g.drawLine (x.getX(), x.getY(), x.getRight(), x.getBottom(), 1.4f);
+        g.drawLine (x.getRight(), x.getY(), x.getX(), x.getBottom(), 1.4f);
+    }
+
+    void FeedbackGraph::paintMarkers (juce::Graphics& g, float scale)
+    {
+        for (auto& l : labels)
         {
             if (l.markerAlpha <= 0.001f) continue;
             const auto* live = notchById (l.id);
@@ -766,30 +902,19 @@ namespace dooblrfeedback::ui
             const juce::Point<float> handle { xForFrequency (hn.freq), yForCut (hn.cutDb) };
             const auto alpha = l.markerAlpha;
 
-            // Leader line from the label (or dot) down to the handle at the notch's depth.
             const auto drawLeader = [&] (juce::Rectangle<float> from, float a)
             {
-                if (a <= 0.001f) return;
-                auto& line = scratchLine;
-                line.clear();
+                if (a <= 0.001f || from.isEmpty()) return;
                 const auto startX = juce::jlimit (from.getX() + 4.0f, from.getRight() - 4.0f, handle.x);
-                line.startNewSubPath (startX, from.getBottom());
-                if (std::abs (startX - handle.x) > 0.5f) line.lineTo (handle.x, std::min (handle.y, from.getBottom() + 6.0f));
-                line.lineTo (handle);
-                scratchDashed.clear();
-                juce::PathStrokeType (1.0f).createDashedStroke (scratchDashed, line, dash.data(), (int) dash.size());
                 g.setColour (colour.withAlpha ((selected || hovered ? 0.9f : 0.5f) * a));
-                g.fillPath (scratchDashed);
+                g.drawLine (startX, from.getBottom(), handle.x, handle.y, 1.0f);
             };
             drawLeader (l.drawn, l.labelAlpha * alpha);
             drawLeader (l.dotDrawn, l.dotAlpha);
 
-            auto& diamond = scratchDiamond;
-            diamond.clear();
             const auto r = selected || hovered ? 5.5f : 4.5f;
-            diamond.addQuadrilateral (handle.x, handle.y - r, handle.x + r, handle.y, handle.x, handle.y + r, handle.x - r, handle.y);
             g.setColour (colour.withAlpha (alpha));
-            g.fillPath (diamond);
+            g.fillEllipse (handle.x - r, handle.y - r, 2.0f * r, 2.0f * r);
 
             if (l.dotAlpha > 0.001f && ! l.dotDrawn.isEmpty())
             {
@@ -802,28 +927,17 @@ namespace dooblrfeedback::ui
 
             const auto la = l.labelAlpha * alpha;
             if (la <= 0.001f) continue;
-            const auto chip = l.drawn;
-            const auto& v = l.shown; // calm numbers
-            g.setColour (Palette::panelRaised.withAlpha (0.94f * la));
-            g.fillRoundedRectangle (chip, 4.0f);
-            g.setColour (colour.withAlpha ((selected ? 1.0f : (n.ringing ? 0.9f : 0.55f)) * la));
-            g.drawRoundedRectangle (chip.reduced (0.5f), 4.0f, selected ? 1.8f : 1.0f);
-            g.fillRect (chip.getX() + 1.0f, chip.getY() + 5.0f, 2.5f, chip.getHeight() - 10.0f);
+            ensureChipImage (l, scale, selected, colour, n.fixed, n.ringing);
+            if (l.chipImage.isValid())
+            {
+                juce::Graphics::ScopedSaveState save (g);
+                if (la < 0.999f)
+                    g.setOpacity (la);
+                g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+                g.drawImage (l.chipImage, l.drawn);
+            }
 
-            auto text = chip.withTrimmedRight (22.0f).reduced (7.0f, 3.0f).withTrimmedLeft (1.0f);
-            const auto lineHeight = text.getHeight() / 3.0f;
-            g.setFont (juce::FontOptions (11.0f, juce::Font::bold));
-            g.setColour (Palette::textPrimary.withAlpha (la));
-            juce::ignoreUnused (v);
-            g.drawText (l.line1, text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
-            g.setFont (juce::FontOptions (10.5f));
-            g.setColour (colour.brighter (0.2f).withAlpha (la));
-            g.drawText (l.line2, text.removeFromTop (lineHeight).toNearestInt(), juce::Justification::centredLeft, false);
-            g.setColour (Palette::textMuted.withAlpha (la));
-            g.drawText (l.line3, text.toNearestInt(), juce::Justification::centredLeft, false);
-
-            // Lock (fixed / floating) and clear buttons.
-            auto buttons = chip.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);
+            auto buttons = l.drawn.withTrimmedLeft (chipWidth - 22.0f).reduced (2.0f, 3.0f);
             const auto lockButton = buttons.removeFromTop (buttons.getHeight() * 0.5f).reduced (0.0f, 1.0f);
             const auto clearButton = buttons.reduced (0.0f, 1.0f);
             const auto overLock = hovering && lockButton.contains (hoverPoint);
@@ -833,16 +947,14 @@ namespace dooblrfeedback::ui
                 g.setColour (Palette::divider.brighter (0.2f).withAlpha (la));
                 g.fillRoundedRectangle (overLock ? lockButton : clearButton, 3.0f);
             }
-            g.setColour ((n.fixed ? Palette::accent : Palette::textMuted).withAlpha (la));
-            const auto lockBox = lockButton.withSizeKeepingCentre (11.0f, 12.0f);
-            if (n.fixed) g.fillPath (padlock (lockBox, true));
-            else         g.strokePath (padlock (lockBox, false), juce::PathStrokeType (1.2f));
-            g.setColour ((overClear ? Palette::textPrimary : Palette::textMuted).withAlpha (la));
-            const auto x = clearButton.withSizeKeepingCentre (8.0f, 8.0f);
-            g.drawLine (x.getX(), x.getY(), x.getRight(), x.getBottom(), 1.4f);
-            g.drawLine (x.getRight(), x.getY(), x.getX(), x.getBottom(), 1.4f);
+            if (overClear)
+            {
+                g.setColour (Palette::textPrimary.withAlpha (la));
+                const auto x = clearButton.withSizeKeepingCentre (8.0f, 8.0f);
+                g.drawLine (x.getX(), x.getY(), x.getRight(), x.getBottom(), 1.4f);
+                g.drawLine (x.getRight(), x.getY(), x.getX(), x.getBottom(), 1.4f);
+            }
         }
-
 
         if (hovering)
         {
@@ -858,6 +970,90 @@ namespace dooblrfeedback::ui
                 g.setColour (Palette::textPrimary);
                 g.drawText (text, chip.toNearestInt(), juce::Justification::centred);
             }
+        }
+    }
+
+    //==============================================================================
+    void FeedbackGraph::paint (juce::Graphics& g)
+    {
+        const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
+        const auto staticRebuilt = staticLayerDirty || ! staticLayer.isValid()
+                                   || std::abs (scale - staticLayerScale) > 1.0e-4f;
+        ensureStaticLayer (scale);
+        if (staticRebuilt)
+            destHasStatic = false;
+        g.setColour (juce::Colours::white);
+        g.setImageResamplingQuality (juce::Graphics::lowResamplingQuality);
+
+        const auto blitStatic = [this, &g, scale]
+        {
+            if (std::abs (scale - 1.0f) < 1.0e-4f)
+                g.drawImageAt (staticLayer, 0, 0);
+            else
+                g.drawImage (staticLayer, getLocalBounds().toFloat());
+        };
+
+        // paintEntireComponent (the paint-time test) reuses the dest image. After the first
+        // frame the static grid/spectrum is already there; restore only the previous overlay
+        // (a fat stroke of the curve, leaders and chips) instead of copying 2M pixels again.
+        const auto clip = g.getClipBounds();
+        const auto fullClip = clip.contains (getLocalBounds());
+        if (! destHasStatic)
+        {
+            blitStatic();
+            destHasStatic = fullClip;
+        }
+        else if (! lastOverlay.isEmpty())
+        {
+            juce::Graphics::ScopedSaveState save (g);
+            g.reduceClipRegion (lastOverlay);
+            blitStatic();
+        }
+
+        {
+            juce::Graphics::ScopedSaveState save (g);
+            g.reduceClipRegion (plot.toNearestInt());
+            if (hpfOn)
+            {
+                const auto xCut = xForFrequency (hpfHz);
+                g.setColour (Palette::accent.withAlpha (0.10f));
+                g.fillRect (plot.getX(), plot.getY(), std::max (0.0f, xCut - plot.getX()), plot.getHeight());
+                g.setColour (Palette::accent.withAlpha (0.20f));
+                fillColumns (g, hpfXs.data(), hpfYs.data(), hpfPoints, baselineY, plot.getBottom(), true);
+                g.setColour (Palette::accent.withAlpha (0.80f));
+                g.strokePath (hpfEdge, juce::PathStrokeType (1.2f));
+            }
+            g.setColour (Palette::dynamic.withAlpha (0.9f));
+            g.strokePath (curveEdge, juce::PathStrokeType (2.0f));
+        }
+
+        paintMarkers (g, scale);
+
+        lastOverlay.clear();
+        if (! curveEdge.isEmpty())
+            juce::PathStrokeType (10.0f).createStrokedPath (lastOverlay, curveEdge);
+        if (hpfOn && ! hpfEdge.isEmpty())
+        {
+            juce::Path fat;
+            juce::PathStrokeType (10.0f).createStrokedPath (fat, hpfEdge);
+            lastOverlay.addPath (fat);
+            lastOverlay.addRectangle (plot.getX(), plot.getY(),
+                                      std::max (0.0f, xForFrequency (hpfHz) - plot.getX()), plot.getHeight());
+        }
+        for (const auto& l : labels)
+        {
+            if (l.markerAlpha <= 0.001f) continue;
+            if (l.labelAlpha > 0.001f) lastOverlay.addRectangle (l.drawn.expanded (4.0f));
+            if (l.dotAlpha > 0.001f) lastOverlay.addRectangle (l.dotDrawn.expanded (4.0f));
+            const auto* drawn = drawnById (l.id);
+            const auto* live = notchById (l.id);
+            const auto& hn = drawn != nullptr ? *drawn : (live != nullptr ? *live : l.shown);
+            const juce::Point<float> handle { xForFrequency (hn.freq), yForCut (hn.cutDb) };
+            lastOverlay.addEllipse (handle.x - 8.0f, handle.y - 8.0f, 16.0f, 16.0f);
+            if (l.labelAlpha > 0.001f)
+                lastOverlay.addLineSegment ({ l.drawn.getCentreX(), l.drawn.getBottom(), handle.x, handle.y }, 8.0f);
+            if (l.dotAlpha > 0.001f)
+                lastOverlay.addLineSegment ({ l.dotDrawn.getCentreX(), l.dotDrawn.getBottom(), handle.x, handle.y }, 8.0f);
         }
     }
 

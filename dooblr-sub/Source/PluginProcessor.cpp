@@ -34,14 +34,28 @@ namespace dooblrsub
             monoFreq = get (id::monoFreq);
             infraHpf = get (id::infraHpf);
             infraFreq = get (id::infraFreq);
+            infraSlope = get (id::infraSlope);
             subLimit = get (id::subLimit);
             target = get (id::target);
             bypass = get (id::bypass);
+            eqShelfGain = get (id::eqShelfGain);
+            eqShelfFreq = get (id::eqShelfFreq);
+            eqPeakGain = get (id::eqPeakGain);
+            eqPeakFreq = get (id::eqPeakFreq);
+            eqPeakQ = get (id::eqPeakQ);
+            eqPresenceGain = get (id::eqPresenceGain);
+            eqPresenceFreq = get (id::eqPresenceFreq);
+            eqPresenceQ = get (id::eqPresenceQ);
+            harmAmount = get (id::harmAmount);
+            phaseInvert = get (id::phaseInvert);
+            phaseDelay = get (id::phaseDelay);
         }
 
         std::atomic<float> *subAmount, *loAmount, *frequency, *octaveMode, *trackingSpeed, *drive, *mix, *output,
-            *shift, *transient, *bodyMix, *shiftMix, *monoBelow, *monoFreq, *infraHpf, *infraFreq, *subLimit,
-            *target, *bypass;
+            *shift, *transient, *bodyMix, *shiftMix, *monoBelow, *monoFreq, *infraHpf, *infraFreq, *infraSlope, *subLimit,
+            *target, *bypass,
+            *eqShelfGain, *eqShelfFreq, *eqPeakGain, *eqPeakFreq, *eqPeakQ,
+            *eqPresenceGain, *eqPresenceFreq, *eqPresenceQ, *harmAmount, *phaseInvert, *phaseDelay;
     };
 
     DooblrSubProcessor::DooblrSubProcessor()
@@ -50,6 +64,7 @@ namespace dooblrsub
                                     .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
           state (*this, nullptr, "DooblrSub", createLayout()),
           undoHistory (*this),
+          fixActions (*this),
           raw (std::make_unique<RawParameters> (state))
     {
         state.state.setProperty ("stateVersion", stateVersion, nullptr);
@@ -83,11 +98,23 @@ namespace dooblrsub
         s.monoHz = raw->monoFreq->load();
         s.infraHpf = raw->infraHpf->load() > 0.5f;
         s.infraHz = raw->infraFreq->load();
+        s.infraSlope = juce::jlimit (0, 2, (int) std::lround (raw->infraSlope->load()));
         s.subLimit = raw->subLimit->load() > 0.5f;
         s.target = (dsp::Target) juce::jlimit (0, 2, (int) std::lround (raw->target->load()));
         s.mix = raw->mix->load() * 0.01f;
         s.outputDb = raw->output->load();
         s.bypass = raw->bypass->load() > 0.5f;
+        s.eq.shelfDb = raw->eqShelfGain->load();
+        s.eq.shelfHz = raw->eqShelfFreq->load();
+        s.eq.peakDb = raw->eqPeakGain->load();
+        s.eq.peakHz = raw->eqPeakFreq->load();
+        s.eq.peakQ = raw->eqPeakQ->load();
+        s.eq.presenceDb = raw->eqPresenceGain->load();
+        s.eq.presenceHz = raw->eqPresenceFreq->load();
+        s.eq.presenceQ = raw->eqPresenceQ->load();
+        s.harmAmount = raw->harmAmount->load() * 0.01f;
+        s.phaseInvert = raw->phaseInvert->load() > 0.5f;
+        s.phaseDelayMs = raw->phaseDelay->load();
         return s;
     }
 

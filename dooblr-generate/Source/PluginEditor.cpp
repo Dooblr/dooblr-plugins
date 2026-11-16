@@ -129,6 +129,8 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
     // --- Waveform and history -------------------------------------------------------
     addAndMakeVisible (waveform);
     playButton.onClick = [this] { generator.requestPreview(); };
+    stopAllButton.onClick = [this] { generator.requestStop(); };
+    stopAllButton.setEnabled (false);
     dragButton.addMouseListener (this, false);
     // Drag the button out to drag the WAV; a plain click shows the file in Finder.
     dragButton.onClick = [this]
@@ -137,6 +139,7 @@ DooblrGenerateEditor::DooblrGenerateEditor (DooblrGenerateProcessor& p)
             sample->file.revealToUser();
     };
     addAndMakeVisible (playButton);
+    addAndMakeVisible (stopAllButton);
     addAndMakeVisible (dragButton);
     styleCaption (infoLabel, {});
     infoLabel.setFont (juce::FontOptions (11.0f));
@@ -343,12 +346,30 @@ void DooblrGenerateEditor::refreshLengthUi()
     }
 }
 
+void DooblrGenerateEditor::refreshStopAll()
+{
+    const auto playing = generator.isPlaying();
+    stopAllButton.setEnabled (playing);
+
+    if (playing)
+    {
+        stopAllButton.setColour (juce::TextButton::buttonColourId, Palette::accent);
+        stopAllButton.setColour (juce::TextButton::textColourOffId, Palette::background);
+    }
+    else
+    {
+        stopAllButton.removeColour (juce::TextButton::buttonColourId);
+        stopAllButton.removeColour (juce::TextButton::textColourOffId);
+    }
+}
+
 void DooblrGenerateEditor::timerCallback()
 {
     refreshSample();
     refreshJob();
     refreshModel();
     refreshLengthUi();
+    refreshStopAll();
 }
 
 void DooblrGenerateEditor::refreshSample()
@@ -645,6 +666,11 @@ void DooblrGenerateEditor::resized()
     area.removeFromBottom (8);
     waveform.setBounds (area);
     playButton.setBounds (under.removeFromLeft (72).withSizeKeepingCentre (72, 26));
+    under.removeFromLeft (8);
+    const auto stopTextW = juce::GlyphArrangement::getStringWidth (juce::Font (juce::FontOptions (13.0f)),
+                                                                   stopAllButton.getButtonText());
+    const auto stopWidth = juce::jmax (80, (int) std::ceil (stopTextW) + 20);
+    stopAllButton.setBounds (under.removeFromLeft (stopWidth).withSizeKeepingCentre (stopWidth, 26));
     under.removeFromLeft (8);
     dragButton.setBounds (under.removeFromLeft (96).withSizeKeepingCentre (96, 26));
     under.removeFromLeft (12);

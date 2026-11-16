@@ -18,12 +18,37 @@ namespace dooblrgenerate::engine
             v = Voice {};
     }
 
+    void Sampler::startRelease (Voice& v) noexcept
+    {
+        if (! v.active || v.releasing)
+            return;
+
+        v.releasing = true;
+        v.releaseGain = 1.0f;
+        const auto fadeSamples = juce::jmax (1.0, stealFadeMs * 0.001 * hostRate);
+        v.releaseStep = (float) (1.0 / fadeSamples);
+    }
+
+    void Sampler::stopAll()
+    {
+        for (auto& v : voices)
+            startRelease (v);
+    }
+
     int Sampler::numActiveVoices() const noexcept
     {
         int n = 0;
         for (const auto& v : voices)
-            n += v.active ? 1 : 0;
+            n += (v.active && ! v.releasing) ? 1 : 0;
         return n;
+    }
+
+    bool Sampler::isSounding() const noexcept
+    {
+        for (const auto& v : voices)
+            if (v.active)
+                return true;
+        return false;
     }
 
     void Sampler::noteOn (int note, float velocity, const Sample* sample, const PlaybackSettings& s)
@@ -31,8 +56,15 @@ namespace dooblrgenerate::engine
         if (sample == nullptr || sample->audio.getNumSamples() == 0)
             return;
 
-        Voice* target = nullptr;
+        bool stealing = false;
+        for (auto& v : voices)
+            if (v.active && ! v.releasing)
+            {
+                startRelease (v);
+                stealing = true;
+            }
 
+        Voice* target = nullptr;
         for (auto& v : voices)
             if (! v.active) { target = &v; break; }
 
@@ -47,14 +79,19 @@ namespace dooblrgenerate::engine
         auto& v = *target;
         const auto semis = (double) (note - rootNote) + s.tuneSemitones + s.fineCents / 100.0;
         v.active = true;
+        v.releasing = false;
+        v.releaseGain = 1.0f;
+        v.releaseStep = 0.0f;
         v.sample = sample;
         v.increment = std::pow (2.0, semis / 12.0) * sample->sampleRate / hostRate;
         v.position = (double) sample->audio.getNumSamples() * juce::jlimit (0.0f, 95.0f, s.startPercent) / 100.0;
         const auto sens = juce::jlimit (0.0f, 1.0f, s.velocityPercent / 100.0f);
         v.gain = (1.0f - sens) + sens * juce::jlimit (0.0f, 1.0f, velocity);
         const auto attackSamples = s.attackMs * 0.001 * hostRate;
-        v.env = attackSamples < 1.0 ? 1.0f : 0.0f;
-        v.attackStep = attackSamples < 1.0 ? 1.0f : (float) (1.0 / attackSamples);
+        const auto fadeSamples = stealFadeMs * 0.001 * hostRate;
+        const auto startAttack = stealing ? juce::jmax (attackSamples, fadeSamples) : attackSamples;
+        v.env = startAttack < 1.0 ? 1.0f : 0.0f;
+        v.attackStep = startAttack < 1.0 ? 1.0f : (float) (1.0 / startAttack);
         v.decayMul = s.decayMs >= params::decayOffMs - 0.05f
                        ? 1.0f
                        : (float) std::pow (0.001, 1.0 / juce::jmax (1.0, s.decayMs * 0.001 * hostRate)); // -60 dB over Decay
@@ -76,8 +113,9 @@ namespace dooblrgenerate::engine
             const auto index = (int) v.position;
 
             const bool decayedOut = v.attackStep >= 1.0f && v.decayMul < 1.0f && v.env < 1.0e-5f;
+            const bool releasedOut = v.releasing && v.releaseGain <= 0.0f;
 
-            if (index >= length - 1 || decayedOut)
+            if (index >= length - 1 || decayedOut || releasedOut)
             {
                 v.active = false;
                 return;
@@ -98,12 +136,22 @@ namespace dooblrgenerate::engine
                 v.env *= v.decayMul;
             }
 
-            const auto g = v.env * v.gain;
+            const auto g = v.env * v.gain * v.releaseGain;
             outL[i] += l * g;
             if (stereoOut)
                 outR[i] += r * g;
 
             v.position += v.increment;
+
+            if (v.releasing)
+            {
+                v.releaseGain -= v.releaseStep;
+                if (v.releaseGain <= 0.0f)
+                {
+                    v.active = false;
+                    return;
+                }
+            }
         }
     }
 

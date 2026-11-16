@@ -31,7 +31,8 @@ Controls the current routing ignores are dimmed, never hidden. Dimmed controls s
 clickable and automatable.
 
 Header: Undo / Redo, preset menu (factory and user), Save / Load (`.dm` files in
-`~/Music/dooblr-m/Presets`), Output level and meter.
+`~/Library/Audio/Presets/dooblr/dooblr-m/` on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-m\`
+on Windows), Output level and meter.
 
 Shortcuts: Cmd-Z undo, Cmd-Shift-Z or Cmd-Y redo (50 steps; only knob gestures are
 recorded, not host automation). Double-click a knob to reset it; Shift-drag for fine moves.

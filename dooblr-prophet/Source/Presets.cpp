@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "PresetPaths.h"
 
 #include "Parameters.h"
 
@@ -76,17 +77,12 @@ namespace dooblrprophet::presets
 
     juce::File userDirectory()
     {
-        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("dooblr-prophet/Presets");
+        return dooblr::preset_paths::userDirectory ("dooblr-prophet");
     }
 
     juce::Array<juce::File> userPresets()
     {
-        auto files = userDirectory().findChildFiles (juce::File::findFiles, false, juce::String ("*") + fileExtension);
-        std::sort (files.begin(), files.end(), [] (const juce::File& a, const juce::File& b)
-        {
-            return a.getFileNameWithoutExtension().compareIgnoreCase (b.getFileNameWithoutExtension()) < 0;
-        });
-        return files;
+        return dooblr::preset_paths::listUserPresets ("dooblr-prophet", juce::String ("*") + fileExtension);
     }
 
     bool save (const juce::AudioProcessorValueTreeState& state, const juce::File& file, const juce::String& name)
