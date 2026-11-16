@@ -350,7 +350,7 @@ namespace
         for (auto* expected : { id::tune, id::glide, id::osc1Range, id::osc1Wave, id::osc2Freq, id::osc3Control,
                                 id::osc3Lfo, id::lfoRate, id::lfoSync, id::lfoDivision, id::lfoRetrigger,
                                 id::mixOsc1, id::mixExt, id::cutoff, id::emphasis, id::fAttack, id::aSustain,
-                                id::decaySwitch, id::notePriority, id::legato, id::modWheel, id::output })
+                                id::decaySwitch, id::polyphony, id::notePriority, id::legato, id::modWheel, id::output })
             check (ids.count (expected) == 1, std::string ("parameter id ") + expected);
         check (ids.count ("a440") == 0, "A-440 parameter is removed");
 
@@ -584,6 +584,238 @@ namespace
         const auto mid = g->getEngine().getGlidePitch();
         check (mid > startPitch + 0.5f && mid < 59.5f, "glide moves pitch part-way (from "
                + fmt (startPitch, 2) + " toward 60, now " + fmt (mid, 2) + ")");
+    }
+
+    void testPolyphony()
+    {
+        {
+            auto p = makeProcessor();
+            check (get (*p, id::polyphony) < 0.5f, "Polyphony defaults off");
+            check (p->getEngine().getMaxVoices() == dsp::maxVoices, "fixed voice count is 8");
+            check (p->getEngine().getSoundingVoiceCount() == 0, "no voices at rest");
+        }
+
+        {
+            auto a = makeProcessor(), b = makeProcessor();
+            openFilter (*a);
+            openFilter (*b);
+            set (*b, id::polyphony, 0.0f);
+            const std::vector<Event> chord { { 0, on (48) }, { 0, on (60) }, { 0, on (67) } };
+            const auto ra = render (*a, 24000, chord);
+            const auto rb = render (*b, 24000, chord);
+            check (ra.left == rb.left && ra.right == rb.right,
+                   "explicit Polyphony off matches the default (bit-identical)");
+            check (ra.finite() && ra.peak() > 0.05f, "mono chord is audible");
+        }
+
+        {
+            auto mono = makeProcessor();
+            openFilter (*mono);
+            set (*mono, id::polyphony, 0.0f);
+            set (*mono, id::notePriority, 0.0f);
+            set (*mono, id::legato, 1.0f);
+            const auto chord = render (*mono, 24000, { { 0, on (48) }, { 0, on (60) } });
+            auto single = makeProcessor();
+            openFilter (*single);
+            set (*single, id::polyphony, 0.0f);
+            set (*single, id::notePriority, 0.0f);
+            set (*single, id::legato, 1.0f);
+            const auto one = render (*single, 24000, { { 0, on (48) } });
+            check (chord.left == one.left && chord.right == one.right,
+                   "poly off: adding a higher note under low-priority legato is bit-identical to the low note alone");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            p->getEngine().setSettings (p->readSettings());
+            p->getEngine().noteOn (48, 0.8f);
+            p->getEngine().noteOn (60, 0.8f);
+            p->getEngine().noteOn (67, 0.8f);
+            check (p->getEngine().getSoundingVoiceCount() == 3,
+                   "poly on: a triad occupies three voices (got "
+                       + std::to_string (p->getEngine().getSoundingVoiceCount()) + ")");
+            check (p->getEngine().isVoiceGated (0) || p->getEngine().isVoiceGated (1)
+                       || p->getEngine().isVoiceGated (2),
+                   "poly on: at least one voice is gated");
+            std::set<int> notes;
+            for (int i = 0; i < p->getEngine().getMaxVoices(); ++i)
+                if (const auto n = p->getEngine().getVoiceNote (i); n >= 0)
+                    notes.insert (n);
+            check (notes.count (48) == 1 && notes.count (60) == 1 && notes.count (67) == 1,
+                   "poly on: C3, C4 and G4 are all allocated");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            const auto r = render (*p, 48000, { { 0, on (48) }, { 0, on (60) } });
+            const auto e48 = bandEnergy (r.left, defaultRate, 110.0, 150.0);
+            const auto e60 = bandEnergy (r.left, defaultRate, 230.0, 290.0);
+            check (r.finite() && r.peak() > 0.05f, "poly chord is audible (peak " + fmt (r.peak(), 3) + ")");
+            check (e48 > 0.0 && e60 > 0.0, "poly chord has energy at both C3 and C4");
+            check (e60 / juce::jmax (1.0e-12, e48) > 0.15 && e48 / juce::jmax (1.0e-12, e60) > 0.15,
+                   "neither chord tone dominates the other (C3 " + fmt (e48, 1) + ", C4 " + fmt (e60, 1) + ")");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            p->getEngine().setSettings (p->readSettings());
+            for (int n = 36; n <= 52; n += 2)
+                p->getEngine().noteOn (n, 0.8f);
+            check (p->getEngine().getSoundingVoiceCount() == dsp::maxVoices,
+                   "stealing keeps " + std::to_string (dsp::maxVoices) + " voices (got "
+                       + std::to_string (p->getEngine().getSoundingVoiceCount()) + ")");
+            std::set<int> notes;
+            for (int i = 0; i < p->getEngine().getMaxVoices(); ++i)
+                if (const auto n = p->getEngine().getVoiceNote (i); n >= 0)
+                    notes.insert (n);
+            check (notes.count (36) == 0, "oldest note is stolen first");
+            check (notes.count (52) == 1, "the 9th note occupies a voice");
+            check ((int) notes.size() == dsp::maxVoices, "every remaining slot holds a unique note");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            juce::AudioBuffer<float> buffer (2, 256);
+            juce::MidiBuffer midi;
+            for (int n = 36; n < 36 + dsp::maxVoices; ++n)
+                midi.addEvent (on (n), 0);
+            p->processBlock (buffer, midi);
+            midi.clear();
+            buffer.clear();
+            midi.addEvent (on (60), 0);
+            p->processBlock (buffer, midi);
+            float maxDelta = 0.0f;
+            for (int i = 1; i < buffer.getNumSamples(); ++i)
+                maxDelta = std::max (maxDelta, std::abs (buffer.getSample (0, i) - buffer.getSample (0, i - 1)));
+            check (std::isfinite (maxDelta) && maxDelta < 1.2f,
+                   "voice steal does not click (max sample delta " + fmt (maxDelta, 3) + ")");
+            check (p->getEngine().getSoundingVoiceCount() == dsp::maxVoices, "steal keeps the voice count at the limit");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            set (*p, id::decaySwitch, 0.0f);
+            const auto r = render (*p, 24000, {
+                { 0, on (48) }, { 0, on (55) }, { 0, on (60) },
+                { 8000, juce::MidiMessage::controllerEvent (1, 123, 0) } });
+            check (r.finite(), "all-notes-off output is finite");
+            check (r.rms (r.left.size() - 2000) < 2.0e-3, "CC 123 silences a poly chord");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            set (*p, id::aSustain, 1.0f);
+            set (*p, id::decaySwitch, 1.0f);
+            p->getEngine().setSettings (p->readSettings());
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            midi.addEvent (on (48), 0);
+            midi.addEvent (on (60), 0);
+            p->processBlock (buffer, midi);
+            check (p->getEngine().getSoundingVoiceCount() == 2, "sustain test starts with two gated voices");
+            midi.clear();
+            midi.addEvent (juce::MidiMessage::controllerEvent (1, 64, 127), 0);
+            midi.addEvent (off (48), 10);
+            midi.addEvent (off (60), 10);
+            buffer.clear();
+            p->processBlock (buffer, midi);
+            check (p->getEngine().isGated(), "sustain pedal holds poly voices after note-off");
+            check (p->getEngine().getSoundingVoiceCount() == 2, "both voices stay down under sustain");
+            midi.clear();
+            midi.addEvent (juce::MidiMessage::controllerEvent (1, 64, 0), 0);
+            buffer.clear();
+            p->processBlock (buffer, midi);
+            check (! p->getEngine().isGated(), "releasing sustain releases poly voices");
+        }
+
+        {
+            auto p = makeProcessor();
+            juce::XmlElement loaded ("DooblrM");
+            loaded.setAttribute ("stateVersion", 2);
+            loaded.setAttribute ("presetName", "PrePoly");
+            auto addParam = [&loaded] (const juce::String& pid, double value)
+            {
+                auto* child = loaded.createNewChildElement ("PARAM");
+                child->setAttribute ("id", pid);
+                child->setAttribute ("value", value);
+            };
+            addParam (id::cutoff, 640.0);
+            addParam (id::volume, 0.55);
+            juce::MemoryBlock blob;
+            juce::AudioProcessor::copyXmlToBinary (loaded, blob);
+            p->setStateInformation (blob.getData(), (int) blob.getSize());
+            check (get (*p, id::polyphony) < 0.5f, "old state defaults Polyphony off");
+            check (std::abs (get (*p, id::cutoff) - 640.0f) < 0.5f, "old state still restores cutoff");
+        }
+
+        {
+            auto p = makeProcessor();
+            std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
+            auto* editor = dynamic_cast<Editor*> (base.get());
+            check (editor != nullptr, "the editor is a DooblrMEditor");
+            if (editor == nullptr)
+                return;
+            editor->setSize (1080, 660);
+            auto* poly = dynamic_cast<ui::BatToggle*> (editor->findControl (id::polyphony));
+            auto* priority = dynamic_cast<ui::BatToggle*> (editor->findControl (id::notePriority));
+            auto* legato = dynamic_cast<ui::BatToggle*> (editor->findControl (id::legato));
+            check (poly != nullptr, "Polyphony is a two-choice rocker");
+            check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::polyphony)) == nullptr,
+                   "Polyphony is not a rotary");
+            check (priority != nullptr && legato != nullptr, "Priority and Legato rockers exist");
+            check (! ui::isDimmed (*priority) && ! ui::isDimmed (*legato),
+                   "Priority and Legato are live while Polyphony is off");
+
+            auto& history = p->getUndoHistory();
+            history.clear();
+            simulateClick (*poly);
+            check (get (*p, id::polyphony) >= 0.5f, "clicking the Poly rocker turns Polyphony on");
+            check (history.canUndo(), "Poly rocker click is one undo gesture");
+            editor->resized();
+            check (ui::isDimmed (*priority) && ui::isDimmed (*legato),
+                   "Priority and Legato dim when Polyphony is on");
+            check (priority->isEnabled() && legato->isEnabled(),
+                   "dimmed Priority and Legato stay enabled");
+            history.undo();
+            check (get (*p, id::polyphony) < 0.5f, "undo restores Mono");
+            editor->resized();
+            check (! ui::isDimmed (*priority) && ! ui::isDimmed (*legato),
+                   "undo of Poly restores Priority and Legato undimmed");
+        }
+
+        {
+            auto p = makeProcessor();
+            openFilter (*p);
+            set (*p, id::polyphony, 1.0f);
+            juce::AudioBuffer<float> buffer (2, 512);
+            juce::MidiBuffer midi;
+            for (int n = 36; n < 36 + dsp::maxVoices; ++n)
+                midi.addEvent (on (n), 0);
+            p->processBlock (buffer, midi);
+            midi.clear();
+            allocationCount = 0;
+            countAllocations = true;
+            for (int i = 0; i < 32; ++i)
+            {
+                buffer.clear();
+                p->processBlock (buffer, midi);
+            }
+            countAllocations = false;
+            check (allocationCount.load() == 0, "poly processBlock allocates nothing after prepare ("
+                   + std::to_string (allocationCount.load()) + " news)");
+        }
     }
 
     void testOsc3LfoMode()
@@ -1151,6 +1383,10 @@ namespace
             check (editor->getFilterReadout().isVisible(), sizeLabel + "filter readout visible");
             check (editor->getFilterReadout().getHeight() >= 40, sizeLabel + "filter readout has height");
             check (editor->findControl ("a440") == nullptr, sizeLabel + "A-440 control is gone");
+            check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::polyphony)) != nullptr,
+                   sizeLabel + "polyphony is a 2-position rocker");
+            check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::polyphony)) == nullptr,
+                   sizeLabel + "polyphony is not a rotary");
             check (dynamic_cast<ui::BatToggle*> (editor->findControl (id::notePriority)) != nullptr,
                    sizeLabel + "note priority is a 2-position rocker");
             check (dynamic_cast<ui::RotarySwitch*> (editor->findControl (id::notePriority)) == nullptr,
@@ -1800,6 +2036,7 @@ int main()
         { "keyboard tracking 1/3 and 2/3",             testCutoffTracking },
         { "envelope timing and Decay switch",          testEnvelopeTiming },
         { "note priority and glide",                   testNotePriorityAndGlide },
+        { "polyphony",                                 testPolyphony },
         { "osc 3 LO free-running LFO",                 testOsc3LfoMode },
         { "osc 3 dedicated LFO mode",                  testOsc3DedicatedLfo },
         { "A-440 removed, old state still loads",      testA440Removed },

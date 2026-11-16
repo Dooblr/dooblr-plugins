@@ -1,6 +1,6 @@
 # dooblr-m
 
-An all-purpose Model D-style monophonic synthesizer (VST3 instrument). One board, laid
+An all-purpose Model D-style synthesizer (VST3 instrument). One board, laid
 out like the classic three-oscillator panel: wheels, controllers, oscillator bank, mixer,
 modifiers, output. Independent architecture; original design, code and sounds. No
 third-party names, logos, wood or artwork.
@@ -8,8 +8,10 @@ third-party names, logos, wood or artwork.
 DSP follows the attached references: Stilson/Smith BLIT oscillators, Huovilainen's 2004
 non-linear ladder, Folkman's Model D service-manual contours and mixer, and the usual
 analog-synth voice (keyboard CV, glide, low-note priority) described in the MIT 6.101 report.
+A Poly rocker adds eight of those voices; off (the default) the synth is the original mono
+instrument, and old presets load unchanged.
 
-Version 0.1.5.
+Version 0.1.6.
 
 ## Board
 
@@ -18,7 +20,7 @@ One page. No page column. Header, a voice strip, then the panel left to right.
 | Section | Controls |
 | --- | --- |
 | **Wheels** | Pitch (springs back to centre) and Mod. MIDI pitch-bend and CC1 also drive them. |
-| **Voice** | Note Priority (Low / Last rocker; Low is the original), Legato (single-trigger envelopes), Velocity (off by default — the original has none), Bend Range. |
+| **Voice** | Poly (Mono / Poly rocker; off by default), Note Priority (Low / Last rocker; Low is the original), Legato (single-trigger envelopes), Velocity (off by default — the original has none), Bend Range. Priority and Legato dim in Poly (they are unused; they stay clickable). |
 | **Controllers** | Tune (±2.5 st), Glide, Modulation Mix (Osc 3 ↔ Noise), Osc 3 Control, Oscillator Mod, Filter Mod, Osc 3 LFO rocker, LFO Retrig. |
 | **Oscillator bank** | Osc 1–3: Range 32' / 16' / 8' / 4' / 2' / LO and six waveforms (triangle, shark / tri-saw, saw, square, wide pulse, narrow pulse). Osc 2 / 3 Frequency ±8 st. Oscillators are free-running. Osc 3 LFO mode adds Rate (0.05–30 Hz, log), host-tempo Sync, and a beat-division rotary; a pulse lamp on Rate follows the LFO. In LFO mode the Osc 3 wave ticks read Tri / Dn / Up / Sqr / S/H / Rnd. |
 | **Mixer** | Osc 1 / 2 / 3, Ext / Feedback, Noise, each with a level and an on switch. Noise colour is a White / Pink rocker. Ext is the classic output-into-external overdrive trick. Mixer Osc 3 is faded out in Osc 3 LFO mode (level is ignored); Osc 3 still feeds Modulation Mix. |
@@ -36,7 +38,7 @@ recorded, not host automation). Double-click a knob to reset it; Shift-drag for 
 Knobs have no value bubble or overlay while dragging (the pointer and filled arc stay; the
 host still shows the value). Vertical rockers click to toggle, or drag with the lever
 (up = on, down = off); dragging across neighbouring rockers flips them in one undo step.
-Two-choice parameters (priority, noise colour) use that rocker; range / waveform switches
+Two-choice parameters (poly, priority, noise colour) use that rocker; range / waveform switches
 stay multi-position and step by dragging. Double-click an envelope handle to reset it.
 
 MIDI: notes, pitch bend, mod wheel (CC1), sustain pedal. Velocity is ignored unless Velocity
@@ -62,8 +64,13 @@ parameters only.
   1/3, 2/3 or 1 (both switches).
 - Contours: attack / decay / sustain. Decay switch makes release = decay; off, notes dump
   in a few milliseconds. Legato is single-trigger.
-- Voice: monophonic, low-note priority by default, optional last-note, glide on the
-  sample-hold.
+- Voice: monophonic by default (low-note priority, optional last-note, glide on the
+  sample-hold). Poly mode (0.1.6) is eight independent voices, each with its own
+  oscillators, mixer path, ladder and contours. Voice steal takes the oldest, then
+  quietest, released voice first, with a 4 ms fade so a steal does not click. Glide
+  is per voice from that voice's previous note. Note Priority and Legato are ignored
+  (and dimmed) while Poly is on. Off, the mono path is unchanged; old presets that
+  omit the parameter load as mono.
 
 Factory patches: Init, Classic Bass, Lead, Brass, Self-osc Filter Whistle, Pluck, Pad,
 Kick / Percussion, Two-Osc Detune. All original.

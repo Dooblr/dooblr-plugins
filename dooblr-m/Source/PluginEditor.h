@@ -14,7 +14,7 @@ namespace dooblrm
 {
     /**
         One-page Model D-style board in the dooblr aesthetic (design/dooblr-design-system.md):
-        60 px header, a slim voice strip, then left-to-right Controllers / Oscillator Bank /
+        60 px header, a slim voice strip (poly, priority, legato, velocity, bend), then left-to-right Controllers / Oscillator Bank /
         Mixer / Modifiers / Output, with pitch and mod wheels on the far left.
     */
     class DooblrMEditor final : public juce::AudioProcessorEditor,

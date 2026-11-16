@@ -142,6 +142,7 @@ namespace dooblrm::params
 
         addPercent (layout, id::volume, "Volume", 0.7f);
 
+        addBool (layout, id::polyphony, "Polyphony", false);
         addChoice (layout, id::notePriority, "Note Priority", priorityNames(), 0); // low, like the original
         addBool (layout, id::legato, "Legato", true);
         layout.add (std::make_unique<juce::AudioParameterInt> (pid (id::bendRange), "Bend Range", 0, 12, 2));

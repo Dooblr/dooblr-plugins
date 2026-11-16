@@ -15,7 +15,7 @@ namespace dooblrm
     X(cutoff) X(emphasis) X(contourAmt) X(fAttack) X(fDecay) X(fSustain) X(kybd1) X(kybd2) \
     X(aAttack) X(aDecay) X(aSustain) X(decaySwitch) \
     X(volume) \
-    X(notePriority) X(legato) X(bendRange) X(velocityOn) X(output) \
+    X(polyphony) X(notePriority) X(legato) X(bendRange) X(velocityOn) X(output) \
     X(modWheel) X(pitchBend)
 
     struct DooblrMProcessor::RawParameters
@@ -109,6 +109,7 @@ namespace dooblrm
 
         s.volume = f (r.volume);
 
+        s.polyphony = b (r.polyphony);
         s.notePriority = juce::jlimit (0, 1, i (r.notePriority));
         s.legato = b (r.legato);
         s.bendRange = juce::jlimit (0, 12, i (r.bendRange));

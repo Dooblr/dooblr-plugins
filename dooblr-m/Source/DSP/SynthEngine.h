@@ -12,6 +12,9 @@ namespace dooblrm::dsp
     /** Amount of Contour = 1 opens the ladder by this many octaves. */
     inline constexpr float contourOctaves = 5.0f;
 
+    /** Fixed voice count when Polyphony is on. Mono still uses the original single voice. */
+    inline constexpr int maxVoices = 8;
+
     struct EnvSettings
     {
         float attack = 0.002f, decay = 0.5f, sustain = 1.0f;
@@ -55,6 +58,7 @@ namespace dooblrm::dsp
 
         float volume = 0.7f;
 
+        bool polyphony = false;
         int notePriority = 0; // 0 low, 1 last
         bool legato = true;
         int bendRange = 2;
@@ -78,7 +82,7 @@ namespace dooblrm::dsp
     public:
         void prepare (double sampleRate, int samplesPerBlock);
         void reset();
-        void setSettings (const Settings& s) noexcept { settings = s; }
+        void setSettings (const Settings& s) noexcept;
         const Settings& getSettings() const noexcept { return settings; }
 
         void process (float* left, float* right, int numSamples, juce::MidiBuffer& midi, const HostTime&);
@@ -87,9 +91,9 @@ namespace dooblrm::dsp
         void noteOff (int note);
         void allNotesOff();
 
-        int getCurrentNote() const noexcept { return currentNote; }
-        bool isGated() const noexcept { return gate; }
-        float getAmpEnv() const noexcept { return amp.value; }
+        int getCurrentNote() const noexcept;
+        bool isGated() const noexcept;
+        float getAmpEnv() const noexcept;
         float getFilterEnv() const noexcept { return filterEnvTap.load (std::memory_order_relaxed); }
         int getFilterEnvStage() const noexcept { return filterEnvStageTap.load (std::memory_order_relaxed); }
         const std::atomic<float>& getFilterEnvTap() const noexcept { return filterEnvTap; }
@@ -98,22 +102,68 @@ namespace dooblrm::dsp
         float getLfoValue() const noexcept { return lastLfo; }
         float getLfoPhase() const noexcept { return lfo.phase; }
         const std::atomic<float>& getLfoTap() const noexcept { return lfoTap; }
-        float getGlidePitch() const noexcept { return glide.current; }
+        float getGlidePitch() const noexcept;
         float getLastCutoffHz() const noexcept { return lastCutoffHz; }
         float getLastSample() const noexcept { return lastSample; }
         ScopeTap& getScopeTap() noexcept { return scope; }
+        int getMaxVoices() const noexcept { return maxVoices; }
+        int getSoundingVoiceCount() const noexcept;
+        int getVoiceNote (int index) const noexcept;
+        bool isVoiceGated (int index) const noexcept;
 
         /** Semitones of MIDI pitch-bend currently applied (−1..1, from the wheel message). */
         float getMidiPitchBend() const noexcept { return midiPitchBend.load (std::memory_order_relaxed); }
         float getMidiModWheel() const noexcept { return midiModWheel.load (std::memory_order_relaxed); }
 
     private:
+        struct Voice
+        {
+            BlitOsc osc1, osc2, osc3;
+            LfoOsc lfo;
+            Drift drift1, drift2, drift3;
+            LadderFilter ladder;
+            Contour filt, amp;
+            Glide glide;
+            Noise noise;
+            Rng thermal;
+
+            int note = 60;
+            float velocity = 0.8f;
+            bool gate = false;
+            bool hasPlayed = false;
+            bool sustained = false;
+            int startOrder = 0;
+            float feedbackSample = 0.0f;
+            float lastCutoffHz = 1200.0f;
+            float osc3AudioGain = 1.0f;
+            float onsetGain = 1.0f;
+            int onsetSamplesLeft = 0;
+            int onsetSamplesTotal = 1;
+
+            void prepare (double sampleRate, int index);
+            void reset();
+            bool isIdle() const noexcept;
+            bool needsRender() const noexcept;
+            void start (int newNote, float newVelocity, bool stolen, const Settings&, float sampleRate);
+            void release();
+            float render (const Settings&, float sampleRate, float globalLfo, float lfoHzTarget,
+                          float midiBend, float midiMod);
+        };
+
         void handleMidiBytes (const juce::uint8* data, int size);
         float oscillatorHz (int rangeIndex, float detuneSt, bool keyTrack, float note, float modSt, float driftSt) const noexcept;
         float renderSample();
+        float renderPolySample();
+        void polyNoteOn (int note, float velocity);
+        void polyNoteOff (int note);
+        void polySustain (bool down);
+        int allocateVoice (int note) noexcept;
+        int newestSoundingVoice() const noexcept;
+        void updatePolyTaps() noexcept;
 
         Settings settings;
         double sampleRate = 48000.0;
+        int voiceAge = 0;
 
         float lfoTargetHz() const noexcept;
 
@@ -125,6 +175,7 @@ namespace dooblrm::dsp
         Glide glide;
         Noise noise;
         ScopeTap scope;
+        std::array<Voice, maxVoices> voices {};
 
         struct Held
         {

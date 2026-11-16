@@ -83,6 +83,11 @@ namespace dooblrm
                 ids.add (id::modMix);
                 ids.add (id::modWheel);
             }
+            if (valueOf (state, id::polyphony) >= 0.5f)
+            {
+                ids.add (id::notePriority);
+                ids.add (id::legato);
+            }
             return ids;
         }
     }
@@ -216,6 +221,7 @@ namespace dooblrm
         addWheel (wheelsSec, id::modWheel, "Mod", false);
 
         auto& voice = addSection ("VOICE", Palette::master);
+        addToggle (voice, id::polyphony, "Poly", "Mono", "Poly");
         addChoiceControl (voice, id::notePriority, "Priority", juce::StringArray { "Low", "Last" });
         addToggle (voice, id::legato, "Legato");
         addToggle (voice, id::velocityOn, "Velocity");
@@ -325,7 +331,13 @@ namespace dooblrm
 
         for (auto& k : knobs) apply (k->getSlider());
         for (auto& r : rotaries) apply (r->getSlider());
-        for (auto& t : toggles) apply (t->getButton());
+        for (auto& t : toggles)
+        {
+            const auto dim = dimmed.contains (t->getComponentID());
+            apply (t->getButton());
+            ui::setDimmed (*t, dim);
+            t->setAlpha (dim ? 0.5f : 1.0f);
+        }
         for (auto& w : wheels) apply (w->getSlider());
 
         const auto lfoOn = valueOf (state, id::osc3Lfo) >= 0.5f;
@@ -515,6 +527,7 @@ namespace dooblrm
 
         contentArea = bounds.reduced (margin);
         layoutBoard();
+        updateEnablement();
     }
 
     void DooblrMEditor::layoutBoard()
@@ -538,8 +551,8 @@ namespace dooblrm
 
         const auto voiceH = juce::jlimit (78, 90, voiceBarHeight);
         auto voiceRow = area.removeFromTop (voiceH);
-        const auto voiceCell = juce::jlimit (72, 88, voiceRow.getWidth() / 8);
-        voiceBarArea = voiceRow.removeFromLeft (voiceCell * 4 + 12);
+        const auto voiceCell = juce::jlimit (72, 88, voiceRow.getWidth() / 10);
+        voiceBarArea = voiceRow.removeFromLeft (voiceCell * 5 + 12);
         place (voice, voiceBarArea);
         area.removeFromTop (gap);
 
@@ -594,10 +607,11 @@ namespace dooblrm
                 c->setBounds (r);
         };
 
-        // Voice strip: the panel is only as wide as the four extras (not a full-width empty bar).
+        // Voice strip: as wide as the five extras (Poly + the original four), left-aligned.
         {
             auto box = voice.contentBounds();
-            const auto cell = box.getWidth() / 4;
+            const auto cell = box.getWidth() / 5;
+            placeId (id::polyphony, box.removeFromLeft (cell).reduced (2));
             placeId (id::notePriority, box.removeFromLeft (cell).reduced (2));
             placeId (id::legato, box.removeFromLeft (cell).reduced (2));
             placeId (id::velocityOn, box.removeFromLeft (cell).reduced (2));
