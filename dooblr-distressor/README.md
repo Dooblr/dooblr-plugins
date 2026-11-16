@@ -81,7 +81,8 @@ Ableton automation work. The GR meter and history keep running while Bypass is o
 Factory presets are original starting points named after uses (Vocals, Bass, Room Nuke,
 …), not copies of anyone's commercial presets.
 
-User presets: `~/Music/dooblr-distressor/Presets`, extension `.ddistressor`.
+User presets: `~/Library/Audio/Presets/dooblr/dooblr-distressor/` on Mac,
+`%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-distressor\` on Windows, extension `.ddistressor`.
 Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
 
 ## Build

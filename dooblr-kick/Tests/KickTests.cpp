@@ -11,6 +11,7 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "Presets.h"
+#include "PresetPaths.h"
 #include "DSP/KickEngine.h"
 #include "DSP/Effects.h"
 #include "DSP/ProcessingChain.h"
@@ -1412,6 +1413,8 @@ namespace
         check (! q->loadUserPreset (garbage, error) && error.isNotEmpty(), "a broken preset file is refused with a message");
         file.deleteFile();
         garbage.deleteFile();
+        check (dooblrkick::presets::getUserPresetFolder() == dooblr::preset_paths::userDirectory ("dooblr-kick"),
+               "user presets use the shared VST3 location");
     }
 
     void testStateRoundTrip()

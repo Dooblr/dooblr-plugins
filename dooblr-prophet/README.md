@@ -26,7 +26,8 @@ Variable mode, Rate when the LFO is synced). Dimmed controls stay clickable and 
 you can set them up before switching mode (0.1.4 fixes 0.1.0–0.1.3, where they ignored clicks).
 
 Header: Undo / Redo, preset menu (factory and user), Random, Save / Load (.dprophet files in
-`~/Music/dooblr-prophet/Presets`), Output level and meter.
+`~/Library/Audio/Presets/dooblr/dooblr-prophet/` on Mac, `%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-prophet\`
+on Windows), Output level and meter.
 
 Random makes a new playable patch in one undo step and shows "Random" as the preset name;
 undo also brings back the previous preset name.

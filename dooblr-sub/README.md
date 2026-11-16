@@ -48,7 +48,8 @@ Header: Bypass, Output (−24…+12 dB), factory / user presets.
 Factory presets: Init, 808 Weight, Kick Sub, Bass Guitar Sub, Tom Retune Down,
 Snare Tone Up, Club Safe, Festival Safe.
 
-User presets: `~/Music/dooblr-sub/Presets`, extension `.dsub`.
+User presets: `~/Library/Audio/Presets/dooblr/dooblr-sub/` on Mac,
+`%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-sub\` on Windows, extension `.dsub`.
 Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
 
 Window 1080×660, resizable 940×600–2400×1400.

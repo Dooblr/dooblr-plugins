@@ -1,4 +1,5 @@
 #include "Presets.h"
+#include "PresetPaths.h"
 
 #include "Parameters.h"
 
@@ -402,6 +403,11 @@ namespace dooblrkick::presets
 
     juce::File getUserPresetFolder()
     {
-        return juce::File::getSpecialLocation (juce::File::userMusicDirectory).getChildFile ("dooblr-kick").getChildFile ("Presets");
+        return dooblr::preset_paths::userDirectory ("dooblr-kick");
+    }
+
+    juce::Array<juce::File> userPresets()
+    {
+        return dooblr::preset_paths::listUserPresets ("dooblr-kick", juce::String ("*") + userPresetExtension);
     }
 }

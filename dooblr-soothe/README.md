@@ -83,7 +83,9 @@ right-click a node (shape, Listen, Remove). A hover readout shows frequency, cur
   shown in the toolbar.
 
 Presets: Default plus 7 original factory presets; user presets (`.dsoothe`) in
-`~/Music/dooblr-soothe/Presets`. Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
+`~/Library/Audio/Presets/dooblr/dooblr-soothe/` on Mac,
+`%USERPROFILE%\Documents\VST3 Presets\dooblr\dooblr-soothe\` on Windows.
+Undo / Redo (Cmd-Z, Cmd-Shift-Z) cover every UI gesture.
 
 ## Build
 
