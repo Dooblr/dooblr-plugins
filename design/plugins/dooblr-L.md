@@ -13,6 +13,13 @@ Read `design/INDEX.md` first. This file has two parts:
   strip, meter row (I/O peaks, GR history, LUFS), then Pre-Process / Enhance / Link / Time
   and a full-width Output strip. Existing palette only. No new colour, font, radius or alpha
   tokens. No hint text on graphs.
+- **0.1.2**: the GR history draws a draggable **threshold** line (Pre-Process `threshold`,
+  −40 dB at the bottom of the plot, 0 dB at the top). Vertical drag writes that parameter
+  with `beginChangeGesture` / `endChangeGesture` so the host records automation; Shift or
+  Command is 0.1× fine adjust; double-click resets to −3 dB. Hover uses the up/down resize
+  cursor and a thicker highlight. The Thresh knob and the line share the same parameter
+  (both directions). No caption or hint text on the graph. Paint stays the cached-grid
+  path plus one extra `fillRect`.
 - **0.1.1**: the Output strip height is `ControlPanel::getPreferredHeight` plus padding, so
   Input / Ceiling value boxes sit fully inside the panel at 940×600, 1080×660 and 2400×1400
   (0.1.0 clipped them at 1080×660 on Mac). Layout tests require every knob value box inside
@@ -72,7 +79,9 @@ saturation path (`dsp::LimiterEngine::algoFor`), not a renamed preset:
   LRA and the GR history. LUFS target is optional; Off is a no-op, other values ride
   short-term LUFS toward the target (400 ms) once that window is full, still under the
   ceiling. Below-gate M/S/I read `--`.
-- GR history caches its grid `Image` and has no caption. 1× paint budget is the suite's 4 ms.
+- GR history caches its grid `Image` and has no caption. The threshold line is the
+  Pre-Process threshold on a −40…0 dB axis (0 dB at the top of the plot); GR is still
+  0–24 dB with 0 at the bottom. 1× paint budget is the suite's 4 ms.
 
 ### User presets (0.1.0)
 
@@ -84,9 +93,9 @@ is copied on first run, not deleted. Extension `.dl`.
 ## Generated map
 
 - Kind: JUCE effect VST3 (target `DooblrL`, product "dooblr-L", code Dbll)
-- Version: 0.1.1
+- Version: 0.1.2
 - Last source change: 2026-11-25
-- Source tree: `cfcab8feaace` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-L`)
+- Source tree: `eee42b11dbf6` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-L`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-L/scripts/build.sh` (build dir `~/dooblr-build/dooblr-L`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrLTests` (Tests/CMakeLists.txt)
@@ -154,5 +163,5 @@ is copied on first run, not deleted. Extension `.dl`.
 
 ### Tests
 
-- `Tests/LimiterTests.cpp` (11): Metadata, Ceiling, Latency, EnhanceTransparency, Styles, Lufs, StereoLink, Oversampling, StatePresetsUndo, NoDeadParameters, Editor
+- `Tests/LimiterTests.cpp` (12): Metadata, Ceiling, Latency, EnhanceTransparency, Styles, Lufs, StereoLink, Oversampling, StatePresetsUndo, NoDeadParameters, Editor, ThresholdLineDrag
 <!-- END AUTO-GENERATED -->

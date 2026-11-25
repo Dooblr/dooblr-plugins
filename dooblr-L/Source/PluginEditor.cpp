@@ -67,7 +67,8 @@ namespace dooblrl
               { id::dither, "Dither", Kind::combo, 96 },
               { id::shaping, "Shape", Kind::combo, 96 },
               { id::lufsTarget, "Target", Kind::combo, 110 },
-          })
+          }),
+          grHistory (p.getState())
     {
         setLookAndFeel (&lookAndFeel);
         setWantsKeyboardFocus (true);

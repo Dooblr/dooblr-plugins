@@ -150,10 +150,65 @@ namespace dooblrl::ui
         }
     }
 
-    GrHistory::GrHistory()
+    GrHistory::GrHistory (juce::AudioProcessorValueTreeState& state)
     {
         setComponentID ("grHistory");
         setOpaque (true);
+
+        if (auto* ranged = dynamic_cast<juce::RangedAudioParameter*> (state.getParameter (params::id::threshold)))
+        {
+            thresholdParam = ranged;
+            shownDb = ranged->convertFrom0to1 (ranged->getValue());
+            thresholdAttachment = std::make_unique<juce::ParameterAttachment> (
+                *ranged,
+                [this] (float v)
+                {
+                    shownDb = v;
+                    repaint();
+                },
+                nullptr);
+        }
+    }
+
+    juce::Rectangle<float> GrHistory::plotBounds() const noexcept
+    {
+        return getLocalBounds().toFloat().reduced (0.0f, 14.0f);
+    }
+
+    float GrHistory::thresholdDbToY (float db) const noexcept
+    {
+        return dbToY (db, plotBounds(), thresholdMinDb, thresholdMaxDb);
+    }
+
+    float GrHistory::yToThresholdDb (float y) const noexcept
+    {
+        const auto plot = plotBounds();
+        const auto t = juce::jlimit (0.0f, 1.0f, (plot.getBottom() - y) / juce::jmax (1.0f, plot.getHeight()));
+        return thresholdMinDb + t * (thresholdMaxDb - thresholdMinDb);
+    }
+
+    bool GrHistory::overThresholdLine (juce::Point<float> p) const noexcept
+    {
+        return plotBounds().expanded (0.0f, hitSlopPx).contains (p)
+            && std::abs (p.y - getThresholdLineY()) < hitSlopPx;
+    }
+
+    void GrHistory::setHover (bool next)
+    {
+        if (next == hover)
+            return;
+        hover = next;
+        setMouseCursor (hover || dragging ? juce::MouseCursor::UpDownResizeCursor
+                                          : juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+
+    void GrHistory::applyDragY (float y)
+    {
+        if (thresholdAttachment == nullptr || thresholdParam == nullptr)
+            return;
+        const auto snapped = thresholdParam->getNormalisableRange().snapToLegalValue (yToThresholdDb (y));
+        thresholdAttachment->setValueAsPartOfGesture (snapped);
     }
 
     void GrHistory::resized()
@@ -206,26 +261,98 @@ namespace dooblrl::ui
             g.fillAll (Palette::background);
         }
 
-        auto bounds = getLocalBounds().toFloat().reduced (0.0f, 14.0f);
-        if (bounds.getWidth() < 4.0f || model.getHistoryFilled() < 2)
-            return;
-
-        juce::Path path;
-        const auto n = model.getHistoryFilled();
-        for (int i = 0; i < n; ++i)
+        const auto bounds = plotBounds();
+        if (bounds.getWidth() >= 4.0f && model.getHistoryFilled() >= 2)
         {
-            const auto x = bounds.getX() + bounds.getWidth() * (float) i / (float) (GrMeterModel::historyLength - 1);
-            const auto y = dbToY (model.historyOldest (i), bounds, 0.0f, GrMeterModel::rangeDb);
-            if (i == 0) path.startNewSubPath (x, y);
-            else        path.lineTo (x, y);
+            juce::Path path;
+            const auto n = model.getHistoryFilled();
+            for (int i = 0; i < n; ++i)
+            {
+                const auto x = bounds.getX() + bounds.getWidth() * (float) i / (float) (GrMeterModel::historyLength - 1);
+                const auto y = dbToY (model.historyOldest (i), bounds, 0.0f, GrMeterModel::rangeDb);
+                if (i == 0) path.startNewSubPath (x, y);
+                else        path.lineTo (x, y);
+            }
+
+            g.setColour (Palette::dynamic);
+            g.strokePath (path, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+
+            const auto peakY = dbToY (model.getPeakHoldDb(), bounds, 0.0f, GrMeterModel::rangeDb);
+            g.setColour (Palette::frozen);
+            g.fillRect (juce::Rectangle<float> (6.0f, 2.0f).withCentre ({ bounds.getRight() - 8.0f, peakY }));
         }
 
-        g.setColour (Palette::dynamic);
-        g.strokePath (path, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        if (bounds.getWidth() >= 4.0f)
+        {
+            const auto active = hover || dragging;
+            const auto y = getThresholdLineY();
+            g.setColour (Palette::frozen.withAlpha (active ? 1.0f : 0.85f));
+            g.fillRect (bounds.getX(), y - (active ? 1.0f : 0.75f), bounds.getWidth(), active ? 2.0f : 1.5f);
+        }
+    }
 
-        const auto peakY = dbToY (model.getPeakHoldDb(), bounds, 0.0f, GrMeterModel::rangeDb);
-        g.setColour (Palette::frozen);
-        g.fillRect (juce::Rectangle<float> (6.0f, 2.0f).withCentre ({ bounds.getRight() - 8.0f, peakY }));
+    void GrHistory::mouseMove (const juce::MouseEvent& e)
+    {
+        if (! dragging)
+            setHover (overThresholdLine (e.position));
+    }
+
+    void GrHistory::mouseDown (const juce::MouseEvent& e)
+    {
+        mouseMove (e);
+
+        if (e.getNumberOfClicks() >= 2 || ! hover || thresholdAttachment == nullptr)
+            return;
+
+        dragging = true;
+        downMouseY = e.position.y;
+        downLineY = getThresholdLineY();
+        setMouseCursor (juce::MouseCursor::UpDownResizeCursor);
+        thresholdAttachment->beginGesture();
+        repaint();
+    }
+
+    void GrHistory::mouseDrag (const juce::MouseEvent& e)
+    {
+        if (! dragging)
+            return;
+
+        const auto fine = e.mods.isShiftDown() || e.mods.isCommandDown();
+        const auto y = downLineY + (e.position.y - downMouseY) * (fine ? fineDragScale : 1.0f);
+        applyDragY (y);
+    }
+
+    void GrHistory::mouseUp (const juce::MouseEvent& e)
+    {
+        if (dragging && thresholdAttachment != nullptr)
+        {
+            dragging = false;
+            thresholdAttachment->endGesture();
+        }
+        dragging = false;
+        mouseMove (e);
+        if (! hover)
+            setMouseCursor (juce::MouseCursor::NormalCursor);
+        repaint();
+    }
+
+    void GrHistory::mouseExit (const juce::MouseEvent&)
+    {
+        if (! dragging)
+            setHover (false);
+    }
+
+    void GrHistory::mouseDoubleClick (const juce::MouseEvent& e)
+    {
+        if (thresholdAttachment == nullptr || thresholdParam == nullptr)
+            return;
+        if (! overThresholdLine (e.position) && ! hover)
+            return;
+
+        const auto def = thresholdParam->convertFrom0to1 (thresholdParam->getDefaultValue());
+        thresholdAttachment->setValueAsCompleteGesture (def);
+        shownDb = def;
+        repaint();
     }
 
     LoudnessPanel::LoudnessPanel()

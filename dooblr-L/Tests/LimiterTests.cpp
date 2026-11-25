@@ -206,6 +206,63 @@ namespace
         }
     };
 
+    juce::MouseEvent makeMouseEvent (juce::Component& component, juce::Point<float> position,
+                                     juce::Point<float> downPosition, int clicks, bool dragged,
+                                     juce::ModifierKeys mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier))
+    {
+        using Source = juce::MouseInputSource;
+        const auto now = juce::Time::getCurrentTime();
+        return { juce::Desktop::getInstance().getMainMouseSource(), position, mods,
+                 Source::defaultPressure, Source::defaultOrientation, Source::defaultRotation,
+                 Source::defaultTiltX, Source::defaultTiltY,
+                 &component, &component, now, downPosition, now, clicks, dragged };
+    }
+
+    void simulateDrag (juce::Component& component, juce::Point<float> from, juce::Point<float> to,
+                       juce::ModifierKeys mods = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier))
+    {
+        const auto flags = mods.withFlags (juce::ModifierKeys::leftButtonModifier);
+        component.mouseDown (makeMouseEvent (component, from, from, 1, false, flags));
+        constexpr int steps = 12;
+        for (int i = 1; i <= steps; ++i)
+            component.mouseDrag (makeMouseEvent (component, from + (to - from) * ((float) i / (float) steps),
+                                                 from, 1, true, flags));
+        component.mouseUp (makeMouseEvent (component, to, from, 1, true, flags));
+    }
+
+    void simulateDoubleClick (juce::Component& component, juce::Point<float> position)
+    {
+        const auto flags = juce::ModifierKeys (juce::ModifierKeys::leftButtonModifier);
+        component.mouseDown (makeMouseEvent (component, position, position, 1, false, flags));
+        component.mouseUp (makeMouseEvent (component, position, position, 1, false, flags));
+        component.mouseDoubleClick (makeMouseEvent (component, position, position, 2, false, flags));
+    }
+
+    float snapThreshold (Processor& p, float db)
+    {
+        auto* q = param (p, id::threshold);
+        if (q == nullptr)
+            return db;
+        return q->convertFrom0to1 (q->convertTo0to1 (q->getNormalisableRange().snapToLegalValue (db)));
+    }
+
+    float independentYToThresholdDb (juce::Rectangle<float> plot, float y)
+    {
+        const auto t = juce::jlimit (0.0f, 1.0f, (plot.getBottom() - y) / juce::jmax (1.0f, plot.getHeight()));
+        return ui::GrHistory::thresholdMinDb + t * (ui::GrHistory::thresholdMaxDb - ui::GrHistory::thresholdMinDb);
+    }
+
+    struct GestureCount final : juce::AudioProcessorParameter::Listener
+    {
+        int begins = 0, ends = 0;
+        void parameterValueChanged (int, float) override {}
+        void parameterGestureChanged (int, bool starting) override
+        {
+            if (starting) ++begins;
+            else          ++ends;
+        }
+    };
+
     //------------------------------------------------------------------------------
     void testMetadata()
     {
@@ -215,7 +272,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRL_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
+        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check ((int) p->getParameters().size() == 19, "19 automatable parameters (got " + std::to_string ((int) p->getParameters().size()) + ")");
 
@@ -1011,6 +1068,114 @@ namespace
         snapshot ("-2400x1400");
     }
 
+    void testThresholdLineDrag()
+    {
+        EditorFixture f;
+        if (f.editor == nullptr)
+            return;
+
+        auto& editor = *f.editor;
+        auto& proc = *f.processor;
+        auto& graph = editor.getGrHistory();
+        auto* knob = dynamic_cast<juce::Slider*> (editor.findControl (id::threshold));
+        auto* threshold = param (proc, id::threshold);
+        check (knob != nullptr && threshold != nullptr, "Thresh knob and threshold parameter exist");
+        if (knob == nullptr || threshold == nullptr)
+            return;
+
+        GestureCount gestures;
+        threshold->addListener (&gestures);
+
+        const juce::Point<int> sizes[] { { 940, 600 }, { 1080, 660 }, { 2400, 1400 } };
+        for (auto size : sizes)
+        {
+            editor.setSize (size.x, size.y);
+            const auto label = std::to_string (size.x) + "x" + std::to_string (size.y);
+            set (proc, id::threshold, params::thresholdDefault);
+            const auto plot = graph.plotBounds();
+            check (plot.getWidth() > 40.0f && plot.getHeight() > 20.0f,
+                   label + " GR plot is laid out (" + plot.toString().toStdString() + ")");
+
+            const auto from = juce::Point<float> (plot.getCentreX(), graph.getThresholdLineY());
+            const auto targetY = plot.getY() + plot.getHeight() * 0.65f;
+            const auto linear = independentYToThresholdDb (plot, targetY);
+            check (std::abs (graph.yToThresholdDb (targetY) - linear) < 0.02f,
+                   label + " yToThresholdDb matches 0 dB at top / −40 dB at bottom");
+
+            const auto expected = snapThreshold (proc, linear);
+            const auto beginsBefore = gestures.begins, endsBefore = gestures.ends;
+            simulateDrag (graph, from, { from.x, targetY });
+
+            const auto got = get (proc, id::threshold);
+            check (std::abs (got - expected) < 0.15f,
+                   label + " drag maps to " + fmt (expected, 1) + " dB (got " + fmt (got, 1) + ")");
+            check (std::abs (graph.getThresholdDb() - got) < 0.05f
+                       && std::abs ((float) knob->getValue() - got) < 0.05f,
+                   label + " knob and line follow the drag (" + fmt ((float) knob->getValue(), 1)
+                       + " / " + fmt (graph.getThresholdDb(), 1) + ")");
+            check (std::abs (graph.getThresholdLineY() - graph.thresholdDbToY (got)) < 0.6f,
+                   label + " line Y matches the parameter");
+            check (gestures.begins == beginsBefore + 1 && gestures.ends == endsBefore + 1,
+                   label + " drag sends one begin and one end gesture (begin "
+                       + std::to_string (gestures.begins - beginsBefore) + ", end "
+                       + std::to_string (gestures.ends - endsBefore) + ")");
+        }
+
+        editor.setSize (1080, 660);
+        set (proc, id::threshold, -18.0f);
+        check (std::abs (graph.getThresholdDb() + 18.0f) < 0.05f
+                   && std::abs ((float) knob->getValue() + 18.0f) < 0.05f
+                   && std::abs (graph.getThresholdLineY() - graph.thresholdDbToY (-18.0f)) < 0.6f,
+               "setting the parameter moves the knob and the line");
+
+        {
+            const auto onLine = juce::Point<float> (graph.plotBounds().getCentreX(), graph.getThresholdLineY());
+            const auto beginsBefore = gestures.begins, endsBefore = gestures.ends;
+            simulateDoubleClick (graph, onLine);
+            check (std::abs (get (proc, id::threshold) - params::thresholdDefault) < 0.05f
+                       && std::abs (graph.getThresholdDb() - params::thresholdDefault) < 0.05f
+                       && std::abs ((float) knob->getValue() - params::thresholdDefault) < 0.05f,
+                   "double-click on the line resets threshold to " + fmt (params::thresholdDefault, 1) + " dB");
+            check (gestures.begins > beginsBefore && gestures.ends == gestures.begins,
+                   "double-click reset sends begin and end gestures (begin "
+                       + std::to_string (gestures.begins - beginsBefore) + ", end "
+                       + std::to_string (gestures.ends - endsBefore) + ")");
+        }
+
+        {
+            set (proc, id::threshold, params::thresholdDefault);
+            const auto plot = graph.plotBounds();
+            const auto from = juce::Point<float> (plot.getCentreX(), graph.getThresholdLineY());
+            const auto to = from + juce::Point<float> (0.0f, plot.getHeight() * 0.4f);
+            simulateDrag (graph, from, to);
+            const auto coarse = get (proc, id::threshold);
+            set (proc, id::threshold, params::thresholdDefault);
+            simulateDrag (graph, from, to, juce::ModifierKeys (juce::ModifierKeys::shiftModifier));
+            const auto fineShift = get (proc, id::threshold);
+            set (proc, id::threshold, params::thresholdDefault);
+            simulateDrag (graph, from, to, juce::ModifierKeys (juce::ModifierKeys::commandModifier));
+            const auto fineCmd = get (proc, id::threshold);
+            check (std::abs (fineShift - params::thresholdDefault) < 0.35f * std::abs (coarse - params::thresholdDefault)
+                       && std::abs (fineCmd - params::thresholdDefault) < 0.35f * std::abs (coarse - params::thresholdDefault),
+                   "Shift and Cmd drags are fine (coarse " + fmt (coarse, 1) + ", shift " + fmt (fineShift, 1)
+                       + ", cmd " + fmt (fineCmd, 1) + ")");
+        }
+
+        {
+            set (proc, id::threshold, params::thresholdDefault);
+            const auto onLine = juce::Point<float> (graph.plotBounds().getCentreX(), graph.getThresholdLineY());
+            graph.mouseMove (makeMouseEvent (graph, onLine, onLine, 0, false, juce::ModifierKeys()));
+            check (graph.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::UpDownResizeCursor),
+                   "hovering the line uses the up/down resize cursor");
+            const auto away = juce::Point<float> (onLine.x, graph.plotBounds().getBottom() - 2.0f);
+            graph.mouseMove (makeMouseEvent (graph, away, away, 0, false, juce::ModifierKeys()));
+            check (graph.getMouseCursor() == juce::MouseCursor (juce::MouseCursor::NormalCursor),
+                   "leaving the line restores the normal cursor");
+        }
+
+        threshold->removeListener (&gestures);
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -1030,6 +1195,7 @@ int main()
         { "state, presets, undo-ready round-trip",         testStatePresetsUndo },
         { "no dead parameters",                            testNoDeadParameters },
         { "editor: size, version, one control, layout",    testEditor },
+        { "editor: draggable threshold line",              testThresholdLineDrag },
     };
 
     int failedTests = 0;

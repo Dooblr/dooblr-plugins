@@ -2,7 +2,9 @@
 
 #include <array>
 #include <functional>
+#include <memory>
 
+#include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Theme.h"
@@ -58,24 +60,54 @@ namespace dooblrl::ui
         int lastPicture = 0;
     };
 
-    /** GR history (newest right). Cached grid, no hint text. */
+    /** GR history (newest right) with a draggable threshold line. Cached grid, no hint text.
+        The line is the Pre-Process **threshold** (−40 dB at the bottom of the plot, 0 dB at the
+        top). GR still uses 0–24 dB (0 at the bottom). Vertical drag writes threshold with
+        begin/endChangeGesture; Shift or Command is 0.1× fine adjust; double-click resets. */
     class GrHistory final : public juce::Component
     {
     public:
-        GrHistory();
+        static constexpr float thresholdMinDb = -40.0f;
+        static constexpr float thresholdMaxDb = 0.0f;
+        static constexpr float hitSlopPx = 7.0f;
+        static constexpr float fineDragScale = 0.1f;
+
+        explicit GrHistory (juce::AudioProcessorValueTreeState&);
 
         void push (float grDb, double nowMs);
         GrMeterModel& getModel() noexcept { return model; }
         void paint (juce::Graphics&) override;
         void resized() override;
 
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
+        void mouseDoubleClick (const juce::MouseEvent&) override;
+
+        juce::Rectangle<float> plotBounds() const noexcept;
+        float thresholdDbToY (float db) const noexcept;
+        float yToThresholdDb (float y) const noexcept;
+        float getThresholdLineY() const noexcept { return thresholdDbToY (shownDb); }
+        float getThresholdDb() const noexcept { return shownDb; }
+
     private:
         void rebuildGrid();
+        bool overThresholdLine (juce::Point<float>) const noexcept;
+        void setHover (bool);
+        void applyDragY (float y);
 
         GrMeterModel model;
         juce::Image grid;
         double lastMs = -1.0;
         int lastPicture = 0;
+
+        juce::RangedAudioParameter* thresholdParam = nullptr;
+        std::unique_ptr<juce::ParameterAttachment> thresholdAttachment;
+        float shownDb = -3.0f;
+        bool hover = false, dragging = false;
+        float downMouseY = 0, downLineY = 0;
     };
 
     /** LUFS M / S / I and LRA plus Reset. */

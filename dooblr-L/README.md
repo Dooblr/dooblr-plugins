@@ -6,7 +6,7 @@ peaks (harmonics and density) instead of hard-clipping them. Part of Dan
 Feinstein's **dooblr** suite.
 
 VST3 effect, macOS 11+ (arm64 / x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
-Version **0.1.1**.
+Version **0.1.2**.
 
 Independently designed. No third-party names, logos, branding or assets appear
 in the plug-in, the UI or this document.
@@ -36,7 +36,9 @@ to the host (lookahead + oversampler FIR). Lookahead 0–20 ms.
 
 **Stereo link** — independent percent controls for transients vs release.
 
-**Meters** — input/output sample peak and true peak, gain-reduction history,
+**Meters** — input/output sample peak and true peak, gain-reduction history
+(the horizontal line is Pre-Process threshold: drag it, Shift/Cmd for fine,
+double-click resets; no captions on the graph),
 LUFS momentary / short-term / integrated, loudness range (LRA), Reset.
 Optional LUFS target (−23 / −16 / −14 / −12) slowly rides short-term loudness
 toward that value, still under the ceiling.
