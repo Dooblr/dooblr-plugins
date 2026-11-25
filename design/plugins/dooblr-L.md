@@ -79,7 +79,7 @@ is copied on first run, not deleted. Extension `.dl`.
 
 - Kind: JUCE effect VST3 (target `DooblrL`, product "dooblr-L", code Dbll)
 - Version: 0.1.0
-- Last source change: uncommitted
+- Last source change: 2026-11-25
 - Source tree: `eec0b796883f` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-L`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-L/scripts/build.sh` (build dir `~/dooblr-build/dooblr-L`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`

@@ -29,7 +29,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE app (target `DooblrInstaller`, product "dooblr installer")
 - Version: 0.1.7
-- Last source change: 2026-11-16
+- Last source change: 2026-11-25
 - Source tree: `85621e4bc944` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-installer`)
 - Window: resize limits 720x520..1400x1000
 - Build/test: `dooblr-installer/scripts/build.sh`
