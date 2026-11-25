@@ -36,6 +36,7 @@ env:
     dooblr-generate:DOOBLRGENERATE:DooblrGenerate
     dooblr-sub:DOOBLRSUB:DooblrSub
     dooblr-rhythm:DOOBLRRHYTHM:DooblrRhythm
+    dooblr-L:DOOBLRL:DooblrL
 
 jobs:
   mac:
