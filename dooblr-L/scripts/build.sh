@@ -16,7 +16,10 @@
 #                    unless dooblr-L.vst3 is already installed only in
 #                    ~/Library/Audio/Plug-Ins/VST3 (then that copy is updated). Never uses sudo.
 #   LOAD_CHECK       1 to load every delivered bundle like a host (dlopen + JUCE VST3
-#                    hosting, see Tools/LoadCheck) and fail if it does not load (default: 1)
+#                    hosting, see Tools/LoadCheck) and fail if it does not load (default: 1).
+#                    Invoked as: DooblrLLoadCheck --expect-latency 168 <bundle> <version>
+#                    (48 kHz, default 4x OS + 2 ms lookahead + Auto Comp). Default with no
+#                    flag is still zero latency, matching the other suite LoadChecks.
 #   COPY_TO_PROJECT  1 to also copy the bundle to <repo>/dooblr-L.vst3 (default: 0)
 #   JOBS             parallel build jobs (default: number of CPUs)
 #   CMAKE_GENERATOR  honoured by CMake itself; defaults to Unix Makefiles.
@@ -116,7 +119,7 @@ echo "  $artefact"
 
 if [[ "$LOAD_CHECK" == "1" && "$INSTALL_VST3" != "1" ]]; then
     echo "==> Loading built bundle like a host"
-    if ! "$loadcheck" "$artefact" "$project_version"; then
+    if ! "$loadcheck" --expect-latency 168 "$artefact" "$project_version"; then
         echo "error: $artefact does not load; hosts will reject it" >&2
         exit 1
     fi
@@ -179,7 +182,7 @@ deliver_bundle() {
 
     if [[ "$LOAD_CHECK" == "1" ]]; then
         echo "==> Loading $destination like a host"
-        if ! "$loadcheck" "$destination" "$project_version"; then
+        if ! "$loadcheck" --expect-latency 168 "$destination" "$project_version"; then
             echo "error: $destination does not load; hosts will reject it" >&2
             exit 1
         fi

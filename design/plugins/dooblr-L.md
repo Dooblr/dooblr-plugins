@@ -13,6 +13,12 @@ Read `design/INDEX.md` first. This file has two parts:
   strip, meter row (I/O peaks, GR history, LUFS), then Pre-Process / Enhance / Link / Time
   and a full-width Output strip. Existing palette only. No new colour, font, radius or alpha
   tokens. No hint text on graphs.
+- **0.1.1**: the Output strip height is `ControlPanel::getPreferredHeight` plus padding, so
+  Input / Ceiling value boxes sit fully inside the panel at 940×600, 1080×660 and 2400×1400
+  (0.1.0 clipped them at 1080×660 on Mac). Layout tests require every knob value box inside
+  its parent panel, not only inside the window. `Tools/LoadCheck` keeps a default of zero
+  latency and takes `--expect-latency N` or `--allow-latency`; `scripts/build.sh` passes
+  `--expect-latency 168` (48 kHz, default 4x + 2 ms lookahead + Auto Comp).
 - `dooblr-L/README.md`
 - Independently designed two-stage mastering / bus limiter. No third-party names, logos or
   branding appear in the UI, presets, comments or identifiers.
@@ -78,9 +84,9 @@ is copied on first run, not deleted. Extension `.dl`.
 ## Generated map
 
 - Kind: JUCE effect VST3 (target `DooblrL`, product "dooblr-L", code Dbll)
-- Version: 0.1.0
+- Version: 0.1.1
 - Last source change: 2026-11-25
-- Source tree: `eec0b796883f` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-L`)
+- Source tree: `cfcab8feaace` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-L`)
 - Window: resize limits minWidthxminHeight..2400x1400; default size 1080x660
 - Build/test: `dooblr-L/scripts/build.sh` (build dir `~/dooblr-build/dooblr-L`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrLTests` (Tests/CMakeLists.txt)

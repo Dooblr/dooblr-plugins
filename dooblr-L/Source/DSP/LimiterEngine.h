@@ -158,7 +158,5 @@ namespace dooblrl::dsp
         std::atomic<float> grDb { 0 };
         std::atomic<float> mLufs { -70 }, sLufs { -70 }, iLufs { -70 }, lraVal { 0 };
         std::atomic<int> integratedFlag { 0 };
-
-        bool preProcessOnly = false;
     };
 }

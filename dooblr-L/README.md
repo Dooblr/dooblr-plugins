@@ -6,7 +6,7 @@ peaks (harmonics and density) instead of hard-clipping them. Part of Dan
 Feinstein's **dooblr** suite.
 
 VST3 effect, macOS 11+ (arm64 / x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
-Version **0.1.0**.
+Version **0.1.1**.
 
 Independently designed. No third-party names, logos, branding or assets appear
 in the plug-in, the UI or this document.
@@ -62,7 +62,10 @@ dooblr-L/scripts/build.sh
 
 Builds in `~/dooblr-build/dooblr-L`, runs `Tests/LimiterTests.cpp`, ad-hoc
 signs the bundle on macOS and installs it to `/Library/Audio/Plug-Ins/VST3/dooblr-L.vst3`
-when that folder is writable (never with sudo).
+when that folder is writable (never with sudo). LoadCheck is
+`DooblrLLoadCheck --expect-latency 168 <bundle> [version]` (48 kHz, default 4x
+OS + 2 ms lookahead + Auto Comp). Without `--expect-latency` / `--allow-latency`
+the tool still requires zero latency, same as the other suite LoadChecks.
 
 Editor snapshots: `DOOBLRL_EDITOR_SNAPSHOT=/tmp/l ~/dooblr-build/dooblr-L/Tests/DooblrLTests`
 

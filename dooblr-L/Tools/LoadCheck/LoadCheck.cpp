@@ -7,8 +7,16 @@
     2. Uses JUCE's VST3 hosting to scan the bundle, instantiate the plug-in, prepare it
        and process a few blocks of audio, checking the output is finite.
 
-    Usage: DooblrLLoadCheck /path/to/dooblr-L.vst3 [expected-version]
-    Exit code 0 only when every step succeeds.
+    Usage:
+      DooblrLLoadCheck [--expect-latency N | --allow-latency] /path/to/dooblr-L.vst3 [expected-version]
+
+    Latency (checked after prepareToPlay at 48 kHz + 32 process blocks):
+      default              must be 0 (same as the other suite LoadChecks)
+      --expect-latency N   must equal N (dooblr-L: 168 at 48 kHz with default 4x OS,
+                           2 ms lookahead and Auto Comp)
+      --allow-latency      any reported latency is accepted
+
+    Exit code 0 only when every step succeeds. 2 = bad arguments.
 */
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -16,7 +24,10 @@
 #include <dlfcn.h>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <algorithm>
+#include <cstring>
+#include <optional>
 
 namespace
 {
@@ -37,18 +48,76 @@ namespace
         const auto files = macDir.findChildFiles (juce::File::findFiles, false);
         return files.isEmpty() ? juce::File() : files.getFirst();
     }
+
+    void printUsage (const char* argv0)
+    {
+        std::fprintf (stderr,
+                      "usage: %s [--expect-latency N | --allow-latency] /path/to/plugin.vst3 [expected-version]\n",
+                      argv0);
+    }
 }
 
 int main (int argc, char* argv[])
 {
-    if (argc < 2)
+    std::optional<int> expectedLatency = 0;
+    juce::String bundleArg, expectedVersion;
+
+    for (int i = 1; i < argc; ++i)
     {
-        std::fprintf (stderr, "usage: %s /path/to/plugin.vst3 [expected-version]\n", argv[0]);
+        const juce::String arg (argv[i]);
+        if (arg == "--expect-latency")
+        {
+            if (i + 1 >= argc)
+            {
+                printUsage (argv[0]);
+                return 2;
+            }
+            char* end = nullptr;
+            const auto value = std::strtol (argv[++i], &end, 10);
+            if (end == argv[i] || *end != '\0' || value < 0 || value > 1'000'000)
+            {
+                std::fprintf (stderr, "LOAD CHECK FAILED: --expect-latency needs a non-negative integer\n");
+                return 2;
+            }
+            expectedLatency = (int) value;
+        }
+        else if (arg == "--allow-latency")
+        {
+            expectedLatency.reset();
+        }
+        else if (arg == "-h" || arg == "--help")
+        {
+            printUsage (argv[0]);
+            return 2;
+        }
+        else if (arg.startsWith ("-"))
+        {
+            std::fprintf (stderr, "LOAD CHECK FAILED: unknown option %s\n", argv[i]);
+            printUsage (argv[0]);
+            return 2;
+        }
+        else if (bundleArg.isEmpty())
+        {
+            bundleArg = arg;
+        }
+        else if (expectedVersion.isEmpty())
+        {
+            expectedVersion = arg;
+        }
+        else
+        {
+            printUsage (argv[0]);
+            return 2;
+        }
+    }
+
+    if (bundleArg.isEmpty())
+    {
+        printUsage (argv[0]);
         return 2;
     }
 
-    const juce::File bundle (juce::File::getCurrentWorkingDirectory().getChildFile (argv[1]));
-    const juce::String expectedVersion (argc > 2 ? argv[2] : "");
+    const juce::File bundle (juce::File::getCurrentWorkingDirectory().getChildFile (bundleArg));
 
     if (! bundle.isDirectory())
         return fail ("bundle not found: " + bundle.getFullPathName());
@@ -130,8 +199,14 @@ int main (int argc, char* argv[])
     if (! finite)
         return fail ("processed audio contains NaN/Inf");
 
-    if (latency != 0)
-        return fail ("expected zero latency (feed-forward compressor, no look-ahead), got " + juce::String (latency));
+    if (expectedLatency.has_value() && latency != *expectedLatency)
+    {
+        if (*expectedLatency == 0)
+            return fail ("expected zero latency, got " + juce::String (latency)
+                         + " (pass --expect-latency N or --allow-latency)");
+        return fail ("expected latency " + juce::String (*expectedLatency)
+                     + " samples, got " + juce::String (latency));
+    }
 
     std::printf ("  load check passed\n");
     return 0;

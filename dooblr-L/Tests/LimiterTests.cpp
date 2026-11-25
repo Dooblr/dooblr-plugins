@@ -215,7 +215,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRL_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
         check ((int) p->getParameters().size() == 19, "19 automatable parameters (got " + std::to_string ((int) p->getParameters().size()) + ")");
 
@@ -920,6 +920,39 @@ namespace
             }
             check (overlaps == 0 && outside == 0 && tooSmall == 0,
                    label + " layout fit (" + std::to_string (rects.size()) + " controls)");
+
+            int valueBoxesOutside = 0;
+            forEachVisible (*editor, [&] (juce::Component& c)
+            {
+                auto* slider = dynamic_cast<juce::Slider*> (&c);
+                if (slider == nullptr) return;
+                auto* panel = slider->getParentComponent();
+                if (panel == nullptr) return;
+                const auto sliderInPanel = panel->getLocalArea (slider, slider->getLocalBounds());
+                if (! panel->getLocalBounds().contains (sliderInPanel))
+                {
+                    ++valueBoxesOutside;
+                    check (false, label + ": " + slider->getComponentID().toStdString()
+                           + " slider inside its panel (" + sliderInPanel.toString().toStdString()
+                           + " in " + panel->getLocalBounds().toString().toStdString() + ")");
+                }
+                for (auto* child : slider->getChildren())
+                {
+                    if (child == nullptr) continue;
+                    if (dynamic_cast<juce::Label*> (child) == nullptr
+                        && dynamic_cast<juce::TextEditor*> (child) == nullptr)
+                        continue;
+                    const auto box = panel->getLocalArea (child, child->getLocalBounds());
+                    if (! panel->getLocalBounds().contains (box))
+                    {
+                        ++valueBoxesOutside;
+                        check (false, label + ": " + slider->getComponentID().toStdString()
+                               + " value box inside its panel (" + box.toString().toStdString()
+                               + " in " + panel->getLocalBounds().toString().toStdString() + ")");
+                    }
+                }
+            });
+            check (valueBoxesOutside == 0, label + " knob value boxes sit fully inside their panel");
 
             const auto hist = editor->getGrHistory().getBounds();
             check (editor->getLocalBounds().contains (hist) && hist.getWidth() >= 160 && hist.getHeight() >= 60,

@@ -387,10 +387,14 @@ namespace dooblrl
             grHistory.setBounds (row);
         }
 
-        const auto outH = juce::jlimit (108, 150, body.getHeight() / 3);
+        constexpr int outPadX = 10, outPadY = 8;
+        const auto outInnerW = juce::jmax (1, body.getWidth() - 2 * outPadX);
+        const auto outContentH = outPanel.getPreferredHeight (outInnerW);
+        const auto outH = juce::jmax (outContentH + 2 * outPadY,
+                                      juce::jlimit (108, 150, body.getHeight() / 3));
         outArea = body.removeFromBottom (outH);
         body.removeFromBottom (panelGap);
-        outPanel.setBounds (outArea.reduced (10, 8));
+        outPanel.setBounds (outArea.reduced (outPadX, outPadY));
 
         const auto colGap = panelGap;
         const auto w = body.getWidth();
