@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <memory>
 
 #include <juce_audio_processors/juce_audio_processors.h>
@@ -27,6 +28,10 @@ namespace dooblrl
         ui::GrHistory& getGrHistory() noexcept { return grHistory; }
         ui::LoudnessPanel& getLoudnessPanel() noexcept { return loudness; }
         ui::SegmentedToggle& getStyleStrip() noexcept { return *styleStrip; }
+        juce::TextButton& getLearnButton() noexcept { return learnButton; }
+        juce::TextButton& getLearnRevertButton() noexcept { return learnRevertButton; }
+        void pollMeters();
+        void refreshLearnUi();
 
         static constexpr int defaultWidth = 1080, defaultHeight = 660;
         static constexpr int minWidth = 940, minHeight = 600, maxWidth = 2400, maxHeight = 1400;
@@ -34,6 +39,7 @@ namespace dooblrl
     private:
         void timerCallback() override;
         void changeListenerCallback (juce::ChangeBroadcaster*) override;
+        std::array<dsp::HistoryFrame, 128> historyScratch {};
         void refreshPresetBox();
         void presetChosen();
         void savePreset();
@@ -41,6 +47,8 @@ namespace dooblrl
         void setStatus (const juce::String& text);
         void updateUndoButtons();
         void updateDimmed();
+        void updateLearnUi();
+        void toggleLearn();
 
         DooblrLProcessor& proc;
         juce::AudioProcessorValueTreeState& state;
@@ -53,6 +61,31 @@ namespace dooblrl
         std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> bypassAttachment;
 
         std::unique_ptr<ui::SegmentedToggle> styleStrip;
+        juce::TextButton learnButton { "Learn" }, learnRevertButton { "Revert" };
+        class LearnBar final : public juce::Component
+        {
+        public:
+            void setProgress (float p, bool active)
+            {
+                progress = juce::jlimit (0.0f, 1.0f, p);
+                listening = active;
+                repaint();
+            }
+            void paint (juce::Graphics& g) override
+            {
+                auto r = getLocalBounds().toFloat().reduced (0, 6);
+                g.setColour (ui::Palette::divider);
+                g.fillRoundedRectangle (r, 3.0f);
+                if (progress > 0.0f)
+                {
+                    g.setColour ((listening ? ui::Palette::frozen : ui::Palette::accent).withAlpha (listening ? 0.5f : 1.0f));
+                    g.fillRoundedRectangle (r.withWidth (r.getWidth() * progress), 3.0f);
+                }
+            }
+        private:
+            float progress = 0;
+            bool listening = false;
+        } learnBar;
         ui::ControlPanel prePanel, enhancePanel, linkPanel, timePanel, outPanel;
         ui::LevelMeter inMeter { "IN" }, outMeter { "OUT" };
         ui::GrHistory grHistory;

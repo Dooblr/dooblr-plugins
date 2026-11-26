@@ -78,7 +78,24 @@ namespace dooblrl::dsp
         return a;
     }
 
-    void LimiterEngine::ensureOversampler (int index, int block)
+    float LimiterEngine::effectiveLookaheadMs() const noexcept
+    {
+        if (settings.latencyMode <= 0)
+            return 0.0f;
+        const auto user = juce::jlimit (0.0f, maxLookaheadMs, settings.lookaheadMs);
+        if (settings.latencyMode >= 2)
+            return std::max (user, 8.0f);
+        return user;
+    }
+
+    int LimiterEngine::autoCompLatency() const noexcept
+    {
+        if (isZeroLatency() || ! settings.autoComp)
+            return 0;
+        return TruePeak::latency();
+    }
+
+    void LimiterEngine::ensureOversampler (int index)
     {
         const auto clamped = std::clamp (index, 0, 5);
         if (clamped == 0)
@@ -90,10 +107,28 @@ namespace dooblrl::dsp
         }
 
         const auto slot = clamped - 1; // 0..4 for 2x..32x
-        activeOs = oversamplers[(size_t) slot].get();
+        auto* fir = oversamplers[(size_t) slot].get();
+        auto* iir = iirOversamplers[(size_t) slot].get();
+
+        if (isZeroLatency())
+        {
+            // Min-phase IIR: keep Zero at 0 samples if the IIR reports none; otherwise skip OS.
+            if (iir != nullptr && (int) std::llround (iir->getLatencyInSamples()) == 0)
+            {
+                activeOs = iir;
+                osFactor = factorForIndex (clamped);
+                osLatency = 0;
+                return;
+            }
+            activeOs = nullptr;
+            osFactor = 1;
+            osLatency = 0;
+            return;
+        }
+
+        activeOs = fir;
         osFactor = factorForIndex (clamped);
-        osLatency = activeOs != nullptr ? (int) std::llround (activeOs->getLatencyInSamples()) : 0;
-        (void) block;
+        osLatency = fir != nullptr ? (int) std::llround (fir->getLatencyInSamples()) : 0;
     }
 
     void LimiterEngine::prepare (double sr, int maxBlk, int oversamplingIndex)
@@ -104,31 +139,41 @@ namespace dooblrl::dsp
 
         for (auto& slot : oversamplers)
             slot.reset();
+        for (auto& slot : iirOversamplers)
+            slot.reset();
 
-        auto makeOs = [&] (int log2Factor)
+        auto makeOs = [&] (int log2Factor, bool iir)
         {
             const auto slot = log2Factor - 1;
-            oversamplers[(size_t) slot] = std::make_unique<juce::dsp::Oversampling<float>> (
+            auto& dest = iir ? iirOversamplers[(size_t) slot] : oversamplers[(size_t) slot];
+            dest = std::make_unique<juce::dsp::Oversampling<float>> (
                 (size_t) maxChannels,
                 (size_t) log2Factor,
-                juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple,
+                iir ? juce::dsp::Oversampling<float>::filterHalfBandPolyphaseIIR
+                    : juce::dsp::Oversampling<float>::filterHalfBandFIREquiripple,
                 true,
                 true);
-            oversamplers[(size_t) slot]->initProcessing ((size_t) maxBlock);
+            dest->initProcessing ((size_t) maxBlock);
         };
 
         // 2x / 4x / 8x are always live so the control can switch during playback.
         for (int log2 = 1; log2 <= 3; ++log2)
-            makeOs (log2);
+        {
+            makeOs (log2, false);
+            makeOs (log2, true);
+        }
         if (osIndex >= 4)
-            makeOs (osIndex);
+        {
+            makeOs (osIndex, false);
+            makeOs (osIndex, true);
+        }
 
-        ensureOversampler (osIndex, maxBlock);
+        ensureOversampler (osIndex);
 
         const auto maxLook = (int) std::llround (maxLookaheadMs * 0.001 * sampleRate);
-        hostLookahead = std::max (0, (int) std::llround (std::min (maxLookaheadMs, settings.lookaheadMs) * 0.001 * sampleRate));
+        hostLookahead = std::max (0, (int) std::llround (effectiveLookaheadMs() * 0.001 * sampleRate));
         osLookahead = hostLookahead * osFactor;
-        reportedLatency = hostLookahead + osLatency + autoCompLatency();
+        reportedLatency = isZeroLatency() ? 0 : hostLookahead + osLatency + autoCompLatency();
 
         delaySize = std::max (maxLook * 32 + 64, 256); // enough for 32x at max lookahead
         delayL.assign ((size_t) delaySize, 0.0f);
@@ -439,25 +484,22 @@ namespace dooblrl::dsp
         const auto n = std::min (numSamples, (int) dryL.size());
 
         const auto neededIndex = std::clamp (settings.oversamplingIndex, 0, 5);
-        if (neededIndex != osIndex)
-        {
-            // Switching to a factor that was not prepared stays on the current
-            // oversampler until the host calls prepareToPlay (no audio-thread alloc).
-            if (neededIndex == 0 || oversamplers[(size_t) (neededIndex - 1)] != nullptr)
-            {
-                osIndex = neededIndex;
-                ensureOversampler (osIndex, maxBlock);
-                std::fill (delayL.begin(), delayL.end(), 0.0f);
-                std::fill (delayR.begin(), delayR.end(), 0.0f);
-                delayWrite = 0;
-                autoTp.prepare (sampleRate * (double) osFactor);
-            }
-        }
+        const auto slotReady = neededIndex == 0
+            || (isZeroLatency() ? iirOversamplers[(size_t) (neededIndex - 1)] != nullptr
+                                : oversamplers[(size_t) (neededIndex - 1)] != nullptr);
+        // Switching to a factor that was not prepared stays on the current
+        // oversampler until the host calls prepareToPlay (no audio-thread alloc).
+        if (slotReady)
+            osIndex = neededIndex;
+        auto* previousOs = activeOs;
+        ensureOversampler (osIndex);
+        if (activeOs != previousOs && activeOs != nullptr)
+            activeOs->reset();
 
-        const auto lookMs = std::max (settings.lookaheadMs, a.minLookaheadMs);
+        const auto lookMs = isZeroLatency() ? 0.0f : std::max (effectiveLookaheadMs(), a.minLookaheadMs);
         hostLookahead = std::max (0, (int) std::llround (std::min (maxLookaheadMs, lookMs) * 0.001 * sampleRate));
         osLookahead = std::min (delaySize - 8, hostLookahead * osFactor);
-        reportedLatency = hostLookahead + osLatency + autoCompLatency();
+        reportedLatency = isZeroLatency() ? 0 : hostLookahead + osLatency + autoCompLatency();
 
         for (int i = 0; i < n; ++i)
         {
@@ -570,7 +612,6 @@ namespace dooblrl::dsp
                     acL[(size_t) acWrite] = ol;
                     acR[(size_t) acWrite] = or_;
                     const auto newest = acWrite;
-                    const auto acRead = (acWrite - TruePeak::latency() + acSize) % acSize;
                     const auto tp = std::max (autoTp.peakFromRing (acL.data(), acSize, newest),
                                               autoTp.peakFromRing (acR.data(), acSize, newest));
                     const auto acCeil = dbToLinear (settings.ceilingDb - 0.05f);
@@ -581,8 +622,20 @@ namespace dooblrl::dsp
                         autoCompGain = want; // instant attack for the duration of the over
                     else
                         autoCompGain = want + (autoCompGain - want) * coeffForMs (sampleRate, 8.0f);
-                    ol = acL[(size_t) acRead] * autoCompGain;
-                    or_ = acR[(size_t) acRead] * autoCompGain;
+
+                    if (isZeroLatency())
+                    {
+                        // No reconstruction delay: duck the current sample. Inter-sample peaks
+                        // that need future taps may slip until the next sample (Zero tradeoff).
+                        ol *= autoCompGain;
+                        or_ *= autoCompGain;
+                    }
+                    else
+                    {
+                        const auto acRead = (acWrite - TruePeak::latency() + acSize) % acSize;
+                        ol = acL[(size_t) acRead] * autoCompGain;
+                        or_ = acR[(size_t) acRead] * autoCompGain;
+                    }
                     acWrite = (acWrite + 1) % acSize;
                 }
 

@@ -1114,6 +1114,7 @@ dooblr-vocals 0.3.0 replaces the previous Low-shelf / Mid / High-shelf EQ page w
 
 ## 16. Changelog
 
+- **2026-11-26**: dooblr-L 0.1.3 adds a scrolling I/O history (input fill, processed output, GR overlay, dB scale, lock-free FIFO), Learn auto-setup on a background CPU thread (no GPU), and a Latency mode parameter (Zero / Natural / High, default Zero, reported latency 0). Additive only; no token change.
 - **2026-11-25**: dooblr-L 0.1.2 adds a draggable Pre-Process threshold line on the GR history (host gestures, Shift/Cmd fine, double-click reset, knob stays in sync). No graph hint text. Additive only; no token change.
 - **2026-11-25**: dooblr-L 0.1.1 sizes the Output strip from ControlPanel preferred height so knob value boxes stay inside the panel at 940×600 / 1080×660 / 2400×1400; layout tests assert that. LoadCheck default remains zero latency; `--expect-latency N` / `--allow-latency` are per-invocation. Additive only; no token change.
 - **2026-11-25**: dooblr-L 0.1.0 added as a sibling VST3 effect (product `dooblr-L`, target `DooblrL`, plugin code `Dbll`). One page: header, eight-style strip, I/O + GR history + LUFS meters, Pre-Process / Enhance / Link / Time / Output. Two-stage limiter (pre-process overshoot + Enhance), Auto Comp true-peak catch, Off–32× oversampling. Existing palette, ControlPanel, undo history; no new colour, font, radius or alpha tokens. User presets via `common/PresetPaths`. Installer 0.1.7 lists it. Additive only; no existing rule, token name or value changed; no JSON change.

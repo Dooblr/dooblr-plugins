@@ -58,6 +58,7 @@ namespace dooblrl
           timePanel (p.getState(), "Time", Palette::master, {
               { id::lookahead, "Look", Kind::knob },
               { id::oversampling, "OS", Kind::combo, 88 },
+              { id::latencyMode, "Latency", Kind::combo, 96 },
           }),
           outPanel (p.getState(), "Output", Palette::accent, {
               { id::inputGain, "Input", Kind::knob },
@@ -113,11 +114,32 @@ namespace dooblrl
         styleStrip->setTooltip ("Limiting style");
         addAndMakeVisible (*styleStrip);
 
+        learnButton.setComponentID ("learn");
+        learnButton.setTooltip ("Listen to 20 s of incoming audio, then pick limiter settings that stay loud without flattening transients. Analysis runs on a background CPU thread (no GPU).");
+        learnButton.onClick = [this] { toggleLearn(); };
+        learnRevertButton.setComponentID ("learnRevert");
+        learnRevertButton.setTooltip ("Restore the settings from before the last Learn.");
+        learnRevertButton.onClick = [this]
+        {
+            proc.revertLearn();
+            updateLearnUi();
+            updateUndoButtons();
+        };
+        learnBar.setComponentID ("learnProgress");
+        addAndMakeVisible (learnButton);
+        addAndMakeVisible (learnRevertButton);
+        addAndMakeVisible (learnBar);
+
         addAndMakeVisible (prePanel);
         addAndMakeVisible (enhancePanel);
         addAndMakeVisible (linkPanel);
         addAndMakeVisible (timePanel);
         addAndMakeVisible (outPanel);
+        if (auto* box = dynamic_cast<juce::ComboBox*> (findControl (id::latencyMode)))
+            box->setTooltip ("Zero: no lookahead, no oversampling delay (min-phase IIR or Off). "
+                             "True-peak catching still honours the ceiling as well as a zero-look path can. "
+                             "Natural: the Look knob plus linear-phase oversampling. "
+                             "High: at least 8 ms look plus linear-phase oversampling.");
         addAndMakeVisible (inMeter);
         addAndMakeVisible (outMeter);
         addAndMakeVisible (grHistory);
@@ -126,26 +148,16 @@ namespace dooblrl
         loudness.onReset = [this]
         {
             proc.resetMeters();
-            grHistory.getModel().reset();
+            grHistory.clear();
         };
 
         proc.presetChanged.addChangeListener (this);
         refreshPresetBox();
         updateUndoButtons();
         updateDimmed();
+        updateLearnUi();
 
-        vblank = std::make_unique<juce::VBlankAttachment> (this, [this]
-        {
-            const auto m = proc.takeMeters();
-            const auto now = juce::Time::getMillisecondCounterHiRes();
-            inMeter.push (m.inputPeakL, m.inputPeakR, m.inputTruePeakL, m.inputTruePeakR, now);
-            outMeter.push (m.outputPeakL, m.outputPeakR, m.outputTruePeakL, m.outputTruePeakR, now);
-            grHistory.push (m.gainReductionDb, now);
-            const auto target = params::lufsTargetValue ((int) std::lround (
-                state.getRawParameterValue (id::lufsTarget)->load()));
-            loudness.setReadings (m.momentaryLufs, m.shortTermLufs, m.integratedLufs, m.lra, m.hasIntegrated, target);
-            updateDimmed();
-        });
+        vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { pollMeters(); });
 
         setResizable (true, true);
         setResizeLimits (minWidth, minHeight, maxWidth, maxHeight);
@@ -157,8 +169,26 @@ namespace dooblrl
     {
         stopTimer();
         vblank.reset();
+        if (proc.isLearning())
+            proc.cancelLearn();
         proc.presetChanged.removeChangeListener (this);
         setLookAndFeel (nullptr);
+    }
+
+    void DooblrLEditor::pollMeters()
+    {
+        const auto n = proc.getHistoryTap().popFrames (historyScratch.data(), (int) historyScratch.size());
+        if (n > 0)
+            grHistory.ingest (historyScratch.data(), n);
+
+        const auto m = proc.takeMeters();
+        const auto now = juce::Time::getMillisecondCounterHiRes();
+        inMeter.push (m.inputPeakL, m.inputPeakR, m.inputTruePeakL, m.inputTruePeakR, now);
+        outMeter.push (m.outputPeakL, m.outputPeakR, m.outputTruePeakL, m.outputTruePeakR, now);
+        const auto target = params::lufsTargetValue ((int) std::lround (
+            state.getRawParameterValue (id::lufsTarget)->load()));
+        loudness.setReadings (m.momentaryLufs, m.shortTermLufs, m.integratedLufs, m.lra, m.hasIntegrated, target);
+        updateDimmed();
     }
 
     juce::Component* DooblrLEditor::findControl (const juce::String& parameterId) const
@@ -175,6 +205,8 @@ namespace dooblrl
     void DooblrLEditor::timerCallback()
     {
         updateUndoButtons();
+        proc.pollLearn();
+        updateLearnUi();
         if (transientStatus.isNotEmpty() && juce::Time::getMillisecondCounter() > transientStatusUntil)
         {
             transientStatus.clear();
@@ -202,6 +234,41 @@ namespace dooblrl
         const auto ditherOn = state.getRawParameterValue (id::dither)->load() > 0.5f;
         if (auto* c = findControl (id::shaping))
             ui::setDimmed (*c, ! ditherOn);
+        const auto zero = (int) std::lround (state.getRawParameterValue (id::latencyMode)->load()) <= 0;
+        if (auto* c = findControl (id::lookahead))
+            ui::setDimmed (*c, zero);
+    }
+
+    void DooblrLEditor::toggleLearn()
+    {
+        if (proc.isLearning())
+            proc.cancelLearn();
+        else
+            proc.startLearn();
+        updateLearnUi();
+    }
+
+    void DooblrLEditor::updateLearnUi()
+    {
+        const auto busy = proc.isLearning();
+        learnButton.setButtonText (busy ? "Cancel" : "Learn");
+        const auto canRevert = proc.canRevertLearn() && ! busy;
+        const auto visChanged = learnRevertButton.isVisible() != canRevert || learnBar.isVisible() != busy;
+        learnRevertButton.setVisible (canRevert);
+        learnRevertButton.setEnabled (canRevert);
+        learnBar.setVisible (busy);
+        learnBar.setProgress (proc.learnProgress(), busy);
+        const auto text = proc.getLearnStatus();
+        if (text.isNotEmpty())
+            statusLabel.setText (text, juce::dontSendNotification);
+        if (visChanged)
+            resized();
+    }
+
+    void DooblrLEditor::refreshLearnUi()
+    {
+        proc.pollLearn();
+        updateLearnUi();
     }
 
     void DooblrLEditor::setStatus (const juce::String& text)
@@ -349,6 +416,15 @@ namespace dooblrl
             header.removeFromLeft (4);
             redoButton.setBounds (header.removeFromLeft (50).withSizeKeepingCentre (50, 24));
             header.removeFromLeft (8);
+            learnButton.setBounds (header.removeFromLeft (56).withSizeKeepingCentre (56, 24));
+            header.removeFromLeft (4);
+            if (learnRevertButton.isVisible())
+            {
+                learnRevertButton.setBounds (header.removeFromLeft (56).withSizeKeepingCentre (56, 24));
+                header.removeFromLeft (4);
+            }
+            else
+                learnRevertButton.setBounds ({});
 
             bypassButton.setBounds (header.removeFromRight (88).withSizeKeepingCentre (88, 24));
             header.removeFromRight (8);
@@ -360,7 +436,15 @@ namespace dooblrl
             presetBox.setBounds (header.removeFromRight (presetWidth).withSizeKeepingCentre (presetWidth, 26));
         }
 
-        statusLabel.setBounds (bounds.removeFromBottom (16).reduced (24, 0));
+        auto statusRow = bounds.removeFromBottom (16).reduced (24, 0);
+        if (learnBar.isVisible())
+        {
+            learnBar.setBounds (statusRow.removeFromRight (100));
+            statusRow.removeFromRight (8);
+        }
+        else
+            learnBar.setBounds ({});
+        statusLabel.setBounds (statusRow);
         auto body = bounds.reduced (margin, 8);
 
         const auto styleH = juce::jlimit (48, 64, body.getHeight() / 11);
@@ -372,7 +456,22 @@ namespace dooblrl
             styleStrip->setBounds (row);
         }
 
-        const auto meterH = juce::jlimit (120, 280, body.getHeight() * 36 / 100);
+        const auto colGap = panelGap;
+        const auto w = body.getWidth();
+        const auto preW = (w - 3 * colGap) * 34 / 100;
+        const auto enhW = (w - 3 * colGap) * 22 / 100;
+        const auto linkW = (w - 3 * colGap) * 22 / 100;
+        const auto timeW = juce::jmax (1, w - preW - enhW - linkW - 3 * colGap);
+        const auto colNeed = 16 + juce::jmax (prePanel.getPreferredHeight (juce::jmax (1, preW - 20)),
+                                             enhancePanel.getPreferredHeight (juce::jmax (1, enhW - 20)),
+                                             linkPanel.getPreferredHeight (juce::jmax (1, linkW - 20)),
+                                             timePanel.getPreferredHeight (juce::jmax (1, timeW - 20)));
+        constexpr int outPadX = 10, outPadY = 8;
+        const auto outNeed = juce::jmax (outPanel.getPreferredHeight (juce::jmax (1, w - 2 * outPadX)) + 2 * outPadY, 108);
+        const auto minLower = colNeed + panelGap + outNeed;
+        auto meterH = juce::jlimit (120, 280, body.getHeight() * 36 / 100);
+        if (body.getHeight() - meterH - panelGap < minLower)
+            meterH = juce::jmax (96, body.getHeight() - panelGap - minLower);
         meterArea = body.removeFromTop (meterH);
         body.removeFromTop (panelGap);
         {
@@ -388,7 +487,6 @@ namespace dooblrl
             grHistory.setBounds (row);
         }
 
-        constexpr int outPadX = 10, outPadY = 8;
         const auto outInnerW = juce::jmax (1, body.getWidth() - 2 * outPadX);
         const auto outContentH = outPanel.getPreferredHeight (outInnerW);
         const auto outH = juce::jmax (outContentH + 2 * outPadY,
@@ -397,11 +495,6 @@ namespace dooblrl
         body.removeFromBottom (panelGap);
         outPanel.setBounds (outArea.reduced (outPadX, outPadY));
 
-        const auto colGap = panelGap;
-        const auto w = body.getWidth();
-        const auto preW = (w - 3 * colGap) * 34 / 100;
-        const auto enhW = (w - 3 * colGap) * 22 / 100;
-        const auto linkW = (w - 3 * colGap) * 22 / 100;
         preArea = body.removeFromLeft (preW);
         body.removeFromLeft (colGap);
         enhanceArea = body.removeFromLeft (enhW);

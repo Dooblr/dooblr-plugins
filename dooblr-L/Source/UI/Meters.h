@@ -8,6 +8,7 @@
 #include <juce_gui_basics/juce_gui_basics.h>
 
 #include "Theme.h"
+#include "../DSP/HistoryTap.h"
 #include "../DSP/LimiterEngine.h"
 
 namespace dooblrl::ui
@@ -60,10 +61,14 @@ namespace dooblrl::ui
         int lastPicture = 0;
     };
 
-    /** GR history (newest right) with a draggable threshold line. Cached grid, no hint text.
-        The line is the Pre-Process **threshold** (−40 dB at the bottom of the plot, 0 dB at the
-        top). GR still uses 0–24 dB (0 at the bottom). Vertical drag writes threshold with
-        begin/endChangeGesture; Shift or Command is 0.1× fine adjust; double-click resets. */
+    /** Scrolling input / output / GR history with a draggable threshold line. Cached grid and
+        waveform image, no hint text.
+
+        Y axis is level: 0 dB at the top, −40 dB at the bottom. Input is a dim filled peak
+        envelope; output is a brighter fill and line on top of it; GR is a distinct overlay
+        from the top down and in the band between input and output. The line is Pre-Process
+        **threshold**. Vertical drag writes threshold with begin/endChangeGesture; Shift or
+        Command is 0.1× fine adjust; double-click resets. */
     class GrHistory final : public juce::Component
     {
     public:
@@ -71,10 +76,19 @@ namespace dooblrl::ui
         static constexpr float thresholdMaxDb = 0.0f;
         static constexpr float hitSlopPx = 7.0f;
         static constexpr float fineDragScale = 0.1f;
+        static constexpr float scaleWidth = 32.0f;
+        static constexpr int maxColumns = 4096;
+
+        struct Column
+        {
+            float inPeakDb = thresholdMinDb, outPeakDb = thresholdMinDb, grDb = 0;
+        };
 
         explicit GrHistory (juce::AudioProcessorValueTreeState&);
 
-        void push (float grDb, double nowMs);
+        void ingest (const dsp::HistoryFrame* frames, int numFrames);
+        void pushColumn (const Column&);
+        void clear() noexcept;
         GrMeterModel& getModel() noexcept { return model; }
         void paint (juce::Graphics&) override;
         void resized() override;
@@ -87,21 +101,29 @@ namespace dooblrl::ui
         void mouseDoubleClick (const juce::MouseEvent&) override;
 
         juce::Rectangle<float> plotBounds() const noexcept;
-        float thresholdDbToY (float db) const noexcept;
+        float levelDbToY (float db) const noexcept;
+        float thresholdDbToY (float db) const noexcept { return levelDbToY (db); }
         float yToThresholdDb (float y) const noexcept;
         float getThresholdLineY() const noexcept { return thresholdDbToY (shownDb); }
         float getThresholdDb() const noexcept { return shownDb; }
 
+        int getFilledColumns() const noexcept { return filled; }
+        Column getColumnFromOldest (int index) const noexcept;
+        Column getColumnFromNewest (int index) const noexcept;
+
     private:
         void rebuildGrid();
+        void rebuildWaveform();
+        void drawColumn (juce::Graphics&, juce::Rectangle<float> plot, float x, float width, const Column&) const;
         bool overThresholdLine (juce::Point<float>) const noexcept;
         void setHover (bool);
         void applyDragY (float y);
+        static float toDb (float linear) noexcept;
 
         GrMeterModel model;
-        juce::Image grid;
-        double lastMs = -1.0;
-        int lastPicture = 0;
+        juce::Image grid, waveform;
+        std::array<Column, maxColumns> ring {};
+        int write = 0, filled = 0;
 
         juce::RangedAudioParameter* thresholdParam = nullptr;
         std::unique_ptr<juce::ParameterAttachment> thresholdAttachment;

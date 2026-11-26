@@ -11,12 +11,15 @@
 #include "PluginProcessor.h"
 #include "Parameters.h"
 #include "Presets.h"
+#include "DSP/HistoryTap.h"
+#include "DSP/LearnSetup.h"
 #include "DSP/LimiterEngine.h"
 #include "DSP/Loudness.h"
 #include "DSP/TruePeak.h"
 #include "UI/Meters.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <complex>
 #include <cstdlib>
@@ -24,10 +27,32 @@
 #include <functional>
 #include <iomanip>
 #include <iostream>
+#include <new>
 #include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace
+{
+    thread_local bool countAllocations = false;
+    thread_local int allocationCount = 0;
+}
+
+void* operator new (std::size_t size)
+{
+    if (countAllocations)
+        ++allocationCount;
+    if (auto* p = std::malloc (size == 0 ? 1 : size))
+        return p;
+    throw std::bad_alloc();
+}
+
+void* operator new[] (std::size_t size) { return operator new (size); }
+void operator delete (void* p) noexcept { std::free (p); }
+void operator delete[] (void* p) noexcept { std::free (p); }
+void operator delete (void* p, std::size_t) noexcept { std::free (p); }
+void operator delete[] (void* p, std::size_t) noexcept { std::free (p); }
 
 namespace
 {
@@ -272,9 +297,9 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRL_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
+        check (juce::String (JucePlugin_VersionString) == "0.1.3", "version 0.1.3");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "Bypass is the host bypass parameter");
-        check ((int) p->getParameters().size() == 19, "19 automatable parameters (got " + std::to_string ((int) p->getParameters().size()) + ")");
+        check ((int) p->getParameters().size() == 20, "20 automatable parameters (got " + std::to_string ((int) p->getParameters().size()) + ")");
 
         auto layout = p->getBusesLayout();
         layout.inputBuses.getReference (0) = juce::AudioChannelSet::mono();
@@ -287,7 +312,7 @@ namespace
             id::threshold, id::attack, id::release, id::knee, id::enhance, id::style,
             id::oversampling, id::lookahead, id::transientLink, id::releaseLink,
             id::inputGain, id::ceiling, id::unityGain, id::delta, id::autoComp,
-            id::dither, id::shaping, id::lufsTarget, id::bypass
+            id::dither, id::shaping, id::lufsTarget, id::bypass, id::latencyMode
         };
         for (auto* pid : ids)
             check (p->getState().getParameter (pid) != nullptr, std::string (pid) + " is in the layout");
@@ -296,6 +321,8 @@ namespace
         check (std::abs (get (*p, id::enhance)) < 0.01f, "default Enhance is 0");
         check (std::abs (get (*p, id::dither)) < 0.01f, "dither is Off by default");
         check (get (*p, id::autoComp) > 0.5f, "Auto Comp is on by default");
+        check (std::abs (get (*p, id::latencyMode)) < 0.01f, "default latency mode is Zero");
+        check (p->getLatencySamples() == 0, "Zero mode reports 0 latency (got " + std::to_string (p->getLatencySamples()) + ")");
         check (p->getLatencySamples() == p->getEngine().latencySamples(), "reported latency matches the engine");
         note ("version " JucePlugin_VersionString ", latency " + std::to_string (p->getLatencySamples()) + " samples");
     }
@@ -324,6 +351,7 @@ namespace
                + fmt (dsp::linearToDb (sp), 3) + " dB, ceiling " + fmt (dsp::linearToDb (ceilLin), 3) + ")");
 
         defaults (*p);
+        set (*p, id::latencyMode, 1.0f); // Natural: Auto Comp has the 11-sample reconstruction delay
         set (*p, id::oversampling, 0.0f);
         set (*p, id::dither, 0.0f);
         set (*p, id::unityGain, 0.0f);
@@ -352,30 +380,8 @@ namespace
         note ("sample " + fmt (dsp::linearToDb (sampleP), 3) + " dB, true-peak " + fmt (dsp::linearToDb (tp), 3) + " dBTP");
     }
 
-    void testLatency()
+    int impulsePeakIndex (const Stereo& out)
     {
-        auto p = makeProcessor();
-        defaults (*p);
-        set (*p, id::oversampling, 0.0f);
-        set (*p, id::lookahead, 2.0f);
-        set (*p, id::dither, 0.0f);
-        set (*p, id::autoComp, 0.0f);
-        set (*p, id::enhance, 0.0f);
-        set (*p, id::inputGain, 0.0f);
-        set (*p, id::threshold, 0.0f); // no GR on a small impulse
-        set (*p, id::unityGain, 0.0f);
-        set (*p, id::delta, 0.0f);
-        set (*p, id::bypass, 0.0f);
-        p->prepareToPlay (defaultRate, defaultBlock);
-
-        const auto expected = p->getLatencySamples();
-        check (expected == p->getEngine().latencySamples(), "getLatencySamples matches engine");
-        check (expected == p->getEngine().lookaheadSamples(), "OS Off: latency is the lookahead delay ("
-               + std::to_string (expected) + ")");
-
-        Stereo in ((size_t) defaultRate / 10);
-        in.l[0] = in.r[0] = 0.1f;
-        const auto out = render (*p, in);
         int peakAt = 0;
         float maxv = 0;
         for (int i = 0; i < (int) out.l.size(); ++i)
@@ -383,6 +389,40 @@ namespace
             const auto v = std::abs (out.l[(size_t) i]);
             if (v > maxv) { maxv = v; peakAt = i; }
         }
+        return peakAt;
+    }
+
+    void configureImpulse (Processor& p)
+    {
+        set (p, id::dither, 0.0f);
+        set (p, id::autoComp, 0.0f);
+        set (p, id::enhance, 0.0f);
+        set (p, id::inputGain, 0.0f);
+        set (p, id::threshold, 0.0f);
+        set (p, id::unityGain, 0.0f);
+        set (p, id::delta, 0.0f);
+        set (p, id::bypass, 0.0f);
+        set (p, id::lookahead, 2.0f);
+    }
+
+    void testLatency()
+    {
+        auto p = makeProcessor();
+        defaults (*p);
+        configureImpulse (*p);
+        set (*p, id::latencyMode, 1.0f); // Natural: look + FIR
+        set (*p, id::oversampling, 0.0f);
+        p->prepareToPlay (defaultRate, defaultBlock);
+
+        const auto expected = p->getLatencySamples();
+        check (expected == p->getEngine().latencySamples(), "getLatencySamples matches engine");
+        check (expected == p->getEngine().lookaheadSamples(), "Natural, OS Off: latency is the lookahead delay ("
+               + std::to_string (expected) + ")");
+
+        Stereo in ((size_t) defaultRate / 10);
+        in.l[0] = in.r[0] = 0.1f;
+        const auto out = render (*p, in);
+        const auto peakAt = impulsePeakIndex (out);
         check (std::abs (peakAt - expected) <= 1, "impulse peak at reported latency (got "
                + std::to_string (peakAt) + ", expected " + std::to_string (expected) + ")");
 
@@ -396,16 +436,42 @@ namespace
         Stereo in4 ((size_t) defaultRate / 5);
         in4.l[0] = in4.r[0] = 0.08f;
         const auto out4 = render (*p, in4);
-        int peak4 = 0;
-        float max4 = 0;
-        for (int i = 0; i < (int) out4.l.size(); ++i)
-        {
-            const auto v = std::abs (out4.l[(size_t) i]);
-            if (v > max4) { max4 = v; peak4 = i; }
-        }
+        const auto peak4 = impulsePeakIndex (out4);
         check (std::abs (peak4 - lat4) <= 2, "4x impulse peak at reported latency (got "
                + std::to_string (peak4) + ", expected " + std::to_string (lat4) + ")");
         note ("1x latency " + std::to_string (expected) + ", 4x " + std::to_string (lat4));
+
+        defaults (*p);
+        configureImpulse (*p);
+        set (*p, id::latencyMode, 0.0f);
+        set (*p, id::oversampling, 2.0f);
+        set (*p, id::lookahead, 20.0f);
+        set (*p, id::autoComp, 1.0f);
+        p->prepareToPlay (defaultRate, defaultBlock);
+        check (p->getLatencySamples() == 0, "Zero mode reports 0 latency with OS, look and Auto Comp on (got "
+               + std::to_string (p->getLatencySamples()) + ")");
+        Stereo zIn ((size_t) defaultRate / 10);
+        zIn.l[0] = zIn.r[0] = 0.1f;
+        const auto zOut = render (*p, zIn);
+        const auto zPeak = impulsePeakIndex (zOut);
+        check (std::abs (zPeak) <= 1, "Zero mode impulse is not delayed (peak at " + std::to_string (zPeak) + ")");
+
+        defaults (*p);
+        configureImpulse (*p);
+        set (*p, id::latencyMode, 2.0f); // High: at least 8 ms look + FIR
+        set (*p, id::oversampling, 2.0f);
+        set (*p, id::lookahead, 2.0f);
+        p->prepareToPlay (defaultRate, defaultBlock);
+        const auto latHigh = p->getLatencySamples();
+        check (latHigh == p->getEngine().latencySamples(), "High: host latency matches engine");
+        check (latHigh > lat4, "High latency exceeds Natural 4x (" + std::to_string (latHigh)
+               + " vs " + std::to_string (lat4) + ")");
+        Stereo hIn ((size_t) defaultRate / 5);
+        hIn.l[0] = hIn.r[0] = 0.08f;
+        const auto hOut = render (*p, hIn);
+        const auto hPeak = impulsePeakIndex (hOut);
+        check (std::abs (hPeak - latHigh) <= 2, "High impulse peak at reported latency (got "
+               + std::to_string (hPeak) + ", expected " + std::to_string (latHigh) + ")");
     }
 
     void testEnhanceTransparency()
@@ -679,6 +745,7 @@ namespace
         {
             auto p = makeProcessor();
             defaults (*p);
+            set (*p, id::latencyMode, 1.0f); // Natural: FIR oversampling reports its delay
             set (*p, id::oversampling, (float) idx);
             set (*p, id::dither, 0.0f);
             set (*p, id::autoComp, 0.0f);
@@ -770,6 +837,21 @@ namespace
             q->setCurrentProgram (modernIndex);
             check (std::abs (get (*q, id::style) - 5.0f) < 0.01f, "Modern Stream factory preset selects Modern");
         }
+
+        {
+            auto saved = makeProcessor();
+            defaults (*saved);
+            set (*saved, id::latencyMode, 2.0f);
+            set (*saved, id::threshold, -9.0f);
+            juce::MemoryBlock highBlob;
+            saved->getStateInformation (highBlob);
+            auto loaded = makeProcessor();
+            defaults (*loaded);
+            check (std::abs (get (*loaded, id::latencyMode)) < 0.01f, "fresh instance is Zero");
+            loaded->setStateInformation (highBlob.getData(), (int) highBlob.getSize());
+            check (std::abs (get (*loaded, id::latencyMode) - 2.0f) < 0.01f, "state restores Latency High");
+            check (std::abs (get (*loaded, id::threshold) + 9.0f) < 0.05f, "state still restores Threshold");
+        }
     }
 
     void testNoDeadParameters()
@@ -793,6 +875,7 @@ namespace
 
         auto p = makeProcessor();
         defaults (*p);
+        set (*p, id::latencyMode, 1.0f); // Natural so Lookahead and OS delays are audible
         set (*p, id::oversampling, 0.0f); // keep OS Off so other params aren't fighting FIR delay
         set (*p, id::threshold, -8.0f);
         set (*p, id::inputGain, 6.0f);
@@ -808,6 +891,7 @@ namespace
             { id::enhance, 70.0f, "Enhance" },
             { id::style, 4.0f, "Style Aggressive" },
             { id::lookahead, 10.0f, "Lookahead" },
+            { id::latencyMode, 2.0f, "Latency High" },
             { id::transientLink, 0.0f, "Transient Link" },
             { id::releaseLink, 0.0f, "Release Link" },
             { id::inputGain, 8.0f, "Input" },
@@ -821,6 +905,7 @@ namespace
         for (const auto& c : cases)
         {
             defaults (*p);
+            set (*p, id::latencyMode, 1.0f);
             set (*p, id::oversampling, 0.0f);
             set (*p, id::threshold, -8.0f);
             set (*p, id::inputGain, 6.0f);
@@ -883,6 +968,7 @@ namespace
 
         {
             defaults (*p);
+            set (*p, id::latencyMode, 1.0f);
             set (*p, id::oversampling, 0.0f);
             const auto o0 = snapshot (*p);
             set (*p, id::oversampling, 2.0f);
@@ -1016,11 +1102,12 @@ namespace
                    label + " GR history fits (" + hist.toString().toStdString() + ")");
         }
 
-        // Paint budget: GR history + loudness at 1x, default and max size.
+        // Paint budget: scrolling I/O + GR history at 1x, all three sizes.
         {
             std::string report;
             double worstAvg = 0.0;
-            for (auto size : { juce::Point<int> { 1080, 660 }, juce::Point<int> { 2400, 1400 } })
+            const juce::Point<int> paintSizes[] { { 940, 600 }, { 1080, 660 }, { 2400, 1400 } };
+            for (auto size : paintSizes)
             {
                 editor->setSize (size.x, size.y);
                 auto& g = editor->getGrHistory();
@@ -1031,7 +1118,8 @@ namespace
                 double total = 0.0;
                 for (int i = 0; i < frames; ++i)
                 {
-                    g.push ((float) (6.0 + 4.0 * std::sin (i * 0.2)), (double) i * 16.0);
+                    const auto t = (float) i * 0.2f;
+                    g.pushColumn ({ -4.0f + 3.0f * std::sin (t), -8.0f + 2.0f * std::sin (t), 6.0f + 2.0f * std::sin (t) });
                     const auto t0 = juce::Time::getMillisecondCounterHiRes();
                     g.paintEntireComponent (gr, true);
                     total += juce::Time::getMillisecondCounterHiRes() - t0;
@@ -1040,32 +1128,10 @@ namespace
                 worstAvg = std::max (worstAvg, avg);
                 report += "  " + std::to_string (size.x) + "x" + std::to_string (size.y) + ": " + fmt (avg, 2) + " ms avg;";
             }
-            note ("GR history paint (software renderer):" + report);
-            check (worstAvg < 4.0, "a GR-history frame paints in under 4 ms on average at 1x ("
+            note ("level history paint (software renderer):" + report);
+            check (worstAvg < 4.0, "a level-history frame paints in under 4 ms on average at 1x ("
                    + fmt (worstAvg, 2) + " ms)");
         }
-
-        auto snapshot = [&] (const char* suffix)
-        {
-            const auto prefix = std::getenv ("DOOBLRL_EDITOR_SNAPSHOT");
-            if (prefix == nullptr)
-                return;
-            const auto image = editor->createComponentSnapshot (editor->getLocalBounds(), true, 1.0f);
-            const juce::File file (juce::String (prefix) + suffix + ".png");
-            file.deleteFile();
-            juce::FileOutputStream stream (file);
-            if (stream.openedOk() && juce::PNGImageFormat().writeImageToStream (image, stream))
-                note ("snapshot: " + file.getFullPathName().toStdString());
-            else
-                check (false, "could not write snapshot " + file.getFullPathName().toStdString());
-        };
-
-        editor->setSize (1080, 660);
-        snapshot ("-1080x660");
-        editor->setSize (940, 600);
-        snapshot ("-940x600");
-        editor->setSize (2400, 1400);
-        snapshot ("-2400x1400");
     }
 
     void testThresholdLineDrag()
@@ -1176,6 +1242,438 @@ namespace
         threshold->removeListener (&gestures);
     }
 
+    void configureGrabbingLimiter (Processor& p)
+    {
+        set (p, id::oversampling, 0.0f);
+        set (p, id::latencyMode, 0.0f);
+        set (p, id::threshold, -12.0f);
+        set (p, id::attack, 0.01f);
+        set (p, id::release, 5.0f);
+        set (p, id::lookahead, 0.0f);
+        set (p, id::knee, 0.0f);
+        set (p, id::enhance, 0.0f);
+        set (p, id::style, 0.0f); // Transparent
+        set (p, id::inputGain, 0.0f);
+        set (p, id::ceiling, -0.3f);
+        set (p, id::autoComp, 0.0f);
+        set (p, id::lufsTarget, 0.0f);
+        set (p, id::unityGain, 0.0f);
+        set (p, id::delta, 0.0f);
+        set (p, id::bypass, 0.0f);
+    }
+
+    void pollUntilEmpty (Editor& editor)
+    {
+        for (int i = 0; i < 8; ++i)
+            editor.pollMeters();
+    }
+
+    void writeSnapshot (Editor& editor, const char* suffix)
+    {
+        const auto prefix = std::getenv ("DOOBLRL_EDITOR_SNAPSHOT");
+        if (prefix == nullptr)
+            return;
+        const auto image = editor.createComponentSnapshot (editor.getLocalBounds(), true, 1.0f);
+        const juce::File file (juce::String (prefix) + suffix + ".png");
+        file.deleteFile();
+        juce::FileOutputStream stream (file);
+        if (stream.openedOk() && juce::PNGImageFormat().writeImageToStream (image, stream))
+            note ("snapshot: " + file.getFullPathName().toStdString());
+        else
+            check (false, "could not write snapshot " + file.getFullPathName().toStdString());
+    }
+
+    void testHistoryFifo()
+    {
+        dsp::HistoryTap tap;
+        tap.prepare (48000.0);
+        check (tap.getSamplesPerFrame() == 256, "48 kHz frames are 256 samples (~5 ms)");
+
+        dsp::HistoryFrame a { -0.4f, 0.5f, 0.5f, 0.25f, 6.0f };
+        tap.addBlock (a, 128);
+        dsp::HistoryFrame out {};
+        check (tap.popFrames (&out, 1) == 0, "a half-frame stays in the accumulator");
+
+        dsp::HistoryFrame b { -0.6f, 0.3f, 0.6f, 0.2f, 3.0f };
+        tap.addBlock (b, 128);
+        check (tap.popFrames (&out, 1) == 1, "two half-blocks emit one frame");
+        check (std::abs (out.inMin + 0.6f) < 1.0e-6f && std::abs (out.inMax - 0.5f) < 1.0e-6f,
+               "min/max keep the extrema across the window");
+        check (std::abs (out.inPeak - 0.6f) < 1.0e-6f && std::abs (out.outPeak - 0.25f) < 1.0e-6f
+                   && std::abs (out.grDb - 6.0f) < 1.0e-6f,
+               "peak and GR keep the window maxima");
+        check (tap.getFramesWritten() == 1, "one frame written");
+
+        for (int i = 0; i < 8; ++i)
+            tap.addBlock (a, 256);
+        dsp::HistoryFrame buf[16] {};
+        const auto n = tap.popFrames (buf, 16);
+        check (n == 8, "pop returns the queued frames (" + std::to_string (n) + ")");
+        tap.discardAll();
+        check (tap.popFrames (buf, 16) == 0, "discardAll empties the FIFO");
+    }
+
+    void testBurstOverlayAndPaint()
+    {
+        EditorFixture f;
+        if (f.editor == nullptr)
+            return;
+
+        auto& editor = *f.editor;
+        auto& proc = *f.processor;
+        configureGrabbingLimiter (proc);
+        proc.prepareToPlay (defaultRate, defaultBlock);
+
+        const auto quiet = (size_t) std::lround (0.25 * defaultRate);
+        const auto burst = (size_t) std::lround (0.20 * defaultRate);
+        const auto after = (size_t) std::lround (0.35 * defaultRate);
+        Stereo in (quiet + burst + after);
+        for (size_t i = 0; i < quiet; ++i)
+            in.l[i] = in.r[i] = 0.01f * (float) std::sin (twoPi * 1000.0 * (double) i / defaultRate);
+        for (size_t i = 0; i < burst; ++i)
+        {
+            const auto s = (float) std::sin (twoPi * 1000.0 * (double) (quiet + i) / defaultRate);
+            in.l[quiet + i] = in.r[quiet + i] = s;
+        }
+        for (size_t i = 0; i < after; ++i)
+        {
+            const auto idx = quiet + burst + i;
+            in.l[idx] = in.r[idx] = 0.01f * (float) std::sin (twoPi * 1000.0 * (double) idx / defaultRate);
+        }
+
+        render (proc, in);
+        pollUntilEmpty (editor);
+
+        auto& graph = editor.getGrHistory();
+        check (graph.getFilledColumns() > 20, "history filled from the burst render ("
+               + std::to_string (graph.getFilledColumns()) + " columns)");
+
+        const auto perFrame = proc.getHistoryTap().getSamplesPerFrame();
+        const auto burstStartCol = (int) (quiet / (size_t) perFrame);
+        const auto burstEndCol = (int) ((quiet + burst) / (size_t) perFrame);
+        const auto tailCol = (int) ((quiet + burst + (size_t) std::lround (0.08 * defaultRate)) / (size_t) perFrame);
+
+        int hotWithGr = 0, quietBeforeGr = 0, quietAfterGr = 0, hotWithGap = 0;
+        const auto n = graph.getFilledColumns();
+        for (int i = 0; i < n; ++i)
+        {
+            const auto c = graph.getColumnFromOldest (i);
+            const auto hasGr = c.grDb > 0.75f;
+            if (i < burstStartCol - 2 && hasGr)
+                ++quietBeforeGr;
+            if (i >= burstStartCol && i <= burstEndCol)
+            {
+                if (hasGr) ++hotWithGr;
+                if (c.inPeakDb > c.outPeakDb + 0.5f) ++hotWithGap;
+            }
+            if (i >= tailCol && hasGr)
+                ++quietAfterGr;
+        }
+
+        check (quietBeforeGr == 0, "GR overlay is off before the burst ("
+               + std::to_string (quietBeforeGr) + " quiet columns with GR)");
+        check (hotWithGr >= 4 && hotWithGap >= 4,
+               "GR overlay and in>out only during the burst (GR cols " + std::to_string (hotWithGr)
+                   + ", in>out " + std::to_string (hotWithGap) + ")");
+        check (quietAfterGr == 0, "GR overlay is off after the burst tail ("
+               + std::to_string (quietAfterGr) + " late columns with GR)");
+
+        const juce::Point<int> sizes[] { { 940, 600 }, { 1080, 660 }, { 2400, 1400 } };
+        for (auto size : sizes)
+        {
+            editor.setSize (size.x, size.y);
+            const auto label = std::to_string (size.x) + "x" + std::to_string (size.y);
+            const auto plot = graph.plotBounds();
+            juce::Image image (juce::Image::ARGB, juce::jmax (2, graph.getWidth()), juce::jmax (2, graph.getHeight()), true);
+            juce::Graphics g (image);
+            graph.paintEntireComponent (g, true);
+
+            int grCol = -1;
+            for (int i = 0; i < graph.getFilledColumns(); ++i)
+                if (graph.getColumnFromOldest (i).grDb > 2.0f)
+                    grCol = i;
+            check (grCol >= 0, label + " has a column with GR > 2 dB");
+            if (grCol < 0)
+                continue;
+
+            const auto visible = juce::jmin (graph.getFilledColumns(), (int) plot.getWidth());
+            const auto x0 = (int) plot.getX() + ((int) plot.getWidth() - visible);
+            const auto x = juce::jlimit ((int) plot.getX() + 1, (int) plot.getRight() - 2,
+                                         x0 + visible - (graph.getFilledColumns() - grCol));
+            const auto col = graph.getColumnFromOldest (grCol);
+            const auto yGr = juce::jlimit ((int) plot.getY() + 2, (int) plot.getBottom() - 4,
+                                           (int) plot.getY() + 4);
+            const auto yOut = juce::jlimit ((int) plot.getY() + 2, (int) plot.getBottom() - 8,
+                                            (int) graph.levelDbToY (col.outPeakDb) + 6);
+            const auto yIn = juce::jlimit ((int) plot.getY() + 2, (int) plot.getBottom() - 8,
+                                           (int) graph.levelDbToY (col.inPeakDb) + 2);
+
+            const auto grPx = image.getPixelAt (x, yGr);
+            const auto outPx = image.getPixelAt (x, yOut);
+            const auto inPx = image.getPixelAt (x, yIn);
+            check (grPx.getRed() > grPx.getBlue() && grPx.getFloatAlpha() > 0.05f,
+                   label + " GR overlay is warm/visible at the top (rgba "
+                       + std::to_string (grPx.getRed()) + "," + std::to_string (grPx.getGreen()) + ","
+                       + std::to_string (grPx.getBlue()) + ")");
+            check (outPx.getGreen() > outPx.getRed() && outPx.getFloatAlpha() > 0.05f,
+                   label + " output overlay is teal/visible (rgba "
+                       + std::to_string (outPx.getRed()) + "," + std::to_string (outPx.getGreen()) + ","
+                       + std::to_string (outPx.getBlue()) + ")");
+            check (std::abs (grPx.getRed() - outPx.getRed()) > 8
+                       || std::abs (grPx.getGreen() - outPx.getGreen()) > 8,
+                   label + " GR and output overlays are distinct colours");
+            check (inPx.getFloatAlpha() > 0.02f, label + " input fill is visible");
+        }
+
+        // Sustained hot tone so snapshots show input, output and GR together.
+        Stereo hot ((size_t) std::lround (1.2 * defaultRate));
+        for (size_t i = 0; i < hot.size(); ++i)
+        {
+            const auto s = 0.95f * (float) std::sin (twoPi * 1000.0 * (double) i / defaultRate);
+            hot.l[i] = hot.r[i] = s;
+        }
+        graph.clear();
+        proc.resetMeters();
+        render (proc, hot);
+        pollUntilEmpty (editor);
+        check (graph.getFilledColumns() > 40 && graph.getColumnFromNewest (0).grDb > 1.0f,
+               "sustained tone fills the history with GR");
+
+        editor.setSize (1080, 660);
+        writeSnapshot (editor, "-1080x660");
+        editor.setSize (940, 600);
+        writeSnapshot (editor, "-940x600");
+        editor.setSize (2400, 1400);
+        writeSnapshot (editor, "-2400x1400");
+    }
+
+    void testNoAudioThreadAllocation()
+    {
+        auto p = makeProcessor();
+        configureGrabbingLimiter (*p);
+        p->prepareToPlay (defaultRate, defaultBlock);
+        const auto warmup = sine ((size_t) defaultBlock * 4, 1000.0, 0.9);
+        render (*p, warmup); // first buffers may warm caches
+
+        const auto in = sine ((size_t) defaultBlock * 40, 1000.0, 0.9);
+        int allocations = 0;
+        juce::AudioBuffer<float> buffer (2, defaultBlock);
+        juce::MidiBuffer midi;
+        size_t i = 0;
+        while (i < in.size())
+        {
+            const auto n = (int) std::min ((size_t) defaultBlock, in.size() - i);
+            buffer.setSize (2, n, false, false, true);
+            for (int s = 0; s < n; ++s)
+            {
+                buffer.setSample (0, s, in.l[i + (size_t) s]);
+                buffer.setSample (1, s, in.r[i + (size_t) s]);
+            }
+            allocationCount = 0;
+            countAllocations = true;
+            p->processBlock (buffer, midi);
+            countAllocations = false;
+            allocations += allocationCount;
+            i += (size_t) n;
+        }
+        check (allocations == 0, "processBlock allocates nothing on the audio thread ("
+               + std::to_string (allocations) + " news)");
+    }
+
+    Stereo drumLoop (size_t n, double rate = defaultRate)
+    {
+        Stereo s (n);
+        const auto kickEvery = (size_t) std::lround (0.5 * rate);
+        const auto hatEvery = (size_t) std::lround (0.125 * rate);
+        for (size_t i = 0; i < n; ++i)
+        {
+            const auto t = (double) i / rate;
+            float v = (float) (0.72 * std::sin (twoPi * 80.0 * t));
+            const auto kickPhase = i % kickEvery;
+            const auto kickEnv = std::exp (-(double) kickPhase / (0.12 * rate));
+            v += (float) (0.95 * kickEnv * std::sin (twoPi * (55.0 + 80.0 * kickEnv) * t));
+            if ((i % kickEvery) == kickEvery / 2)
+            {
+                // snare: short noise burst on the backbeat
+            }
+            const auto snarePhase = (i + kickEvery / 2) % kickEvery;
+            if (snarePhase < (size_t) (0.04 * rate))
+            {
+                const auto snEnv = std::exp (-(double) snarePhase / (0.03 * rate));
+                const auto noise = (float) (2.0 * ((double) ((i * 1103515245u + 12345u) % 10000) / 10000.0 - 0.5));
+                v += (float) (0.7 * snEnv) * noise;
+            }
+            if (i % hatEvery < (size_t) (0.008 * rate))
+            {
+                const auto noise = (float) (2.0 * ((double) ((i * 1664525u + 1013904223u) % 10000) / 10000.0 - 0.5));
+                v += 0.18f * noise;
+            }
+            s.l[i] = s.r[i] = v;
+        }
+        for (size_t i = 0; i < n; ++i)
+        {
+            s.l[i] = juce::jlimit (-0.95f, 0.95f, s.l[i]);
+            s.r[i] = juce::jlimit (-0.95f, 0.95f, s.r[i]);
+        }
+        return s;
+    }
+
+    float integratedLufsOf (const Stereo& x, double rate, int latency)
+    {
+        dsp::LoudnessMeter loud;
+        loud.prepare (rate);
+        const auto start = std::min ((size_t) std::max (0, latency), x.size());
+        const auto n = (int) (x.size() - start);
+        if (n <= 0)
+            return -70.0f;
+        loud.process (x.l.data() + start, x.r.data() + start, n, 2);
+        return loud.hasIntegrated() ? loud.integratedLufs() : loud.shortTermLufs();
+    }
+
+    float onsetRetain (const Stereo& in, const Stereo& out, int hop)
+    {
+        if ((int) in.size() < hop * 4)
+            return 1.0f;
+        double retain = 0;
+        int count = 0;
+        float prevIn = 0;
+        const auto n = (int) std::min (in.size(), out.size());
+        for (int i = 0; i + hop < n; i += hop)
+        {
+            float inPeak = 0, outPeak = 0;
+            for (int k = 0; k < hop; ++k)
+            {
+                inPeak = std::max (inPeak, std::max (std::abs (in.l[(size_t) (i + k)]), std::abs (in.r[(size_t) (i + k)])));
+                outPeak = std::max (outPeak, std::max (std::abs (out.l[(size_t) (i + k)]), std::abs (out.r[(size_t) (i + k)])));
+            }
+            if (inPeak > prevIn * 1.6f && inPeak > 0.05f)
+            {
+                retain += outPeak / std::max (1.0e-6f, inPeak);
+                ++count;
+            }
+            prevIn = inPeak;
+        }
+        return count > 0 ? (float) (retain / (double) count) : 1.0f;
+    }
+
+    void testLearn()
+    {
+        auto p = makeProcessor();
+        defaults (*p);
+        set (*p, id::oversampling, 0.0f);
+        p->prepareToPlay (defaultRate, defaultBlock);
+
+        const auto drums = drumLoop ((size_t) std::lround (1.4 * defaultRate));
+        const auto defaultOut = render (*p, drums);
+        const auto defaultLufs = integratedLufsOf (defaultOut, defaultRate, p->getLatencySamples());
+
+        const auto a = dsp::LearnSetup::analyseAndSearch (drums.l.data(), drums.r.data(), (int) drums.size(), 2,
+                                                          defaultRate, p->readSettings());
+        const auto b = dsp::LearnSetup::analyseAndSearch (drums.l.data(), drums.r.data(), (int) drums.size(), 2,
+                                                          defaultRate, p->readSettings());
+        check (a.valid && b.valid, "Learn search returns a valid result");
+        check (std::abs (a.settings.thresholdDb - b.settings.thresholdDb) < 1.0e-5f
+                   && std::abs (a.settings.attackMs - b.settings.attackMs) < 1.0e-5f
+                   && a.settings.style == b.settings.style
+                   && std::abs (a.settings.enhance - b.settings.enhance) < 1.0e-5f
+                   && std::abs (a.targetLufs - b.targetLufs) < 1.0e-4f,
+               "Learn search is deterministic");
+
+        GestureCount gestures;
+        for (auto* pid : { id::threshold, id::attack, id::release, id::knee, id::enhance, id::style })
+            if (auto* q = param (*p, pid))
+                q->addListener (&gestures);
+
+        const auto applied = p->runLearnOnBuffer (drums.l.data(), drums.r.data(), (int) drums.size(), 2);
+        check (applied.valid, "runLearnOnBuffer applies a result");
+        check (gestures.begins == gestures.ends && gestures.begins >= 1,
+               "Learn apply is one balanced host gesture (begin " + std::to_string (gestures.begins)
+                   + ", end " + std::to_string (gestures.ends) + ")");
+        check (p->canRevertLearn(), "Learn stores a revert snapshot");
+        check (p->lastLearnTargetLufs() > -70.0f, "Learn reports a target loudness ("
+               + fmt (p->lastLearnTargetLufs(), 2) + " LUFS)");
+
+        const auto learnedOut = render (*p, drums);
+        check (allFinite (learnedOut), "learned output is finite");
+        const auto ceilLin = dsp::dbToLinear (get (*p, id::ceiling));
+        const auto sp = std::max (peak (learnedOut.l), peak (learnedOut.r));
+        check (sp <= ceilLin + 1.5e-4f, "Learn honours the ceiling (peak "
+               + fmt (dsp::linearToDb (sp), 3) + " dB vs " + fmt (dsp::linearToDb (ceilLin), 3) + ")");
+
+        const auto learnedLufs = integratedLufsOf (learnedOut, defaultRate, p->getLatencySamples());
+        check (learnedLufs > defaultLufs + 0.15f, "Learn on drums is louder than default ("
+               + fmt (learnedLufs, 2) + " vs " + fmt (defaultLufs, 2) + " LUFS)");
+
+        const auto retain = onsetRetain (drums, learnedOut, std::max (32, (int) std::lround (0.01 * defaultRate)));
+        check (retain > 0.55f, "Learn keeps transient peaks (onset retain " + fmt (retain, 3) + ")");
+
+        p->revertLearn();
+        check (std::abs (get (*p, id::threshold) - params::thresholdDefault) < 0.05f,
+               "Revert restores the default Threshold");
+        check (! p->canRevertLearn(), "Revert clears the snapshot");
+
+        for (auto* pid : { id::threshold, id::attack, id::release, id::knee, id::enhance, id::style })
+            if (auto* q = param (*p, pid))
+                q->removeListener (&gestures);
+    }
+
+    void testLearnThread()
+    {
+        auto p = makeProcessor();
+        defaults (*p);
+        p->prepareToPlay (defaultRate, defaultBlock);
+        const auto drums = drumLoop ((size_t) std::lround (0.4 * defaultRate));
+
+        p->startLearn (10.0f);
+        check (p->isLearning(), "Learn arms a listening take");
+
+        int allocations = 0;
+        juce::AudioBuffer<float> buffer (2, defaultBlock);
+        juce::MidiBuffer midi;
+        size_t i = 0;
+        while (i < drums.size())
+        {
+            const auto n = (int) std::min ((size_t) defaultBlock, drums.size() - i);
+            buffer.setSize (2, n, false, false, true);
+            for (int s = 0; s < n; ++s)
+            {
+                buffer.setSample (0, s, drums.l[i + (size_t) s]);
+                buffer.setSample (1, s, drums.r[i + (size_t) s]);
+            }
+            allocationCount = 0;
+            countAllocations = true;
+            p->processBlock (buffer, midi);
+            countAllocations = false;
+            allocations += allocationCount;
+            i += (size_t) n;
+        }
+        check (allocations == 0, "Learn capture does not allocate on the audio thread ("
+               + std::to_string (allocations) + " news)");
+        check (p->isLearning(), "analysis stays off the audio thread after capture blocks");
+        check (p->learnProgress() >= 0.0f, "Learn reports progress");
+
+        p->cancelLearn();
+        check (! p->isLearning(), "Cancel stops Learn");
+
+        EditorFixture f;
+        if (f.editor != nullptr)
+        {
+            check (f.editor->findControl (id::latencyMode) != nullptr, "Latency combo is in the editor");
+            auto& button = f.editor->getLearnButton();
+            check (button.getComponentID() == "learn" && button.getButtonText() == "Learn",
+                   "Learn button is in the header");
+            // triggerClick posts a command message; invoke the handler directly.
+            button.onClick();
+            f.editor->refreshLearnUi();
+            check (f.processor->isLearning() && button.getButtonText() == "Cancel",
+                   "Learn button arms and becomes Cancel");
+            button.onClick();
+            f.editor->refreshLearnUi();
+            check (! f.processor->isLearning() && button.getButtonText() == "Learn",
+                   "second click cancels Learn");
+        }
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
@@ -1196,6 +1694,11 @@ int main()
         { "no dead parameters",                            testNoDeadParameters },
         { "editor: size, version, one control, layout",    testEditor },
         { "editor: draggable threshold line",              testThresholdLineDrag },
+        { "history FIFO min/max/peak/GR",                  testHistoryFifo },
+        { "burst GR overlay, paint, snapshots",            testBurstOverlayAndPaint },
+        { "no audio-thread allocation",                    testNoAudioThreadAllocation },
+        { "Learn drums, determinism, revert",              testLearn },
+        { "Learn thread never blocks audio",               testLearnThread },
     };
 
     int failedTests = 0;

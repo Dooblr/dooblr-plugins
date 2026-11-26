@@ -6,7 +6,7 @@ peaks (harmonics and density) instead of hard-clipping them. Part of Dan
 Feinstein's **dooblr** suite.
 
 VST3 effect, macOS 11+ (arm64 / x86_64) and Windows x64, C++20, CMake, JUCE 8.0.15.
-Version **0.1.2**.
+Version **0.1.3**.
 
 Independently designed. No third-party names, logos, branding or assets appear
 in the plug-in, the UI or this document.
@@ -31,14 +31,29 @@ label): Transparent, Punchy, Dynamic (transient reshape before limiting),
 Allround, Aggressive (near-clip), Modern (clean, loud), Bus (deliberate pumping),
 Safe (avoid distortion).
 
-**Oversampling** Off / 2x / 4x / 8x / 16x / 32x (default 4x). Latency is reported
-to the host (lookahead + oversampler FIR). Lookahead 0–20 ms.
+**Oversampling** Off / 2x / 4x / 8x / 16x / 32x (default 4x).
+
+**Latency** Zero / Natural / High (default Zero). Zero reports 0 samples: no
+lookahead and no oversampling delay (min-phase IIR, or Off if the IIR would
+add delay). True-peak catching still honours the ceiling as well as a
+zero-look path can — inter-sample overs that need future taps may slip by
+one sample. Natural uses the Look knob plus linear-phase FIR oversampling.
+High uses at least 8 ms of lookahead plus linear-phase oversampling. The host
+is told via `setLatencySamples` whenever the mode changes.
+
+**Learn** listens to 10–30 s of incoming audio on a background CPU thread
+(lock-free FIFO from the audio thread; SIMD via `juce::FloatVectorOperations`,
+Accelerate on Mac). There is no GPU path. It scores style / threshold / attack
+/ release / knee / Enhance / lookahead / link for loudness vs transient
+retention and applies one undoable change. Revert restores the previous
+settings. The chosen loudness is shown in the status line.
 
 **Stereo link** — independent percent controls for transients vs release.
 
-**Meters** — input/output sample peak and true peak, gain-reduction history
+**Meters** — input/output sample peak and true peak, scrolling I/O history
+with processed output and gain-reduction overlaid on a dim input fill
 (the horizontal line is Pre-Process threshold: drag it, Shift/Cmd for fine,
-double-click resets; no captions on the graph),
+double-click resets; no captions or hint text on the graph),
 LUFS momentary / short-term / integrated, loudness range (LRA), Reset.
 Optional LUFS target (−23 / −16 / −14 / −12) slowly rides short-term loudness
 toward that value, still under the ceiling.
@@ -65,9 +80,9 @@ dooblr-L/scripts/build.sh
 Builds in `~/dooblr-build/dooblr-L`, runs `Tests/LimiterTests.cpp`, ad-hoc
 signs the bundle on macOS and installs it to `/Library/Audio/Plug-Ins/VST3/dooblr-L.vst3`
 when that folder is writable (never with sudo). LoadCheck is
-`DooblrLLoadCheck --expect-latency 168 <bundle> [version]` (48 kHz, default 4x
-OS + 2 ms lookahead + Auto Comp). Without `--expect-latency` / `--allow-latency`
-the tool still requires zero latency, same as the other suite LoadChecks.
+`DooblrLLoadCheck <bundle> [version]` (default Zero latency is 0). Pass
+`--expect-latency N` for Natural/High. Without those flags the tool requires
+zero latency, same as the other suite LoadChecks.
 
 Editor snapshots: `DOOBLRL_EDITOR_SNAPSHOT=/tmp/l ~/dooblr-build/dooblr-L/Tests/DooblrLTests`
 

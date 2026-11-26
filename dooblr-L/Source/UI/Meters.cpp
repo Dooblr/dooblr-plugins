@@ -172,10 +172,12 @@ namespace dooblrl::ui
 
     juce::Rectangle<float> GrHistory::plotBounds() const noexcept
     {
-        return getLocalBounds().toFloat().reduced (0.0f, 14.0f);
+        auto r = getLocalBounds().toFloat().reduced (0.0f, 8.0f);
+        r.removeFromRight (scaleWidth);
+        return r;
     }
 
-    float GrHistory::thresholdDbToY (float db) const noexcept
+    float GrHistory::levelDbToY (float db) const noexcept
     {
         return dbToY (db, plotBounds(), thresholdMinDb, thresholdMaxDb);
     }
@@ -185,6 +187,37 @@ namespace dooblrl::ui
         const auto plot = plotBounds();
         const auto t = juce::jlimit (0.0f, 1.0f, (plot.getBottom() - y) / juce::jmax (1.0f, plot.getHeight()));
         return thresholdMinDb + t * (thresholdMaxDb - thresholdMinDb);
+    }
+
+    float GrHistory::toDb (float linear) noexcept
+    {
+        return linear > 1.0e-6f ? 20.0f * std::log10 (linear) : thresholdMinDb;
+    }
+
+    GrHistory::Column GrHistory::getColumnFromOldest (int index) const noexcept
+    {
+        if (index < 0 || index >= filled)
+            return {};
+        const auto idx = (write - filled + index + maxColumns) % maxColumns;
+        return ring[(size_t) idx];
+    }
+
+    GrHistory::Column GrHistory::getColumnFromNewest (int index) const noexcept
+    {
+        if (index < 0 || index >= filled)
+            return {};
+        const auto idx = (write - 1 - index + maxColumns) % maxColumns;
+        return ring[(size_t) idx];
+    }
+
+    void GrHistory::clear() noexcept
+    {
+        write = filled = 0;
+        ring.fill ({});
+        model.reset();
+        waveform = {};
+        rebuildWaveform();
+        repaint();
     }
 
     bool GrHistory::overThresholdLine (juce::Point<float> p) const noexcept
@@ -214,7 +247,9 @@ namespace dooblrl::ui
     void GrHistory::resized()
     {
         grid = {};
+        waveform = {};
         rebuildGrid();
+        rebuildWaveform();
     }
 
     void GrHistory::rebuildGrid()
@@ -228,66 +263,154 @@ namespace dooblrl::ui
         auto bounds = getLocalBounds().toFloat();
         g.setColour (Palette::background);
         g.fillRect (bounds);
+
+        const auto plot = plotBounds();
         g.setColour (Palette::grid);
-        for (int db : { 0, 6, 12, 18, 24 })
+        const int ticks[] { 0, -6, -12, -18, -24, -30, -36, -40 };
+        g.setFont (juce::FontOptions (10.0f));
+        for (int db : ticks)
         {
-            const auto y = dbToY ((float) db, bounds.reduced (0, 14.0f), 0.0f, GrMeterModel::rangeDb);
-            g.drawHorizontalLine ((int) y, bounds.getX(), bounds.getRight());
+            const auto y = levelDbToY ((float) db);
+            g.setColour (Palette::grid);
+            g.fillRect (plot.getX(), y, plot.getWidth(), 1.0f);
+            g.setColour (Palette::textMuted);
+            g.drawText (juce::String (db),
+                        juce::Rectangle<float> (plot.getRight() + 2.0f, y - 7.0f, scaleWidth - 4.0f, 14.0f),
+                        juce::Justification::centredLeft, false);
         }
     }
 
-    void GrHistory::push (float grDb, double nowMs)
+    void GrHistory::drawColumn (juce::Graphics& g, juce::Rectangle<float> plot, float x, float width, const Column& c) const
     {
-        const auto dt = lastMs < 0.0 ? 0.0 : juce::jlimit (0.0, 0.1, (nowMs - lastMs) * 0.001);
-        lastMs = nowMs;
-        model.tick (grDb, dt, nowMs);
-        const auto pic = juce::roundToInt (model.getDisplayedDb() * 10)
-                         ^ (model.getHistoryFilled() << 4)
-                         ^ juce::roundToInt (model.historyNewest() * 8);
-        if (pic != lastPicture)
+        const auto bottom = plot.getBottom();
+        const auto yIn = juce::jlimit (plot.getY(), bottom, dbToY (c.inPeakDb, plot, thresholdMinDb, thresholdMaxDb));
+        const auto yOut = juce::jlimit (plot.getY(), bottom, dbToY (c.outPeakDb, plot, thresholdMinDb, thresholdMaxDb));
+        const auto range = thresholdMaxDb - thresholdMinDb;
+        const auto grH = juce::jlimit (0.0f, plot.getHeight(), c.grDb / range * plot.getHeight());
+
+        if (bottom > yIn)
         {
-            lastPicture = pic;
-            repaint();
+            g.setColour (Palette::spectrum.withAlpha (0.38f));
+            g.fillRect (x, yIn, width, bottom - yIn);
         }
+
+        if (yOut > yIn + 0.4f)
+        {
+            g.setColour (Palette::dynamic.withAlpha (0.55f));
+            g.fillRect (x, yIn, width, yOut - yIn);
+        }
+
+        if (bottom > yOut)
+        {
+            g.setColour (Palette::accent.withAlpha (0.78f));
+            g.fillRect (x, yOut, width, bottom - yOut);
+        }
+
+        g.setColour (Palette::accent);
+        g.fillRect (x, yOut - 0.8f, width, 1.6f);
+
+        if (grH > 0.35f)
+        {
+            g.setColour (Palette::dynamic.withAlpha (0.42f));
+            g.fillRect (x, plot.getY(), width, grH);
+        }
+    }
+
+    void GrHistory::rebuildWaveform()
+    {
+        const auto plot = plotBounds().toNearestInt();
+        if (plot.getWidth() <= 2 || plot.getHeight() <= 2)
+        {
+            waveform = {};
+            return;
+        }
+
+        const auto scale = (int) juce::jmax (1.0f, juce::Desktop::getInstance().getGlobalScaleFactor());
+        waveform = juce::Image (juce::Image::ARGB, plot.getWidth() * scale, plot.getHeight() * scale, true);
+        juce::Graphics g (waveform);
+        g.addTransform (juce::AffineTransform::scale ((float) scale));
+        g.setColour (juce::Colours::transparentBlack);
+        g.fillAll();
+
+        const auto local = juce::Rectangle<float> (0.0f, 0.0f, (float) plot.getWidth(), (float) plot.getHeight());
+        const auto visible = juce::jmin (filled, plot.getWidth());
+        const auto x0 = plot.getWidth() - visible;
+        for (int i = 0; i < visible; ++i)
+        {
+            const auto col = getColumnFromOldest (filled - visible + i);
+            drawColumn (g, local, (float) (x0 + i), 1.0f, col);
+        }
+    }
+
+    void GrHistory::pushColumn (const Column& c)
+    {
+        ring[(size_t) write] = c;
+        write = (write + 1) % maxColumns;
+        filled = juce::jmin (filled + 1, maxColumns);
+
+        const auto plot = plotBounds().toNearestInt();
+        if (! waveform.isValid() || plot.getWidth() <= 2)
+        {
+            rebuildWaveform();
+            repaint();
+            return;
+        }
+
+        const auto scale = (int) juce::jmax (1.0f, juce::Desktop::getInstance().getGlobalScaleFactor());
+        if (waveform.getWidth() != plot.getWidth() * scale || waveform.getHeight() != plot.getHeight() * scale)
+        {
+            rebuildWaveform();
+            repaint();
+            return;
+        }
+
+        if (waveform.getWidth() > scale)
+            waveform.moveImageSection (0, 0, scale, 0, waveform.getWidth() - scale, waveform.getHeight());
+
+        waveform.clear (juce::Rectangle<int> ((plot.getWidth() - 1) * scale, 0, scale, plot.getHeight() * scale));
+        juce::Graphics g (waveform);
+        g.addTransform (juce::AffineTransform::scale ((float) scale));
+        const auto local = juce::Rectangle<float> (0.0f, 0.0f, (float) plot.getWidth(), (float) plot.getHeight());
+        drawColumn (g, local, (float) (plot.getWidth() - 1), 1.0f, c);
+        repaint();
+    }
+
+    void GrHistory::ingest (const dsp::HistoryFrame* frames, int numFrames)
+    {
+        if (frames == nullptr || numFrames <= 0)
+            return;
+        for (int i = 0; i < numFrames; ++i)
+        {
+            Column c;
+            c.inPeakDb = juce::jlimit (thresholdMinDb, 6.0f, toDb (frames[i].inPeak));
+            c.outPeakDb = juce::jlimit (thresholdMinDb, 6.0f, toDb (frames[i].outPeak));
+            c.grDb = juce::jmax (0.0f, frames[i].grDb);
+            ring[(size_t) write] = c;
+            write = (write + 1) % maxColumns;
+            filled = juce::jmin (filled + 1, maxColumns);
+        }
+        rebuildWaveform();
+        repaint();
     }
 
     void GrHistory::paint (juce::Graphics& g)
     {
+        const auto inv = 1.0f / juce::jmax (1.0f, juce::Desktop::getInstance().getGlobalScaleFactor());
         if (grid.isValid())
-            g.drawImageTransformed (grid, juce::AffineTransform::scale (
-                1.0f / juce::jmax (1.0f, juce::Desktop::getInstance().getGlobalScaleFactor())));
+            g.drawImageTransformed (grid, juce::AffineTransform::scale (inv));
         else
-        {
             g.fillAll (Palette::background);
-        }
 
-        const auto bounds = plotBounds();
-        if (bounds.getWidth() >= 4.0f && model.getHistoryFilled() >= 2)
-        {
-            juce::Path path;
-            const auto n = model.getHistoryFilled();
-            for (int i = 0; i < n; ++i)
-            {
-                const auto x = bounds.getX() + bounds.getWidth() * (float) i / (float) (GrMeterModel::historyLength - 1);
-                const auto y = dbToY (model.historyOldest (i), bounds, 0.0f, GrMeterModel::rangeDb);
-                if (i == 0) path.startNewSubPath (x, y);
-                else        path.lineTo (x, y);
-            }
+        const auto plot = plotBounds();
+        if (waveform.isValid() && plot.getWidth() >= 4.0f)
+            g.drawImage (waveform, plot);
 
-            g.setColour (Palette::dynamic);
-            g.strokePath (path, juce::PathStrokeType (1.5f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
-
-            const auto peakY = dbToY (model.getPeakHoldDb(), bounds, 0.0f, GrMeterModel::rangeDb);
-            g.setColour (Palette::frozen);
-            g.fillRect (juce::Rectangle<float> (6.0f, 2.0f).withCentre ({ bounds.getRight() - 8.0f, peakY }));
-        }
-
-        if (bounds.getWidth() >= 4.0f)
+        if (plot.getWidth() >= 4.0f)
         {
             const auto active = hover || dragging;
             const auto y = getThresholdLineY();
             g.setColour (Palette::frozen.withAlpha (active ? 1.0f : 0.85f));
-            g.fillRect (bounds.getX(), y - (active ? 1.0f : 0.75f), bounds.getWidth(), active ? 2.0f : 1.5f);
+            g.fillRect (plot.getX(), y - (active ? 1.0f : 0.75f), plot.getWidth(), active ? 2.0f : 1.5f);
         }
     }
 

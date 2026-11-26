@@ -1,9 +1,13 @@
 #pragma once
 
 #include <array>
+#include <utility>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 
+#include "DSP/HistoryTap.h"
+#include "DSP/LearnSetup.h"
 #include "DSP/LimiterEngine.h"
 #include "UndoHistory.h"
 
@@ -46,7 +50,22 @@ namespace dooblrl
 
         dsp::Settings readSettings() const;
         dsp::Meters takeMeters() noexcept { return engine.takeMeters(); }
-        void resetMeters() noexcept { engine.resetMeters(); }
+        void resetMeters() noexcept { engine.resetMeters(); history.discardAll(); }
+        dsp::HistoryTap& getHistoryTap() noexcept { return history; }
+        dsp::LearnSetup& getLearnSetup() noexcept { return learn; }
+
+        void startLearn (float seconds = dsp::LearnSetup::defaultSeconds);
+        void cancelLearn();
+        void pollLearn();
+        void revertLearn();
+        bool isLearning() const noexcept { return learn.isBusy(); }
+        bool canRevertLearn() const noexcept { return haveLearnRevert; }
+        float learnProgress() const noexcept { return learn.progress(); }
+        float lastLearnTargetLufs() const noexcept { return learnedLufs; }
+        juce::String getLearnStatus() const { return learnStatus; }
+
+        /** Tests: analyse a buffer and apply as one undoable change. */
+        dsp::LearnResult runLearnOnBuffer (const float* left, const float* right, int numSamples, int numChannels);
 
         juce::String getPresetName() const;
         void setPresetName (const juce::String& name);
@@ -63,8 +82,20 @@ namespace dooblrl
         juce::AudioProcessorValueTreeState state;
         ParameterUndoHistory undoHistory;
         dsp::LimiterEngine engine;
+        dsp::HistoryTap history;
+        dsp::LearnSetup learn;
         std::unique_ptr<RawParameters> raw;
         int currentProgram = 0;
+
+        void applyLearnResult (const dsp::LearnResult& result, bool snapshotRevert);
+        void applyDenormalised (const juce::String& pid, float value);
+        void beginAllLearnGestures();
+        void endAllLearnGestures();
+
+        std::vector<std::pair<juce::RangedAudioParameter*, float>> learnRevert;
+        bool haveLearnRevert = false;
+        float learnedLufs = -70.0f;
+        juce::String learnStatus;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrLProcessor)
     };

@@ -30,6 +30,7 @@ namespace dooblrl::params
     juce::StringArray ditherNames()       { return { "Off", "16-bit", "24-bit" }; }
     juce::StringArray shapingNames()      { return { "Off", "Low", "Medium", "High" }; }
     juce::StringArray lufsTargetNames()   { return { "Off", "-23 LUFS", "-16 LUFS", "-14 LUFS", "-12 LUFS" }; }
+    juce::StringArray latencyModeNames()  { return { "Zero", "Natural", "High" }; }
 
     int oversamplingFactor (int index)
     {
@@ -185,6 +186,8 @@ namespace dooblrl::params
             juce::ParameterID { id::lufsTarget, 1 }, "LUFS Target", lufsTargetNames(), 0));
         layout.add (std::make_unique<juce::AudioParameterBool> (
             juce::ParameterID { id::bypass, 1 }, "Bypass", false));
+        layout.add (std::make_unique<juce::AudioParameterChoice> (
+            juce::ParameterID { id::latencyMode, 1 }, "Latency", latencyModeNames(), defaultLatencyMode));
 
         return layout;
     }

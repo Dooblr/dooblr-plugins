@@ -4,6 +4,9 @@
 #include "PluginEditor.h"
 #include "Presets.h"
 
+#include <algorithm>
+#include <cmath>
+
 namespace dooblrl
 {
     using namespace params;
@@ -37,11 +40,12 @@ namespace dooblrl
             shaping       = get (id::shaping);
             lufsTarget    = get (id::lufsTarget);
             bypass        = get (id::bypass);
+            latencyMode   = get (id::latencyMode);
         }
 
         std::atomic<float> *threshold, *attack, *release, *knee, *enhance, *style, *oversampling,
             *lookahead, *transientLink, *releaseLink, *inputGain, *ceiling, *unityGain, *delta,
-            *autoComp, *dither, *shaping, *lufsTarget, *bypass;
+            *autoComp, *dither, *shaping, *lufsTarget, *bypass, *latencyMode;
     };
 
     DooblrLProcessor::DooblrLProcessor()
@@ -56,10 +60,15 @@ namespace dooblrl
         state.state.setProperty ("presetName", presets::factory().front().name, nullptr);
         engine.setSettings (readSettings());
         engine.prepare (44100.0, maxChunk, (int) std::lround (raw->oversampling->load()));
+        history.prepare (44100.0);
+        learn.prepare (44100.0);
         setLatencySamples (engine.latencySamples());
     }
 
-    DooblrLProcessor::~DooblrLProcessor() = default;
+    DooblrLProcessor::~DooblrLProcessor()
+    {
+        learn.cancel();
+    }
 
     bool DooblrLProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
     {
@@ -89,6 +98,7 @@ namespace dooblrl
         s.shaping = juce::jlimit (0, params::numShaping - 1, (int) std::lround (raw->shaping->load()));
         s.lufsTarget = juce::jlimit (0, params::numLufsTargets - 1, (int) std::lround (raw->lufsTarget->load()));
         s.bypass = raw->bypass->load() > 0.5f;
+        s.latencyMode = juce::jlimit (0, params::numLatencyModes - 1, (int) std::lround (raw->latencyMode->load()));
         return s;
     }
 
@@ -97,6 +107,8 @@ namespace dooblrl
         const auto s = readSettings();
         engine.setSettings (s);
         engine.prepare (sampleRate, std::min (samplesPerBlock, maxChunk), s.oversamplingIndex);
+        history.prepare (sampleRate);
+        learn.prepare (sampleRate);
         setLatencySamples (engine.latencySamples());
     }
 
@@ -114,18 +126,160 @@ namespace dooblrl
 
         engine.setSettings (readSettings());
 
+        if (learn.isListening())
+            learn.pushAudio (main.getReadPointer (0),
+                             numChannels > 1 ? main.getReadPointer (1) : main.getReadPointer (0),
+                             numSamples, numChannels);
+
         for (int start = 0; start < numSamples; start += maxChunk)
         {
             const auto n = std::min (maxChunk, numSamples - start);
             float* io[2] {};
             for (int ch = 0; ch < numChannels; ++ch)
                 io[ch] = main.getWritePointer (ch, start);
+
+            dsp::HistoryFrame block;
+            block.inMin = 1.0e6f;
+            block.inMax = -1.0e6f;
+            for (int i = 0; i < n; ++i)
+            {
+                for (int ch = 0; ch < numChannels; ++ch)
+                {
+                    const auto s = io[ch][i];
+                    block.inMin = std::min (block.inMin, s);
+                    block.inMax = std::max (block.inMax, s);
+                    block.inPeak = std::max (block.inPeak, std::abs (s));
+                }
+            }
+
             engine.process (io, numChannels, n);
+
+            for (int i = 0; i < n; ++i)
+                for (int ch = 0; ch < numChannels; ++ch)
+                    block.outPeak = std::max (block.outPeak, std::abs (io[ch][i]));
+            block.grDb = engine.currentGainReductionDb();
+            history.addBlock (block, n);
         }
 
         const auto lat = engine.latencySamples();
         if (lat != getLatencySamples())
             setLatencySamples (lat);
+    }
+
+    namespace
+    {
+        const char* learnParamIds[] {
+            id::threshold, id::attack, id::release, id::knee, id::enhance, id::style,
+            id::lookahead, id::transientLink, id::releaseLink, id::autoComp
+        };
+    }
+
+    void DooblrLProcessor::startLearn (float seconds)
+    {
+        learnStatus = "Listening...";
+        learn.start (readSettings(), seconds);
+    }
+
+    void DooblrLProcessor::cancelLearn()
+    {
+        learn.cancel();
+        learnStatus = "Learn cancelled";
+    }
+
+    void DooblrLProcessor::applyDenormalised (const juce::String& pid, float value)
+    {
+        if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (state.getParameter (pid)))
+            p->setValueNotifyingHost (p->convertTo0to1 (value));
+    }
+
+    void DooblrLProcessor::beginAllLearnGestures()
+    {
+        for (auto* pid : learnParamIds)
+            if (auto* p = state.getParameter (pid))
+                p->beginChangeGesture();
+    }
+
+    void DooblrLProcessor::endAllLearnGestures()
+    {
+        for (auto* pid : learnParamIds)
+            if (auto* p = state.getParameter (pid))
+                p->endChangeGesture();
+    }
+
+    void DooblrLProcessor::applyLearnResult (const dsp::LearnResult& result, bool snapshotRevert)
+    {
+        if (! result.valid)
+        {
+            learnStatus = "Learn found nothing to change";
+            return;
+        }
+
+        if (snapshotRevert)
+        {
+            learnRevert.clear();
+            for (auto* pid : learnParamIds)
+            {
+                if (auto* p = dynamic_cast<juce::RangedAudioParameter*> (state.getParameter (pid)))
+                    learnRevert.push_back ({ p, p->getValue() });
+            }
+            haveLearnRevert = true;
+        }
+
+        const auto& s = result.settings;
+        beginAllLearnGestures();
+        applyDenormalised (id::threshold, s.thresholdDb);
+        applyDenormalised (id::attack, s.attackMs);
+        applyDenormalised (id::release, s.releaseMs);
+        applyDenormalised (id::knee, s.kneeDb);
+        applyDenormalised (id::enhance, s.enhance);
+        applyDenormalised (id::style, (float) s.style);
+        applyDenormalised (id::lookahead, s.lookaheadMs);
+        applyDenormalised (id::transientLink, s.transientLink * 100.0f);
+        applyDenormalised (id::releaseLink, s.releaseLink * 100.0f);
+        applyDenormalised (id::autoComp, s.autoComp ? 1.0f : 0.0f);
+        endAllLearnGestures();
+
+        learnedLufs = result.targetLufs;
+        learnStatus = "Learned  " + juce::String (result.targetLufs, 1) + " LUFS";
+    }
+
+    void DooblrLProcessor::pollLearn()
+    {
+        if (learn.isListening())
+        {
+            learnStatus = "Listening... " + juce::String ((int) std::lround (learn.progress() * 100.0f)) + " %";
+            return;
+        }
+        if (learn.isBusy())
+        {
+            learnStatus = "Analysing...";
+            return;
+        }
+        if (! learn.hasResult())
+            return;
+        applyLearnResult (learn.takeResult(), true);
+    }
+
+    void DooblrLProcessor::revertLearn()
+    {
+        if (! haveLearnRevert)
+            return;
+        beginAllLearnGestures();
+        for (auto& item : learnRevert)
+            item.first->setValueNotifyingHost (item.second);
+        endAllLearnGestures();
+        haveLearnRevert = false;
+        learnStatus = "Reverted Learn";
+    }
+
+    dsp::LearnResult DooblrLProcessor::runLearnOnBuffer (const float* left, const float* right,
+                                                         int numSamples, int numChannels)
+    {
+        const auto result = dsp::LearnSetup::analyseAndSearch (left, right, numSamples, numChannels,
+                                                               getSampleRate() > 1.0 ? getSampleRate() : 48000.0,
+                                                               readSettings());
+        applyLearnResult (result, true);
+        return result;
     }
 
     juce::AudioProcessorParameter* DooblrLProcessor::getBypassParameter() const

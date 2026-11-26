@@ -49,6 +49,7 @@ namespace dooblrl::dsp
         int shaping = 1;
         int lufsTarget = 0;
         bool bypass = false;
+        int latencyMode = 0; // 0 Zero, 1 Natural, 2 High
     };
 
     struct Meters
@@ -89,6 +90,7 @@ namespace dooblrl::dsp
 
         Meters takeMeters() noexcept;
         void resetMeters() noexcept;
+        float currentGainReductionDb() const noexcept { return grDb.load (std::memory_order_relaxed); }
 
         LoudnessMeter& getLoudness() noexcept { return loudness; }
         TruePeak& getOutputTruePeak() noexcept { return outTp; }
@@ -116,7 +118,7 @@ namespace dooblrl::dsp
         static StyleAlgo algoFor (int style) noexcept;
         static int factorForIndex (int index) noexcept;
 
-        void ensureOversampler (int index, int maxBlock);
+        void ensureOversampler (int index);
         void processHostRate (float* const* io, int numChannels, int numSamples, bool skipEnhance);
         void processOversampled (juce::dsp::AudioBlock<float> block, bool skipEnhance);
         void processSample (float& l, float& r, bool skipEnhance) noexcept;
@@ -124,7 +126,9 @@ namespace dooblrl::dsp
         float enhanceResidual (float x, float amount, const StyleAlgo& a) const noexcept;
         void applyDither (float& l, float& r) noexcept;
         float nextRandom() noexcept;
-        int autoCompLatency() const noexcept { return settings.autoComp ? TruePeak::latency() : 0; }
+        bool isZeroLatency() const noexcept { return settings.latencyMode <= 0; }
+        float effectiveLookaheadMs() const noexcept;
+        int autoCompLatency() const noexcept;
 
         Settings settings;
         double sampleRate = 48000.0;
@@ -132,7 +136,7 @@ namespace dooblrl::dsp
         int osFactor = 4, osIndex = 2, osLatency = 0, hostLookahead = 96, reportedLatency = 0;
         int osLookahead = 384;
 
-        std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, 5> oversamplers;
+        std::array<std::unique_ptr<juce::dsp::Oversampling<float>>, 5> oversamplers, iirOversamplers;
         juce::dsp::Oversampling<float>* activeOs = nullptr;
 
         std::vector<float> delayL, delayR, dryL, dryR, dryDelayL, dryDelayR;

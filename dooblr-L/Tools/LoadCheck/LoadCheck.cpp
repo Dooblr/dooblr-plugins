@@ -11,9 +11,8 @@
       DooblrLLoadCheck [--expect-latency N | --allow-latency] /path/to/dooblr-L.vst3 [expected-version]
 
     Latency (checked after prepareToPlay at 48 kHz + 32 process blocks):
-      default              must be 0 (same as the other suite LoadChecks)
-      --expect-latency N   must equal N (dooblr-L: 168 at 48 kHz with default 4x OS,
-                           2 ms lookahead and Auto Comp)
+      default              must be 0 (Zero latency mode; same as the other suite LoadChecks)
+      --expect-latency N   must equal N (Natural/High: lookahead + linear-phase OS + Auto Comp)
       --allow-latency      any reported latency is accepted
 
     Exit code 0 only when every step succeeds. 2 = bad arguments.

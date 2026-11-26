@@ -29,6 +29,7 @@ namespace dooblrl::params
         inline constexpr const char* shaping       = "shaping";
         inline constexpr const char* lufsTarget    = "lufsTarget";
         inline constexpr const char* bypass        = "bypass";
+        inline constexpr const char* latencyMode   = "latencyMode"; // append-only
     }
 
     inline constexpr int numStyles = 8;
@@ -39,6 +40,8 @@ namespace dooblrl::params
     inline constexpr int numShaping = 4;
     inline constexpr int defaultShapingIndex = 1;        // Low
     inline constexpr int numLufsTargets = 5;
+    inline constexpr int numLatencyModes = 3;
+    inline constexpr int defaultLatencyMode = 0; // Zero
 
     inline constexpr float thresholdDefault = -3.0f;
     inline constexpr float attackDefaultMs = 0.5f;
@@ -58,6 +61,7 @@ namespace dooblrl::params
     juce::StringArray ditherNames();
     juce::StringArray shapingNames();
     juce::StringArray lufsTargetNames();
+    juce::StringArray latencyModeNames();
 
     int oversamplingFactor (int index);
     float lufsTargetValue (int index); // NaN when Off
