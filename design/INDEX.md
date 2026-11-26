@@ -32,10 +32,11 @@ User Library.
 | dooblr-0coast | 0.1.1 | JUCE instrument VST3 | 30 | 2026-11-16 | [design/plugins/dooblr-0coast.md](plugins/dooblr-0coast.md) |
 | dooblr-bass | 0.1.1 | JUCE instrument VST3 | 46 | 2026-11-16 | [design/plugins/dooblr-bass.md](plugins/dooblr-bass.md) |
 | dooblr-chords | 0.6.2 | Max for Live MIDI effect that writes chord progressions into Session View clip slots. | 22 | 2026-11-14 | [design/plugins/dooblr-chords.md](plugins/dooblr-chords.md) |
+| dooblr-chroma | 0.1.0 | JUCE instrument VST3 | ~144 | 2026-11-26 | [design/plugins/dooblr-chroma.md](plugins/dooblr-chroma.md) |
 | dooblr-distressor | 0.1.3 | JUCE effect VST3 | 14 | 2026-11-16 | [design/plugins/dooblr-distressor.md](plugins/dooblr-distressor.md) |
 | dooblr-feedback | 0.1.5 | JUCE effect VST3 | 22 | 2026-11-16 | [design/plugins/dooblr-feedback.md](plugins/dooblr-feedback.md) |
 | dooblr-generate | 0.3.2 | JUCE instrument VST3 | 10 | 2026-11-14 | [design/plugins/dooblr-generate.md](plugins/dooblr-generate.md) |
-| dooblr-installer | 0.1.6 | JUCE app |  | 2026-11-16 | [design/plugins/dooblr-installer.md](plugins/dooblr-installer.md) |
+| dooblr-installer | 0.1.6 | JUCE app |  | 2026-11-26 | [design/plugins/dooblr-installer.md](plugins/dooblr-installer.md) |
 | dooblr-kick | 0.3.9 | JUCE instrument VST3 | ~143 | 2026-11-16 | [design/plugins/dooblr-kick.md](plugins/dooblr-kick.md) |
 | dooblr-m | 0.1.7 | JUCE instrument VST3 | 51 | 2026-11-16 | [design/plugins/dooblr-m.md](plugins/dooblr-m.md) |
 | dooblr-prophet | 0.3.4 | JUCE instrument VST3; plus a Max for Live companion in `m4l/` | ~88 | 2026-11-16 | [design/plugins/dooblr-prophet.md](plugins/dooblr-prophet.md) |
