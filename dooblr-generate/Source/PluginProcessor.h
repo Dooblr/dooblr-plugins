@@ -103,6 +103,10 @@ public:
     std::shared_ptr<const dooblrgenerate::engine::Sample> getCurrentSample() const { return slot.current(); }
     /** Plays the current sample at the root key (the editor's Play button); audio thread picks it up. */
     void requestPreview() noexcept { previewRequested.store (true); }
+    /** Fades out any sounding voice (the editor's Stop All button); audio thread picks it up. */
+    void requestStop() noexcept { stopRequested.store (true); }
+    /** Audio-thread playback flag, polled by the editor. True while a voice (or its fade) is sounding. */
+    bool isPlaying() const noexcept { return sounding.load (std::memory_order_relaxed); }
 
     /** Increments whenever the current sample changes (the editor watches it). */
     int getSampleSerial() const noexcept { return sampleSerial.load(); }
@@ -123,6 +127,8 @@ private:
     dooblrgenerate::engine::Sampler sampler;
     std::atomic<bool> previewRequested { false };
     std::atomic<bool> sourcePreviewRequested { false };
+    std::atomic<bool> stopRequested { false };
+    std::atomic<bool> sounding { false };
     std::atomic<int> sampleSerial { 0 };
     std::atomic<int> sourceSerial { 0 };
     juce::String sourceName, sourceMessage;
