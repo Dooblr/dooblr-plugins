@@ -31,6 +31,33 @@ namespace dooblrchroma::params
             return (v >= 0.0f ? "+" : "") + juce::String (v, 0) + " ct";
         }
 
+        juce::String formatQ (float v, int)
+        {
+            return juce::String (v, 2);
+        }
+
+        juce::String formatHzRate (float v, int)
+        {
+            return juce::String (v, v < 1.0f ? 2 : 1) + " Hz";
+        }
+
+        juce::String formatPartial (float v, int)
+        {
+            return juce::String (v, 2);
+        }
+
+        juce::String formatMaterial (float v, int)
+        {
+            return juce::String (v, 2);
+        }
+
+        juce::String formatSignedSt (float v, int)
+        {
+            if (v > -0.05f && v < 0.05f)
+                return "0 st";
+            return (v > 0.0f ? "+" : "") + juce::String (v, 1) + " st";
+        }
+
         juce::ParameterID pidStr (const juce::String& identifier)
         {
             return { identifier, 1 };
@@ -64,7 +91,7 @@ namespace dooblrchroma::params
             layout.add (std::make_unique<juce::AudioParameterFloat> (pidStr (idOf ("_pLevel")),
                                                                      label + " P.Level",
                                                                      juce::NormalisableRange<float> (-12.0f, 12.0f, 0.01f), 0.0f,
-                                                                     Attributes().withLabel ("st")));
+                                                                     Attributes().withLabel ("st").withStringFromValueFunction (formatSignedSt)));
             layout.add (std::make_unique<juce::AudioParameterFloat> (pidStr (idOf ("_pRate")),
                                                                      label + " P.Rate",
                                                                      rangeWithCentre (0.001f, 2.0f, 0.08f), 0.05f,
@@ -88,7 +115,8 @@ namespace dooblrchroma::params
                                                                      Attributes().withStringFromValueFunction (formatPct)));
             layout.add (std::make_unique<juce::AudioParameterFloat> (pidStr (idOf ("_material")),
                                                                      label + " Material",
-                                                                     juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), -0.35f));
+                                                                     juce::NormalisableRange<float> (-1.0f, 1.0f, 0.01f), -0.35f,
+                                                                     Attributes().withStringFromValueFunction (formatMaterial)));
             layout.add (std::make_unique<juce::AudioParameterFloat> (pidStr (idOf ("_tone")),
                                                                      label + " Tone",
                                                                      juce::NormalisableRange<float> (-12.0f, 12.0f, 0.1f), -3.0f,
@@ -123,7 +151,8 @@ namespace dooblrchroma::params
                 const auto suffix = "_part" + juce::String (i);
                 layout.add (std::make_unique<juce::AudioParameterFloat> (pidStr (idOf (suffix.toRawUTF8())),
                                                                          label + " Partial " + juce::String (i),
-                                                                         juce::NormalisableRange<float> (1.0f, 32.0f, 0.01f), (float) i));
+                                                                         juce::NormalisableRange<float> (1.0f, 32.0f, 0.01f), (float) i,
+                                                                         Attributes().withStringFromValueFunction (formatPartial)));
             }
         }
     }
@@ -157,7 +186,8 @@ namespace dooblrchroma::params
                                                                  rangeWithCentre (40.0f, 12000.0f, 1500.0f), 1800.0f,
                                                                  Attributes().withStringFromValueFunction (formatHz)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::noiseQ), "Noise Q",
-                                                                 rangeWithCentre (0.3f, 12.0f, 1.0f), 0.8f));
+                                                                 rangeWithCentre (0.3f, 12.0f, 1.0f), 0.8f,
+                                                                 Attributes().withStringFromValueFunction (formatQ)));
 
         layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::envMode), "Env Mode", envModeNames(), 0));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::envAttack), "Attack",
@@ -177,8 +207,7 @@ namespace dooblrchroma::params
                                                                  Attributes().withStringFromValueFunction (formatMs)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::lfoRate), "LFO Rate",
                                                                  rangeWithCentre (0.05f, 30.0f, 3.0f), 4.0f,
-                                                                 Attributes().withLabel ("Hz").withStringFromValueFunction ([] (float v, int)
-                                                                 { return juce::String (v, v < 10.0f ? 2 : 1) + " Hz"; })));
+                                                                 Attributes().withLabel ("Hz").withStringFromValueFunction (formatHzRate)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::lfoDepth), "LFO Depth",
                                                                  juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.0f,
                                                                  Attributes().withStringFromValueFunction (formatPct)));
@@ -189,7 +218,7 @@ namespace dooblrchroma::params
                                                                  Attributes().withStringFromValueFunction (formatCents)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::vibratoRate), "Vibrato Rate",
                                                                  rangeWithCentre (0.1f, 12.0f, 5.0f), 5.0f,
-                                                                 Attributes().withLabel ("Hz")));
+                                                                 Attributes().withLabel ("Hz").withStringFromValueFunction (formatHzRate)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::vibratoDepth), "Vibrato Depth",
                                                                  juce::NormalisableRange<float> (0.0f, 100.0f, 0.1f), 0.0f,
                                                                  Attributes().withStringFromValueFunction (formatCents)));
@@ -268,7 +297,7 @@ namespace dooblrchroma::params
 
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::chorusRate), "Chorus Rate",
                                                                  rangeWithCentre (0.05f, 8.0f, 0.8f), 0.8f,
-                                                                 Attributes().withLabel ("Hz")));
+                                                                 Attributes().withLabel ("Hz").withStringFromValueFunction (formatHzRate)));
         layout.add (std::make_unique<juce::AudioParameterFloat> (pid (id::chorusDepth), "Chorus Depth",
                                                                  juce::NormalisableRange<float> (0.0f, 1.0f, 0.01f), 0.35f,
                                                                  Attributes().withStringFromValueFunction (formatPct)));

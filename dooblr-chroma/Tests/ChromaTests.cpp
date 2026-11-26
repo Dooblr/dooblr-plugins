@@ -247,7 +247,7 @@ namespace
         check (p->acceptsMidi() && ! p->producesMidi() && ! p->isMidiEffect(), "instrument, MIDI in only");
         check (p->getLatencySamples() == 0, "zero reported latency");
         check (p->getNumPrograms() >= 9, "Init plus at least 8 factory programs");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check ((int) p->getParameters().size() > 80, "a full parameter set is published");
     }
 
@@ -522,6 +522,93 @@ namespace
             check (false, "could not write snapshot " + file.getFullPathName().toStdString());
     }
 
+
+    int textWidth (const juce::Font& font, const juce::String& text)
+    {
+        juce::GlyphArrangement ga;
+        ga.addLineOfText (font, text, 0.0f, 0.0f);
+        return (int) std::ceil (ga.getBoundingBox (0, -1, true).getWidth());
+    }
+
+    bool findById (juce::Component* root, const juce::String& id, juce::Component** out)
+    {
+        if (root == nullptr)
+            return false;
+        if (root->getComponentID() == id)
+        {
+            if (out != nullptr) *out = root;
+            return true;
+        }
+        for (auto* ch : root->getChildren())
+            if (findById (ch, id, out))
+                return true;
+        return false;
+    }
+
+    void checkControlLayout (juce::Component& root, const std::string& prefix)
+    {
+        std::function<void (juce::Component*)> walk = [&] (juce::Component* c)
+        {
+            if (c == nullptr || ! c->isVisible() || c->getWidth() <= 0 || c->getHeight() <= 0)
+                return;
+
+            if (auto* knob = dynamic_cast<ui::Knob*> (c))
+            {
+                const auto rot = knob->getRotaryBounds();
+                check (rot.getWidth() >= 22 && rot.getHeight() >= 22,
+                       prefix + "min knob size 22 px (" + knob->caption.getText().toStdString()
+                           + " is " + std::to_string (rot.getWidth()) + "x" + std::to_string (rot.getHeight()) + ")");
+                if (auto* box = knob->getTextBox())
+                {
+                    const auto text = box->getText();
+                    if (text.isNotEmpty())
+                    {
+                        const juce::Font font { juce::FontOptions (11.0f) };
+                        const int need = textWidth (font, text) + 2;
+                        check (box->getWidth() >= need,
+                               prefix + "value box fits formatted text '" + text.toStdString()
+                                   + "' need " + std::to_string (need) + " px, have "
+                                   + std::to_string (box->getWidth()) + " (" + knob->caption.getText().toStdString() + ")");
+                    }
+                    const auto cap = knob->caption.getBounds();
+                    const auto boxB = knob->getLocalArea (box, box->getLocalBounds());
+                    check (! cap.intersects (boxB),
+                           prefix + "label/value bounds do not overlap (" + knob->caption.getText().toStdString() + ")");
+                }
+                const auto capText = knob->caption.getText();
+                if (capText.isNotEmpty() && knob->caption.getWidth() > 0)
+                {
+                    const juce::Font font { juce::FontOptions (11.0f) };
+                    const int need = textWidth (font, capText) + 2;
+                    check (knob->caption.getWidth() >= need,
+                           prefix + "caption is fully visible '" + capText.toStdString()
+                               + "' need " + std::to_string (need) + " px, have "
+                               + std::to_string (knob->caption.getWidth()));
+                }
+            }
+            if (auto* choice = dynamic_cast<ui::Choice*> (c))
+            {
+                const auto cap = choice->caption.getBounds();
+                check (! cap.intersects (choice->box.getBounds()),
+                       prefix + "choice label/value bounds do not overlap (" + choice->caption.getText().toStdString() + ")");
+                const auto capText = choice->caption.getText();
+                if (capText.isNotEmpty() && choice->caption.getWidth() > 0)
+                {
+                    const juce::Font font { juce::FontOptions (11.0f) };
+                    const int need = textWidth (font, capText) + 2;
+                    check (choice->caption.getWidth() >= need,
+                           prefix + "choice caption is fully visible '" + capText.toStdString()
+                               + "' need " + std::to_string (need) + " px, have "
+                               + std::to_string (choice->caption.getWidth()));
+                }
+            }
+
+            for (auto* ch : c->getChildren())
+                walk (ch);
+        };
+        walk (&root);
+    }
+
     void testEditor()
     {
         auto p = makeProcessor();
@@ -585,6 +672,41 @@ namespace
                        + std::to_string (editor->getViewA().getHeight()) + ")");
             // No hint text: the view has no child labels.
             check (editor->getViewA().getNumChildComponents() == 0, sizeLabel + "resonator view has no hint labels");
+
+            check (editor->getViewA().getWidth() >= 70 && editor->getViewA().getHeight() >= 120,
+                   sizeLabel + "resonator A view is a proper object picture ("
+                       + std::to_string (editor->getViewA().getWidth()) + "x"
+                       + std::to_string (editor->getViewA().getHeight()) + ")");
+            check (editor->getViewB().getWidth() >= 70 && editor->getViewB().getHeight() >= 120,
+                   sizeLabel + "resonator B view is a proper object picture");
+
+            if (auto* cap = editor->findChildWithID ("outputCaption"))
+                if (auto* lab = dynamic_cast<juce::Label*> (cap))
+                {
+                    const juce::Font font { juce::FontOptions (11.0f) };
+                    const int need = textWidth (font, lab->getText()) + 2;
+                    check (lab->getWidth() >= need && lab->getHeight() >= 16,
+                           sizeLabel + "Output caption is fully readable (need "
+                               + std::to_string (need) + "x14, have " + std::to_string (lab->getWidth())
+                               + "x" + std::to_string (lab->getHeight()) + ")");
+                }
+
+            checkControlLayout (*editor, sizeLabel + "main ");
+
+            juce::Component* stiff = nullptr, *noiseAmt = nullptr, *reverb = nullptr;
+            juce::Component* noiseFilter = nullptr, *layers = nullptr;
+            findById (editor, id::malletStiffness, &stiff);
+            findById (editor, id::mixNoise, &noiseAmt);
+            findById (editor, id::reverbMix, &reverb);
+            findById (editor, id::noiseFilter, &noiseFilter);
+            findById (editor, id::layerMode, &layers);
+            check (stiff != nullptr && stiff->isVisible(), sizeLabel + "Main shows Mallet Stiffness");
+            check (noiseAmt != nullptr && noiseAmt->isVisible(), sizeLabel + "Main shows Noise amount");
+            check (reverb != nullptr && reverb->isVisible(), sizeLabel + "Main shows Reverb");
+            check (noiseFilter == nullptr || ! noiseFilter->isVisible(),
+                   sizeLabel + "Noise filter detail is on Advanced, not Main");
+            check (layers == nullptr || ! layers->isVisible(),
+                   sizeLabel + "Layers / Play detail is on Advanced, not Main");
         }
 
         // Switching layers rebinds resonator controls to L2 IDs.
@@ -602,6 +724,30 @@ namespace
         check (foundL2, "layer 2 pitch component is in the tree");
         editor->setEditLayer (0);
         check (editor->getAPitchParamId() == "l1_a_pitch", "layer 1 pitch control after switch back");
+
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor->setSize (size.x, size.y);
+            const auto sizeLabel = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
+            editor->setAdvanced (true);
+            set (*p, "l1_a_type", (float) (int) dsp::ResType::manual);
+            editor->refreshVisibility();
+            juce::Component* part = nullptr;
+            findById (editor, "l1_a_part1", &part);
+            check (part != nullptr && part->isVisible(),
+                   sizeLabel + "part 1 is visible on Advanced when Type is Manual");
+            checkControlLayout (*editor, sizeLabel + "advanced manual ");
+
+            set (*p, "l1_a_type", (float) (int) dsp::ResType::string);
+            editor->refreshVisibility();
+            part = nullptr;
+            findById (editor, "l1_a_part1", &part);
+            check (part == nullptr || ! part->isVisible(),
+                   sizeLabel + "part 1 is hidden when Type is not Manual");
+            checkControlLayout (*editor, sizeLabel + "advanced string ");
+            editor->setAdvanced (false);
+            editor->refreshVisibility();
+        }
 
         editor->setSize (1080, 660);
         snapshot (*editor, "-default");

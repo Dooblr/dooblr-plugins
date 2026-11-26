@@ -30,18 +30,26 @@ namespace dooblrchroma
         void setEditLayer (int layer);
         juce::String getAPitchParamId() const { return aPitch.paramId; }
 
+        bool isAdvanced() const noexcept { return advanced; }
+        void setAdvanced (bool shouldBeAdvanced);
+        void refreshVisibility();
+
     private:
         void timerCallback() override;
         void changeListenerCallback (juce::ChangeBroadcaster*) override;
         void rebuildPresetMenu();
         void bindLayer();
         void layoutKnobs (juce::Rectangle<int> area, const std::vector<juce::Component*>& items, int columns);
-        void refreshDimmed();
+        void applyVisibility();
+        dsp::ResType typeOf (const ui::Choice& c) const;
+        bool isSplitMode() const;
+        bool isCoupled() const;
 
         DooblrChromaProcessor& owner;
         ui::DooblrLookAndFeel lnf;
 
         juce::TextButton undo { "Undo" }, redo { "Redo" };
+        juce::TextButton pageMain { "Main" }, pageAdvanced { "Advanced" };
         juce::ComboBox presetBox;
         juce::TextButton savePreset { "Save" }, loadPreset { "Load" };
         juce::Slider output { juce::Slider::RotaryHorizontalVerticalDrag, juce::Slider::TextBoxBelow };
@@ -53,6 +61,8 @@ namespace dooblrchroma
         ui::Panel resA { "Resonator A" }, resB { "Resonator B" }, coupling { "Coupling" }, fx { "Effects" };
 
         ui::ResonatorView viewA, viewB;
+        ui::ObjectPicker pickA, pickB;
+        ui::CouplingArt linkArt;
 
         // Global exciters / mixer / play / fx — always bound
         ui::Knob stiff { "Stiffness", params::id::malletStiffness };
@@ -115,7 +125,7 @@ namespace dooblrchroma
         ui::Knob aPitch { "Pitch", "l1_a_pitch" }, bPitch { "Pitch", "l1_b_pitch" };
         ui::Knob aCents { "Cents", "l1_a_cents" }, bCents { "Cents", "l1_b_cents" };
         ui::Knob aKey { "Key", "l1_a_key" }, bKey { "Key", "l1_b_key" };
-        ui::Knob aLevel { "Level", "l1_a_pLevel" }, bLevel { "Level", "l1_b_pLevel" };
+        ui::Knob aLevel { "P.Env", "l1_a_pLevel" }, bLevel { "P.Env", "l1_b_pLevel" };
         ui::Knob aRate { "Rate", "l1_a_pRate" }, bRate { "Rate", "l1_b_pRate" };
         ui::Knob aVel { "Vel", "l1_a_pVel" }, bVel { "Vel", "l1_b_pVel" };
         ui::Knob aDecay { "Decay", "l1_a_decay" }, bDecay { "Decay", "l1_b_decay" };
@@ -137,6 +147,7 @@ namespace dooblrchroma
 
         std::vector<ui::Panel*> panels;
         int editLayer = 0;
+        bool advanced = false;
 
         JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (DooblrChromaEditor)
     };

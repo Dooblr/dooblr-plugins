@@ -161,7 +161,10 @@ namespace dooblrchroma::ui
     juce::Label* DooblrLookAndFeel::createSliderTextBox (juce::Slider& slider)
     {
         auto* label = juce::LookAndFeel_V4::createSliderTextBox (slider);
-        label->setMinimumHorizontalScale (0.6f);
+        // 0.1.1: never squash the readout; the layout must give the box enough width.
+        label->setMinimumHorizontalScale (1.0f);
+        label->setFont (juce::FontOptions (11.0f));
+        label->setJustificationType (juce::Justification::centred);
         return label;
     }
 

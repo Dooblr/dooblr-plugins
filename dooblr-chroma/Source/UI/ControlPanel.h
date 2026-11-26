@@ -22,6 +22,9 @@ namespace dooblrchroma::ui
         void attach (juce::AudioProcessorValueTreeState& state);
         void detach();
 
+        juce::Label* getTextBox() const;
+        juce::Rectangle<int> getRotaryBounds() const;
+
     private:
         std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> attachment;
     };
@@ -68,7 +71,7 @@ namespace dooblrchroma::ui
         juce::String title;
     };
 
-    /** Object body + strike marker. No hint text. */
+    /** Object body + mallet at the hit position. Drag to move the strike. No hint text. */
     class ResonatorView final : public juce::Component
     {
     public:
@@ -77,12 +80,54 @@ namespace dooblrchroma::ui
         dsp::ResType getType() const noexcept { return type; }
         float getHit() const noexcept { return hit; }
         juce::Point<float> getHitMarker() const;
+        std::function<void (float)> onHitChanged;
         void paint (juce::Graphics&) override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseDrag (const juce::MouseEvent&) override;
+        void mouseUp (const juce::MouseEvent&) override;
 
     private:
+        float hitAt (juce::Point<float> p) const;
+        void dragTo (juce::Point<float> p);
+
         dsp::ResType type = dsp::ResType::string;
         float hit = 0.22f;
         bool coupled = false;
         juce::Point<float> marker;
+        bool dragging = false;
+    };
+
+    /** Icon tiles for picking a resonator object. */
+    class ObjectPicker final : public juce::Component
+    {
+    public:
+        ObjectPicker();
+        void setType (dsp::ResType t);
+        dsp::ResType getType() const noexcept { return type; }
+        std::function<void (dsp::ResType)> onChange;
+        void paint (juce::Graphics&) override;
+        void resized() override;
+        void mouseDown (const juce::MouseEvent&) override;
+        void mouseMove (const juce::MouseEvent&) override;
+        void mouseExit (const juce::MouseEvent&) override;
+
+    private:
+        juce::Rectangle<int> tileBounds (int index) const;
+        int indexAt (juce::Point<int> p) const;
+
+        dsp::ResType type = dsp::ResType::string;
+        int hover = -1;
+    };
+
+    /** Visual link between resonators A and B. */
+    class CouplingArt final : public juce::Component
+    {
+    public:
+        CouplingArt();
+        void setCoupled (bool shouldBeCoupled);
+        void paint (juce::Graphics&) override;
+
+    private:
+        bool coupled = false;
     };
 }

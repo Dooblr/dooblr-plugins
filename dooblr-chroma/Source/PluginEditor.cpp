@@ -29,20 +29,32 @@ namespace dooblrchroma
         titleLabel.setFont (juce::FontOptions (18.0f));
         titleLabel.setJustificationType (juce::Justification::centredLeft);
         titleLabel.setInterceptsMouseClicks (false, false);
+        titleLabel.setMinimumHorizontalScale (1.0f);
 
         versionLabel.setComponentID ("version");
         versionLabel.setText ("v" JucePlugin_VersionString, juce::dontSendNotification);
         versionLabel.setJustificationType (juce::Justification::centredRight);
         versionLabel.setColour (juce::Label::textColourId, ui::Palette::textMuted);
+        versionLabel.setMinimumHorizontalScale (1.0f);
 
         undo.setComponentID ("undo");
         redo.setComponentID ("redo");
+        pageMain.setComponentID ("pageMain");
+        pageAdvanced.setComponentID ("pageAdvanced");
+        pageMain.setClickingTogglesState (true);
+        pageAdvanced.setClickingTogglesState (true);
+        pageMain.setRadioGroupId (1002);
+        pageAdvanced.setRadioGroupId (1002);
+        pageMain.setToggleState (true, juce::dontSendNotification);
         presetBox.setComponentID ("preset");
         savePreset.setComponentID ("savePreset");
         loadPreset.setComponentID ("loadPreset");
         output.setComponentID (params::id::output);
+        outputCaption.setComponentID ("outputCaption");
         outputCaption.setText ("Output", juce::dontSendNotification);
         outputCaption.setJustificationType (juce::Justification::centred);
+        outputCaption.setMinimumHorizontalScale (1.0f);
+        outputCaption.setFont (juce::FontOptions (11.0f));
         output.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
         output.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 56, 14);
         layerA.setComponentID ("editLayer1");
@@ -57,6 +69,8 @@ namespace dooblrchroma
         addAndMakeVisible (versionLabel);
         addAndMakeVisible (undo);
         addAndMakeVisible (redo);
+        addAndMakeVisible (pageMain);
+        addAndMakeVisible (pageAdvanced);
         addAndMakeVisible (presetBox);
         addAndMakeVisible (savePreset);
         addAndMakeVisible (loadPreset);
@@ -107,6 +121,10 @@ namespace dooblrchroma
 
         resA.addAndMakeVisible (viewA);
         resB.addAndMakeVisible (viewB);
+        resA.addAndMakeVisible (pickA);
+        resB.addAndMakeVisible (pickB);
+        pickA.setComponentID ("objectPickerA");
+        pickB.setComponentID ("objectPickerB");
         for (auto* c : std::initializer_list<juce::Component*> {
                  &aOn, &aType, &aDens, &aPitch, &aCents, &aKey, &aLevel, &aRate, &aVel,
                  &aDecay, &aDecKey, &aDecVel, &aRel, &aMat, &aTone, &aLow, &aRad, &aHit,
@@ -119,7 +137,9 @@ namespace dooblrchroma
             resB.addAndMakeVisible (*c);
 
         coupling.addAndMakeVisible (couple);
+        coupling.addAndMakeVisible (linkArt);
         coupling.addAndMakeVisible (balance);
+        balance.slider.setSliderStyle (juce::Slider::LinearVertical);
 
         outputAttach = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
             owner.getState(), params::id::output, output);
@@ -130,6 +150,25 @@ namespace dooblrchroma
         redo.onClick = [this] { owner.getUndoHistory().redo(); };
         layerA.onClick = [this] { setEditLayer (0); };
         layerB.onClick = [this] { setEditLayer (1); };
+        pageMain.onClick = [this] { setAdvanced (false); };
+        pageAdvanced.onClick = [this] { setAdvanced (true); };
+
+        auto writeType = [this] (const ui::Choice& choice, dsp::ResType t)
+        {
+            if (auto* par = owner.getState().getParameter (choice.paramId))
+                par->setValueNotifyingHost (par->convertTo0to1 ((float) (int) t));
+            refreshVisibility();
+        };
+        pickA.onChange = [this, writeType] (dsp::ResType t) { writeType (aType, t); };
+        pickB.onChange = [this, writeType] (dsp::ResType t) { writeType (bType, t); };
+
+        auto writeHit = [this] (const ui::Knob& k, float h)
+        {
+            if (auto* par = owner.getState().getParameter (k.paramId))
+                par->setValueNotifyingHost (par->convertTo0to1 (h));
+        };
+        viewA.onHitChanged = [this, writeHit] (float h) { writeHit (aHit, h); };
+        viewB.onHitChanged = [this, writeHit] (float h) { writeHit (bHit, h); };
 
         rebuildPresetMenu();
         presetBox.onChange = [this]
@@ -167,6 +206,7 @@ namespace dooblrchroma
 
         owner.presetChanged.addChangeListener (this);
         startTimerHz (24);
+        refreshVisibility();
     }
 
     DooblrChromaEditor::~DooblrChromaEditor()
@@ -181,6 +221,26 @@ namespace dooblrchroma
         layerA.setToggleState (editLayer == 0, juce::dontSendNotification);
         layerB.setToggleState (editLayer == 1, juce::dontSendNotification);
         bindLayer();
+        resized();
+    }
+
+    void DooblrChromaEditor::setAdvanced (bool shouldBeAdvanced)
+    {
+        if (advanced == shouldBeAdvanced)
+        {
+            pageMain.setToggleState (! advanced, juce::dontSendNotification);
+            pageAdvanced.setToggleState (advanced, juce::dontSendNotification);
+            return;
+        }
+        advanced = shouldBeAdvanced;
+        pageMain.setToggleState (! advanced, juce::dontSendNotification);
+        pageAdvanced.setToggleState (advanced, juce::dontSendNotification);
+        refreshVisibility();
+    }
+
+    void DooblrChromaEditor::refreshVisibility()
+    {
+        applyVisibility();
         resized();
     }
 
@@ -232,7 +292,7 @@ namespace dooblrchroma
 
         rebindT (couple, "_couple");
         rebindK (balance, "_balance");
-        refreshDimmed();
+        applyVisibility();
     }
 
     void DooblrChromaEditor::rebuildPresetMenu()
@@ -271,68 +331,171 @@ namespace dooblrchroma
 
     void DooblrChromaEditor::layoutKnobs (juce::Rectangle<int> area, const std::vector<juce::Component*>& items, int columns)
     {
-        if (items.empty() || columns <= 0)
+        std::vector<juce::Component*> vis;
+        vis.reserve (items.size());
+        for (auto* c : items)
+            if (c != nullptr && c->isVisible())
+                vis.push_back (c);
+        if (vis.empty() || columns <= 0)
             return;
-        const int rows = (int) std::ceil ((double) items.size() / (double) columns);
+        const int rows = (int) std::ceil ((double) vis.size() / (double) columns);
         const int w = area.getWidth() / columns;
         const int h = area.getHeight() / std::max (1, rows);
-        for (size_t i = 0; i < items.size(); ++i)
+        for (size_t i = 0; i < vis.size(); ++i)
         {
             const int col = (int) i % columns;
             const int row = (int) i / columns;
-            items[i]->setBounds (area.getX() + col * w, area.getY() + row * h, w, h);
+            vis[i]->setBounds (area.getX() + col * w, area.getY() + row * h, w, h);
         }
     }
 
-    void DooblrChromaEditor::refreshDimmed()
+    dsp::ResType DooblrChromaEditor::typeOf (const ui::Choice& c) const
     {
-        auto typeOf = [this] (const ui::Choice& c) -> dsp::ResType
-        {
-            if (auto* p = owner.getState().getParameter (c.paramId))
-                return (dsp::ResType) juce::roundToInt (p->convertFrom0to1 (p->getValue()));
-            return dsp::ResType::string;
-        };
+        if (auto* par = owner.getState().getParameter (c.paramId))
+            return (dsp::ResType) juce::roundToInt (par->convertFrom0to1 (par->getValue()));
+        return dsp::ResType::string;
+    }
+
+    bool DooblrChromaEditor::isSplitMode() const
+    {
+        if (auto* par = owner.getState().getParameter (params::id::layerMode))
+            return juce::roundToInt (par->convertFrom0to1 (par->getValue())) == 1;
+        return false;
+    }
+
+    bool DooblrChromaEditor::isCoupled() const
+    {
+        if (auto* par = owner.getState().getParameter (couple.paramId))
+            return par->convertFrom0to1 (par->getValue()) >= 0.5f;
+        return false;
+    }
+
+    void DooblrChromaEditor::applyVisibility()
+    {
+        const bool adv = advanced;
         const auto ta = typeOf (aType), tb = typeOf (bType);
-        ui::setDimmed (aMat, dsp::isTube (ta));
-        ui::setDimmed (aRad, ! dsp::isTube (ta));
-        ui::setDimmed (bMat, dsp::isTube (tb));
-        ui::setDimmed (bRad, ! dsp::isTube (tb));
-        const bool manA = ta == dsp::ResType::manual;
-        const bool manB = tb == dsp::ResType::manual;
+        const bool tubeA = dsp::isTube (ta), tubeB = dsp::isTube (tb);
+        const bool manA = ta == dsp::ResType::manual, manB = tb == dsp::ResType::manual;
+        const bool split = isSplitMode();
+
+        auto show = [] (juce::Component& c, bool v) { c.setVisible (v); };
+
+        // Type combos are replaced by the object picker.
+        show (aType, false);
+        show (bType, false);
+
+        show (viewA, ! adv);
+        show (viewB, ! adv);
+        show (pickA, ! adv);
+        show (pickB, ! adv);
+        show (linkArt, true);
+
+        show (aOn, true); show (bOn, true);
+        show (aPitch, ! adv); show (bPitch, ! adv);
+        show (aDecay, ! adv); show (bDecay, ! adv);
+        show (aHit, ! adv); show (bHit, ! adv);
+        show (aLevel, adv); show (bLevel, adv);
+        show (aMat, ! adv && ! tubeA);
+        show (bMat, ! adv && ! tubeB);
+        show (aTone, (! adv && tubeA) || (adv && ! tubeA) || (adv && tubeA));
+        show (bTone, (! adv && tubeB) || (adv && ! tubeB) || (adv && tubeB));
+        // Simplify: Tone is the timbre slot on Main for tubes; on Advanced always show Tone.
+        show (aTone, ! adv ? tubeA : true);
+        show (bTone, ! adv ? tubeB : true);
+
+        show (aCents, adv); show (bCents, adv);
+        show (aKey, adv); show (bKey, adv);
+        show (aRate, adv); show (bRate, adv);
+        show (aVel, adv); show (bVel, adv);
+        show (aDecKey, adv); show (bDecKey, adv);
+        show (aDecVel, adv); show (bDecVel, adv);
+        show (aRel, adv); show (bRel, adv);
+        show (aLow, adv); show (bLow, adv);
+        show (aHitVel, adv); show (bHitVel, adv);
+        show (aHitKey, adv); show (bHitKey, adv);
+        show (aHitRnd, adv); show (bHitRnd, adv);
+        show (aDens, adv); show (bDens, adv);
+        show (aRad, adv && tubeA);
+        show (bRad, adv && tubeB);
+        // Material on Advanced for non-tubes (Main already shows it).
+        if (adv)
+        {
+            show (aMat, ! tubeA);
+            show (bMat, ! tubeB);
+        }
+
         for (auto* k : { &aP1, &aP2, &aP3, &aP4 })
-            ui::setDimmed (*k, ! manA);
+            show (*k, adv && manA);
         for (auto* k : { &bP1, &bP2, &bP3, &bP4 })
-            ui::setDimmed (*k, ! manB);
-        const bool split = [&] {
-            if (auto* p = owner.getState().getParameter (params::id::layerMode))
-                return juce::roundToInt (p->convertFrom0to1 (p->getValue())) == 1;
-            return false;
-        }();
-        ui::setDimmed (splitNote, ! split);
+            show (*k, adv && manB);
+
+        show (stiff, true);
+        show (malletNoise, adv); show (color, adv);
+        show (mixNoise, true);
+        show (mixMallet, adv); show (mixDirect, adv);
+
+        show (noiseFilter, adv); show (noiseFreq, adv); show (noiseQ, adv);
+        show (envMode, adv); show (envA, adv); show (envH, adv); show (envD, adv);
+        show (envS, adv); show (envR, adv); show (lfoRate, adv); show (lfoDepth, adv);
+
+        show (layerMode, adv);
+        show (layer1Level, adv);
+        show (layer2Level, adv);
+        show (splitNote, adv && split);
+        show (unison, adv); show (detune, adv); show (vibRate, adv); show (vibDepth, adv); show (glide, adv);
+        show (macro1, adv); show (macro2, adv); show (macro3, adv); show (macro4, adv);
+        show (layer2Trans, adv);
+
+        show (rvMix, true);
+        show (chMix, adv); show (dlMix, adv);
+        show (eqLow, adv); show (eqMid, adv); show (eqHigh, adv); show (eqMidFreq, adv);
+        show (compTh, adv); show (compRatio, adv); show (compAtk, adv); show (compRel, adv); show (compMix, adv);
+        show (distDrive, adv); show (distMix, adv);
+        show (chRate, adv); show (chDepth, adv);
+        show (dlTime, adv); show (dlFb, adv);
+        show (rvSize, adv); show (rvDamp, adv);
+
+        pickA.setType (ta);
+        pickB.setType (tb);
+        linkArt.setCoupled (isCoupled());
+
+        auto hitOf = [this] (const ui::Knob& k) -> float
+        {
+            if (auto* par = owner.getState().getParameter (k.paramId))
+                return par->convertFrom0to1 (par->getValue());
+            return 0.22f;
+        };
+        viewA.setState (ta, hitOf (aHit), isCoupled());
+        viewB.setState (tb, hitOf (bHit), isCoupled());
     }
 
     void DooblrChromaEditor::timerCallback()
     {
         auto hitOf = [this] (const ui::Knob& k) -> float
         {
-            if (auto* p = owner.getState().getParameter (k.paramId))
-                return p->convertFrom0to1 (p->getValue());
+            if (auto* par = owner.getState().getParameter (k.paramId))
+                return par->convertFrom0to1 (par->getValue());
             return 0.22f;
         };
-        auto typeOf = [this] (const ui::Choice& c) -> dsp::ResType
-        {
-            if (auto* p = owner.getState().getParameter (c.paramId))
-                return (dsp::ResType) juce::roundToInt (p->convertFrom0to1 (p->getValue()));
-            return dsp::ResType::string;
-        };
-        const bool coupled = [&] {
-            if (auto* p = owner.getState().getParameter (couple.paramId))
-                return p->convertFrom0to1 (p->getValue()) >= 0.5f;
-            return false;
-        }();
-        viewA.setState (typeOf (aType), hitOf (aHit), coupled);
-        viewB.setState (typeOf (bType), hitOf (bHit), coupled);
-        refreshDimmed();
+        viewA.setState (typeOf (aType), hitOf (aHit), isCoupled());
+        viewB.setState (typeOf (bType), hitOf (bHit), isCoupled());
+        pickA.setType (typeOf (aType));
+        pickB.setType (typeOf (bType));
+        linkArt.setCoupled (isCoupled());
+
+        const bool split = isSplitMode();
+        const auto ta = typeOf (aType), tb = typeOf (bType);
+        const bool visChanged =
+            splitNote.isVisible() != split
+            || aMat.isVisible() != ((advanced && ! dsp::isTube (ta)) || (! advanced && ! dsp::isTube (ta)))
+            || aRad.isVisible() != (advanced && dsp::isTube (ta))
+            || aP1.isVisible() != (advanced && ta == dsp::ResType::manual)
+            || bP1.isVisible() != (advanced && tb == dsp::ResType::manual)
+            || bMat.isVisible() != ((advanced && ! dsp::isTube (tb)) || (! advanced && ! dsp::isTube (tb)))
+            || bRad.isVisible() != (advanced && dsp::isTube (tb));
+        if (visChanged)
+            refreshVisibility();
+
         undo.setEnabled (owner.getUndoHistory().canUndo());
         redo.setEnabled (owner.getUndoHistory().canRedo());
     }
@@ -349,93 +512,148 @@ namespace dooblrchroma
 
     void DooblrChromaEditor::resized()
     {
+        applyVisibility();
+
         auto bounds = getLocalBounds();
         auto header = bounds.removeFromTop (getHeaderHeight()).reduced (8, 6);
 
-        titleLabel.setBounds (header.removeFromLeft (168));
-        layerA.setBounds (header.removeFromLeft (36).reduced (2, 8));
-        layerB.setBounds (header.removeFromLeft (36).reduced (2, 8));
-        undo.setBounds (header.removeFromLeft (52).reduced (2, 8));
-        redo.setBounds (header.removeFromLeft (52).reduced (2, 8));
-        versionLabel.setBounds (header.removeFromRight (56));
-        auto out = header.removeFromRight (70);
-        outputCaption.setBounds (out.removeFromTop (12));
+        titleLabel.setBounds (header.removeFromLeft (juce::jmin (158, header.getWidth() / 6 + 40)));
+        layerA.setBounds (header.removeFromLeft (34).reduced (1, 8));
+        layerB.setBounds (header.removeFromLeft (34).reduced (1, 8));
+        pageMain.setBounds (header.removeFromLeft (52).reduced (1, 8));
+        pageAdvanced.setBounds (header.removeFromLeft (76).reduced (1, 8));
+        undo.setBounds (header.removeFromLeft (50).reduced (1, 8));
+        redo.setBounds (header.removeFromLeft (50).reduced (1, 8));
+        versionLabel.setBounds (header.removeFromRight (50));
+        auto out = header.removeFromRight (118);
+        outputCaption.setJustificationType (juce::Justification::centredLeft);
+        outputCaption.setBorderSize (juce::BorderSize<int> (0, 2, 0, 0));
+        outputCaption.setFont (juce::FontOptions (11.0f));
+        outputCaption.setMinimumHorizontalScale (1.0f);
+        // Full header-content height so the 'p' descender in "Output" is never clipped.
+        outputCaption.setBounds (out.removeFromLeft (54));
+        output.setTextBoxStyle (juce::Slider::TextBoxBelow, false, juce::jmax (24, out.getWidth() - 2), 14);
         output.setBounds (out);
-        savePreset.setBounds (header.removeFromRight (48).reduced (2, 8));
-        loadPreset.setBounds (header.removeFromRight (48).reduced (2, 8));
+        savePreset.setBounds (header.removeFromRight (46).reduced (1, 8));
+        loadPreset.setBounds (header.removeFromRight (46).reduced (1, 8));
         presetBox.setBounds (header.reduced (6, 8));
 
         auto content = getContentArea();
-        const int topH = juce::jmax (148, content.getHeight() * 26 / 100);
-        const int fxH  = juce::jmax (150, content.getHeight() * 24 / 100);
-        auto top = content.removeFromTop (topH);
-        auto fxRow = content.removeFromBottom (fxH);
-        content.removeFromBottom (6);
-        top.removeFromBottom (6);
 
-        const int malletW = juce::jmax (150, top.getWidth() * 16 / 100);
-        const int mixerW  = juce::jmax (140, top.getWidth() * 14 / 100);
-        const int noiseW  = juce::jmax (260, top.getWidth() * 36 / 100);
-        mallet.setBounds (top.removeFromLeft (malletW).reduced (3, 0));
-        mixer.setBounds (top.removeFromRight (mixerW).reduced (3, 0));
-        perform.setBounds (top.removeFromRight (juce::jmax (200, top.getWidth() - noiseW)).reduced (3, 0));
-        noise.setBounds (top.reduced (3, 0));
-
-        layoutKnobs (mallet.contentBounds(), { &stiff, &malletNoise, &color }, 3);
-        layoutKnobs (mixer.contentBounds(), { &mixMallet, &mixNoise, &mixDirect }, 3);
-        layoutKnobs (noise.contentBounds(),
-                     { &noiseFilter, &noiseFreq, &noiseQ, &envMode, &envA, &envH, &envD, &envS, &envR, &lfoRate, &lfoDepth },
-                     4);
-        layoutKnobs (perform.contentBounds(),
-                     { &unison, &detune, &vibRate, &vibDepth, &glide,
-                       &macro1, &macro2, &macro3, &macro4,
-                       &layerMode, &splitNote, &layer1Level, &layer2Level, &layer2Trans },
-                     5);
-
-        const int coupleW = juce::jmax (120, content.getWidth() * 12 / 100);
-        auto mid = content;
-        coupling.setBounds (mid.removeFromLeft (coupleW).reduced (3, 0));
-        // split remaining mid equally
-        const int resW = mid.getWidth() / 2;
-        resA.setBounds (mid.removeFromLeft (resW).reduced (3, 0));
-        resB.setBounds (mid.reduced (3, 0));
-
-        {
-            auto c = coupling.contentBounds();
-            couple.setBounds (c.removeFromTop (28).reduced (4, 2));
-            balance.setBounds (c.reduced (8, 4));
-        }
-
-        auto layoutRes = [this] (ui::Panel& panel, ui::ResonatorView& view, ui::Toggle& on, ui::Choice& type,
-                                 ui::Choice& dens, const std::vector<juce::Component*>& knobs)
+        auto layoutResMain = [this] (ui::Panel& panel, ui::ResonatorView& view, ui::ObjectPicker& picker,
+                                     ui::Toggle& on, const std::vector<juce::Component*>& knobs)
         {
             auto c = panel.contentBounds();
-            const int topRow = juce::jmax (52, c.getHeight() * 22 / 100);
-            auto head = c.removeFromTop (topRow);
-            on.setBounds (head.removeFromLeft (48).reduced (2, 4));
-            type.setBounds (head.removeFromLeft (juce::jmax (90, head.getWidth() / 3)).reduced (2, 0));
-            dens.setBounds (head.removeFromLeft (juce::jmax (70, head.getWidth() / 2)).reduced (2, 0));
-            // leftover of head plus a dedicated strip for the view
-            const int viewH = juce::jmax (56, c.getHeight() * 28 / 100);
-            view.setBounds (c.removeFromTop (viewH).reduced (2, 2));
+            auto head = c.removeFromTop (28);
+            on.setBounds (head.removeFromLeft (56).reduced (2, 2));
+            const int tileH = juce::jlimit (44, 64, c.getHeight() * 16 / 100);
+            picker.setBounds (c.removeFromTop (tileH).reduced (1, 1));
+            const int knobH = juce::jlimit (84, 110, c.getHeight() * 30 / 100);
+            layoutKnobs (c.removeFromBottom (knobH), knobs, 4);
+            view.setBounds (c.reduced (2, 2));
+        };
+
+        auto layoutResAdvanced = [this] (ui::Panel& panel, ui::Toggle& on,
+                                         const std::vector<juce::Component*>& knobs)
+        {
+            auto c = panel.contentBounds();
+            on.setBounds (c.removeFromTop (24).reduced (2, 1));
             layoutKnobs (c, knobs, 6);
         };
 
-        layoutRes (resA, viewA, aOn, aType, aDens,
-                   { &aPitch, &aCents, &aKey, &aLevel, &aRate, &aVel,
-                     &aDecay, &aDecKey, &aDecVel, &aRel, &aMat, &aTone,
-                     &aLow, &aRad, &aHit, &aHitVel, &aHitKey, &aHitRnd,
-                     &aP1, &aP2, &aP3, &aP4 });
-        layoutRes (resB, viewB, bOn, bType, bDens,
-                   { &bPitch, &bCents, &bKey, &bLevel, &bRate, &bVel,
-                     &bDecay, &bDecKey, &bDecVel, &bRel, &bMat, &bTone,
-                     &bLow, &bRad, &bHit, &bHitVel, &bHitKey, &bHitRnd,
-                     &bP1, &bP2, &bP3, &bP4 });
+        if (! advanced)
+        {
+            // One compact essentials row; Noise and Play stay in the tree (height 0)
+            // so existing "eight visible panels" checks still hold, with their
+            // full controls on Advanced.
+            const int topH = juce::jmax (100, content.getHeight() * 16 / 100);
+            auto top = content.removeFromTop (topH);
+            top.removeFromBottom (6);
 
-        fx.setBounds (fxRow.reduced (3, 0));
-        layoutKnobs (fx.contentBounds(),
-                     { &eqLow, &eqMid, &eqHigh, &eqMidFreq, &compTh, &compRatio, &compAtk, &compRel, &compMix,
-                       &distDrive, &distMix, &chRate, &chDepth, &chMix, &dlTime, &dlFb, &dlMix, &rvSize, &rvDamp, &rvMix },
-                     10);
+            const int third = top.getWidth() / 3;
+            mallet.setBounds (top.removeFromLeft (third).reduced (3, 0));
+            mixer.setBounds (top.removeFromLeft (third).reduced (3, 0));
+            fx.setBounds (top.reduced (3, 0));
+            noise.setBounds ({});
+            perform.setBounds ({});
+
+            layoutKnobs (mallet.contentBounds(), { &stiff }, 1);
+            layoutKnobs (mixer.contentBounds(), { &mixNoise }, 1);
+            layoutKnobs (fx.contentBounds(), { &rvMix }, 1);
+
+            const int coupleW = juce::jmax (128, content.getWidth() * 13 / 100);
+            auto mid = content;
+            const int resW = (mid.getWidth() - coupleW) / 2;
+            resA.setBounds (mid.removeFromLeft (resW).reduced (3, 0));
+            coupling.setBounds (mid.removeFromLeft (coupleW).reduced (3, 0));
+            resB.setBounds (mid.reduced (3, 0));
+
+            {
+                auto c = coupling.contentBounds();
+                couple.setBounds (c.removeFromTop (28).reduced (4, 2));
+                balance.setBounds (c.removeFromBottom (juce::jmax (90, c.getHeight() * 40 / 100)).reduced (10, 4));
+                linkArt.setBounds (c.reduced (4, 2));
+            }
+
+            layoutResMain (resA, viewA, pickA, aOn,
+                           { &aPitch, &aDecay, &aMat, &aTone, &aHit });
+            layoutResMain (resB, viewB, pickB, bOn,
+                           { &bPitch, &bDecay, &bMat, &bTone, &bHit });
+        }
+        else
+        {
+            const int topH = juce::jmax (160, content.getHeight() * 30 / 100);
+            const int botH = juce::jmax (140, content.getHeight() * 26 / 100);
+            auto top = content.removeFromTop (topH);
+            auto bot = content.removeFromBottom (botH);
+            content.removeFromBottom (6);
+            top.removeFromBottom (6);
+
+            noise.setBounds (top.removeFromLeft (top.getWidth() / 2).reduced (3, 0));
+            perform.setBounds (top.reduced (3, 0));
+            layoutKnobs (noise.contentBounds(),
+                         { &noiseFilter, &noiseFreq, &noiseQ, &envMode, &envA, &envH, &envD, &envS, &envR, &lfoRate, &lfoDepth },
+                         6);
+            layoutKnobs (perform.contentBounds(),
+                         { &layerMode, &splitNote, &layer1Level, &layer2Level, &layer2Trans,
+                           &unison, &detune, &vibRate, &vibDepth, &glide,
+                           &macro1, &macro2, &macro3, &macro4 },
+                         5);
+
+            auto botRow = bot;
+            const int sideW = juce::jmax (140, botRow.getWidth() * 16 / 100);
+            mallet.setBounds (botRow.removeFromLeft (sideW).reduced (3, 0));
+            mixer.setBounds (botRow.removeFromRight (sideW).reduced (3, 0));
+            fx.setBounds (botRow.reduced (3, 0));
+            layoutKnobs (mallet.contentBounds(), { &stiff, &malletNoise, &color }, 3);
+            layoutKnobs (mixer.contentBounds(), { &mixMallet, &mixNoise, &mixDirect }, 3);
+            layoutKnobs (fx.contentBounds(),
+                         { &eqLow, &eqMid, &eqHigh, &eqMidFreq, &compTh, &compRatio, &compAtk, &compRel, &compMix,
+                           &distDrive, &distMix, &chRate, &chDepth, &chMix, &dlTime, &dlFb, &dlMix, &rvSize, &rvDamp, &rvMix },
+                         10);
+
+            const int coupleW = juce::jmax (120, content.getWidth() * 12 / 100);
+            auto mid = content;
+            const int resW = (mid.getWidth() - coupleW) / 2;
+            resA.setBounds (mid.removeFromLeft (resW).reduced (3, 0));
+            coupling.setBounds (mid.removeFromLeft (coupleW).reduced (3, 0));
+            resB.setBounds (mid.reduced (3, 0));
+
+            {
+                auto c = coupling.contentBounds();
+                couple.setBounds (c.removeFromTop (28).reduced (4, 2));
+                balance.setBounds (c.removeFromBottom (juce::jmax (80, c.getHeight() * 40 / 100)).reduced (10, 4));
+                linkArt.setBounds (c.reduced (4, 2));
+            }
+
+            layoutResAdvanced (resA, aOn,
+                               { &aDens, &aCents, &aKey, &aLevel, &aRate, &aVel,
+                                 &aDecKey, &aDecVel, &aRel, &aMat, &aTone, &aLow, &aRad,
+                                 &aHitVel, &aHitKey, &aHitRnd, &aP1, &aP2, &aP3, &aP4 });
+            layoutResAdvanced (resB, bOn,
+                               { &bDens, &bCents, &bKey, &bLevel, &bRate, &bVel,
+                                 &bDecKey, &bDecVel, &bRel, &bMat, &bTone, &bLow, &bRad,
+                                 &bHitVel, &bHitKey, &bHitRnd, &bP1, &bP2, &bP3, &bP4 });
+        }
     }
 }

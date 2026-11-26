@@ -17,13 +17,21 @@ Read `design/INDEX.md` first. This file has two parts:
   bidirectionally coupled. Two layers can be stacked or split across the keyboard. A zero-latency
   master chain (EQ, compressor, distortion, chorus, delay, reverb) and four macros finish the
   sound. The reference pitch with Pitch at 0.00 and Key at 1.00:1 is C4 = 261.63 Hz.
-- **Layout**: a 60 px header (name, L1/L2 edit, undo/redo, preset, save/load, output, version)
-  over three rows — exciters / mixer / play; resonator A, coupling, resonator B; a single effects
-  strip. The resonator view draws the object body and a hit-position marker; there is no hint
-  text on the graph. Editing L1 vs L2 rebinds the same resonator controls (both layers' parameters
-  stay automatable). Material is dimmed on tubes (Radius is live); Radius is dimmed otherwise;
-  manual partials are dimmed unless the type is Manual; Split is dimmed unless Layers = Split.
-  Dimming never disables a control. Window sizes stay 940×600 / 1080×660 / 2400×1400.
+- **Layout (0.1.1)**: a 60 px header (name, L1/L2 edit, Main/Advanced, undo/redo, preset,
+  save/load, output, version). The Main page is built around the objects: each resonator is a
+  large dooblr-style drawing of the selected body (string, bar, marimba, plate, drumhead,
+  membrane, open/closed tube, manual partials) with a mallet striking at the hit position and
+  no hint text. Object tiles pick the type; dragging the mallet on the picture sets Hit.
+  Only four musical knobs sit under the picture (Pitch, Decay, Material or Tone, Hit).
+  Coupling is drawn as a spring between A and B, with the Coupled toggle and a vertical Balance
+  fader. A single compact essentials row on Main holds Mallet Stiffness, Noise amount, and
+  Reverb. Noise filter/envelope, Mixer detail, Play (Layers / L1 / L2 levels, unison, vibrato,
+  macros), and the rest of the FX live on the Advanced page — same controls, never dropped. Manual partials are hidden unless the
+  type is Manual; Material is hidden on tubes and Radius is hidden otherwise — they are not left
+  as dead controls. Split is hidden unless Layers = Split. Value strings use short units
+  (e.g. `0.80`, `5.0 Hz`) and captions/value boxes do not squeeze text below a horizontal scale
+  of 1. Window sizes stay 940×600 / 1080×660 / 2400×1400. Editing L1 vs L2 rebinds the same
+  controls (both layers stay automatable).
 - **DSP**: each resonator is a bank of two-pole modes (band-pass impulse form) with published
   ratios for string (harmonics), bar (free-free Euler–Bernoulli), marimba (undercut, 1 : 4 : 9.3),
   rectangular plate (bending, *f* ~ *k*²), circular drumhead (membrane Bessel ratios), rectangular
@@ -35,6 +43,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - **Presets**: factory programs are compiled in (Init plus Marimba, Kalimba, Steel Drum, Bells,
   Plucked String, Noise Pad, Open Pipe, Coupled Plates, Bass Drum). User presets use
   `common/PresetPaths` (`~/Library/Audio/Presets/dooblr/dooblr-chroma/`, `.dchroma`).
+- **0.1.1**: layout pass only — object-first Main page, Advanced detail page, readable knobs, hide-not-dim for inapplicable controls.
 - **0.1.0 deferrals**: per-layer exciters and FX (they are shared); graphic (10-band) noise
   shaping; randomiser; a file-chooser for Load (Load opens the first user preset; Save writes a
   new file). Do not ship dead controls in their place.
@@ -43,9 +52,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrChroma`, product "dooblr-chroma", code Dbch)
-- Version: 0.1.0
+- Version: 0.1.1
 - Last source change: 2026-11-26
-- Source tree: `be37695640d8` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chroma`)
+- Source tree: `fd15941bf51e` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chroma`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-chroma/scripts/build.sh` (build dir `~/dooblr-build/chroma-build`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrChromaTests` (Tests/CMakeLists.txt)
@@ -207,7 +216,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | file | role |
 |---|---|
 | `CMakeLists.txt` | CMake build: DooblrChroma |
-| `README.md` | Readme: dooblr-chroma 0.1.0 |
+| `README.md` | Readme: dooblr-chroma 0.1.1 |
 | `Source/DSP/Biquad.h` | A reusable, non-nested transposes-form-II biquad. [Biquad] |
 | `Source/DSP/Modes.{h,cpp}` | Concert-pitch C4 used as the resonator reference when Pitch is 0.00. |
 | `Source/DSP/SynthEngine.{h,cpp}` | Tube radius: clockwise (higher) = longer decay = smaller actual radius, and darker? [ResonatorSettings, LayerSettings, Settings, SynthEngine, ...] |
@@ -215,7 +224,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | `Source/PluginEditor.{h,cpp}` | Global exciters / mixer / play / fx — always bound [DooblrChromaEditor] |
 | `Source/PluginProcessor.{h,cpp}` | [DooblrChromaProcessor] |
 | `Source/Presets.{h,cpp}` | [Factory] |
-| `Source/UI/ControlPanel.{h,cpp}` | Object body + strike marker. [Knob, Choice, Toggle, Panel, ...] |
+| `Source/UI/ControlPanel.{h,cpp}` | Object body + mallet at the hit position. [Knob, Choice, Toggle, Panel, ...] |
 | `Source/UI/Theme.{h,cpp}` | Flat, understated look for knobs, buttons and combo boxes. [DooblrLookAndFeel] |
 | `Source/UndoHistory.{h,cpp}` | Undo/redo of the plug-in's own UI edits, built on juce::UndoManager. [ParameterUndoHistory, Change, Pending] |
 | `Tests/CMakeLists.txt` | CMake build: DooblrChromaTests |
@@ -233,6 +242,8 @@ Read `design/INDEX.md` first. This file has two parts:
 - `Toggle` : Component (ControlPanel.h)
 - `Panel` : Component (ControlPanel.h)
 - `ResonatorView` : Component (ControlPanel.h)
+- `ObjectPicker` : Component (ControlPanel.h)
+- `CouplingArt` : Component (ControlPanel.h)
 - `DooblrLookAndFeel` : LookAndFeel_V4 (Theme.h)
 
 ### Tests
