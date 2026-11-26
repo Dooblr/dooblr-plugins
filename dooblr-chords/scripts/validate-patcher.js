@@ -20,7 +20,7 @@ const IO = {
   'live.dial': [1, 2], 'live.numbox': [1, 2], 'live.menu': [1, 3], 'live.tab': [1, 3], 'live.text': [1, 2], 'live.drop': [1, 2],
   message: [2, 1], comment: [1, 0], panel: [1, 0], jsui: [1, 1],
   'newobj:live.thisdevice': [1, 3], 'newobj:midiin': [1, 1], 'newobj:midiout': [1, 0], 'newobj:prepend': [1, 1],
-  'newobj:js': [1, 2], 'newobj:route': [2, -1], 'newobj:thispatcher': [1, 1]
+  'newobj:js': [1, 3], 'newobj:route': [2, -1], 'newobj:thispatcher': [1, 1]
 };
 
 function ioKey(b) {

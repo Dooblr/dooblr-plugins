@@ -24,7 +24,15 @@ function makeLive(ctx, opts) {
     devicePath: opts.devicePath || 'live_set tracks 0 devices 0',
     slots: (opts.slots || [1, 0, 0]).map((h) => ({ clip: h ? { name: 'existing', notes: [{}], length: 4 } : null })),
     addNewNotesWorks: opts.addNewNotesWorks !== false,
-    calls: []
+    calls: [],
+    song: {
+      is_playing: opts.is_playing != null ? opts.is_playing : 0,
+      current_song_time: opts.current_song_time != null ? opts.current_song_time : 0,
+      tempo: opts.tempo != null ? opts.tempo : 120,
+      signature_numerator: opts.signature_numerator != null ? opts.signature_numerator : 4,
+      signature_denominator: opts.signature_denominator != null ? opts.signature_denominator : 4,
+      is_active: 1
+    }
   };
   function typeOf(p) {
     const t = p.split(' ');
@@ -32,7 +40,8 @@ function makeLive(ctx, opts) {
     const kind = t[t.length - 2];
     return { tracks: 'Track', devices: 'Device', chains: 'Chain', clip_slots: 'ClipSlot' }[kind] || (t[t.length - 1] === 'clip' ? 'Clip' : 'Unknown');
   }
-  function LiveAPI(p) {
+  function LiveAPI(p, p2) {
+    if (typeof p === 'function') { this._cb = p; p = p2; }
     let path = p === 'this_device' ? live.devicePath : String(p);
     if (/ canonical_parent$/.test(path)) {
       const base = path.replace(/ canonical_parent$/, '').split(' ');
@@ -60,6 +69,8 @@ function makeLive(ctx, opts) {
       return arr([v === undefined ? 0 : v]);
     }
     if (prop === 'has_clip') { return arr([this._slot && this._slot.clip ? 1 : 0]); }
+    if (this.unquotedpath === 'live_set' && live.song[prop] !== undefined) { return arr([live.song[prop]]); }
+    if (/this_device$/.test(this.unquotedpath) && prop === 'is_active') { return arr([live.song.is_active]); }
     return arr([0]);
   };
   LiveAPI.prototype.getcount = function (prop) { return prop === 'clip_slots' && this.type === 'Track' ? live.slots.length : 0; };
@@ -166,7 +177,8 @@ function loadController(opts) {
     const m = (out.named[name] ? out.named[name].msgs : []).filter((x) => x[0] === sel);
     return m.length ? m[m.length - 1] : undefined;
   };
-  return { ctx, out, live: mock.live, lastState, lastActive, lastMsg };
+  const midi = () => out.outlets.filter((o) => o[0] === 2);
+  return { ctx, out, live: mock.live, lastState, lastActive, lastMsg, midi };
 }
 
 // ---- controller --------------------------------------------------------------
@@ -648,4 +660,91 @@ test('Notes tab sets the chord type and clip name', () => {
   assert.match(t.live.slots[2].clip.name, /11th/);
   const hex = t.live.slots[2].clip.notes.filter((n) => n.start_time === 0).length;
   assert.strictEqual(hex, 6, '11TH with Bass on: 6 sounding notes, bass included');
+});
+
+
+// ---- LIVE mode --------------------------------------------------------------
+
+test('LIVE mode does not write a clip; Generate is New Progression; Write is dimmed', () => {
+  const t = loadController();
+  t.ctx.init();
+  const slotsBefore = t.live.slots.map((s) => !!(s.clip));
+  t.ctx.param('playmode', 1);
+  assert.strictEqual(t.lastState().playmode, 1);
+  assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'New Progression']);
+  assert.strictEqual(t.lastActive('write'), 0);
+  const writeHint = t.lastMsg('write', 'annotation');
+  assert.ok(writeHint && /LIVE mode/.test(writeHint[1]), 'Write tooltip explains LIVE: ' + (writeHint && writeHint[1]));
+  t.ctx.generate();
+  const slotsAfter = t.live.slots.map((s) => !!(s.clip));
+  assert.deepStrictEqual(slotsAfter, slotsBefore, 'LIVE generate must not create a clip');
+  assert.match(t.lastState().status, /next bar/);
+});
+
+test('LIVE clock emits note-ons at a bar line and matching note-offs on stop, no clip write', () => {
+  const t = loadController();
+  t.ctx.init();
+  t.ctx.param('playmode', 1);
+  t.out.outlets = [];
+  t.ctx.clock(1, 0, 4, 120);
+  const ons = t.midi().filter((o) => o[1] === 144);
+  const offs = t.midi().filter((o) => o[1] === 128);
+  assert.ok(ons.length >= 3, 'expected chord note-ons, got ' + ons.length);
+  assert.strictEqual(new Set(ons.map((o) => o[2])).size, ons.length, 'unique pitches on');
+  ons.forEach((o) => {
+    assert.equal(o.length, 4);
+    assert.ok(o[2] >= 0 && o[2] <= 127);
+    assert.ok(o[3] >= 1 && o[3] <= 127);
+  });
+  assert.strictEqual(t.lastState().playIndex, 0);
+  // stop
+  t.out.outlets = [];
+  t.ctx.clock(0, 0, 4, 120);
+  const stopOffs = t.midi().filter((o) => o[1] === 128);
+  const stopOns = t.midi().filter((o) => o[1] === 144);
+  assert.strictEqual(stopOffs.length, ons.length, 'every on must be off on stop');
+  assert.strictEqual(stopOns.length, 0);
+  assert.deepStrictEqual(stopOffs.map((o) => o[2]).sort(), ons.map((o) => o[2]).sort());
+  assert.strictEqual(t.lastState().playIndex, -1);
+});
+
+test('LIVE + LEAD labels New Lead and stays monophonic; CLIP generate label is restored', () => {
+  const t = loadController();
+  t.ctx.init();
+  t.ctx.param('lead', 1);
+  t.ctx.param('playmode', 1);
+  assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'New Lead']);
+  t.out.outlets = [];
+  t.ctx.clock(1, 0, 4, 120);
+  const ons = t.midi().filter((o) => o[1] === 144);
+  assert.ok(ons.length >= 1);
+  assert.ok(ons.length <= 2, 'lead should be monophonic at t=0 (maybe a single attack), got ' + ons.length);
+  t.ctx.clock(0, 0, 4, 120);
+  t.ctx.param('playmode', 0);
+  assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'Generate Lead']);
+  t.ctx.param('lead', 0);
+  assert.deepStrictEqual(t.lastMsg('generate', 'text'), ['text', 'Generate']);
+});
+
+test('switching to CLIP or notifydeleted flushes held LIVE notes', () => {
+  const t = loadController();
+  t.ctx.init();
+  t.ctx.param('playmode', 1);
+  t.ctx.clock(1, 0, 4, 120);
+  const held = t.midi().filter((o) => o[1] === 144).map((o) => o[2]).sort();
+  assert.ok(held.length > 0);
+  t.out.outlets = [];
+  t.ctx.param('playmode', 0);
+  const offs = t.midi().filter((o) => o[1] === 128).map((o) => o[2]).sort();
+  assert.deepStrictEqual(offs, held);
+  // go live again, then notifydeleted
+  t.ctx.param('playmode', 1);
+  t.out.outlets = [];
+  t.ctx.clock(1, 4, 4, 120);
+  const held2 = t.midi().filter((o) => o[1] === 144).map((o) => o[2]);
+  assert.ok(held2.length > 0);
+  t.out.outlets = [];
+  t.ctx.notifydeleted();
+  const gone = t.midi().filter((o) => o[1] === 128);
+  assert.strictEqual(gone.length, held2.length);
 });

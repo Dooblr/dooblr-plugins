@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.6.2. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.7.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -65,6 +65,30 @@ Version 0.6.2. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   still set the voicing. Notes forces every derived chord to the same type
   (triad, 7th, 9th or 11th).
 * Incoming MIDI passes straight through.
+* **CLIP / LIVE**: a tab at the top of the left rail. **CLIP** (the default)
+  is the original behaviour: Generate, Reroll and Write put a MIDI clip in
+  the next empty Session slot. **LIVE** plays the generated progression as
+  MIDI notes in real time out of the device, synced to Live's transport. It
+  waits for the next bar line after you press play (or starts immediately if
+  you are already on one), then stays in phase with the Set: the loop
+  position is the song time modulo the progression length, and Bars per
+  Chord is honoured. The currently playing chord is outlined in teal in the
+  blocks (gold if Lead is also on). Generate is labelled **New Progression**
+  (or **New Lead**) and starts the new sequence on the next bar; it does
+  not write a clip. Write is dimmed. Knob changes (Key, Mode, Color, Spice,
+  Notes, Register, Spread, Velocity, Humanize, Bass, Density, and Lead)
+  apply at the next chord boundary, with note-offs sent before the next
+  chord's note-ons so nothing overlaps or sticks. Stopping the transport,
+  switching back to CLIP, disabling or deleting the device, all send
+  note-offs for every pitch the device turned on (never CC 123, so
+  notes you are holding through the device are left alone).
+* **Evolve** (Advanced, LIVE only): Off, every cycle, every 2 cycles, or
+  every 4 cycles. At those cycle boundaries one or two inner unlocked
+  chords are mutated to a neighbour or substitute; the first and last
+  chords stay put. The same seed and cycle always give the same mutation.
+* LEAD, Source, VAR and B all play in LIVE the same way they write in CLIP:
+  a monophonic lead line, or the derived progression, clocked to the
+  transport.
 
 ## First use
 
@@ -76,21 +100,26 @@ inside the device (not separate Max windows).
 2. Pick a **Root** and **Mode**, set **Length**, and optionally turn **Notes**
    (triad, 7th, 9th or 11th; triad is the default), **Color** (how those
    tones are coloured) or **Spice** (more unexpected chords).
-3. Press **Generate**. A clip is written to the next empty slot, and the
-   chords appear in the blocks.
-4. Click a block to lock it, then press **Reroll** to change the others.
-5. Press **LEAD** (the large gold toggle under Generate) and Generate again
+3. Leave the rail tab on **CLIP** and press **Generate**. A clip is written
+   to the next empty slot, and the chords appear in the blocks.
+4. Or switch the tab to **LIVE**, press play in Live, and the same
+   progression is performed in real time from the next bar. Press
+   **New Progression** for a new seed starting on the next bar.
+5. Click a block to lock it, then press **Reroll** to change the others.
+6. Press **LEAD** (the large gold toggle) and Generate / New Lead again
    for a melody over those chords. The blocks stay, with a LEAD header, so
-   you can see what the line follows.
-6. Press **ADVANCED …** for Bars per Chord, voicing, velocity, humanize,
-   Density, Seed and Write. Density is dimmed unless Lead is on. Press
-   **SOURCE …** to drop a `.mid` file, use a clip as the source, or pick a
-   variation or B section. Each panel has a title and a close (×) button;
-   they close again when the device is reloaded.
+   you can see what the line follows. Lead works in LIVE too.
+7. Press **ADVANCED …** for Bars per Chord, voicing, velocity, humanize,
+   Density, Seed, Write and Evolve. Density is dimmed unless Lead is on.
+   Evolve is dimmed in CLIP mode. Press **SOURCE …** to drop a `.mid` file,
+   use a clip as the source, or pick a variation or B section. Each panel
+   has a title and a close (×) button; they close again when the device is
+   reloaded.
 
 ## Controls
 
-The device is 640 × 169 px. The left rail holds Generate, LEAD and Reroll. The
+The device is 640 × 169 px. The left rail holds the CLIP / LIVE tab, Generate
+(or New Progression), LEAD and Reroll. The
 main pane shows the key, length, Notes, Color, Spice and the chord blocks, with
 **ADVANCED …** and **SOURCE …** in the corner. Those buttons open an overlay
 that covers the chord display (and the rest of the main pane) until you
@@ -99,8 +128,9 @@ off-screen, so they cannot be clicked through the overlay.
 
 | Section | Control | What it does |
 |---|---|---|
-| Actions (left) | **Generate** | The largest button. Picks a new seed, clears locks and writes a clip to the next empty slot. |
-| | **Reroll** | Picks a new seed, keeps locked chords and writes a clip. It is dimmed until a chord is locked. |
+| Actions (left) | **CLIP / LIVE** | Mode switch, teal when LIVE is selected. CLIP writes Session clips. LIVE plays the progression as MIDI in real time. |
+| | **Generate** | In CLIP: picks a new seed, clears locks and writes a clip to the next empty slot. In LIVE the label reads **New Progression** (or **New Lead**) and the new sequence starts on the next bar; no clip is written. |
+| | **Reroll** | Picks a new seed, keeps locked chords and writes a clip (CLIP) or starts them on the next bar (LIVE). It is dimmed until a chord is locked. |
 | | source badge | When a source is loaded, a small chip such as `VAR · my riff` appears under Reroll, so that state is not hidden in the Source panel. |
 | Main | **Root**, **Mode**, **Length** | Key, scale and number of chords. |
 | | **Notes** | Chord type: TRI (triad, 3 notes), 7TH (4), 9TH (5) or 11TH (6). The default is Triad. Color and Spice colour the tones but do not change the count. Bass, when on, is one of the N sounding notes. Dimmed while Lead is on. |
@@ -112,15 +142,18 @@ off-screen, so they cannot be clicked through the overlay.
 | | Register, Spread, Bass | Lowest upper note, voicing width and the bass note on or off. |
 | | Velocity, Humanize | Note velocity and human feel. |
 | | Seed | The current seed. Type a number to recall a progression. It is drawn at 60% when every chord is locked, because it then only affects Humanize. |
-| | Write | Writes the progression shown into the next empty slot again, unchanged. |
+| | Write | Writes the progression shown into the next empty slot again, unchanged. Dimmed in LIVE mode, with a tooltip explaining why. |
+| | **Evolve** | LIVE only: Off, every cycle, every 2 cycles, or every 4 cycles. Lightly mutates one or two inner unlocked chords at those boundaries. Dimmed in CLIP mode. |
 | SOURCE panel | drop zone | Drop a `.mid` file to load it as the source. The path is saved with the Set. |
 | | **USE CLIP** | Loads the MIDI clip shown in the Detail View (else the clip in the highlighted slot). Uses the loop if looping, else start to end marker. |
 | | CLEAR | Forgets the source. Generate makes fresh progressions again. |
 | | **VAR / B** | Variation or B section of the source. Dimmed without a source. |
 | | info line | Source name, detected key, chord and bar count, or a hint while there is no source. |
 
-Changing a control updates the preview but does not write anything. Only
-Generate, Reroll and Write create clips. Clips are named like
+In CLIP mode, changing a control updates the preview but does not write
+anything. Only Generate, Reroll and Write create clips. In LIVE mode those
+same changes apply at the next chord (Generate / Reroll at the next bar)
+and no clip is written. Clips are named like
 `C min · 4 · TRI · Col35 Chr10`, or `riff · VAR · A min · 9th · Col35 Chr10`
 and `riff · B III · A min · TRI · Col35 Chr10` when made from a source. Loading a source
 never writes a clip.
@@ -329,6 +362,20 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
+* The 0.7.0 LIVE mode in Live: a 10ms `Task` plus `LiveAPI` `live_set`
+  (`is_playing`, `current_song_time`, `tempo`, `signature_numerator`,
+  `signature_denominator`) staying in phase with the transport, starting on
+  a bar line, looping over Length × Bars per Chord, applying knob changes
+  at the next chord and Generate/Reroll at the next bar, Evolve mutations
+  at cycle wraps, note-offs before note-ons with no stuck notes on stop /
+  mode switch / device off or delete (`notifydeleted`, `closebang`,
+  `is_active`), the teal (or gold-with-Lead) playhead, the New Progression
+  label, Write dimming, LEAD / VAR / B playing live, incoming MIDI still
+  passing through `midiin` → `midiout` alongside outlet 2 of the js object,
+  and `Task` availability in Max 8.5.8's classic `js` object. Same-pitch
+  collisions between a user-held passthrough note and a generated note are
+  possible; the device never sends CC 123 so it will not flush notes you
+  are holding. Hold-a-note-to-transpose was skipped as too risky.
 * The 0.6.2 Notes count in Live: each chord writing exactly N sounding MIDI
   notes (Bass included), triad inversions staying three notes, notes not
   overlapping the next chord, plus the 0.6.1 tab labels, default Triad,

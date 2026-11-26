@@ -137,8 +137,13 @@ def draw_box(c, b, state):
             tc = b['textoncolor'] if val else b['textcolor']
         c.rect(r, fill=rgba(bg), outline=rgba(b.get('bordercolor', bg)), radius=2)
         label = b.get('texton') if val else b.get('text', '')
-        if b.get('varname') == 'generate' and state.get('values', {}).get('lead'):
-            label = 'Generate Lead'
+        if b.get('varname') == 'generate':
+            lead = state.get('values', {}).get('lead')
+            live = state.get('values', {}).get('playmode')
+            if live:
+                label = 'New Lead' if lead else 'New Progression'
+            elif lead:
+                label = 'Generate Lead'
         c.text(label, x + w / 2, y + h / 2, pt, rgba(tc), bold, 'mm')
     elif cls in ('live.menu', 'live.numbox'):
         val = initial(b, state['values'])

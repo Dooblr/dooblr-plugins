@@ -27,7 +27,7 @@ var SOURCE_H = 13;   // source strip under the header when a source is loaded
 var GAP = 4;
 var MAX_PER_ROW = 8;
 
-var model = { chords: [], heading: 'PROGRESSION', key: '', region: '', status: '', level: 'info', locked: 0, source: null };
+var model = { chords: [], heading: 'PROGRESSION', key: '', region: '', status: '', level: 'info', locked: 0, source: null, playIndex: -1, playmode: 0, lead: 0 };
 var hits = [];
 
 function hexToRgba(hex, alpha) {
@@ -169,6 +169,18 @@ function drawBlock(ch, i, x, y, bw, bh) {
     mgraphics.rectangle_rounded(x + 0.75, y + 0.75, bw - 1.5, bh - 1.5, 4, 4);
     mgraphics.stroke();
     drawPadlock(x + bw - 11, y + 6, band);
+  }
+
+  // LIVE playhead: teal outline, gold when Lead is also on.
+  if (typeof model.playIndex === 'number' && model.playIndex === i && model.playmode) {
+    var play = model.lead ? PALETTE.dynamic : PALETTE.accent;
+    setColor(play, 0.18);
+    mgraphics.rectangle_rounded(x, y, bw, bh, 4, 4);
+    mgraphics.fill();
+    setColor(play);
+    mgraphics.set_line_width(2);
+    mgraphics.rectangle_rounded(x + 1, y + 1, bw - 2, bh - 2, 4, 4);
+    mgraphics.stroke();
   }
 
   var name = ch.name || '';

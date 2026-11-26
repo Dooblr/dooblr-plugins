@@ -75,9 +75,20 @@ const STATES = [
       chords: [chord('Am9', 'i9'), chord('Fmaj9', 'VImaj9', { locked: true }), chord('Cmaj9', 'IIImaj9'), chord('G9', 'VII9')] }
   },
   {
+    title: 'Main view: LIVE mode, second chord playing',
+    panel: null,
+    inactive: ['write', 'density'],
+    values: { open_advanced: 0, open_source: 0, lead: 0, notes: 0, playmode: 1, evolve: 0 },
+    badge: '',
+    srcinfo: 'Drop a .mid file or press USE CLIP.',
+    blocks: { heading: 'PROGRESSION', status: 'LIVE: playing.', level: 'ok', locked: 0,
+      playIndex: 1, playmode: 1, lead: 0,
+      chords: [chord('Am', 'i'), chord('F', 'VI'), chord('C', 'III'), chord('G', 'VII')] }
+  },
+  {
     title: 'ADVANCED panel open, Lead on (Density available, Notes dimmed)',
     panel: 'advanced',
-    inactive: ['notes'],
+    inactive: ['notes', 'evolve'],
     values: { open_advanced: 1, open_source: 0, lead: 1, seed: 48213, density: 50, notes: 2 },
     badge: '',
     srcinfo: 'Drop a .mid file or press USE CLIP.',

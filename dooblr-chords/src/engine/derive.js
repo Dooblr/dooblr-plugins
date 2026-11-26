@@ -315,5 +315,35 @@ DC.derive = (function () {
     return kind === 'b' ? bSection(analysis, o, locks, keep) : variation(analysis, o, locks);
   }
 
-  return { derive: derive, RHYTHMS: RHYTHMS, regionsFor: regionsFor, endingOptions: endingOptions };
+
+  // LIGHT EVOLVE: keep first and last chords (and locks), mutate one or two
+  // inner chords to a diatonic neighbour or (with Chromatic) a substitute.
+  // Deterministic in (seed, cycle, chord index).
+  function evolveChords(chords, o, locks, seed, cycle) {
+    var n = chords.length, i, out = [], changed = [];
+    for (i = 0; i < n; i++) { out.push(C.copy(chords[i])); changed.push(false); }
+    if (n < 3) { return { chords: out, changed: changed }; }
+    var inner = [];
+    for (i = 1; i < n - 1; i++) {
+      if (!(locks && locks[i])) { inner.push(i); }
+    }
+    if (!inner.length) { return { chords: out, changed: changed }; }
+    var k = inner.length <= 3 ? 1 : 2;
+    if (k > inner.length) { k = inner.length; }
+    var cands = [];
+    for (i = 0; i < inner.length; i++) {
+      cands.push({ i: inner[i], u: R.stream(seed, cycle, R.P_EVOLVE).next() + R.stream(seed, inner[i], R.P_EVOLVE).next() });
+    }
+    cands.sort(function (a, b) { return a.u - b.u; });
+    for (i = 0; i < k; i++) {
+      var idx = cands[i].i;
+      var cur = out[idx], prev = idx > 0 ? out[idx - 1] : null, next = (idx + 1 < n) ? out[idx + 1] : out[0];
+      var op = variationOptions(o, cur, prev, next);
+      var choice = R.pickIndex(op.w, R.stream(seed, cycle * 17 + idx, R.P_EVOLVE).next());
+      if (choice >= 0) { out[idx] = op.opts[choice]; changed[idx] = true; }
+    }
+    return { chords: out, changed: changed };
+  }
+
+  return { derive: derive, evolveChords: evolveChords, RHYTHMS: RHYTHMS, regionsFor: regionsFor, endingOptions: endingOptions };
 })();

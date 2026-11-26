@@ -206,7 +206,7 @@
 					"maxclass": "comment",
 					"numinlets": 1,
 					"numoutlets": 0,
-					"text": "v0.6.2",
+					"text": "v0.7.0",
 					"fontname": "Arial",
 					"fontsize": 9,
 					"textcolor": [
@@ -248,7 +248,7 @@
 					"text": "Generate",
 					"texton": "Generate",
 					"fontname": "Arial Bold",
-					"fontsize": 13,
+					"fontsize": 10,
 					"activebgcolor": [
 						0.373,
 						0.702,
@@ -334,9 +334,9 @@
 					"presentation": 1,
 					"presentation_rect": [
 						10,
-						42,
+						65,
 						104,
-						36
+						26
 					]
 				}
 			},
@@ -441,9 +441,9 @@
 					"presentation": 1,
 					"presentation_rect": [
 						10,
-						118,
+						121,
 						104,
-						22
+						20
 					]
 				}
 			},
@@ -1105,8 +1105,9 @@
 					"maxclass": "newobj",
 					"text": "js dooblr_chords.js",
 					"numinlets": 1,
-					"numoutlets": 2,
+					"numoutlets": 3,
 					"outlettype": [
+						"",
 						"",
 						""
 					],
@@ -1755,7 +1756,7 @@
 					"text": "LEAD",
 					"texton": "LEAD",
 					"fontname": "Arial Bold",
-					"fontsize": 14,
+					"fontsize": 12,
 					"activebgcolor": [
 						0.145,
 						0.161,
@@ -1845,9 +1846,9 @@
 					"presentation": 1,
 					"presentation_rect": [
 						10,
-						80,
+						93,
 						104,
-						36
+						26
 					]
 				}
 			},
@@ -3957,6 +3958,299 @@
 						22
 					]
 				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "playmode",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial Bold",
+					"fontsize": 11,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Play Mode",
+					"annotation": "CLIP writes Session clips when you press Generate. LIVE plays the generated progression as MIDI in real time, synced to Live's transport, and does not write clips. Incoming MIDI still passes through.",
+					"id": "obj-96",
+					"patching_rect": [
+						10,
+						200,
+						104,
+						22
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						10,
+						42,
+						104,
+						22
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Play Mode",
+							"parameter_shortname": "Play Mode",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"CLIP",
+								"LIVE"
+							],
+							"parameter_mmax": 1,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					}
+				}
+			},
+			{
+				"box": {
+					"maxclass": "live.tab",
+					"varname": "evolve",
+					"numinlets": 1,
+					"numoutlets": 3,
+					"outlettype": [
+						"",
+						"",
+						"float"
+					],
+					"parameter_enable": 1,
+					"num_lines_patching": 1,
+					"num_lines_presentation": 1,
+					"fontname": "Arial",
+					"fontsize": 10,
+					"activebgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						1
+					],
+					"activebgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"activetextcolor": [
+						0.902,
+						0.91,
+						0.922,
+						1
+					],
+					"activetextoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						1
+					],
+					"bgcolor": [
+						0.145,
+						0.161,
+						0.192,
+						0.38
+					],
+					"bgoncolor": [
+						0.373,
+						0.702,
+						0.631,
+						0.38
+					],
+					"textcolor": [
+						0.902,
+						0.91,
+						0.922,
+						0.38
+					],
+					"textoncolor": [
+						0.086,
+						0.094,
+						0.11,
+						0.38
+					],
+					"bordercolor": [
+						0.173,
+						0.188,
+						0.22,
+						1
+					],
+					"focusbordercolor": [
+						0.373,
+						0.702,
+						0.631,
+						1
+					],
+					"annotation_name": "Evolve",
+					"annotation": "EVOLVE (LIVE only) lightly varies one or two inner unlocked chords at cycle boundaries: Off, every cycle, every 2 cycles, or every 4 cycles. The first and last chords stay put. Deterministic for a given seed and cycle.",
+					"id": "obj-97",
+					"patching_rect": [
+						1800,
+						200,
+						116,
+						24
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						2000,
+						50,
+						116,
+						24
+					],
+					"saved_attribute_attributes": {
+						"valueof": {
+							"parameter_longname": "Evolve",
+							"parameter_shortname": "Evolve",
+							"parameter_type": 2,
+							"parameter_enum": [
+								"Off",
+								"1 cycle",
+								"2 cycles",
+								"4 cycles"
+							],
+							"parameter_mmax": 3,
+							"parameter_initial": [
+								0
+							],
+							"parameter_initial_enable": 1,
+							"parameter_invisible": 0
+						}
+					}
+				}
+			},
+			{
+				"box": {
+					"maxclass": "comment",
+					"numinlets": 1,
+					"numoutlets": 0,
+					"text": "Evolve",
+					"fontname": "Arial",
+					"fontsize": 9,
+					"textcolor": [
+						0.541,
+						0.569,
+						0.612,
+						1
+					],
+					"ignoreclick": 1,
+					"background": 0,
+					"id": "obj-98",
+					"patching_rect": [
+						1800,
+						184,
+						116,
+						14
+					],
+					"presentation": 1,
+					"presentation_rect": [
+						2000,
+						36,
+						116,
+						14
+					],
+					"varname": "evolve_label"
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param playmode",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-99",
+					"patching_rect": [
+						10,
+						230,
+						160,
+						22
+					]
+				}
+			},
+			{
+				"box": {
+					"maxclass": "newobj",
+					"text": "prepend param evolve",
+					"numinlets": 1,
+					"numoutlets": 1,
+					"outlettype": [
+						""
+					],
+					"id": "obj-100",
+					"patching_rect": [
+						1800,
+						230,
+						150,
+						22
+					]
+				}
 			}
 		],
 		"lines": [
@@ -4784,6 +5078,66 @@
 					],
 					"destination": [
 						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-96",
+						0
+					],
+					"destination": [
+						"obj-99",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-99",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-97",
+						0
+					],
+					"destination": [
+						"obj-100",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-100",
+						0
+					],
+					"destination": [
+						"obj-41",
+						0
+					]
+				}
+			},
+			{
+				"patchline": {
+					"source": [
+						"obj-41",
+						2
+					],
+					"destination": [
+						"obj-61",
 						0
 					]
 				}

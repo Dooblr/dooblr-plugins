@@ -5,7 +5,7 @@ DC.engine = (function () {
   var T = DC.theory, C = DC.chords, G = DC.generator, V = DC.voicing, RN = DC.render;
   var A = DC.analysis, DV = DC.derive, MF = DC.midifile, L = DC.lead;
 
-  var VERSION = '0.6.2';
+  var VERSION = '0.7.0';
   var KINDS = [{ id: 'var', label: 'VAR', long: 'Variation' }, { id: 'b', label: 'B', long: 'B section' }];
   var DURATIONS = [
     { label: '1/2', beats: 2 },
@@ -17,7 +17,8 @@ DC.engine = (function () {
   var DEFAULTS = {
     root: 0, mode: 1, length: 4, duration: 1, color: 35, chromatic: 10,
     register: 60, spread: 25, bass: 1, velocity: 100, humanize: 0, seed: 1, kind: 0,
-    lead: 0, density: 50, notes: 3
+    lead: 0, density: 50, notes: 3,
+    playmode: 0, evolve: 0
   };
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -58,6 +59,8 @@ DC.engine = (function () {
     o.lead = o.lead ? 1 : 0;
     o.density = clamp(Math.round(o.density), 0, 100);
     o.notes = normalizeNotes(o.notes);
+    o.playmode = o.playmode ? 1 : 0;
+    o.evolve = clamp(Math.round(o.evolve), 0, 3);
     return o;
   }
 
@@ -111,6 +114,59 @@ DC.engine = (function () {
   // source (optional): { analysis, keep: { rhythm } }. With a source the
   // progression is a VARIATION or B SECTION of it (settings.kind) instead of
   // a fresh one; Length equal to the source's chord count keeps its rhythm.
+  
+  var PLAYMODES = ['CLIP', 'LIVE'];
+  var EVOLVE_LABELS = ['Off', '1 cycle', '2 cycles', '4 cycles'];
+  var EVOLVE_EVERY = [0, 1, 2, 4];
+  function evolveEvery(tab) { return EVOLVE_EVERY[clamp(Math.round(+tab || 0), 0, 3)]; }
+
+  // Rebuild a progression after a light Evolve mutation. Keeps slots, length,
+  // ending, and heading; only inner unlocked chords may change.
+  function evolveBuild(prev, cycle, locks) {
+    if (!prev || !prev.chords || !prev.chords.length) { return prev; }
+    var o = normalize(prev.settings), i;
+    var ev = DV.evolveChords(prev.chords, o, locks, o.seed, cycle);
+    var chords = ev.chords, changed = ev.changed;
+    var beats = DURATIONS[o.duration].beats;
+    var slots = null, lengthBeats = prev.lengthBeats;
+    if (prev.slots && prev.slots.length) {
+      slots = [];
+      for (i = 0; i < prev.slots.length; i++) {
+        slots.push({ start: prev.slots[i].start, duration: prev.slots[i].duration, end: prev.slots[i].start + prev.slots[i].duration });
+      }
+    } else if (prev.display && prev.display.length && prev.display[0].beats) {
+      var t = 0;
+      slots = [];
+      for (i = 0; i < prev.display.length; i++) {
+        var d = prev.display[i].beats;
+        slots.push({ start: t, duration: d, end: t + d });
+        t += d;
+      }
+    }
+    for (i = 0; i < chords.length; i++) { C.applyNotes(chords[i], o.notes); }
+    var vopts = { register: o.register, spread: o.spread, bass: o.bass, notes: o.notes };
+    var voicings = V.voiceAll(chords, o.root, vopts);
+    var notes = o.lead
+      ? L.notes(chords, o, { chordBeats: beats, slots: slots, lengthBeats: lengthBeats })
+      : RN.notes(voicings, { chordBeats: beats, velocity: o.velocity, humanize: o.humanize, seed: o.seed, slots: slots });
+    var display = [];
+    for (i = 0; i < chords.length; i++) {
+      var ch = chords[i];
+      display.push({
+        name: C.name(ch, o.root, o.mode), roman: C.roman(ch), func: ch.func, source: ch.source,
+        locked: !!(locks && locks[i]), changed: !!(changed && changed[i]),
+        beats: slots ? slots[i].duration : beats
+      });
+    }
+    var out = {
+      settings: o, chords: chords, display: display, voicings: voicings, notes: notes,
+      ending: prev.ending, lengthBeats: lengthBeats, clipName: prev.clipName, keyName: prev.keyName,
+      derived: prev.derived, rhythm: prev.rhythm, heading: prev.heading, evolved: true, cycle: cycle,
+      slots: slots
+    };
+    return out;
+  }
+
   function build(settings, locks, source) {
     var o = normalize(settings), i;
     var chords, ending, slots = null, lengthBeats, changed = null, rhythm = 'uniform', region = null;
@@ -123,6 +179,10 @@ DC.engine = (function () {
     } else {
       var prog = G.generate({ root: o.root, mode: o.mode, length: o.length, color: o.color, chromatic: o.chromatic, seed: o.seed }, locks);
       chords = prog.chords; ending = prog.ending; lengthBeats = beats * o.length;
+    }
+    if (!slots) {
+      slots = [];
+      for (i = 0; i < chords.length; i++) { slots.push({ start: i * beats, duration: beats, end: (i + 1) * beats }); }
     }
     for (i = 0; i < chords.length; i++) { C.applyNotes(chords[i], o.notes); }
     var voicings = V.voiceAll(chords, o.root, vopts);
@@ -142,7 +202,8 @@ DC.engine = (function () {
     var out = {
       settings: o, chords: chords, display: display, voicings: voicings, notes: notes,
       ending: ending, lengthBeats: lengthBeats, clipName: clipName(o), keyName: keyName,
-      derived: null, rhythm: rhythm, heading: o.lead ? 'LEAD' : 'PROGRESSION'
+      derived: null, rhythm: rhythm, heading: o.lead ? 'LEAD' : 'PROGRESSION',
+      slots: slots
     };
     if (source && source.analysis) {
       var regionText = '';
@@ -163,7 +224,8 @@ DC.engine = (function () {
   return {
     VERSION: VERSION, DURATIONS: DURATIONS, DEFAULTS: DEFAULTS, SEED_MAX: SEED_MAX, KINDS: KINDS,
     normalize: normalize, notesFromTab: notesFromTab, tabFromNotes: tabFromNotes, notesLabel: notesLabel,
-    clipName: clipName, newSeed: newSeed, build: build,
+    clipName: clipName, newSeed: newSeed, build: build, evolveBuild: evolveBuild,
+    PLAYMODES: PLAYMODES, EVOLVE_LABELS: EVOLVE_LABELS, evolveEvery: evolveEvery,
     sourceFromMidi: sourceFromMidi, analyzeSource: analyzeSource, sourceDisplay: sourceDisplay,
     isMidiPath: MF.isMidiPath, baseName: MF.baseName
   };

@@ -5,9 +5,11 @@
 // Messages in:
 //   init                 from live.thisdevice; LiveAPI is safe after this
 //   param <name> <value> from each live.* control (via [prepend param <name>])
-//   generate             new seed, clear locks, write a clip
-//   reroll               new seed, keep locked chords, write a clip
-//   write                write the current preview as a clip
+//   generate             new seed, clear locks; write a clip (CLIP) or queue at next bar (LIVE)
+//   reroll               new seed, keep locked chords; write a clip (CLIP) or queue at next bar (LIVE)
+//   write                write the current preview as a clip (CLIP only)
+//   tick                 LIVE clock (also driven by a 10ms Task after init)
+//   notifydeleted/closebang  all-notes-off and stop the clock
 //   lock <index>         toggle the lock on one chord (from the jsui)
 //   unlockall            clear every lock
 //   ascii <0|1>          use b/# instead of the flat/sharp glyphs on screen
@@ -21,19 +23,23 @@
 // Outlets:
 //   0  setstate <json>   to the chord display (jsui)
 //   1  set <seed>        to the Seed number box (no output, no feedback loop)
+//   2  raw MIDI bytes    note-on 144 p v / note-off 128 p 0, to midiout
 
 autowatch = 0;
 inlets = 1;
-outlets = 2;
+outlets = 3;
 setinletassist(0, 'init, param <name> <value>, generate, reroll, write, lock <index>, dropfile <path>, useclip, clearsource, openpanel, closepanel');
 setoutletassist(0, 'setstate <json> to the chord display');
 setoutletassist(1, 'set <seed> to the Seed number box');
+setoutletassist(2, 'raw MIDI bytes to midiout');
 
 var self = this;
 var E = DC.engine;
+var S = DC.scheduler;
 
 var PARAM_NAMES = ['root', 'mode', 'length', 'duration', 'color', 'chromatic',
-  'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind', 'lead', 'density', 'notes'];
+  'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind', 'lead', 'density', 'notes',
+  'playmode', 'evolve'];
 
 var settings = E.normalize(E.DEFAULTS);
 var locks = [];
@@ -46,9 +52,11 @@ var MAX_FILE_BYTES = 4 * 1024 * 1024;
 
 // Button varnames in the patcher, for dimming with an explanation.
 var BUTTON_HINTS = {
-  generate: 'Generate makes a new progression with a new seed and writes it as a clip in the next empty slot on this track.',
-  reroll: 'Reroll keeps the locked chords, regenerates the others with a new seed and writes a clip.',
+  generate: 'Generate makes a new progression with a new seed and writes it as a clip in the next empty slot on this track. In LIVE mode it starts the new progression on the next bar and does not write a clip.',
+  reroll: 'Reroll keeps the locked chords, regenerates the others with a new seed and writes a clip. In LIVE mode the new chords start on the next bar and no clip is written.',
   write: 'Write puts the progression shown below into the next empty clip slot without changing it.',
+  playmode: 'CLIP writes Session clips when you press Generate. LIVE plays the generated progression as MIDI in real time, synced to Live\'s transport, and does not write clips.',
+  evolve: 'EVOLVE (LIVE only) lightly varies one or two inner unlocked chords at cycle boundaries: Off, every cycle, every 2 cycles, or every 4 cycles. The first and last chords stay put. Deterministic for a given seed and cycle.',
   useclip: 'USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.',
   clearsource: 'CLEAR forgets the source, so Generate makes fresh progressions again.',
   kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.',
@@ -63,7 +71,8 @@ var BUTTON_HINTS = {
 // saved parameter. The first name in each list is the backdrop.
 var PANELS = {
   advanced: ['adv_bg', 'adv_title', 'adv_close', 'adv_bars_label', 'adv_seed_label', 'bass_label',
-    'duration', 'seed', 'write', 'register', 'spread', 'velocity', 'humanize', 'density', 'bass'],
+    'duration', 'seed', 'write', 'register', 'spread', 'velocity', 'humanize', 'density', 'bass',
+    'evolve_label', 'evolve'],
   source: ['src_bg', 'src_title', 'src_close', 'srcdrop', 'useclip', 'clearsource', 'kind', 'srcinfo']
 };
 var PANEL_NAMES = ['advanced', 'source'];
@@ -99,6 +108,8 @@ var PANEL_RECTS = {
   humanize: [332, 84, 56, 72],
   density: [396, 84, 56, 72],
   bass: [460, 100, 48, 22],
+  evolve_label: [512, 36, 116, 14],
+  evolve: [512, 50, 116, 24],
   src_bg: [128, 0, 512, 169],
   src_title: [140, 8, 200, 16],
   src_close: [456, 6, 22, 22],
@@ -112,6 +123,23 @@ var openPanel = null;
 var applyingPanel = false;
 var badgeOn = false;
 
+// LIVE scheduler. The host polls Live's transport every 10ms with a Max Task
+// and feeds { playing, beats, barBeats, tempo } into the pure js scheduler.
+var sched = S.create();
+var clockTask = null;
+var deviceObs = null;
+var lastPlayIndex = -1;
+var lastPlayCycle = -1;
+var MIDI_OUT = 2;
+var BOUNDARY_PARAMS = {
+  root: 1, mode: 1, length: 1, duration: 1, color: 1, chromatic: 1, notes: 1,
+  register: 1, spread: 1, bass: 1, velocity: 1, humanize: 1, density: 1, lead: 1,
+  kind: 1, seed: 1
+};
+
+function isLive() { return !!settings.playmode; }
+
+
 // ---- messages -------------------------------------------------------------
 
 function loadbang() {
@@ -123,7 +151,12 @@ function init() {
   ready = true;
   closepanel();
   refresh();
+  applyPlayMode(-1);
+  bindDevice();
 }
+
+function notifydeleted() { teardownLive(); }
+function closebang() { teardownLive(); }
 
 function param(name, value) {
   if (!isParam(name)) {
@@ -135,7 +168,22 @@ function param(name, value) {
   settings[name] = value;
   settings = E.normalize(settings);
   if (name === 'kind' && settings.kind !== before && source) { locks = []; }
+  if (name === 'playmode') {
+    applyPlayMode(before);
+    refresh();
+    return;
+  }
+  if (name === 'evolve') {
+    S.setEvolveEvery(sched, E.evolveEvery(settings.evolve));
+    refresh();
+    return;
+  }
   refresh();
+  if (isLive() && BOUNDARY_PARAMS[name] && sched.started && sched.playing) {
+    S.queueBuild(sched, current, 'chord');
+    setStatus('info', 'LIVE: that change applies at the next chord.');
+    sendState();
+  }
 }
 
 function generate() {
@@ -143,6 +191,12 @@ function generate() {
   locks = [];
   pickNewSeed();
   refresh();
+  if (isLive()) {
+    S.queueBuild(sched, current, 'bar');
+    setStatus('ok', 'New progression starts at the next bar.');
+    sendState();
+    return;
+  }
   writeClip();
 }
 
@@ -155,11 +209,22 @@ function reroll() {
   }
   pickNewSeed();
   refresh();
+  if (isLive()) {
+    S.queueBuild(sched, current, 'bar');
+    setStatus('ok', 'Reroll starts at the next bar.');
+    sendState();
+    return;
+  }
   writeClip();
 }
 
 function write() {
   if (!guard()) { return; }
+  if (isLive()) {
+    setStatus('info', 'Write is only for CLIP mode: it creates a Session clip. Switch to CLIP to write this progression.');
+    sendState();
+    return;
+  }
   if (!current) { refresh(); }
   writeClip();
 }
@@ -532,23 +597,35 @@ function applyPanelVisibility() {
   }
 }
 
+function soundingBuild() {
+  if (isLive() && sched.started && sched.build) { return sched.build; }
+  return current;
+}
+
 function sendState() {
-  if (!current) { return; }
+  var view = soundingBuild();
+  if (!view) { return; }
+  var playIndex = (isLive() && sched.started) ? sched.chordIndex : -1;
   var state = {
-    chords: current.display,
-    heading: current.heading || (current.derived ? current.derived.heading : 'PROGRESSION'),
-    key: current.keyName + (current.derived && current.derived.regionText ? ' \u00B7 ' + current.derived.regionText : ''),
+    chords: view.display,
+    heading: view.heading || (view.derived ? view.derived.heading : 'PROGRESSION'),
+    key: view.keyName + (view.derived && view.derived.regionText ? ' \u00B7 ' + view.derived.regionText : ''),
     // The Root and Mode menus already show the key, so the display only
     // draws the region a B section moves to.
-    region: (current.derived && current.derived.regionText) ? current.derived.regionText : '',
-    seed: current.settings.seed,
+    region: (view.derived && view.derived.regionText) ? view.derived.regionText : '',
+    seed: view.settings.seed,
     status: statusText,
     level: statusLevel,
     locked: lockCount(),
-    source: (current.derived ? current.derived.source : null),
-    derived: (current.derived ? current.derived.label : null)
+    source: (view.derived ? view.derived.source : null),
+    derived: (view.derived ? view.derived.label : null),
+    playIndex: playIndex,
+    playmode: isLive() ? 1 : 0,
+    lead: settings.lead ? 1 : 0
   };
   outlet(0, 'setstate', JSON.stringify(state));
+  lastPlayIndex = playIndex;
+  lastPlayCycle = sched.cycle;
 }
 
 function setActive(varname, on, annotation) {
@@ -584,8 +661,11 @@ var SEED_HINT = 'The seed makes a progression repeatable. The same seed and sett
 
 function updateButtons() {
   var waiting = ' It is unavailable until the device has finished loading.';
+  var live = isLive();
   setActive('generate', ready, BUTTON_HINTS.generate + (ready ? '' : waiting));
-  setActive('write', ready, BUTTON_HINTS.write + (ready ? '' : waiting));
+  setActive('write', ready && !live, live
+    ? BUTTON_HINTS.write + ' It is dimmed because LIVE mode plays the progression in real time and does not write Session clips. Switch to CLIP to use Write.'
+    : BUTTON_HINTS.write + (ready ? '' : waiting));
   var canReroll = ready && lockCount() > 0;
   setActive('reroll', canReroll, BUTTON_HINTS.reroll +
     (canReroll ? '' : (ready ? ' It is dimmed because no chord is locked yet: click a chord block to lock it.' : waiting)));
@@ -602,11 +682,16 @@ function updateButtons() {
   setActive('notes', ready && !leadOn, leadOn
     ? BUTTON_HINTS.notes + ' It is dimmed because Lead is on: a lead line is monophonic, so the chord-type count does not apply.'
     : BUTTON_HINTS.notes);
-  setGenerateLabel(leadOn);
+  setActive('playmode', ready, BUTTON_HINTS.playmode + (ready ? '' : waiting));
+  setActive('evolve', ready && live, live
+    ? BUTTON_HINTS.evolve
+    : BUTTON_HINTS.evolve + ' It is dimmed in CLIP mode: Evolve only runs while the device is playing a live progression.');
+  setGenerateLabel(leadOn, live);
 }
 
-function setGenerateLabel(leadOn) {
-  var label = leadOn ? 'Generate Lead' : 'Generate';
+function setGenerateLabel(leadOn, live) {
+  if (live === undefined) { live = isLive(); }
+  var label = live ? (leadOn ? 'New Lead' : 'New Progression') : (leadOn ? 'Generate Lead' : 'Generate');
   try {
     var obj = self.patcher.getnamed('generate');
     if (!obj) { return; }
@@ -615,6 +700,158 @@ function setGenerateLabel(leadOn) {
   } catch (e) {
     post('dooblr-chords: could not update the Generate label: ' + e + '\n');
   }
+}
+
+
+// ---- LIVE transport ---------------------------------------------------------
+
+function applyPlayMode(previous) {
+  var live = isLive();
+  S.setEvolveEvery(sched, E.evolveEvery(settings.evolve));
+  if (current) { S.setBuild(sched, current); }
+  S.setLive(sched, live);
+  if (live) {
+    startClock();
+    if (previous === 0 || previous === -1) {
+      setStatus('info', 'LIVE: plays on the next bar when the transport is running. Incoming MIDI still passes through.');
+    }
+  } else {
+    silenceLive();
+    stopClock();
+    if (previous === 1) {
+      setStatus('info', 'CLIP: Generate writes a clip into the next empty slot.');
+    }
+  }
+}
+
+function startClock() {
+  if (clockTask || typeof Task === 'undefined') { return; }
+  try {
+    clockTask = new Task(tick, self);
+    clockTask.interval = 10;
+    clockTask['repeat'](); // Max Task API; bracket form so the ES5 scanner does not see String.repeat
+  } catch (e) {
+    clockTask = null;
+    post('dooblr-chords: could not start the LIVE clock: ' + e + '\n');
+  }
+}
+
+function stopClock() {
+  if (!clockTask) { return; }
+  try { clockTask.cancel(); } catch (e) {}
+  clockTask = null;
+}
+
+function teardownLive() {
+  silenceLive();
+  stopClock();
+  deviceObs = null;
+}
+
+function silenceLive() {
+  S.setLive(sched, false);
+  var out = S.process(sched, { playing: false, beats: 0, barBeats: 4, tempo: 120 }, {});
+  emitMidi(out);
+  if (isLive()) { S.setLive(sched, true); }
+}
+
+function bindDevice() {
+  if (typeof LiveAPI === 'undefined') { return; }
+  try {
+    deviceObs = new LiveAPI(onDevice, 'live_set this_device');
+    deviceObs.property = 'is_active';
+  } catch (e) {
+    deviceObs = null;
+  }
+}
+
+function onDevice(args) {
+  try {
+    var prop = args && args[0];
+    var val = args && args[1];
+    if (String(prop) === 'is_active' && Number(val) === 0) { silenceLive(); }
+  } catch (e) {}
+}
+
+function readTransport() {
+  if (typeof LiveAPI === 'undefined') { return null; }
+  try {
+    var api = new LiveAPI('live_set');
+    if (!api || Number(api.id) === 0) { return null; }
+    var playing = Number(firstValue(api.get('is_playing'))) === 1;
+    var beats = Number(firstValue(api.get('current_song_time')));
+    var tempo = Number(firstValue(api.get('tempo'))) || 120;
+    var num = Number(firstValue(api.get('signature_numerator'))) || 4;
+    var den = Number(firstValue(api.get('signature_denominator'))) || 4;
+    if (!(den > 0)) { den = 4; }
+    var barBeats = num * (4 / den);
+    if (!(barBeats > 0)) { barBeats = 4; }
+    if (isNaN(beats)) { beats = 0; }
+    return { playing: playing, beats: beats, barBeats: barBeats, tempo: tempo };
+  } catch (e) {
+    return null;
+  }
+}
+
+function emitMidi(out) {
+  if (!out) { return; }
+  var evs, i, ev;
+  if (out.events && out.events.length) {
+    evs = out.events;
+  } else {
+    evs = [];
+    if (out.offs) { for (i = 0; i < out.offs.length; i++) { evs.push({ type: 'off', pitch: out.offs[i].pitch, velocity: 0 }); } }
+    if (out.ons) { for (i = 0; i < out.ons.length; i++) { evs.push({ type: 'on', pitch: out.ons[i].pitch, velocity: out.ons[i].velocity }); } }
+  }
+  for (i = 0; i < evs.length; i++) {
+    ev = evs[i];
+    if (ev.type === 'off') { outlet(MIDI_OUT, 128, ev.pitch, 0); }
+    else { outlet(MIDI_OUT, 144, ev.pitch, ev.velocity); }
+  }
+}
+
+function tick() {
+  if (!isLive()) { return; }
+  var clock = readTransport();
+  if (!clock) { return; }
+  if (current && !sched.build) { S.setBuild(sched, current); }
+  var hooks = {
+    evolve: function (prev, cycle) {
+      var next = E.evolveBuild(prev, cycle, locks);
+      if (next) { current = next; }
+      return next;
+    }
+  };
+  var out = S.process(sched, clock, hooks);
+  emitMidi(out);
+  if (sched.build) { current = sched.build; }
+  if (out.chordIndex !== lastPlayIndex || out.cycle !== lastPlayCycle || out.started !== !!sched.started) {
+    sendState();
+  }
+}
+
+// Tests and a manual bang can step the clock without a Task.
+function clock(playing, beats, barBeats, tempo) {
+  if (!isLive()) { return; }
+  var snap = {
+    playing: !!playing,
+    beats: typeof beats === 'number' ? beats : 0,
+    barBeats: barBeats > 0 ? barBeats : 4,
+    tempo: tempo > 0 ? tempo : 120
+  };
+  if (current && !sched.build) { S.setBuild(sched, current); }
+  var hooks = {
+    evolve: function (prev, cycle) {
+      var next = E.evolveBuild(prev, cycle, locks);
+      if (next) { current = next; }
+      return next;
+    }
+  };
+  var out = S.process(sched, snap, hooks);
+  emitMidi(out);
+  if (sched.build) { current = sched.build; }
+  sendState();
+  return out;
 }
 
 // ---- Live API ---------------------------------------------------------------

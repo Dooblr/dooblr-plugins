@@ -78,6 +78,8 @@ DC.rng = (function () {
     // Variation / B section (derive.js)
     P_VARPICK: 8, P_VARSUB: 9, P_BRHYTHM: 10, P_BREGION: 11, P_BWALK: 12, P_BEND: 13, P_BCHROM: 14,
     // Lead line
-    P_LEAD_RHYTHM: 15, P_LEAD_PITCH: 16
+    P_LEAD_RHYTHM: 15, P_LEAD_PITCH: 16,
+    // LIVE mode Evolve
+    P_EVOLVE: 17
   };
 })();
