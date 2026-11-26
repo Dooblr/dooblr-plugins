@@ -34,6 +34,7 @@ in its own folder and has its own README.
 | [`dooblr-distressor/`](dooblr-distressor/) | dooblr-distressor | 0.1.2 | EL8-style compressor (VST3 effect): eight ratio curves, Dist 2 / Dist 3, detector HP / band / link, audio HP, headroom, phase-aligned mix, Gain Match, interactive GR display; independently designed approximation, not an emulation | New; its tests pass in this repo |
 | [`dooblr-0coast/`](dooblr-0coast/) | dooblr-0coast | 0.1.0 | No-coast monophonic synth (VST3 instrument): triangle-core oscillator, Overtone / Multiply, cycling Slope, Contour, LPG Dynamics, host-tempo arp, virtual patch bay; independently designed approximation of the 0-Coast architecture, not an emulation | New; its tests pass in this repo |
 | [`dooblr-sub/`](dooblr-sub/) | dooblr-sub | 0.1.0 | Sub-harmonic generator, duration-preserving tone shift and big-system translation check (VST3 effect) | New; its tests pass in this repo |
+| [`dooblr-reverb/`](dooblr-reverb/) | dooblr-reverb | 0.1.0 | Algorithmic reverb (VST3 effect): Space hero knob (Ambience to Infinite space) with decay readout, Decay Rate, Brightness, Character, Distance, Stereo Width, Mix; Decay Rate EQ and Post EQ drawn over a live spectrum; predelay 0-500 ms or tempo-synced; zero latency | New; tests, LoadCheck and pluginval (strictness 10) pass; not yet tested in Live |
 | [`dooblr-chords/`](dooblr-chords/) | dooblr-chords | 0.5.0 | Chord progression generator (Max for Live MIDI effect, Live 11.3 / Max 8.5) | Active; `npm test` suite |
 | [`dooblr-titan/`](dooblr-titan/) | dooblr-titan | 0.1.0 | MIDI clip tightener and variation writer (Max for Live MIDI effect, Live 11.3 / Max 8.5) | New; `npm test` suite |
 | [`dooblr-installer/`](dooblr-installer/) | dooblr installer | 0.1.5 | Installer / updater app for the whole suite (macOS dmg, Windows exe): picks what to install or update (All / None / Updates), one progress wheel with a summary at the end, sha256-checked downloads from the latest GitHub Release; while the repository is private, "Get access on GitHub" opens a pre-filled token page and the copied token is checked with GitHub before it is saved; errors can be selected and copied | New; Mac tests and a local end-to-end install pass; Windows built and tested in CI (not yet on a real PC) |
@@ -45,7 +46,7 @@ and dooblr-titan: `package.json` / device). Status is as of the last commit; see
 ## Building
 
 VST3 plug-ins (each with `scripts/build.sh`): dooblr-q, dooblr-kick, dooblr-vocals,
-dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor, dooblr-0coast, dooblr-sub, dooblr-generate. Max for Live devices: dooblr-chords and dooblr-titan (see their READMEs) and the
+dooblr-prophet, dooblr-bass, dooblr-m, dooblr-soothe, dooblr-feedback, dooblr-distressor, dooblr-0coast, dooblr-sub, dooblr-reverb, dooblr-generate. Max for Live devices: dooblr-chords and dooblr-titan (see their READMEs) and the
 dooblr-prophet panel 0.3.2 (`dooblr-prophet/m4l/`).
 
 Each VST3 plug-in has a `scripts/build.sh` that configures, builds, runs the tests, runs a
@@ -64,6 +65,7 @@ dooblr-feedback/scripts/build.sh # builds in ~/dooblr-build/dooblr-feedback
 dooblr-distressor/scripts/build.sh # builds in ~/dooblr-build/dooblr-distressor
 dooblr-0coast/scripts/build.sh   # builds in ~/dooblr-build/dooblr-0coast
 dooblr-sub/scripts/build.sh      # builds in ~/dooblr-build/dooblr-sub
+dooblr-reverb/scripts/build.sh   # builds in ~/dooblr-build/dooblr-reverb
 dooblr-generate/scripts/build.sh # builds in ~/dooblr-build/dooblr-generate
 ```
 
