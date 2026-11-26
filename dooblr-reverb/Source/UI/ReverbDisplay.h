@@ -2,6 +2,7 @@
 
 #include <array>
 #include <memory>
+#include <vector>
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
@@ -29,7 +30,17 @@ namespace dooblrreverb::ui
         Handles: drag (Shift for fine moves), mouse wheel for Q, double-click a handle to remove
         it, right-click for shape / slope / remove. Double-click an empty spot to add a band to the
         layer picked with the DECAY RATE EQ / POST EQ buttons (clicking a handle also picks its
-        layer). Hovering shows a readout chip. Opaque; the grid is cached; VBlank drives updates.
+        layer). Hovering shows a readout chip.
+
+        Smooth analyzer: the audio thread delivers samples in host-block bursts, so the display
+        keeps its own queue and, on every VBlank, takes the samples that belong to the elapsed time
+        (a slow servo keeps about one host block in reserve), runs one 4096-point FFT over the newest
+        samples and eases each point toward it with time-based rise / fall ballistics. A fresh,
+        evenly spaced spectrum every frame, whatever the host block size.
+
+        Opaque. The grid is cached in one image and the curves, handles and readout in another
+        (rebuilt only when they change), so a frame repaints only the plot: two image blits and the
+        spectrum.
     */
     class ReverbDisplay final : public juce::Component
     {
@@ -51,6 +62,8 @@ namespace dooblrreverb::ui
 
         /** Polls parameters and the analyzer (VBlank does this); returns true if a repaint was queued. */
         bool poll();
+        /** As poll(), with the elapsed time given rather than measured (tests). */
+        bool tick (double elapsedSeconds);
 
         Layer getEditLayer() const noexcept { return editLayer; }
         void setEditLayer (Layer layer);
@@ -68,6 +81,7 @@ namespace dooblrreverb::ui
         const juce::Path& getDecayPath() const noexcept { return decayPath; }
         const juce::Path& getEqPath() const noexcept { return eqPath; }
         const juce::Path& getPostSpectrumPath() const noexcept { return postPath; }
+        const juce::Path& getPreSpectrumPath() const noexcept { return prePath; }
         juce::TextButton& getLayerButton (Layer layer) noexcept { return layer == Layer::decay ? decayButton : eqButton; }
 
         /** Pushes a test tone through the analyzer state at once (tests and snapshots). */
@@ -79,20 +93,32 @@ namespace dooblrreverb::ui
     private:
         static constexpr int fftOrder = 12, fftSize = 1 << fftOrder, numPoints = 160;
 
+        static constexpr int queueSize = 1 << 15;
+
         struct Analyzer
         {
-            std::array<float, fftSize> history {};
-            int writePos = 0, sinceLast = 0;
-            std::array<float, numPoints> levels {};
+            std::vector<float> queue;                  // samples waiting to be shown (ring)
+            int queueRead = 0, queueCount = 0;
+            std::array<float, fftSize> history {};     // the newest fftSize samples (ring)
+            int writePos = 0;
+            std::array<float, numPoints> target {}, levels {};
+            double carry = 0.0, backlog = 0.0, burst = 0.0, quiet = 0.0;
             bool valid = false;
+
+            void reset();
+            void push (const float* samples, int n);
         };
 
         void drawBackground();
         void rebuildCurves();
         void rebuildSpectrum();
         void addSmoothCurveTo (juce::Path& path) const;
-        void feed (Analyzer& a, const float* samples, int n);
+        bool advance (Analyzer& a, double dt, int burst);
+        void writeHistory (Analyzer& a, const float* samples, int n);
         void analyse (Analyzer& a);
+        void drawOverlay();
+        juce::Rectangle<float> overlayArea() const;
+        void invalidateOverlay();
         juce::String readoutText() const;
         void setParam (const juce::String& pid, float value);
         void beginGesture (const juce::String& pid);
@@ -117,14 +143,17 @@ namespace dooblrreverb::ui
         Layer editLayer = Layer::decay;
 
         juce::Rectangle<float> plot;
-        juce::Image background;
-        float backgroundScale = 0.0f;
+        juce::Image background, overlay;
+        float backgroundScale = 0.0f, overlayScale = 0.0f;
+        bool overlayDirty = true;
         juce::Path decayPath, decayFill, effectivePath, eqPath, eqFill, postPath, postFill, prePath;
 
         juce::dsp::FFT fft { fftOrder };
         std::array<float, 2 * fftSize> fftData {};
         std::array<float, fftSize> window {};
         std::array<float, numPoints> pointFreq {}, pointX {}, pointY {}, smoothed {};
+        std::array<int, numPoints> binLo {}, binHi {};   // each point's FFT bins (binLo > binHi: interpolate)
+        double binsForRate = 0.0;
         Analyzer post, pre;
         int analyzerShown = -1;
         double lastTickMs = 0.0;

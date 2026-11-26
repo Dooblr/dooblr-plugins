@@ -280,7 +280,7 @@ namespace
         check (p->getMainBusNumInputChannels() == 2 && p->getMainBusNumOutputChannels() == 2, "stereo in / out by default");
         check (p->hasEditor(), "has an editor");
         check (juce::String (JucePlugin_VersionString) == DOOBLRREVERB_PROJECT_VERSION, "version string matches the project version");
-        check (juce::String (JucePlugin_VersionString) == "0.1.0", "version 0.1.0");
+        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
         check (p->getBypassParameter() == p->getState().getParameter (id::bypass), "the host bypass is the Bypass parameter");
         check (p->getTailLengthSeconds() > 0.5, "reports a tail (" + fmt (p->getTailLengthSeconds(), 2) + " s)");
         check (p->getNumPrograms() == (int) presets::factory().size(), "factory presets exposed as programs");
@@ -938,7 +938,7 @@ namespace
                 for (int ch = 0; ch < 2; ++ch)
                     buffer.copyFrom (ch, 0, raw.data() + pos, defaultBlock);
                 processor->processBlock (buffer, midi);
-                display.poll();
+                display.tick (defaultBlock / processor->getSampleRate());
             }
         }
     };
@@ -1151,6 +1151,156 @@ namespace
         }
     }
 
+
+    /** The y of a path's end point nearest to x (the height of a tone's peak), and the point count. */
+    std::pair<double, int> pathPoints (const juce::Path& path, float x)
+    {
+        double y = 0.0, best = 1.0e9;
+        int n = 0;
+        for (juce::Path::Iterator it (path); it.next();)
+            if (it.elementType != juce::Path::Iterator::closePath)
+            {
+                ++n;
+                if (std::abs (it.x2 - x) < best) { best = std::abs (it.x2 - x); y = it.y2; }
+            }
+        return { y, n };
+    }
+
+    /**
+        Real-time analyzer motion, simulated on the message thread at real speed. Every ~16.7 ms
+        (a 60 Hz VBlank) the host has delivered whole blocks of `block` samples at 44.1 kHz, then
+        the display polls. The input is a 1 kHz tone rising steadily (16 dB/s), shown as the input
+        spectrum, so an ideal analyzer moves the curve by the same small amount every frame. A
+        stuttery one freezes for a frame or two and then jumps: frozen frames and a high
+        coefficient of variation (CV) of the per-frame step.
+    */
+    struct MotionStats { int ticks = 0, moved = 0; double meanStep = 0.0, maxStep = 0.0, stepCv = 0.0, fps = 0.0; };
+
+    MotionStats measureMotion (int block, double seconds)
+    {
+        EditorFixture f;
+        MotionStats m;
+        if (f.editor == nullptr) return m;
+        auto& p = *f.processor;
+        p.setRateAndBufferSizeDetails (44100.0, block);
+        p.prepareToPlay (44100.0, block);
+        p.setAnalyzerMode (2);
+        auto& display = f.editor->getDisplay();
+        const auto total = (size_t) (44100 * (seconds + 1.0));
+        std::vector<float> src (total);
+        for (size_t i = 0; i < total; ++i)
+        {
+            const auto t = (double) i / 44100.0;
+            src[i] = (float) (juce::Decibels::decibelsToGain (-66.0 + 16.0 * t) * std::sin (juce::MathConstants<double>::twoPi * 1000.0 * t));
+        }
+        juce::AudioBuffer<float> buffer (2, block);
+        juce::MidiBuffer midi;
+        size_t processed = 0;
+        const auto start = juce::Time::getMillisecondCounterHiRes();
+        std::vector<double> steps;
+        double lastMean = 0.0;
+        bool haveLast = false;
+        const auto totalTicks = (int) (seconds * 60.0);
+        for (int t = 0; t < totalTicks; ++t)
+        {
+            const auto deadline = start + (t + 1) * (1000.0 / 60.0);
+            while (juce::Time::getMillisecondCounterHiRes() < deadline)
+                juce::Thread::sleep (1);
+            const auto elapsed = (juce::Time::getMillisecondCounterHiRes() - start) * 0.001;
+            const auto due = (size_t) (elapsed * 44100.0 / block) * (size_t) block;
+            while (processed + (size_t) block <= due && processed + (size_t) block <= src.size())
+            {
+                for (int ch = 0; ch < 2; ++ch) buffer.copyFrom (ch, 0, src.data() + processed, block);
+                p.processBlock (buffer, midi);
+                processed += (size_t) block;
+            }
+            display.poll();
+            const auto [mean, n] = pathPoints (display.getPreSpectrumPath(), display.xForFrequency (1000.0f));
+            if (n == 0) continue;
+            if (haveLast && t >= 60) // after the first second (the analyzer has filled)
+            {
+                const auto step = std::abs (mean - lastMean);
+                steps.push_back (step);
+                ++m.ticks;
+                if (step > 0.02) ++m.moved;
+            }
+            lastMean = mean;
+            haveLast = true;
+        }
+        m.fps = totalTicks / ((juce::Time::getMillisecondCounterHiRes() - start) * 0.001);
+        if (! steps.empty())
+        {
+            double sum = 0.0, sq = 0.0;
+            for (auto s : steps) { sum += s; sq += s * s; m.maxStep = std::max (m.maxStep, s); }
+            m.meanStep = sum / (double) steps.size();
+            const auto var = std::max (0.0, sq / (double) steps.size() - m.meanStep * m.meanStep);
+            m.stepCv = m.meanStep > 0.0 ? std::sqrt (var) / m.meanStep : 0.0;
+        }
+        return m;
+    }
+
+    /**
+        Average and worst time to paint the display (spectrum showing) into an image at a scale.
+        `native` uses the platform renderer the plugin paints with (CoreGraphics on macOS);
+        otherwise JUCE's software renderer. `plotOnly` clips to the plot, as a VBlank frame does.
+    */
+    std::pair<double, double> measurePaint (ui::ReverbDisplay& display, float scale, int frames, bool native, bool plotOnly)
+    {
+        const auto w = (int) std::ceil ((float) display.getWidth() * scale), h = (int) std::ceil ((float) display.getHeight() * scale);
+        juce::Image image = native ? juce::Image (juce::Image::ARGB, w, h, true, juce::NativeImageType())
+                                   : juce::Image (juce::Image::ARGB, w, h, true, juce::SoftwareImageType());
+        double total = 0.0, worst = 0.0;
+        for (int i = 0; i < frames + 3; ++i)
+        {
+            juce::Graphics g (image);
+            g.addTransform (juce::AffineTransform::scale (scale));
+            if (plotOnly)
+                g.reduceClipRegion (display.getPlotArea().getSmallestIntegerContainer());
+            const auto t0 = juce::Time::getMillisecondCounterHiRes();
+            display.paintEntireComponent (g, false);
+            const auto ms = juce::Time::getMillisecondCounterHiRes() - t0;
+            if (i >= 3) { total += ms; worst = std::max (worst, ms); }
+        }
+        return { total / frames, worst };
+    }
+
+    void testAnalyzerMotion()
+    {
+        for (int block : { 256, 1024, 2048 })
+        {
+            const auto m = measureMotion (block, 3.0);
+            note ("host block " + std::to_string (block) + " @ 44.1 kHz, 60 Hz ticks (" + fmt (m.fps, 1) + " fps): spectrum moved on "
+                  + std::to_string (m.moved) + " / " + std::to_string (m.ticks) + " frames, peak step mean " + fmt (m.meanStep, 3)
+                  + " px, max " + fmt (m.maxStep, 3) + " px, unevenness (CV) " + fmt (m.stepCv, 2));
+            check (m.ticks > 0 && m.moved >= (int) (0.97 * m.ticks), "block " + std::to_string (block) + ": the spectrum moves on every frame ("
+                   + std::to_string (m.moved) + " / " + std::to_string (m.ticks) + ")");
+            check (m.stepCv < 0.45, "block " + std::to_string (block) + ": even motion, no freeze-then-jump (CV " + fmt (m.stepCv, 2) + ")");
+        }
+
+        EditorFixture f (presetIndex ("Vocal Hall"));
+        if (f.editor == nullptr) return;
+        f.feedSpectrum (2);
+        auto& display = f.editor->getDisplay();
+        // 1x only: without a window the cached images are 1x, so a scaled test would measure resampling.
+        double frameAt1080 = 0.0;
+        for (bool native : { true, false })
+            for (bool plotOnly : { false, true })
+            {
+                std::string text;
+                for (auto size : editorSizes)
+                {
+                    f.editor->setSize (size.x, size.y);
+                    display.poll();
+                    const auto [avg, worst] = measurePaint (display, 1.0f, 30, native, plotOnly);
+                    text += std::to_string (size.x) + "x" + std::to_string (size.y) + " " + fmt (avg, 2) + " / " + fmt (worst, 2) + " ms;  ";
+                    if (native && plotOnly && size.x == 1080) frameAt1080 = avg;
+                }
+                note (std::string ("display paint, ") + (native ? "native renderer" : "software renderer") + (plotOnly ? ", plot only (a frame)" : ", whole display")
+                      + " (avg / worst): " + text);
+            }
+        check (frameAt1080 < 4.0, "a display frame at the default size paints in under 4 ms, native renderer (" + fmt (frameAt1080, 2) + " ms)");
+    }
+
     struct TestCase
     {
         const char* name;
@@ -1181,6 +1331,7 @@ int main()
         { "editor: size, controls, layout fit",              testEditor },
         { "editor snapshots and analyzer",                   testSnapshots },
         { "display: drag, wheel, add / remove",              testDisplayMouse },
+        { "analyzer: smooth motion and paint time",          testAnalyzerMotion },
     };
 
     int failedTests = 0;

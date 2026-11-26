@@ -13,6 +13,16 @@ namespace dooblrreverb::ui
         constexpr float logSpan = 6.907755279f; // ln (20000 / 20)
         constexpr float spectrumTopDb = 0.0f, spectrumFloorDb = -90.0f, tiltDbPerOctave = 3.0f;
 
+        // Ballistics (90 % times, as dooblr-soothe's display): quick rise, slower fall.
+        constexpr double riseSeconds = 0.06, fallSeconds = 0.5;
+        // No audio for this long (transport stopped): the spectrum eases down to the floor.
+        constexpr double quietSeconds = 0.2;
+
+        double coefficientFor (double dt, double t90)
+        {
+            return 1.0 - std::exp (-dt * 2.302585093 / t90);
+        }
+
         juce::String signedDb (double db)
         {
             return (db >= 0.05 ? "+" : "") + formatValue (db, 1) + " dB";
@@ -50,8 +60,11 @@ namespace dooblrreverb::ui
             pointFreq[(size_t) i] = minFreq * std::exp (logSpan * (float) i / (float) (numPoints - 1));
         for (auto* path : { &decayPath, &decayFill, &effectivePath, &eqPath, &eqFill, &postPath, &postFill, &prePath })
             path->preallocateSpace (4 * 1200);
-        post.levels.fill (spectrumFloorDb);
-        pre.levels.fill (spectrumFloorDb);
+        for (auto* a : { &post, &pre })
+        {
+            a->queue.assign ((size_t) queueSize, 0.0f);
+            a->reset();
+        }
 
         vblank = std::make_unique<juce::VBlankAttachment> (this, [this] { poll(); });
     }
@@ -63,13 +76,54 @@ namespace dooblrreverb::ui
         editLayer = layer;
         decayButton.setToggleState (layer == Layer::decay, juce::dontSendNotification);
         eqButton.setToggleState (layer == Layer::eq, juce::dontSendNotification);
-        repaint();
+        invalidateOverlay();
+    }
+
+    void ReverbDisplay::invalidateOverlay()
+    {
+        overlayDirty = true;
+        repaint (overlayArea().toNearestInt());
+    }
+
+    void ReverbDisplay::Analyzer::reset()
+    {
+        queueRead = queueCount = 0;
+        history.fill (0.0f);
+        writePos = 0;
+        target.fill (spectrumFloorDb);
+        levels.fill (spectrumFloorDb);
+        carry = backlog = burst = quiet = 0.0;
+        valid = false;
+    }
+
+    void ReverbDisplay::Analyzer::push (const float* samples, int n)
+    {
+        // Overflow (the display stalled): the oldest samples go.
+        for (int i = 0; i < n; ++i)
+        {
+            if (queueCount == queueSize)
+            {
+                queueRead = (queueRead + 1) & (queueSize - 1);
+                --queueCount;
+            }
+            queue[(size_t) ((queueRead + queueCount) & (queueSize - 1))] = samples[i];
+            ++queueCount;
+        }
     }
 
     //==============================================================================
     bool ReverbDisplay::poll()
     {
-        bool dirty = false;
+        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
+        const auto dt = lastTickMs > 0.0 ? (nowMs - lastTickMs) * 0.001 : 1.0 / 60.0;
+        lastTickMs = nowMs;
+        return tick (dt);
+    }
+
+    bool ReverbDisplay::tick (double dt)
+    {
+        dt = std::clamp (dt, 0.0, 0.1);
+        bool curvesChanged = false, spectrumChanged = false;
 
         const auto now = processor.readSettings();
         const auto changed = ! settingsValid || ! juce::exactlyEqual (now.space, settings.space)
@@ -80,14 +134,21 @@ namespace dooblrreverb::ui
         if (changed)
         {
             rebuildCurves();
-            dirty = true;
+            curvesChanged = true;
         }
 
-        // Analyzer: drain the taps into the history and analyse every hop. The editor drains even
-        // when the mode is off, so the FIFO never holds stale audio when it comes back on.
+        // Analyzer. The taps are drained every frame (discarded while off, so no stale audio
+        // waits for the analyzer to come back on).
         const auto mode = processor.getAnalyzerMode();
         auto& postTap = processor.getPostTap();
         auto& preTap = processor.getPreTap();
+        if (mode != analyzerShown)
+        {
+            analyzerShown = mode;
+            post.reset();
+            pre.reset();
+            spectrumChanged = true;
+        }
         if (mode == 0)
         {
             postTap.discardAll();
@@ -95,64 +156,98 @@ namespace dooblrreverb::ui
         }
         else
         {
-            postTap.drain ([this] (const float* d, int n) { feed (post, d, n); });
-            if (mode > 1) preTap.drain ([this] (const float* d, int n) { feed (pre, d, n); });
-            else          preTap.discardAll();
-        }
-
-        // With no audio arriving (transport stopped), let the spectrum fall away.
-        const auto nowMs = juce::Time::getMillisecondCounterHiRes();
-        const auto dt = lastTickMs > 0.0 ? std::clamp ((nowMs - lastTickMs) * 0.001, 0.0, 0.25) : 0.0;
-        lastTickMs = nowMs;
-        if (post.sinceLast == 0 && post.valid && dt > 0.0)
-        {
-            bool any = false;
-            for (auto* a : { &post, &pre })
-                for (auto& l : a->levels)
-                    if (l > spectrumFloorDb)
-                    {
-                        l = std::max (spectrumFloorDb, l - (float) (dt * 24.0));
-                        any = true;
-                    }
-            if (any)
+            const auto postIn = postTap.drain ([this] (const float* d, int n) { post.push (d, n); });
+            spectrumChanged = advance (post, dt, postIn) || spectrumChanged;
+            if (mode > 1)
             {
-                rebuildSpectrum();
-                dirty = true;
+                const auto preIn = preTap.drain ([this] (const float* d, int n) { pre.push (d, n); });
+                spectrumChanged = advance (pre, dt, preIn) || spectrumChanged;
+            }
+            else
+            {
+                preTap.discardAll();
             }
         }
 
-        if (mode != analyzerShown)
-        {
-            analyzerShown = mode;
-            if (mode == 0) { post.valid = false; pre.valid = false; }
-            if (mode < 2) pre.valid = false;
+        if (spectrumChanged)
             rebuildSpectrum();
-            dirty = true;
-        }
-
-        if (dirty)
-            repaint();
-        return dirty;
+        if (curvesChanged)
+            invalidateOverlay();
+        else if (spectrumChanged)
+            repaint (plot.getSmallestIntegerContainer());
+        return curvesChanged || spectrumChanged;
     }
 
-    void ReverbDisplay::feed (Analyzer& a, const float* samples, int n)
+    bool ReverbDisplay::advance (Analyzer& a, double dt, int burst)
+    {
+        const auto sr = std::max (8000.0, processor.getCurrentSampleRate());
+
+        // Take the samples that belong to this frame, so every frame shows a fresh spectrum
+        // whatever the host block size. A slow servo keeps about one host block (the largest
+        // recent burst) in reserve: enough that a frame never runs dry between blocks, with the
+        // consumption rate nudged by a few percent rather than jumping.
+        a.burst = std::max ((double) burst, a.burst * std::exp (-dt / 2.0));
+        const auto reserve = std::min (a.burst, sr * 0.1);
+        a.backlog += (a.queueCount - a.backlog) * coefficientFor (dt, 0.5);
+        auto want = dt * sr + a.carry + (a.backlog - reserve) * std::min (1.0, dt / 0.5);
+        if (a.queueCount > reserve + sr * 0.25)   // far behind (a stall, or polled without time): catch up
+            want = a.queueCount - reserve;
+        want = std::max (0.0, want);
+        const auto take = std::min (a.queueCount, (int) want);
+        a.carry = take < a.queueCount ? std::clamp (want - take, 0.0, 1.0) : 0.0;
+
+        if (take > 0)
+        {
+            const auto first = std::min (take, queueSize - a.queueRead);
+            writeHistory (a, a.queue.data() + a.queueRead, first);
+            if (take > first)
+                writeHistory (a, a.queue.data(), take - first);
+            a.queueRead = (a.queueRead + take) & (queueSize - 1);
+            a.queueCount -= take;
+            a.quiet = 0.0;
+            analyse (a);
+        }
+        else
+        {
+            a.quiet += dt;
+            if (a.quiet > quietSeconds)
+                a.target.fill (spectrumFloorDb);
+        }
+        if (! a.valid)
+            return false;
+
+        // Time-based ballistics with the real frame time: smooth at any frame rate.
+        const auto rise = (float) coefficientFor (dt, riseSeconds), fall = (float) coefficientFor (dt, fallSeconds);
+        bool moved = false;
+        for (int i = 0; i < numPoints; ++i)
+        {
+            auto& level = a.levels[(size_t) i];
+            const auto t = a.target[(size_t) i];
+            const auto step = (t - level) * (t > level ? rise : fall);
+            level += step;
+            moved = moved || std::abs (step) > 1.0e-3f;
+        }
+        return moved; // at rest (silence on the floor) nothing repaints
+    }
+
+    void ReverbDisplay::writeHistory (Analyzer& a, const float* samples, int n)
     {
         for (int i = 0; i < n; ++i)
         {
             a.history[(size_t) a.writePos] = samples[i];
             a.writePos = (a.writePos + 1) & (fftSize - 1);
-            if (++a.sinceLast >= fftSize / 4)
-            {
-                analyse (a);
-                a.sinceLast = 0;
-            }
         }
     }
 
     void ReverbDisplay::feedAnalyzerForTest (const float* postSamples, const float* preSamples, int numSamples)
     {
-        if (postSamples != nullptr) feed (post, postSamples, numSamples);
-        if (preSamples != nullptr) feed (pre, preSamples, numSamples);
+        for (auto [a, samples] : { std::pair { &post, postSamples }, std::pair { &pre, preSamples } })
+            if (samples != nullptr)
+            {
+                writeHistory (*a, samples, numSamples);
+                analyse (*a);
+                a->levels = a->target;
+            }
         rebuildSpectrum();
         repaint();
     }
@@ -166,35 +261,48 @@ namespace dooblrreverb::ui
 
         const auto sr = std::max (8000.0, processor.getCurrentSampleRate());
         const auto binHz = (float) (sr / fftSize);
-        const auto norm = 4.0f / (float) fftSize; // Hann (coherent gain 0.5), one-sided
-        const auto hopSeconds = (float) (fftSize / 4) / (float) sr;
-        const auto release = 1.0f - std::exp (-hopSeconds / 0.35f);
-        const auto ratio = std::pow (maxFreq / minFreq, 0.5f / (float) (numPoints - 1));
+        if (! juce::exactlyEqual (binsForRate, sr))
+        {
+            binsForRate = sr;
+            const auto ratio = std::pow (maxFreq / minFreq, 0.5f / (float) (numPoints - 1));
+            for (int p = 0; p < numPoints; ++p)
+            {
+                const auto f = pointFreq[(size_t) p];
+                binLo[(size_t) p] = std::max (1, (int) std::ceil (f / ratio / binHz));
+                binHi[(size_t) p] = std::min (fftSize / 2 - 1, (int) std::floor (f * ratio / binHz));
+            }
+        }
 
+        // Each point is the mean power of its bins (about 1/30 octave wide): steadier than the
+        // loudest bin, and honest for noise. Below a bin per point, interpolate.
+        const auto norm = 4.0f / (float) fftSize; // Hann (coherent gain 0.5), one-sided
         for (int p = 0; p < numPoints; ++p)
         {
             const auto f = pointFreq[(size_t) p];
-            const auto lo = f / ratio, hi = f * ratio;
-            const auto binLo = std::max (1, (int) std::ceil (lo / binHz)), binHi = std::min (fftSize / 2 - 1, (int) std::floor (hi / binHz));
-            float mag = 0.0f;
-            if (binHi >= binLo)
+            const auto lo = binLo[(size_t) p], hi = binHi[(size_t) p];
+            float power = 0.0f;
+            if (hi >= lo)
             {
-                for (int b = binLo; b <= binHi; ++b)
-                    mag = std::max (mag, fftData[(size_t) b]);
+                for (int b = lo; b <= hi; ++b)
+                    power += fftData[(size_t) b] * fftData[(size_t) b];
+                power /= (float) (hi - lo + 1);
             }
             else
             {
                 const auto pos = juce::jlimit (1.0f, (float) (fftSize / 2 - 2), f / binHz);
                 const auto i = (int) pos;
                 const auto t = pos - (float) i;
-                mag = fftData[(size_t) i] + t * (fftData[(size_t) i + 1] - fftData[(size_t) i]);
+                const auto mag = fftData[(size_t) i] + t * (fftData[(size_t) i + 1] - fftData[(size_t) i]);
+                power = mag * mag;
             }
-            const auto db = juce::Decibels::gainToDecibels (mag * norm, -200.0f) + tiltDbPerOctave * std::log2 (f / 1000.0f);
-            auto& level = a.levels[(size_t) p];
-            level = ! a.valid || db > level ? db : level + (db - level) * release;
+            const auto db = 10.0f * std::log10 (std::max (power * norm * norm, 1.0e-20f)) + tiltDbPerOctave * std::log2 (f / 1000.0f);
+            a.target[(size_t) p] = std::max (spectrumFloorDb, db);
         }
-        a.valid = true;
-        rebuildSpectrum();
+        if (! a.valid)
+        {
+            a.levels = a.target;
+            a.valid = true;
+        }
     }
 
     //==============================================================================
@@ -290,6 +398,7 @@ namespace dooblrreverb::ui
         p.removeFromTop (2.0f);
         plot = p;
         background = {};
+        overlayDirty = true;
         rebuildCurves();
         rebuildSpectrum();
     }
@@ -298,7 +407,7 @@ namespace dooblrreverb::ui
     {
         const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
         backgroundScale = scale;
-        background = juce::Image (juce::Image::ARGB, std::max (1, juce::roundToInt ((float) getWidth() * scale)),
+        background = juce::Image (juce::Image::RGB, std::max (1, juce::roundToInt ((float) getWidth() * scale)),
                                   std::max (1, juce::roundToInt ((float) getHeight() * scale)), true);
         juce::Graphics g (background);
         g.addTransform (juce::AffineTransform::scale (scale));
@@ -461,11 +570,13 @@ namespace dooblrreverb::ui
         const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
         if (! background.isValid() || ! juce::exactlyEqual (scale, backgroundScale))
             drawBackground();
+        if (overlayDirty || ! overlay.isValid() || ! juce::exactlyEqual (scale, overlayScale))
+            drawOverlay();
         g.drawImage (background, getLocalBounds().toFloat());
 
+        // The spectrum, the only thing that changes every frame, between the two cached images.
         g.saveState();
         g.reduceClipRegion (plot.toNearestInt());
-
         if (! prePath.isEmpty())
         {
             g.setColour (Palette::spectrum.withAlpha (0.25f));
@@ -478,7 +589,30 @@ namespace dooblrreverb::ui
             g.setColour (Palette::spectrum.withAlpha (0.55f));
             g.strokePath (postPath, juce::PathStrokeType (1.1f));
         }
+        g.restoreState();
 
+        g.drawImage (overlay, overlayArea());
+    }
+
+    juce::Rectangle<float> ReverbDisplay::overlayArea() const
+    {
+        return plot.expanded (handleRadius + 4.0f).getIntersection (getLocalBounds().toFloat()).getSmallestIntegerContainer().toFloat();
+    }
+
+    void ReverbDisplay::drawOverlay()
+    {
+        // Curves, handles and the readout: transparent, over the spectrum; redrawn only when they change.
+        const auto scale = (float) juce::Component::getApproximateScaleFactorForComponent (this);
+        const auto area = overlayArea();
+        overlayScale = scale;
+        overlayDirty = false;
+        overlay = juce::Image (juce::Image::ARGB, std::max (1, juce::roundToInt (area.getWidth() * scale)),
+                               std::max (1, juce::roundToInt (area.getHeight() * scale)), true);
+        juce::Graphics g (overlay);
+        g.addTransform (juce::AffineTransform::translation (-area.getX(), -area.getY()).scaled (scale));
+
+        g.saveState();
+        g.reduceClipRegion (plot.toNearestInt());
         // Post EQ under the Decay Rate EQ; the layer being edited is drawn brighter.
         const auto eqOn = editLayer == Layer::eq;
         g.setColour (Palette::dynamic.withAlpha (eqOn ? 0.14f : 0.07f));
@@ -607,14 +741,14 @@ namespace dooblrreverb::ui
         setMouseCursor (band >= 0 ? juce::MouseCursor::DraggingHandCursor : juce::MouseCursor::NormalCursor);
         hoverLayer = layer;
         hoverBand = band;
-        repaint();
+        invalidateOverlay();
     }
 
     void ReverbDisplay::mouseExit (const juce::MouseEvent&)
     {
         hovering = false;
         hoverBand = -1;
-        repaint();
+        invalidateOverlay();
     }
 
     void ReverbDisplay::mouseDown (const juce::MouseEvent& e)
@@ -679,7 +813,7 @@ namespace dooblrreverb::ui
         }
         dragBand = -1;
         dragMoved = false;
-        repaint();
+        invalidateOverlay();
     }
 
     void ReverbDisplay::mouseDoubleClick (const juce::MouseEvent& e)

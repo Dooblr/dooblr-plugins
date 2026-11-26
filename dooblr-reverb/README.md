@@ -1,7 +1,7 @@
 # dooblr-reverb
 
 Algorithmic reverb, VST3 effect for macOS (Apple Silicon), part of the dooblr suite.
-Version 0.1.0. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
+Version 0.1.1. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
 
 One big **Space** knob picks the room, from a small ambience to an infinite space, and shows its
 decay time. Six knobs shape it. A large display draws the **Decay Rate EQ** (how long each
@@ -33,6 +33,9 @@ original; no third-party code, presets, names or branding are used.
   High shelf, Low cut, High cut; cuts at 12 / 24 / 48 dB/oct). Band 1 is a 100 Hz low cut, on by
   default.
 - **Spectrum:** the reverb output, and optionally the input behind it (Analyzer in the bottom bar).
+  It moves smoothly at the screen's refresh rate (60 Hz) whatever the host buffer size: every
+  frame shows a fresh 4096-point FFT, eased with a 60 ms rise and a 500 ms fall. With no audio
+  (transport stopped) it eases down to the floor.
 - **Mouse:**
   - Drag a handle to move it (frequency and value, one undo step); Shift-drag for fine moves.
   - Mouse wheel over a handle changes its Q.
@@ -109,12 +112,12 @@ dooblr-reverb/scripts/build.sh      # builds in ~/dooblr-build/dooblr-reverb, te
   fetched. See the top of `scripts/build.sh` for the environment variables.
 - The build is installed to `/Library/Audio/Plug-Ins/VST3/dooblr-reverb.vst3` (suite convention,
   no sudo) and ad-hoc signed.
-- Tests: `~/dooblr-build/dooblr-reverb/Tests/DooblrReverbTests` (18 tests, 380 checks).
+- Tests: `~/dooblr-build/dooblr-reverb/Tests/DooblrReverbTests` (19 tests, 391 checks).
   `DOOBLRREVERB_EDITOR_SNAPSHOT=/tmp/reverb` writes editor PNGs.
 
-### Validation (0.1.0)
+### Validation (0.1.1)
 
-- Console tests: 18 / 18 pass, covering:
+- Console tests: 19 / 19 pass, covering:
   - null at Mix 0 and Bypass, zero latency
   - RT60 against the readout; Decay Rate, decay band and Brightness effects
   - predelay and sync; width, mono compatibility and mono layouts
@@ -122,6 +125,9 @@ dooblr-reverb/scripts/build.sh      # builds in ~/dooblr-build/dooblr-reverb, te
   - state round trip, presets, no dead parameters, undo, A / B
   - no allocation in processBlock
   - editor layout at 3 sizes, and real-mouse display drag / wheel / add / remove
+  - analyzer motion in real time (60 Hz frames, host blocks 256 / 1024 / 2048): the spectrum
+    moves on every frame with even steps (step CV 0.21-0.25; 0.1.0 froze on 42 of 120 frames at
+    256 and had CV 0.34-1.07), and a frame paints in about 1.3 ms at 1080 x 660 (CoreGraphics)
 - LoadCheck: dlopen, scan, instantiate, 80 parameters, latency 0, finite output.
 - pluginval 1.0.4 at **strictness 10**: SUCCESS (two random seeds).
 
