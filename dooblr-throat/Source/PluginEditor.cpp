@@ -102,15 +102,37 @@ namespace dooblrthroat
 
         styleLabel (modeCaption, "Mode", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         styleLabel (rateCaption, "Rate", 11.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (voiceCaption, "Voice", 11.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (formantCaption, "Formant", 11.0f, Palette::textMuted, juce::Justification::centredRight);
+        styleLabel (hintLabel, "Sing: each note plays the next syllable and holds its vowel.  Speak: one note plays the whole phrase.", 13.0f,
+                    Palette::textMuted, juce::Justification::centred);
         styleLabel (engineCaption, "Engine", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         modeBox.setComponentID (id::mode);
         modeBox.setTooltip ("Sing: one syllable per note. Speak: the whole phrase on a single note.");
         modeBox.addItemList (params::modeNames(), 1);
         modeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, id::mode, modeBox);
         engineBox.setComponentID (id::engine);
-        engineBox.setTooltip ("Natural: pre-rendered singing voice, retuned to the MIDI note. Tract: the physical-model fallback.");
+        engineBox.setTooltip ("Natural: Piper + WORLD, resynthesized at the MIDI note so formants stay put. Tract: the physical-model fallback.");
         engineBox.addItemList (params::engineNames(), 1);
         engineAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, id::engine, engineBox);
+        voiceBox.setComponentID (id::voice);
+        voiceBox.setTooltip ("Auto: slightly darker formants on low notes. Bright: less of that shift. Deep: a darker, lower tract.");
+        voiceBox.addItemList (params::voiceNames(), 1);
+        voiceAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (state, id::voice, voiceBox);
+        formantSlider.setComponentID (id::formant);
+        formantSlider.setTooltip ("Shift the spectral envelope: left is darker / more male, right is brighter / more female.");
+        formantSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 44, 18);
+        formantSlider.setColour (juce::Slider::trackColourId, Palette::accent.withAlpha (0.7f));
+        formantSlider.setColour (juce::Slider::backgroundColourId, Palette::divider);
+        formantAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, id::formant, formantSlider);
+        mainPageButton.setComponentID ("pageMain");
+        advancedPageButton.setComponentID ("pageAdvanced");
+        mainPageButton.setClickingTogglesState (true);
+        advancedPageButton.setClickingTogglesState (true);
+        mainPageButton.setRadioGroupId (1001);
+        advancedPageButton.setRadioGroupId (1001);
+        mainPageButton.onClick = [this] { setPage (0); };
+        advancedPageButton.onClick = [this] { setPage (1); };
         rateSlider.setComponentID (id::rate);
         rateSlider.setTooltip ("Speak-mode rate (does not change MIDI pitch).");
         rateSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 52, 18);
@@ -119,6 +141,29 @@ namespace dooblrthroat
         rateAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, id::rate, rateSlider);
         addAndMakeVisible (engineCaption);
         addAndMakeVisible (engineBox);
+        addAndMakeVisible (voiceCaption);
+        addAndMakeVisible (voiceBox);
+        addAndMakeVisible (formantCaption);
+        addAndMakeVisible (formantSlider);
+        addAndMakeVisible (mainPageButton);
+        addAndMakeVisible (advancedPageButton);
+        addAndMakeVisible (hintLabel);
+        hintLabel.setComponentID ("mainHint");
+        styleLabel (levelCaption, "Level", 11.0f, Palette::textMuted, juce::Justification::centred);
+        levelSlider.setComponentID ("mainLevel");
+        levelSlider.setTooltip ("Output level (same control as Output in the header).");
+        levelSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 20);
+        levelAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (state, id::output, levelSlider);
+        levelSlider.setDoubleClickReturnValue (true, -6.0);
+        rateSlider.setDoubleClickReturnValue (true, 1.0);
+        formantSlider.setDoubleClickReturnValue (true, 0.5);
+        addAndMakeVisible (levelCaption);
+        addAndMakeVisible (levelSlider);
+        for (auto* s : { &rateSlider, &formantSlider, &levelSlider })
+        {
+            s->setColour (juce::Slider::textBoxOutlineColourId, Palette::divider);
+            s->setColour (juce::Slider::rotarySliderFillColourId, Palette::accent);
+        }
         for (juce::Component* c : { (juce::Component*) &modeCaption, (juce::Component*) &modeBox,
                                     (juce::Component*) &rateCaption, (juce::Component*) &rateSlider })
             addAndMakeVisible (c);
@@ -141,6 +186,7 @@ namespace dooblrthroat
         setResizeLimits (900, 560, 2400, 1600);
         setSize (980, 600);
         startTimerHz (15);
+        setPage (0);
     }
 
     DooblrThroatEditor::~DooblrThroatEditor()
@@ -413,6 +459,80 @@ namespace dooblrthroat
         layoutBoard();
     }
 
+    void DooblrThroatEditor::setPage (int page)
+    {
+        advancedPage = (page != 0);
+        mainPageButton.setToggleState (! advancedPage, juce::dontSendNotification);
+        advancedPageButton.setToggleState (advancedPage, juce::dontSendNotification);
+        vowelPad.setVisible (advancedPage);
+        vowelCaption.setVisible (advancedPage);
+        engineCaption.setVisible (advancedPage);
+        engineBox.setVisible (advancedPage);
+        hintLabel.setVisible (! advancedPage);
+        for (juce::Component* c : { (juce::Component*) &modeCaption, (juce::Component*) &modeBox,
+                                    (juce::Component*) &voiceCaption, (juce::Component*) &voiceBox,
+                                    (juce::Component*) &rateCaption, (juce::Component*) &rateSlider,
+                                    (juce::Component*) &formantCaption, (juce::Component*) &formantSlider,
+                                    (juce::Component*) &levelCaption, (juce::Component*) &levelSlider })
+            c->setVisible (! advancedPage);
+        for (auto* s : { &rateSlider, &formantSlider })
+        {
+            s->setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+            s->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 72, 20);
+        }
+        for (auto* l : { &modeCaption, &voiceCaption, &rateCaption, &formantCaption, &levelCaption })
+        {
+            l->setFont (juce::Font (juce::FontOptions (13.0f, juce::Font::bold)));
+            l->setJustificationType (juce::Justification::centred);
+        }
+        for (auto& panel : panels)
+            panel->setVisible (advancedPage);
+        resized();
+    }
+
+    void DooblrThroatEditor::layoutMainPage (juce::Rectangle<int> area)
+    {
+        // Phrase card: caption + readout, then a tall text field with Reset.
+        {
+            auto head = area.removeFromTop (20);
+            phraseCaption.setBounds (head.removeFromLeft (80));
+            phraseReadout.setBounds (head.removeFromRight (120));
+            area.removeFromTop (4);
+            auto row = area.removeFromTop (44);
+            restartButton.setBounds (row.removeFromRight (72).withSizeKeepingCentre (72, 32));
+            row.removeFromRight (8);
+            phraseEditor.setBounds (row);
+        }
+        area.removeFromTop (16);
+
+        auto hint = area.removeFromBottom (24);
+        hintLabel.setBounds (hint);
+        area.removeFromBottom (8);
+
+        // One row: two selectors then three large knobs.
+        const int rowH = juce::jlimit (120, 260, area.getHeight());
+        auto row = area.withSizeKeepingCentre (area.getWidth(), rowH);
+        const int colW = row.getWidth() / 5;
+        auto column = [&] (juce::Label& cap, juce::Component& ctl, bool knob)
+        {
+            auto col = row.removeFromLeft (colW).reduced (8, 0);
+            cap.setBounds (col.removeFromTop (20));
+            col.removeFromTop (6);
+            if (knob)
+            {
+                const int side = juce::jmin (col.getWidth(), col.getHeight());
+                ctl.setBounds (col.withSizeKeepingCentre (side, side).withY (col.getY()));
+            }
+            else
+                ctl.setBounds (col.removeFromTop (32).withSizeKeepingCentre (juce::jmin (140, col.getWidth()), 32));
+        };
+        column (modeCaption, modeBox, false);
+        column (voiceCaption, voiceBox, false);
+        column (rateCaption, rateSlider, true);
+        column (formantCaption, formantSlider, true);
+        column (levelCaption, levelSlider, true);
+    }
+
     void DooblrThroatEditor::layoutBoard()
     {
         auto area = contentArea;
@@ -420,7 +540,7 @@ namespace dooblrthroat
             return;
 
         auto* vowel = panels[0].get();
-        auto* voice = panels[1].get();
+        auto* voicePanel = panels[1].get();
         auto* source = panels[2].get();
         auto* pitch = panels[3].get();
         auto* env = panels[4].get();
@@ -431,25 +551,41 @@ namespace dooblrthroat
         area.removeFromBottom (panelGap);
 
         {
+            auto tabs = area.removeFromTop (26);
+            mainPageButton.setBounds (tabs.removeFromLeft (64).withSizeKeepingCentre (64, 24));
+            tabs.removeFromLeft (4);
+            advancedPageButton.setBounds (tabs.removeFromLeft (88).withSizeKeepingCentre (88, 24));
+        }
+        area.removeFromTop (4);
+
+        if (! advancedPage)
+        {
+            for (auto& panel : panels) panel->setBounds ({});
+            vowelPad.setBounds ({});
+            vowelCaption.setBounds ({});
+            engineBox.setBounds ({});
+            engineCaption.setBounds ({});
+            layoutMainPage (area);
+            return;
+        }
+        hintLabel.setBounds ({});
+
+        {
             auto strip = area.removeFromTop (phraseRowH);
             phraseCaption.setBounds (strip.removeFromLeft (48).withSizeKeepingCentre (48, 16));
             strip.removeFromLeft (4);
 
-            auto rateArea = strip.removeFromRight (140);
-            rateCaption.setBounds (rateArea.removeFromLeft (32).withSizeKeepingCentre (32, 16));
-            rateSlider.setBounds (rateArea.withSizeKeepingCentre (rateArea.getWidth(), 24));
-            strip.removeFromRight (6);
-            modeBox.setBounds (strip.removeFromRight (80).withSizeKeepingCentre (80, 26));
-            strip.removeFromRight (4);
-            modeCaption.setBounds (strip.removeFromRight (36).withSizeKeepingCentre (36, 16));
-            strip.removeFromRight (6);
-            engineBox.setBounds (strip.removeFromRight (84).withSizeKeepingCentre (84, 26));
-            strip.removeFromRight (4);
-            engineCaption.setBounds (strip.removeFromRight (48).withSizeKeepingCentre (48, 16));
-            strip.removeFromRight (6);
+            if (advancedPage)
+            {
+                engineBox.setBounds (strip.removeFromRight (84).withSizeKeepingCentre (84, 26));
+                strip.removeFromRight (4);
+                engineCaption.setBounds (strip.removeFromRight (48).withSizeKeepingCentre (48, 16));
+                strip.removeFromRight (6);
+            }
+
             restartButton.setBounds (strip.removeFromRight (52).withSizeKeepingCentre (52, 24));
             strip.removeFromRight (4);
-            phraseReadout.setBounds (strip.removeFromRight (96).withSizeKeepingCentre (96, 22));
+            phraseReadout.setBounds (strip.removeFromRight (88).withSizeKeepingCentre (88, 22));
             strip.removeFromRight (4);
             phraseEditor.setBounds (strip.reduced (0, 6));
         }
@@ -465,7 +601,7 @@ namespace dooblrthroat
                                           juce::jmin (topBudget - 16, width / 3));
         const auto colW = width - padSize - panelGap;
         const auto vowelH = vowel->getPreferredHeight (colW);
-        const auto voiceH = voice->getPreferredHeight (colW);
+        const auto voiceH = voicePanel->getPreferredHeight (colW);
         const int topH = juce::jmax (padSize + 16, vowelH + panelGap + voiceH);
         auto top = area.removeFromTop (juce::jmin (topH, juce::jmax (padSize + 16, area.getHeight() - sourceH - midH - 2 * panelGap)));
         {
@@ -477,7 +613,7 @@ namespace dooblrthroat
             vowel->setBounds (top.removeFromTop (vowelH));
             if (top.getHeight() > 0)
                 top.removeFromTop (juce::jmin (panelGap, top.getHeight()));
-            voice->setBounds (top.removeFromTop (juce::jmin (voiceH, juce::jmax (0, top.getHeight()))));
+            voicePanel->setBounds (top.removeFromTop (juce::jmin (voiceH, juce::jmax (0, top.getHeight()))));
         }
 
         area.removeFromTop (panelGap);

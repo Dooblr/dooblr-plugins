@@ -166,6 +166,9 @@ namespace dooblrthroat::dsp
         s.speechRate = float (clamp (double (fin (s.speechRate, 1.0f)), 0.25, 2.5));
         s.effort = float (clamp (double (fin (s.effort, 0.5f)), 0.0, 1.0));
         s.formantTune = float (clamp (double (fin (s.formantTune, 0.0f)), 0.0, 1.0));
+        s.formant = float (clamp (double (fin (s.formant, 0.5f)), 0.0, 1.0));
+        if (s.voice < 0) s.voice = 0;
+        if (s.voice > 2) s.voice = 2;
         if (s.clarityMode < 0) s.clarityMode = 0;
         if (s.clarityMode > 7) s.clarityMode = 7;
     }
@@ -180,6 +183,8 @@ namespace dooblrthroat::dsp
 
     void ThroatEngine::applyToLive()
     {
+        proven_.setFormant (double (settings_.formant));
+        proven_.setVoice (settings_.voice);
         if (auto* v = live())
         {
             applySource (*v, settings_);
@@ -245,6 +250,9 @@ namespace dooblrthroat::dsp
     void ThroatEngine::clearTalk (HumanVoice* v)
     {
         talk_ = Talk::Off;
+        // Stop the vowel loop but let the Natural clip play out and stay engaged,
+        // so the Tract voice never leaks through during the release (0.3.0 behaviour).
+        proven_.setSustaining (false);
         if (v != nullptr)
             v->clearScore();
     }
@@ -286,7 +294,8 @@ namespace dooblrthroat::dsp
     {
         attachProven (v);
         const auto hz = (midi >= 0) ? currentHz() : 261.626;
-        // Audio thread: only arm playback of the already-published cache.
+        proven_.setSustaining (true);
+        // Arm playback and (when offline) wait for WORLD resynthesis at this F0.
         if (syllable)
             proven_.startSyllablePlayback (syl_, hz);
         else
@@ -349,6 +358,7 @@ namespace dooblrthroat::dsp
     void ThroatEngine::startCoda (HumanVoice& v, const phonetics::PublishedPhrase& ph, int syl, int midi)
     {
         (void) midi;
+        proven_.setSustaining (false);
         if (ph.plans.empty()) { clearTalk (&v); return; }
         const auto n = int (ph.plans.size());
         syl = ((syl % n) + n) % n;

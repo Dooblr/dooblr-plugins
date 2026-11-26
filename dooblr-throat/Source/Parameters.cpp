@@ -111,6 +111,9 @@ namespace dooblrthroat::params
 
         layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::engine), "Engine", engineNames(), 0));
 
+        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::voice), "Voice", voiceNames(), 0));
+        addPercent (layout, id::formant, "Formant", 0.5f);
+
         return layout;
     }
 }

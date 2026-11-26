@@ -1,8 +1,9 @@
 # dooblr-throat
 
-A monophonic / legato VST3 vocal instrument. MIDI in, audio out. From 0.3.0
-the default **Natural** engine is a pre-rendered singing voice (Piper, retuned
-with WORLD to the MIDI note). The 0.2.x physical model — lungs and a parametric
+A monophonic / legato VST3 vocal instrument. MIDI in, audio out. From 0.4.0
+the default **Natural** engine is a neural speech voice (Piper) resynthesized
+with the WORLD vocoder at the MIDI note, so formants and duration stay put on
+low and high notes (C2 to A4 tested). The 0.2.x physical model — lungs and a parametric
 glottis driving a branched FDTD tract — remains the **Tract** fallback and is
 still used when the phrase box is empty. Licenses for the bundled engines are
 in `LICENSES.md`; this build is for personal use.
@@ -46,41 +47,65 @@ VST3 instrument host). It does not belong on an audio track.
 
 ## Controls
 
-- **Vowel** — named English vowels, or **Pad** to morph in height (close–open)
-  and back (front–back) space. The pad shows the calibrated vowel targets.
-- **Voice** — Female and Child blend the body (tract scale / formants). Nasal
-  raises the velum port when turned up; zero leaves the vowel's velum.
-  **Effort** is vocal effort (source tilt and pressure), independent of the
-  Output fader. **Tuning** (formant tuning) lets the first formants track the
-  lower harmonics as pitch rises, which keeps a more even colour on high notes.
+The editor has two pages.
+
+**Main** (everything needed to play):
+
+- **Phrase** — type English text, then play MIDI. **Reset** restarts at the
+  first syllable. The readout shows the current syllable.
+- **Mode** — **Sing** plays the next syllable on each note-on (wraps) at the
+  note's pitch and holds its vowel while the key is down; the closing
+  consonant plays on release. **Speak** says the whole line on one note-on, at
+  **Rate**, and stops on release or at the end.
+- **Voice** — **Auto** darkens the formants a little on low notes (about 16%
+  lower at C2, none from C4 up) so a bass note sounds like a lower voice, not a
+  slowed-down one. **Bright** keeps half of that shift; **Deep** adds 10% more.
+- **Rate** — Speak-mode speed. It does not change pitch.
+- **Formant** — moves the whole spectral envelope darker (left) or brighter
+  (right); 50% is neutral.
+- **Level** — the same control as Output in the header.
+
+**Advanced** (the Tract engine and the engine switch):
+
+- **Engine** — **Natural** (default) or **Tract**, the 0.2.x physical model.
+- **Vowel** pad and panel — named English vowels or **Pad** (height / back).
+- **Voice** panel — Female, Child, Nasal, Effort, Tuning.
 - **Source** — Breath, Tension, Bright, Fry, Rough, Pressure (cm H2O), Voiced.
 - **Pitch** — Vibrato depth and rate, Glide, pitch-bend range.
-- **Envelope** — ADSR on the glottal gate. Output level is in the header.
-- **Phrase** — type English text and play MIDI. **Engine** chooses **Natural**
-  (default) or **Tract**. **Sing** advances one syllable per note (wraps;
-  **Reset** restarts). On Natural, each syllable is pre-rendered off the audio
-  thread at a C4 reference and played back at the note's pitch by resampling;
-  the syllable plays once, then stays quiet if you hold the key longer.
-  Duration shortens as pitch rises; this is not a full independent time-stretch
-  to the note length. **Speak** says the whole pre-rendered line on one
-  note-on, at **Rate**, pitched the same way, and stops on release or at the
-  end. The readout shows the current phoneme / syllable. Empty text keeps the
-  vowel-pad behaviour of 0.1.x (always the Tract model).
+- **Envelope** — ADSR on the glottal gate.
+
+The Advanced controls shape the Tract engine; Natural ignores them (except
+pitch bend). Empty text keeps the vowel-pad behaviour of 0.1.x (always Tract).
+
+### How Natural works (0.4.0)
+
+When the phrase changes, a worker thread runs Piper for the whole line and for
+each syllable and stores WORLD features (F0, spectral envelope, aperiodicity)
+at the voice's native 16 kHz rate (F0 floor 40 Hz). On each note-on the worker
+resynthesizes the clip at the note's F0 with the envelope kept (formants stay
+put), applies the Voice / Formant shift, upsamples to the host rate with a
+windowed-sinc filter, and finds a vowel loop of whole pitch periods. The audio
+thread only plays the finished clip (no locks, no allocation). Speak keeps 15%
+of Piper's own intonation; Sing holds the note within ±15 cents. Up to 0.3.0
+the clip was made once at C4 and resampled to the note, which slowed and
+darkened low notes (4× longer at C2) and made them unintelligible.
 
 On Tract, one FDTD voice; legato re-pitches the same airway with glide.
-
 
 ## Factory presets
 
 Init, Close Front, Open Back, Soft Breath, Spoken, Choir Lead, Low Voice,
 Whisper, Spoken Line, Sung Phrase.
 
-## Limits of v0.3.0
+## Limits of v0.4.0
 
 - English text only. Natural uses a low-quality en_US Piper voice; the first
   render after a phrase edit takes a fraction of a second to about a second.
-- Natural Sing resamples a C4 reference take to the MIDI note, so formants
-  shift with pitch and longer holds than the rendered syllable go quiet.
+- Natural needs the note's clip before it can sound: about 20–35 ms after
+  note-on in Sing and 55–70 ms in Speak on an M-series Mac (worker time plus
+  the voice's own onset). Repeating the same syllable on the same note is
+  instant. Play slightly ahead of the beat for tight timing.
+- Speak does not hold its last vowel; a held Speak note ends with the line.
 - Voice / Source / Effort / Tuning colour the Tract model; they do not
   reshape the Natural recording.
 - The Lessac-trained voice is for personal, non-commercial use (see
@@ -102,4 +127,4 @@ JUCE 8.0.15, C++20, arm64. From this directory:
 Default build directory: `~/dooblr-build/dooblr-throat`. JUCE is reused from
 `~/dooblr-build/_deps/juce-src` when present. After tests and LoadCheck pass,
 the bundle is installed to `/Library/Audio/Plug-Ins/VST3/dooblr-throat.vst3`
-(no sudo). Version 0.3.0.
+(no sudo). Version 0.4.0.

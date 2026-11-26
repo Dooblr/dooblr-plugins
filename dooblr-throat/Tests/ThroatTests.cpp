@@ -197,6 +197,7 @@ namespace
         editor.paintEntireComponent (g, true);
         juce::File file (path);
         file.getParentDirectory().createDirectory();
+        file.deleteFile(); // FileOutputStream appends to an existing file
         juce::FileOutputStream stream (file);
         if (stream.openedOk())
         {
@@ -214,13 +215,14 @@ namespace
         check (p->getNumPrograms() == 10, "Init + 9 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
         check (p->getProgramName (0) == "Init", "first program is Init");
         check (juce::String (JucePlugin_VersionString) == DOOBLRTHROAT_PROJECT_VERSION, "JUCE version string matches CMake");
-        check (p->getParameters().size() == 27, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
+        check (p->getParameters().size() == 29, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
 
         for (auto* expected : { id::vowel, id::height, id::back, id::nasal, id::female, id::child,
                                 id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
                                 id::vibratoDepth, id::vibratoRate, id::glide, id::bendRange,
                                 id::attack, id::decay, id::sustain, id::release, id::output,
-                                id::mode, id::rate, id::effort, id::formantTune })
+                                id::mode, id::rate, id::effort, id::formantTune, id::engine,
+                                id::voice, id::formant })
             check (p->getState().getParameter (expected) != nullptr, std::string ("parameter id ") + expected);
     }
 
@@ -311,7 +313,16 @@ namespace
 
         check (editor->getWidth() >= 900 && editor->getHeight() >= 560, "minimum editor size");
         check (editor->getPanels().size() == 5, "five control panels");
-        check (editor->getVowelPad().isVisible(), "vowel pad is visible");
+        check (editor->getPage() == 0, "editor opens on the Main page");
+        check (! editor->getVowelPad().isVisible(), "vowel pad is hidden on Main");
+        check (editor->findChildWithID ("pageMain") != nullptr, "Main page button");
+        check (editor->findChildWithID ("pageAdvanced") != nullptr, "Advanced page button");
+        check (editor->findChildWithID (id::voice) != nullptr, "Voice is on the Main page");
+        check (editor->findChildWithID (id::formant) != nullptr, "Formant is on the Main page");
+        editor->setPage (1);
+        check (editor->getPage() == 1, "Advanced page selected");
+        check (editor->getVowelPad().isVisible(), "vowel pad is visible on Advanced");
+        editor->setPage (0);
         if (auto* status = dynamic_cast<juce::Label*> (editor->findChildWithID ("status")))
         {
             const auto text = status->getText();
@@ -327,13 +338,28 @@ namespace
                                                          : juce::String (p->getName() + "-editor.png");
         if (snapshotEnv != nullptr || true)
         {
-            const auto dest = snapshotEnv != nullptr
-                ? juce::String (snapshotEnv) + ".png"
+            const auto base = snapshotEnv != nullptr
+                ? juce::String (snapshotEnv)
                 : juce::File::getSpecialLocation (juce::File::userHomeDirectory)
-                      .getChildFile ("dooblr-build/dooblr-throat/dooblr-throat.png").getFullPathName();
-            writeSnapshot (*editor, dest);
-            check (juce::File (dest).existsAsFile() && juce::File (dest).getSize() > 1000,
-                   "editor snapshot written to " + dest.toStdString());
+                      .getChildFile ("dooblr-build/dooblr-throat/dooblr-throat").getFullPathName();
+            editor->setPage (0);
+            editor->resized();
+            const auto destMain = base + "-main.png";
+            writeSnapshot (*editor, destMain);
+            check (juce::File (destMain).existsAsFile() && juce::File (destMain).getSize() > 1000,
+                   "Main snapshot written to " + destMain.toStdString());
+            editor->setPage (1);
+            editor->resized();
+            const auto destAdv = base + "-advanced.png";
+            writeSnapshot (*editor, destAdv);
+            check (juce::File (destAdv).existsAsFile() && juce::File (destAdv).getSize() > 1000,
+                   "Advanced snapshot written to " + destAdv.toStdString());
+            editor->setPage (0);
+            if (snapshotEnv == nullptr)
+            {
+                const auto dest = base + ".png";
+                writeSnapshot (*editor, dest);
+            }
         }
     }
 
@@ -882,14 +908,14 @@ namespace
     }
 
     juce::AudioBuffer<float> renderPhraseWav (const juce::String& text, double sr, double seconds,
-                                              int engine = -1)
+                                              int engine = -1, int midiNote = 60, int speechMode = 1)
     {
         Processor p;
         if (engine >= 0)
             setEngineChoice (p, engine);
         p.setPhraseText (text);
         p.getState().getParameter (id::mode)->setValueNotifyingHost (
-            p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
+            p.getState().getParameter (id::mode)->convertTo0to1 (float (speechMode)));
         p.getState().getParameter (id::rate)->setValueNotifyingHost (
             p.getState().getParameter (id::rate)->convertTo0to1 (1.0f));
         p.setNonRealtime (true);
@@ -907,7 +933,7 @@ namespace
             juce::MidiBuffer midi;
             if (! on)
             {
-                midi.addEvent (juce::MidiMessage::noteOn (1, 60, (juce::uint8) 110), 0);
+                midi.addEvent (juce::MidiMessage::noteOn (1, midiNote, (juce::uint8) 110), 0);
                 on = true;
             }
             p.processBlock (buf, midi);
@@ -1056,16 +1082,25 @@ namespace
         if (editor == nullptr) return;
 
         const int sizes[][2] = { { 980, 600 }, { 900, 560 }, { 1100, 720 }, { 1200, 800 } };
-        for (const auto& sz : sizes)
+        for (int page = 0; page < 2; ++page)
         {
-            editor->setSize (sz[0], sz[1]);
-            editor->resized();
-            assertLayout (*editor, juce::String (sz[0]) + "x" + juce::String (sz[1]));
+            editor->setPage (page);
+            for (const auto& sz : sizes)
+            {
+                editor->setSize (sz[0], sz[1]);
+                editor->resized();
+                const auto tag = juce::String (page == 0 ? "Main " : "Advanced ")
+                               + juce::String (sz[0]) + "x" + juce::String (sz[1]);
+                assertLayout (*editor, tag);
+            }
         }
 
+        editor->setPage (0);
         check (editor->findChildWithID ("phraseText") != nullptr, "phrase text field is present");
         check (editor->findChildWithID (id::mode) != nullptr, "mode combo is a top-level control");
         check (editor->findChildWithID (id::rate) != nullptr, "rate slider is a top-level control");
+        check (editor->findChildWithID (id::voice) != nullptr, "voice combo is a top-level control");
+        check (editor->findChildWithID (id::formant) != nullptr, "formant slider is a top-level control");
     }
 
 
@@ -1410,6 +1445,85 @@ namespace
 
 }
 
+    double soundingDuration (const juce::AudioBuffer<float>& buf, double sr, float thresh = 1.0e-3f);
+    double soundingDuration (const juce::AudioBuffer<float>& buf, double sr, float thresh)
+    {
+        int first = -1, last = -1;
+        for (int i = 0; i < buf.getNumSamples(); ++i)
+        {
+            if (std::abs (buf.getSample (0, i)) > thresh)
+            {
+                if (first < 0) first = i;
+                last = i;
+            }
+        }
+        if (first < 0) return 0.0;
+        return (last - first + 1) / sr;
+    }
+
+    void testNaturalTargetF0DurationAndHold();
+    void testNaturalTargetF0DurationAndHold()
+    {
+        // Speak "hello world" at C4 vs C2: duration must stay close (not 4x from resampling).
+        auto c4 = renderPhraseWav ("hello world", 48000.0, 4.0, 0, 60);
+        auto c2 = renderPhraseWav ("hello world", 48000.0, 4.0, 0, 36);
+        const auto d4 = soundingDuration (c4, 48000.0);
+        const auto d2 = soundingDuration (c2, 48000.0);
+        check (d4 > 0.3, "C4 hello world has sounding audio (" + std::to_string (d4) + " s)");
+        check (d2 > 0.3, "C2 hello world has sounding audio (" + std::to_string (d2) + " s)");
+        check (d2 < d4 * 1.6 && d4 < d2 * 1.6,
+               "C2 duration stays near C4, not time-stretched (C2 " + std::to_string (d2)
+               + " s, C4 " + std::to_string (d4) + " s)");
+
+        // Held "la" in Sing at C3 for 2.2 s must still be sounding after 1.0 s (vowel loop).
+        auto held = renderPhraseWav ("la", 48000.0, 2.2, 0, 48, 0);
+        const int sr = 48000;
+        const int mid = int (sr * 1.1);
+        double energy = 0;
+        const int span = int (sr * 0.15);
+        if (mid + span < held.getNumSamples())
+        {
+            for (int i = mid; i < mid + span; ++i)
+                energy += double (held.getSample (0, i)) * held.getSample (0, i);
+        }
+        const auto rms = std::sqrt (energy / std::max (1, span));
+        check (rms > 1.0e-3, "held la at C3 still sounds after 1.1 s (rms " + std::to_string (rms) + ")");
+
+        // 0.4.0: a held Sing note sits on the MIDI pitch (no resampling drift, no
+        // inherited speech contour) at a bass pitch and at C3.
+        auto acHz = [] (const juce::AudioBuffer<float>& b, int start, int len, double rate, double lo, double hi)
+        {
+            if (start + len + int (rate / lo) + 2 >= b.getNumSamples()) return 0.0;
+            const float* x = b.getReadPointer (0) + start;
+            const int tMin = int (rate / hi), tMax = int (rate / lo);
+            double best = -1.0; int bestT = 0;
+            std::vector<double> r (size_t (tMax + 2), 0.0);
+            for (int t = tMin - 1; t <= tMax + 1; ++t)
+            {
+                double s = 0, e0 = 0, e1 = 0;
+                for (int i = 0; i < len; ++i)
+                { s += double (x[i]) * x[i + t]; e0 += double (x[i]) * x[i]; e1 += double (x[i + t]) * x[i + t]; }
+                r[size_t (t)] = s / std::sqrt (std::max (1.0e-12, e0 * e1));
+            }
+            for (int t = tMin; t <= tMax; ++t)
+                if (r[size_t (t)] > best) { best = r[size_t (t)]; bestT = t; }
+            const double a = r[size_t (bestT - 1)], b0 = r[size_t (bestT)], c = r[size_t (bestT + 1)];
+            const double den = a - 2.0 * b0 + c;
+            const double off = (std::abs (den) > 1.0e-12) ? 0.5 * (a - c) / den : 0.0;
+            return rate / (double (bestT) + std::clamp (off, -0.5, 0.5));
+        };
+        for (int note : { 36, 48 })
+        {
+            auto h = renderPhraseWav ("la", 48000.0, 2.2, 0, note, 0);
+            const double want = 440.0 * std::pow (2.0, (note - 69) / 12.0);
+            const double got = acHz (h, int (sr * 1.2), int (sr * 0.2), double (sr), want * 0.75, want * 1.33);
+            const double cents = (got > 0) ? 1200.0 * std::log2 (got / want) : 9999.0;
+            check (std::abs (cents) < 35.0, "held Sing la at MIDI " + std::to_string (note) + " is "
+                   + std::to_string (got) + " Hz (" + std::to_string (cents) + " cents)");
+        }
+    }
+
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
@@ -1433,6 +1547,7 @@ int main()
         { "funk G2P and diction",         testFunkG2PAndDiction },
         { "coarticulation and TA",         testCoarticulationAndTargetApproximation },
         { "editor layout no clip",        testEditorLayoutNoClipOrOverlap },
+        { "Natural target F0, duration, hold", testNaturalTargetF0DurationAndHold },
         { "diction wavs",                 testWriteDictionWavs },
         { "AB / held wavs",              testWriteAbAndHeldWavs },
         { "sample rates and block sizes", testSampleRatesAndBlockSizes },

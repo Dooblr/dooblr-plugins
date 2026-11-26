@@ -127,7 +127,8 @@ into the `.vst3` at `Contents/Frameworks` (ONNX Runtime) and `Contents/Resources
 (the Piper voice and a trimmed English `espeak-ng-data`). They are not committed
 to git, aside from the small WORLD source tree.
 
-The default 0.3.0 engine is Natural (Piper + WORLD retune). The 0.2.x waveguide
+The default engine (since 0.3.0) is Natural (Piper + WORLD). 0.4.0 adds no new
+third-party component; it uses the same WORLD sources differently (below). The 0.2.x waveguide
 remains available as the Engine = Tract fallback. Empty phrase text still uses
 the waveguide vowel instrument.
 
@@ -168,5 +169,7 @@ https://www.cstr.ed.ac.uk/projects/blizzard/2013/lessac_blizzard2013/license.htm
 
 Source vendored in `third_party/World/` from [mmorise/World](https://github.com/mmorise/World)
 (commit `c794856b537758a3d300757db2e5e31685a822c2`). See
-`third_party/World/LICENSE.txt`. Used off the audio thread to flatten Piper's F0
-to a C4 reference; the audio thread then resamples that buffer to the MIDI note.
+`third_party/World/LICENSE.txt`. Used off the audio thread: from 0.4.0 it analyses each
+Piper clip once and resynthesizes it at the MIDI note's F0 on a worker; the
+audio thread only plays the finished buffer. (0.3.0 flattened to a C4
+reference and the audio thread resampled it to the note.)

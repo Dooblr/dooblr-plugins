@@ -216,29 +216,52 @@ namespace dooblrthroat::dsp
             return ! out.empty();
         }
 
-        std::vector<float> resampleLinear (const std::vector<float>& in, int inRate, int outRate)
+        // Band-limited (Hann-windowed sinc, 24 zero crossings) resampler for the
+        // worker. Used to bring WORLD output at the voice's native rate up to the
+        // host rate without the imaging a linear interpolator leaves above 8 kHz.
+        std::vector<float> resampleSinc (const std::vector<float>& in, int inRate, int outRate)
         {
             if (in.empty() || inRate <= 0 || outRate <= 0) return {};
             if (inRate == outRate) return in;
             const auto outN = std::max<size_t> (1, size_t (std::llround (double (in.size()) * outRate / inRate)));
             std::vector<float> out (outN);
-            const auto scale = (in.size() - 1) / std::max (1.0, double (outN - 1));
+            const double step = double (inRate) / double (outRate);
+            const double cutoff = 0.95 * std::min (1.0, double (outRate) / double (inRate)); // of input Nyquist
+            constexpr int half = 24;
+            const double pi = 3.14159265358979323846;
+            const auto inN = long (in.size());
             for (size_t i = 0; i < outN; ++i)
             {
-                const auto x = double (i) * scale;
-                const auto j = size_t (x);
-                const auto t = float (x - double (j));
-                const auto a = in[j];
-                const auto b = in[std::min (j + 1, in.size() - 1)];
-                out[i] = a + (b - a) * t;
+                const double x = double (i) * step;
+                const long c0 = long (std::floor (x));
+                double acc = 0.0, wsum = 0.0;
+                for (long k = c0 - half + 1; k <= c0 + half; ++k)
+                {
+                    const double d = x - double (k);
+                    const double ad = std::abs (d);
+                    if (ad >= double (half)) continue;
+                    const double arg = pi * cutoff * d;
+                    const double sinc = (std::abs (arg) < 1.0e-9) ? 1.0 : std::sin (arg) / arg;
+                    const double win = 0.5 + 0.5 * std::cos (pi * d / double (half));
+                    const double w = cutoff * sinc * win;
+                    wsum += w;
+                    if (k >= 0 && k < inN)
+                        acc += w * double (in[size_t (k)]);
+                }
+                out[i] = float (wsum > 1.0e-9 ? acc / wsum : 0.0);
             }
             return out;
         }
 
-        bool worldRetune (std::vector<float>& audio, int fs, double midiHz, bool keepResidual)
+        constexpr double kWorldFloor = 40.0;
+
+        bool worldAnalyze (const std::vector<float>& audio, int fs, WorldFeatures& feat, std::string& err)
         {
-            if (audio.size() < size_t (fs / 20)) // < 50 ms, leave as-is
-                return true;
+            if (audio.size() < size_t (std::max (1, fs / 20)))
+            {
+                err = "audio too short for WORLD";
+                return false;
+            }
             std::vector<double> wave (audio.size());
             for (size_t i = 0; i < audio.size(); ++i)
                 wave[i] = audio[i];
@@ -246,8 +269,13 @@ namespace dooblrthroat::dsp
             HarvestOption hopt;
             InitializeHarvestOption (&hopt);
             hopt.frame_period = 5.0;
+            hopt.f0_floor = kWorldFloor;
             const int f0n = GetSamplesForHarvest (fs, int (wave.size()), hopt.frame_period);
-            if (f0n <= 2) return true;
+            if (f0n <= 2)
+            {
+                err = "WORLD Harvest produced too few frames";
+                return false;
+            }
             std::vector<double> temporal (static_cast<size_t> (f0n));
             std::vector<double> f0c (static_cast<size_t> (f0n));
             std::vector<double> refined (static_cast<size_t> (f0n));
@@ -256,7 +284,9 @@ namespace dooblrthroat::dsp
 
             CheapTrickOption copt;
             InitializeCheapTrickOption (fs, &copt);
-            const int fft = GetFFTSizeForCheapTrick (fs, &copt);
+            copt.f0_floor = kWorldFloor;
+            copt.fft_size = GetFFTSizeForCheapTrick (fs, &copt);
+            const int fft = copt.fft_size;
             const int bins = fft / 2 + 1;
             std::vector<double> spStore (size_t (f0n) * size_t (bins), 0.0);
             std::vector<double> apStore (size_t (f0n) * size_t (bins), 0.0);
@@ -270,41 +300,186 @@ namespace dooblrthroat::dsp
             CheapTrick (wave.data(), int (wave.size()), fs, temporal.data(), refined.data(), f0n, &copt, specPtr.data());
             D4COption dopt;
             InitializeD4COption (&dopt);
+            // Default threshold is 0.85. A slightly lower value keeps low-F0
+            // frames voiced instead of collapsing to noisy aperiodicity.
+            dopt.threshold = 0.80;
             D4C (wave.data(), int (wave.size()), fs, temporal.data(), refined.data(), f0n, fft, &dopt, apPtr.data());
 
-            // Median of voiced F0.
-            std::vector<double> voiced;
-            voiced.reserve (size_t (f0n));
+            feat.fs = fs;
+            feat.f0n = f0n;
+            feat.fft = fft;
+            feat.bins = bins;
+            feat.framePeriod = hopt.frame_period;
+            feat.temporal = std::move (temporal);
+            feat.f0 = std::move (refined);
+            feat.sp = std::move (spStore);
+            feat.ap = std::move (apStore);
+            return feat.valid();
+        }
+
+        void shiftSpectrum (std::vector<double>& sp, int f0n, int bins, double factor)
+        {
+            if (f0n <= 0 || bins <= 0 || ! std::isfinite (factor) || std::abs (factor - 1.0) < 1.0e-4)
+                return;
+            factor = std::clamp (factor, 0.70, 1.30);
+            std::vector<double> tmp (static_cast<size_t> (bins));
             for (int i = 0; i < f0n; ++i)
-                if (refined[i] > 40.0) voiced.push_back (refined[i]);
-            double median = midiHz;
+            {
+                double* row = sp.data() + i * bins;
+                for (int k = 0; k < bins; ++k)
+                {
+                    const auto src = double (k) / factor;
+                    if (src >= double (bins - 1))
+                    {
+                        tmp[size_t (k)] = row[bins - 1];
+                        continue;
+                    }
+                    const auto j = int (src);
+                    const auto t = src - double (j);
+                    auto a = std::max (row[j], 1.0e-16);
+                    auto b = std::max (row[std::min (j + 1, bins - 1)], 1.0e-16);
+                    tmp[size_t (k)] = std::exp ((1.0 - t) * std::log (a) + t * std::log (b));
+                }
+                std::copy (tmp.begin(), tmp.end(), row);
+            }
+        }
+
+        double formantFactor (double hz, double formant, int voice)
+        {
+            const auto safeHz = std::max (40.0, hz);
+            const auto t = std::clamp ((std::log2 (safeHz) - std::log2 (65.40639132514966))
+                                           / (std::log2 (261.6255653005986) - std::log2 (65.40639132514966)),
+                                       0.0, 1.0);
+            double range = 0.84 + 0.16 * t; // C2 ~0.84, C4 and above 1.0
+            if (voice == 1) range = 0.5 * range + 0.5; // Bright: half the auto drop
+            if (voice == 2) range *= 0.90;             // Deep: extra lowering
+            const auto user = 0.75 + 0.50 * std::clamp (formant, 0.0, 1.0);
+            return std::clamp (range * user, 0.70, 1.30);
+        }
+
+        // residual: how much of the voice's own contour survives (0 = flat note).
+        // maxCents caps the deviation so a sung note stays in tune.
+        void applyTargetF0 (std::vector<double>& f0, double target, double residual, double maxCents)
+        {
+            std::vector<double> voiced;
+            voiced.reserve (f0.size());
+            for (auto v : f0)
+                if (v > 40.0) voiced.push_back (v);
+            double median = target;
             if (! voiced.empty())
             {
                 std::nth_element (voiced.begin(), voiced.begin() + voiced.size() / 2, voiced.end());
                 median = voiced[voiced.size() / 2];
             }
-            const auto target = std::clamp (midiHz, 50.0, 800.0);
-            for (int i = 0; i < f0n; ++i)
+            target = std::clamp (target, 50.0, 800.0);
+            for (auto& v : f0)
             {
-                if (refined[i] <= 40.0) continue;
-                if (keepResidual && median > 40.0)
-                    refined[i] = target * (0.85 + 0.15 * (refined[i] / median));
+                if (v <= 40.0) continue;
+                if (residual > 0.0 && median > 40.0)
+                {
+                    auto cents = 1200.0 * std::log2 (1.0 + residual * (v / median - 1.0));
+                    if (! std::isfinite (cents)) cents = 0.0;
+                    cents = std::clamp (cents, -maxCents, maxCents);
+                    v = target * std::pow (2.0, cents / 1200.0);
+                }
                 else
-                    refined[i] = target;
+                    v = target;
             }
+        }
 
-            const int yLen = int ((f0n - 1) * hopt.frame_period / 1000.0 * fs) + 1;
-            if (yLen <= 1) return true;
+        // Loop on the vowel nucleus: centre on the loudest voiced frame, keep the
+        // window inside the voiced span and make its length a whole number of
+        // periods at the note F0 so the crossfade joins in phase.
+        void findLoop (const std::vector<float>& audio, const WorldFeatures& feat, double hz, int fs,
+                       int& loopStart, int& loopEnd)
+        {
+            loopStart = 0;
+            loopEnd = 0;
+            if (! feat.valid() || audio.size() < 64 || ! (hz > 20.0) || fs <= 0) return;
+            const int n = int (audio.size());
+            int first = -1, last = -1;
+            for (int i = 0; i < feat.f0n; ++i)
+                if (feat.f0[size_t (i)] > 40.0)
+                {
+                    if (first < 0) first = i;
+                    last = i;
+                }
+            if (first < 0 || last - first < 8) return;
+            auto toSamp = [&] (int i) {
+                i = std::clamp (i, 0, feat.f0n - 1);
+                return std::clamp (int (std::llround (feat.temporal[size_t (i)] * fs)), 0, n - 1);
+            };
+            const int vs = toSamp (first + 1), ve = toSamp (last - 1);
+            if (ve - vs < fs / 20) return;
+            // Loudest 20 ms window inside the voiced span.
+            const int win = std::max (32, fs / 50);
+            double best = -1.0;
+            int bestCentre = (vs + ve) / 2;
+            for (int c = vs + win / 2; c + win / 2 < ve; c += win / 4)
+            {
+                double e = 0.0;
+                for (int k = c - win / 2; k < c + win / 2; ++k)
+                    e += double (audio[size_t (k)]) * audio[size_t (k)];
+                if (e > best) { best = e; bestCentre = c; }
+            }
+            const double period = double (fs) / hz;
+            const int periods = std::max (2, int (std::floor (0.12 * fs / period)));
+            int len = int (std::llround (periods * period));
+            const int maxLen = (ve - vs) * 3 / 4;
+            while (len > maxLen && len > int (2 * period) + 1)
+                len = int (std::llround ((std::floor (len / period) - 1.0) * period));
+            if (len < 64) return;
+            int s = std::clamp (bestCentre - len / 2, vs, std::max (vs, ve - len));
+            loopStart = s;
+            loopEnd = std::min (n - 1, s + len);
+            if (loopEnd - loopStart < 64) { loopStart = loopEnd = 0; }
+        }
+
+        bool worldSynthesize (const WorldFeatures& feat, double hz, double formant, int voice, bool sung,
+                              std::vector<float>& audio, std::string& err)
+        {
+            if (! feat.valid())
+            {
+                err = "no WORLD features";
+                return false;
+            }
+            auto f0 = feat.f0;
+            auto sp = feat.sp;
+            auto ap = feat.ap;
+            // Speak keeps 15% of Piper's intonation; Sing holds the note (light life, within +/-15 cents).
+            if (sung) applyTargetF0 (f0, hz, 0.04, 15.0);
+            else      applyTargetF0 (f0, hz, 0.15, 300.0);
+            shiftSpectrum (sp, feat.f0n, feat.bins, formantFactor (hz, formant, voice));
+
+            const int yLen = int ((feat.f0n - 1) * feat.framePeriod / 1000.0 * feat.fs) + 1;
+            if (yLen <= 1)
+            {
+                err = "WORLD synthesis length invalid";
+                return false;
+            }
             std::vector<double> y (size_t (yLen), 0.0);
-            Synthesis (refined.data(), f0n, specPtr.data(), apPtr.data(), fft, hopt.frame_period, fs, yLen, y.data());
+            std::vector<double*> specPtr (static_cast<size_t> (feat.f0n));
+            std::vector<double*> apPtr (static_cast<size_t> (feat.f0n));
+            for (int i = 0; i < feat.f0n; ++i)
+            {
+                specPtr[size_t (i)] = sp.data() + i * feat.bins;
+                apPtr[size_t (i)] = ap.data() + i * feat.bins;
+            }
+            Synthesis (f0.data(), feat.f0n, specPtr.data(), apPtr.data(),
+                       feat.fft, feat.framePeriod, feat.fs, yLen, y.data());
             audio.resize (size_t (yLen));
-            // Soft normalize to avoid WORLD gain swings, keep headroom.
             double peak = 1.0e-6;
             for (double v : y) peak = std::max (peak, std::abs (v));
             const auto scale = (peak > 0.95) ? (0.90 / peak) : 1.0;
             for (int i = 0; i < yLen; ++i)
                 audio[size_t (i)] = float (y[size_t (i)] * scale);
             return true;
+        }
+
+        int midiOfHz (double hz)
+        {
+            if (! (hz > 1.0)) return 60;
+            return int (std::lround (69.0 + 12.0 * std::log2 (hz / 440.0)));
         }
 
         std::vector<char32_t> utf32 (const std::string& s)
@@ -517,6 +692,7 @@ namespace dooblrthroat::dsp
         bool renderClip (ProvenKind kind, const std::string& text, double midiHz, double lengthScale,
                          int outRate, ProvenClip& clip, ProvenStats& stats, std::string& err)
         {
+            (void) midiHz;
             std::lock_guard<std::mutex> synth (gSynthMutex);
             std::vector<float> native;
             int nativeRate = 22050;
@@ -531,16 +707,19 @@ namespace dooblrthroat::dsp
             else if (kind == ProvenKind::Piper)
             {
                 ok = synthPiper (text, native, nativeRate, infer, err, lengthScale);
-                if (ok)
-                    worldRetune (native, nativeRate, midiHz, true);
             }
             if (! ok || native.empty())
                 return false;
-            auto resampled = resampleLinear (native, nativeRate, outRate);
-            fadeEdges (resampled, outRate);
-            clip.samples.swap (resampled);
+            // WORLD runs at the voice's native rate (16-22 kHz): ~3x cheaper per note
+            // than at 48 kHz, and the voice has no content above its Nyquist anyway.
+            fadeEdges (native, nativeRate);
+            if (! worldAnalyze (native, nativeRate, clip.world, err))
+                return false;
+            clip.samples.clear();
+            clip.loopStart = 0;
+            clip.loopEnd = 0;
             clip.rate = outRate;
-            clip.refHz = midiHz;
+            clip.refHz = 0.0;
             stats.inferSeconds += infer;
             stats.nativeRate = nativeRate;
             stats.outputRate = outRate;
@@ -596,9 +775,11 @@ namespace dooblrthroat::dsp
         working_ = false;
         engaged_.store (false, std::memory_order_release);
         liveCache_.store (nullptr, std::memory_order_release);
+        livePlay_.store (nullptr, std::memory_order_release);
         while (inRender_.load (std::memory_order_acquire) != 0)
             std::this_thread::yield();
         ownedCache_.reset();
+        ownedPlay_.reset();
         bool last = false;
         {
             std::lock_guard<std::mutex> g (gInitMutex);
@@ -614,6 +795,7 @@ namespace dooblrthroat::dsp
     {
         engaged_.store (false, std::memory_order_release);
         playPos_.store (0.0, std::memory_order_release);
+        sustaining_.store (false, std::memory_order_release);
     }
 
     void ProvenEngine::requestPrepare (ProvenKind kind, const std::string& phrase,
@@ -624,6 +806,7 @@ namespace dooblrthroat::dsp
         {
             engaged_.store (false, std::memory_order_release);
             liveCache_.store (nullptr, std::memory_order_release);
+            livePlay_.store (nullptr, std::memory_order_release);
             return;
         }
         {
@@ -666,48 +849,107 @@ namespace dooblrthroat::dsp
             std::vector<std::string> syllables;
             double length = 1.0;
             unsigned gen = 0;
+            bool doCache = false;
+            unsigned noteGen = 0;
+            int mode = 0, syl = 0, voice = 0;
+            double hz = 261.626, formant = 0.5;
+            const ProvenCache* cacheCopy = nullptr;
             {
                 std::unique_lock<std::mutex> lk (mutex_);
-                cv_.wait (lk, [&] {
-                    return stop_.load (std::memory_order_acquire) || pending_;
+                cv_.wait_for (lk, std::chrono::milliseconds (5), [&] {
+                    return stop_.load (std::memory_order_acquire)
+                        || pending_
+                        || (noteGen_.load (std::memory_order_acquire)
+                            != noteDone_.load (std::memory_order_acquire));
                 });
                 if (stop_.load (std::memory_order_acquire))
                     return;
-                kind = pendingKind_;
-                phrase = pendingPhrase_;
-                syllables = pendingSyllables_;
-                length = pendingLength_;
-                gen = generation_;
-                pending_ = false;
-                working_ = true;
+                if (pending_)
+                {
+                    kind = pendingKind_;
+                    phrase = pendingPhrase_;
+                    syllables = pendingSyllables_;
+                    length = pendingLength_;
+                    gen = generation_;
+                    pending_ = false;
+                    working_ = true;
+                    doCache = true;
+                }
+                else if (noteGen_.load (std::memory_order_acquire)
+                         != noteDone_.load (std::memory_order_acquire)
+                         && ownedCache_ != nullptr)
+                {
+                    noteGen = noteGen_.load (std::memory_order_acquire);
+                    mode = playMode_.load (std::memory_order_acquire);
+                    syl = playSyl_.load (std::memory_order_acquire);
+                    hz = playHz_.load (std::memory_order_acquire);
+                    formant = formant_.load (std::memory_order_acquire);
+                    voice = voice_.load (std::memory_order_acquire);
+                    cacheCopy = ownedCache_.get();
+                }
+                else
+                    continue;
             }
-            const auto outRate = outputRate_.load (std::memory_order_acquire);
-            auto cache = buildCache (kind, phrase, syllables, length, outRate);
+
+            if (doCache)
             {
-                std::lock_guard<std::mutex> g (mutex_);
-                working_ = false;
-                doneGeneration_ = gen;
+                const auto outRate = outputRate_.load (std::memory_order_acquire);
+                auto cache = buildCache (kind, phrase, syllables, length, outRate);
+                {
+                    std::lock_guard<std::mutex> g (mutex_);
+                    working_ = false;
+                    doneGeneration_ = gen;
+                    if (cache != nullptr)
+                        stats_ = cache->stats;
+                    else if (error_.empty())
+                        error_ = "proven render failed";
+                }
                 if (cache != nullptr)
-                    stats_ = cache->stats;
-                else if (error_.empty())
-                    error_ = "proven render failed";
+                    publishCache (std::move (cache));
+                readyCv_.notify_all();
+                continue;
             }
-            if (cache != nullptr)
-                publishCache (std::move (cache));
-            readyCv_.notify_all();
+
+            if (cacheCopy != nullptr)
+            {
+                auto play = synthesizeNote (*cacheCopy, mode, syl, hz, formant, voice);
+                if (play != nullptr)
+                    publishPlay (std::move (play));
+                noteDone_.store (noteGen, std::memory_order_release);
+                readyCv_.notify_all();
+            }
         }
     }
 
     void ProvenEngine::publishCache (std::unique_ptr<ProvenCache> next)
     {
         auto* raw = next.get();
-        std::unique_ptr<ProvenCache> old;
+        std::unique_ptr<ProvenCache> oldCache;
+        std::unique_ptr<ProvenPlay> oldPlay;
         {
             std::lock_guard<std::mutex> g (mutex_);
-            old = std::move (ownedCache_);
+            oldCache = std::move (ownedCache_);
+            oldPlay = std::move (ownedPlay_);
             ownedCache_ = std::move (next);
             liveCache_.store (raw, std::memory_order_release);
+            livePlay_.store (nullptr, std::memory_order_release);
             readyFlag_.store (raw != nullptr, std::memory_order_release);
+        }
+        while (inRender_.load (std::memory_order_acquire) != 0)
+            std::this_thread::yield();
+        oldCache.reset();
+        oldPlay.reset();
+    }
+
+    void ProvenEngine::publishPlay (std::unique_ptr<ProvenPlay> next)
+    {
+        auto* raw = next.get();
+        std::unique_ptr<ProvenPlay> old;
+        {
+            std::lock_guard<std::mutex> g (mutex_);
+            old = std::move (ownedPlay_);
+            ownedPlay_ = std::move (next);
+            livePlay_.store (raw, std::memory_order_release);
         }
         while (inRender_.load (std::memory_order_acquire) != 0)
             std::this_thread::yield();
@@ -747,24 +989,82 @@ namespace dooblrthroat::dsp
                 cache->syllables.push_back (ProvenClip {});
         }
         cache->stats.synthSeconds = std::chrono::duration<double> (std::chrono::steady_clock::now() - t0).count();
-        cache->stats.audioSeconds = cache->speak.samples.empty()
-            ? 0.0
-            : double (cache->speak.samples.size()) / double (cache->rate);
+        cache->stats.audioSeconds = 0.0;
         return cache;
+    }
+
+    std::unique_ptr<ProvenPlay> ProvenEngine::synthesizeNote (const ProvenCache& cache, int mode, int syl,
+                                                            double hz, double formant, int voice) const
+    {
+        const ProvenClip* clip = nullptr;
+        if (mode == 1 && syl >= 0 && syl < int (cache.syllables.size())
+            && cache.syllables[size_t (syl)].world.valid())
+            clip = &cache.syllables[size_t (syl)];
+        else
+            clip = &cache.speak;
+        if (clip == nullptr || ! clip->world.valid())
+            return nullptr;
+        auto play = std::make_unique<ProvenPlay>();
+        std::string err;
+        std::vector<float> native;
+        if (! worldSynthesize (clip->world, hz, formant, voice, mode == 1, native, err))
+        {
+            std::cerr << "ProvenVoice synth error: " << err << "\n";
+            return nullptr;
+        }
+        const int outRate = (cache.rate > 1000) ? cache.rate : 48000;
+        play->samples = (clip->world.fs == outRate) ? std::move (native)
+                                                    : resampleSinc (native, clip->world.fs, outRate);
+        fadeEdges (play->samples, outRate);
+        findLoop (play->samples, clip->world, hz, outRate, play->loopStart, play->loopEnd);
+        play->rate = outRate;
+        play->hz = hz;
+        play->midi = midiOfHz (hz);
+        play->mode = mode;
+        play->syl = syl;
+        return play;
+    }
+
+    bool ProvenEngine::playMatchesRequest (const ProvenPlay* play) const noexcept
+    {
+        if (play == nullptr || play->samples.empty())
+            return false;
+        const int mode = playMode_.load (std::memory_order_acquire);
+        const int syl = playSyl_.load (std::memory_order_acquire);
+        const auto hz = playHz_.load (std::memory_order_acquire);
+        if (play->mode != mode)
+            return false;
+        if (mode == 1 && play->syl != syl)
+            return false;
+        return midiOfHz (play->hz) == midiOfHz (hz);
     }
 
     void ProvenEngine::armPlayback (int mode, int syl, double midiHz) noexcept
     {
-        const auto* cache = liveCache_.load (std::memory_order_acquire);
-        const auto ref = (cache != nullptr && cache->refHz > 1.0) ? cache->refHz : 261.626;
-        auto ratio = (midiHz > 1.0 && ref > 1.0) ? (midiHz / ref) : 1.0;
-        if (! std::isfinite (ratio)) ratio = 1.0;
-        ratio = std::clamp (ratio, 0.25, 4.0);
+        if (! std::isfinite (midiHz) || midiHz < 1.0)
+            midiHz = 261.626;
         playMode_.store (mode, std::memory_order_release);
         playSyl_.store (syl, std::memory_order_release);
         playPos_.store (0.0, std::memory_order_release);
-        playRatio_.store (ratio, std::memory_order_release);
-        engaged_.store (cache != nullptr, std::memory_order_release);
+        playHz_.store (midiHz, std::memory_order_release);
+        playRatio_.store (1.0, std::memory_order_release);
+        engaged_.store (liveCache_.load (std::memory_order_acquire) != nullptr, std::memory_order_release);
+        const auto* existing = livePlay_.load (std::memory_order_acquire);
+        if (playMatchesRequest (existing))
+        {
+            const auto ratio = (existing->hz > 1.0) ? (midiHz / existing->hz) : 1.0;
+            playRatio_.store (std::clamp (std::isfinite (ratio) ? ratio : 1.0, 0.5, 2.0),
+                              std::memory_order_release);
+            noteDone_.store (noteGen_.load (std::memory_order_acquire), std::memory_order_release);
+        }
+        else
+        {
+            noteGen_.fetch_add (1, std::memory_order_acq_rel);
+        }
+        // Real time: the worker polls every 5 ms, so the audio thread never
+        // touches the condition variable. Offline: wake it and wait.
+        if (offline_.load (std::memory_order_acquire))
+            waitNoteReady();
     }
 
     void ProvenEngine::startSpeakPlayback (double midiHz) noexcept
@@ -781,62 +1081,85 @@ namespace dooblrthroat::dsp
     {
         playPos_.store (0.0, std::memory_order_release);
         engaged_.store (false, std::memory_order_release);
+        sustaining_.store (false, std::memory_order_release);
+    }
+
+    bool ProvenEngine::waitNoteReady()
+    {
+        cv_.notify_all();
+        std::unique_lock<std::mutex> lk (mutex_);
+        readyCv_.wait_for (lk, std::chrono::seconds (15), [&] {
+            return stop_.load (std::memory_order_acquire)
+                || playMatchesRequest (livePlay_.load (std::memory_order_acquire));
+        });
+        return playMatchesRequest (livePlay_.load (std::memory_order_acquire));
     }
 
     bool ProvenEngine::finished() const noexcept
     {
-        const auto* cache = liveCache_.load (std::memory_order_acquire);
-        if (cache == nullptr) return true;
-        const int mode = playMode_.load (std::memory_order_acquire);
-        const int si = playSyl_.load (std::memory_order_acquire);
-        const ProvenClip* clip = nullptr;
-        if (mode == 1 && si >= 0 && si < int (cache->syllables.size()))
-            clip = &cache->syllables[size_t (si)];
-        else
-            clip = &cache->speak;
-        if (clip == nullptr || clip->samples.empty()) return true;
-        return playPos_.load (std::memory_order_acquire) >= double (clip->samples.size());
+        if (! engaged_.load (std::memory_order_acquire))
+            return true;
+        if (noteGen_.load (std::memory_order_acquire) != noteDone_.load (std::memory_order_acquire)
+            && ! playMatchesRequest (livePlay_.load (std::memory_order_acquire)))
+            return false;
+        const auto* play = livePlay_.load (std::memory_order_acquire);
+        if (play == nullptr || play->samples.empty())
+            return true;
+        const bool canLoop = sustaining_.load (std::memory_order_acquire)
+                          && play->mode == 1
+                          && play->loopEnd > play->loopStart + 32;
+        if (canLoop)
+            return false;
+        return playPos_.load (std::memory_order_acquire) >= double (play->samples.size());
     }
 
     bool ProvenEngine::render (float* out, size_t n, double gate) noexcept
     {
         if (out == nullptr || n == 0) return false;
         inRender_.store (1, std::memory_order_release);
-        const auto* cache = liveCache_.load (std::memory_order_acquire);
-        const int mode = playMode_.load (std::memory_order_relaxed);
-        const int si = playSyl_.load (std::memory_order_relaxed);
-        const ProvenClip* clip = nullptr;
-        if (cache != nullptr)
-        {
-            if (mode == 1 && si >= 0 && si < int (cache->syllables.size())
-                && ! cache->syllables[size_t (si)].samples.empty())
-                clip = &cache->syllables[size_t (si)];
-            else
-                clip = &cache->speak;
-        }
+        const auto* play = livePlay_.load (std::memory_order_acquire);
         const auto g = float (std::clamp (gate, 0.0, 1.5));
-        if (clip == nullptr || clip->samples.empty())
+        if (play == nullptr || play->samples.empty()
+            || ! playMatchesRequest (play))
         {
             for (size_t i = 0; i < n; ++i) out[i] = 0;
             inRender_.store (0, std::memory_order_release);
             return false;
         }
-        const auto& s = clip->samples;
+        const auto& s = play->samples;
         const auto sz = int (s.size());
+        const auto loopStart = play->loopStart;
+        const auto loopEnd = play->loopEnd;
+        const bool canLoop = sustaining_.load (std::memory_order_relaxed)
+                          && play->mode == 1
+                          && loopEnd > loopStart + 32;
+        const int xfade = canLoop ? std::max (0, std::min ({ play->rate / 100, (loopEnd - loopStart) / 3, loopStart })) : 0;
         auto pos = playPos_.load (std::memory_order_relaxed);
-        const auto inc = playRatio_.load (std::memory_order_relaxed);
+        auto inc = playRatio_.load (std::memory_order_relaxed);
+        if (! std::isfinite (inc) || inc <= 0.0) inc = 1.0;
+        auto sampleAt = [&] (double p) -> float
+        {
+            if (p < 0.0 || p >= double (sz)) return 0.0f;
+            if (p >= double (sz - 1)) return s[size_t (sz - 1)];
+            const auto j = int (p);
+            const auto t = float (p - double (j));
+            return s[size_t (j)] + (s[size_t (j + 1)] - s[size_t (j)]) * t;
+        };
         for (size_t i = 0; i < n; ++i)
         {
-            if (pos >= 0.0 && pos < double (sz - 1))
+            if (canLoop && pos >= double (loopEnd))
+                pos = double (loopStart) + (pos - double (loopEnd));
+            float y = 0;
+            if (canLoop && xfade > 0 && pos >= double (loopEnd - xfade) && pos < double (loopEnd))
             {
-                const auto j = int (pos);
-                const auto t = float (pos - double (j));
-                out[i] = (s[size_t (j)] + (s[size_t (j + 1)] - s[size_t (j)]) * t) * g;
+                const auto t = float ((pos - double (loopEnd - xfade)) / double (xfade));
+                const auto a = sampleAt (pos);
+                const auto b = sampleAt (pos - double (loopEnd - loopStart)); // the run-in to loopStart
+                y = (1.0f - t) * a + t * b;
             }
-            else if (pos >= 0.0 && pos < double (sz))
-                out[i] = s[size_t (int (pos))] * g;
             else
-                out[i] = 0;
+                y = sampleAt (pos);
+            out[i] = y * g;
             pos += inc;
         }
         playPos_.store (pos, std::memory_order_relaxed);

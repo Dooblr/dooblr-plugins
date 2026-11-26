@@ -29,6 +29,8 @@ namespace dooblrthroat::dsp
         float speechRate = 1.0f;
         float effort = 0.5f;
         float formantTune = 0.0f;
+        float formant = 0.5f;   // 0 darker .. 0.5 neutral .. 1 brighter (Natural)
+        int voice = 0;          // 0 Auto, 1 Bright, 2 Deep
         int clarityMode = 6; // 0 waveguide, 1 A, 2 B, 3 C, 4 K, 5 E espeak, 6 P piper (default), 7 M
     };
 
@@ -77,6 +79,7 @@ namespace dooblrthroat::dsp
         ProvenEngine& proven() noexcept { return proven_; }
         void prepareProven (bool wait);
         bool waitProvenReady() { return proven_.waitReady(); }
+        bool waitProvenNoteReady() { return proven_.waitNoteReady(); }
 
         void process (float* left, float* right, int n);
 

@@ -11,6 +11,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Spec and decisions so far: `design/dooblr-design-system.md` §15 dooblr-throat (T).
 - `dooblr-throat/README.md`
+- v0.4.0: Natural resynthesizes Piper+WORLD features at the MIDI F0 on a worker (formants stay, duration no longer follows pitch). Sing loops the vowel while the key is held. Main page: Phrase, Mode, Voice (Auto / Bright / Deep), Rate, Formant, Level. Advanced: Engine and the Tract-engine knobs. Append-only `voice` and `formant`; `stateVersion` stays 1; old sets load. Personal-use licenses are listed in `dooblr-throat/LICENSES.md`.
 - v0.3.0: default Engine is Natural (Piper + WORLD, pre-rendered off the audio thread, resampled to the MIDI note). Tract is the 0.2.x waveguide fallback. Empty text is still the vowel instrument. Old sets load (`stateVersion` 1) and open on Natural. Sing plays the next pre-rendered syllable once per note-on; longer holds go quiet; pitch and duration are coupled by resampling. Personal-use licenses are listed in `dooblr-throat/LICENSES.md`.
 - v0.2.1: type English in the Phrase box and play MIDI. Sing advances a syllable per note; Speak says the whole line at Rate. Diction pass on clusters, final stops, fricatives and nasals; Speak-mode declination. Context-sensitive consonant targets and third-order target approximation after Birkholz 2013 and 2007 (reimplemented from the papers; VocalTractLab is not used or linked). Effort and Tuning (formant tuning) knobs; compact Phrase row in a 980×600 default window. Expressivity ideas from Rodet, Potard and Barrière 1984 (CHANT), used as a guide; waveguide airway remains the core. Empty text is the old vowel instrument. English only; tract-model intelligibility, not a commercial vocoder. No third-party brand names in the UI or presets.
 
@@ -18,9 +19,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrThroat`, product "dooblr-throat", code Dbth)
-- Version: 0.3.0
-- Last source change: 2026-11-12
-- Source tree: `62a716fd1b4b` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-throat`)
+- Version: 0.4.0
+- Last source change: 2026-11-26
+- Source tree: `9d132af3d8e7` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-throat`)
 - Window: resize limits 900x560..2400x1600; default size 980x600
 - Build/test: `dooblr-throat/scripts/build.sh` (build dir `~/dooblr-build/dooblr-throat`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrThroatTests` (Tests/CMakeLists.txt)
@@ -28,7 +29,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Build/test: target `tests` (third_party/World/CMakeLists.txt)
 - Hand-written spec: `design/dooblr-design-system.md` §15 dooblr-throat (T)
 
-### Parameters (27 rows, 27 parameters after loops; from `Source/Parameters.cpp`)
+### Parameters (29 rows, 29 parameters after loops; from `Source/Parameters.cpp`)
 
 `{n}` = index or name filled in by a loop; `x` = loop condition or repeat count.
 
@@ -61,6 +62,8 @@ Read `design/INDEX.md` first. This file has two parts:
 | effort | float | Effort | lo..hi | 0.5 |  |
 | formantTune | float | Tuning | lo..hi | 0 |  |
 | engine | choice | Engine | engineNames() | 0 |  |
+| voice | choice | Voice | voiceNames() | 0 |  |
+| formant | float | Formant | lo..hi | 0.5 |  |
 
 ### Source map
 
@@ -93,11 +96,11 @@ Read `design/INDEX.md` first. This file has two parts:
 | `Source/DSP/Phonetics/Syllables.{h,cpp}` | English syllabification (maximal onset). [SyllableParts] |
 | `Source/DSP/Phonetics/Types.h` | [Segment, PlannedSegment, Syllable, Phrase] |
 | `Source/DSP/Physics.h` | CGS constants and wall parameters, ported from CHIMERA (MIT, Copyright 2026 Jameson Hodge). [WallParams] |
-| `Source/DSP/ProvenVoice.{h,cpp}` | Pre-rendered cache for embedded third-party voices (espeak-ng, Piper+WORLD). [ProvenStats, ProvenClip, ProvenCache, ProvenEngine] |
+| `Source/DSP/ProvenVoice.{h,cpp}` | Pre-rendered cache for embedded third-party voices (espeak-ng, Piper+WORLD). [ProvenStats, WorldFeatures, ProvenClip, ProvenPlay, ...] |
 | `Source/DSP/ThroatEngine.{h,cpp}` | Monophonic / legato instrument wrapper around HumanVoice. [ThroatSettings, ThroatEngine, AudioCallbackScope] |
 | `Source/DSP/Vowels.{h,cpp}` | inverse-distance blend of the three nearest vowels [VowelDef] |
 | `Source/Parameters.{h,cpp}` | Choice 0 is the vowel pad; 1..N_VOWELS are the named vowels. |
-| `Source/PluginEditor.{h,cpp}` | One-page editor (design/dooblr-design-system.md): a 60 px header (title, version, undo / redo, presets,... [DooblrThroatEditor] |
+| `Source/PluginEditor.{h,cpp}` | Editor (design/dooblr-design-system.md): a 60 px header (title, version, undo / redo, presets, output) and... [DooblrThroatEditor] |
 | `Source/PluginProcessor.{h,cpp}` | Apply body-mix changes (may allocate). [DooblrThroatProcessor] |
 | `Source/Presets.{h,cpp}` | [Factory] |
 | `Source/UI/ControlPanel.{h,cpp}` | A titled group of parameter controls laid out left to right (wrapping): rotary knobs, pill toggles and... [ControlPanel, Spec, Item, SegmentedToggle] |
@@ -198,5 +201,5 @@ Read `design/INDEX.md` first. This file has two parts:
 
 ### Tests
 
-- `Tests/ThroatTests.cpp` (22): Metadata, Silence, NoteSoundsAndPitch, HigherNotePitch, ReleaseToSilence, Presets, Editor, NoChimeraName, ParamExtremesAndMidi, SampleRatesAndBlockSizes, StressAutomationAndBodySwap, GraphemeToPhoneme, SingSyllableAdvance, SpeakRendersFinite, PhraseStateRoundTrip, EditTextWhileNotesPlay, WriteHelloWavAndScreenshot, FunkG2PAndDiction, EditorLayoutNoClipOrOverlap, CoarticulationAndTargetApproximation, WriteDictionWavs, WriteAbAndHeldWavs
+- `Tests/ThroatTests.cpp` (24): Metadata, Silence, NoteSoundsAndPitch, HigherNotePitch, ReleaseToSilence, Presets, Editor, NoChimeraName, ParamExtremesAndMidi, SampleRatesAndBlockSizes, StressAutomationAndBodySwap, GraphemeToPhoneme, SingSyllableAdvance, SpeakRendersFinite, PhraseStateRoundTrip, EditTextWhileNotesPlay, WriteHelloWavAndScreenshot, FunkG2PAndDiction, EditorLayoutNoClipOrOverlap, CoarticulationAndTargetApproximation, WriteDictionWavs, WriteAbAndHeldWavs, NaturalTargetF0DurationAndHold, NaturalTargetF0DurationAndHold
 <!-- END AUTO-GENERATED -->
