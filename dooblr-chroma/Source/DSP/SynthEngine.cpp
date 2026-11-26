@@ -197,6 +197,9 @@ namespace dooblrchroma::dsp
         envTime = 0;
         malletPhase = 1.0f;
         age = 0;
+        dampGain = 1.0f;
+        declick = 0;
+        lastOut = 0;
         for (auto& layer : layers)
             for (auto& u : layer.unisons)
             {
@@ -444,6 +447,9 @@ namespace dooblrchroma::dsp
 
         const bool wasActive = slot->active;
         const bool retrigger = wasActive && slot->note == note;
+        // Keep any leftover output and fade it out over ~2 ms so a steal or
+        // retrigger does not hard-cut a ringing tail (or a previous fade).
+        const float leftover = wasActive ? slot->lastOut : 0.0f;
         slot->active = true;
         slot->gate = true;
         slot->note = note;
@@ -461,8 +467,14 @@ namespace dooblrchroma::dsp
         slot->malletPhase = 0.0f;
         const float stiff = std::clamp (settings.malletStiffness, 0.0f, 1.0f);
         slot->malletDur = 0.00032f + (1.0f - stiff) * 0.0075f;
+        slot->malletColor.reset();
+        slot->noiseLp.reset();
+        slot->noiseHp.reset();
         slot->malletColor.setHighpass (settings.malletColor, 0.7f, (float) sampleRate);
         slot->lfoPhase = 0;
+        slot->dampGain = 1.0f;
+        slot->declick = leftover;
+        slot->lastOut = leftover;
         slot->rng.setSeedRandomly();
         for (int li = 0; li < 2; ++li)
             for (int ri = 0; ri < 2; ++ri)
@@ -663,7 +675,9 @@ namespace dooblrchroma::dsp
                 mallet = 0.5f * (1.0f - std::cos (2.0f * kPi * t)) * (1.0f - t);
                 if (s.malletNoise > 1.0e-5f)
                 {
-                    const float n = (v.rng.nextFloat() * 2.0f - 1.0f) * s.malletNoise * (1.0f - t);
+                    // Window the noise with the same Hann * decay as the pulse so the
+                    // first (and last) sample is 0. A bare (1-t) step at t=0 was a click.
+                    const float n = (v.rng.nextFloat() * 2.0f - 1.0f) * s.malletNoise * mallet;
                     mallet += v.malletColor.process (n);
                 }
                 v.malletPhase += 1.0f / malletWidth;
@@ -788,39 +802,46 @@ namespace dooblrchroma::dsp
                 res += layerOut * ls.level * invUnison * stackNorm;
             }
 
-            // On release, shorten resonator decay by ramping a damper gain toward 0
-            // according to release * decay. Implemented as a post gain on the residual:
-            // the modal r already uses full decay; we also fade the voice when released
-            // if all envelopes are done. Modal rings for decay * release afterwards.
             float out = res + excitation * directAmt;
 
-            // Damper: after note-off, scale by an exponential with time constant release*decay.
+            // Release damper: multiply by a gain that starts at 1 and decays smoothly
+            // (never a step). Time constant is resonator Release * Decay, at least 2 ms.
             if (! v.gate)
             {
-                const float rel = std::max (0.02f, s.layers[0].a.release) * std::max (0.05f, s.layers[0].a.decay);
-                const float damp = std::exp (-1.0f / (rel * sr));
-                // Apply a one-pole fade on the voice's residual by leaking env already;
-                // also shrink modal gains slowly by leaking the output.
-                out *= std::max (v.env, 0.15f) + 0.85f; // keep most of the ring, env handles noise
-                juce::ignoreUnused (damp);
+                const float rel = std::max (0.02f, s.layers[0].a.release)
+                                * std::max (0.05f, s.layers[0].a.decay);
+                const float tau = std::max (0.002f, rel);
+                v.dampGain *= std::exp (-1.0f / (tau * sr));
+                out *= v.dampGain;
             }
 
+            // ~2 ms fade of a stolen / retriggered tail, added after the new attack
+            // so the leftover level falls to zero without a hard cut.
+            if (v.declick != 0.0f)
+            {
+                out += v.declick;
+                v.declick *= std::exp (-1.0f / (0.002f * sr));
+                if (std::abs (v.declick) < 1.0e-6f)
+                    v.declick = 0.0f;
+            }
+
+            v.lastOut = flush (out);
             left[start + i]  += out;
             right[start + i] += out;
         }
 
         v.age += num;
 
-        // Voice off when silent and released and mallet done and env idle.
-        if (! v.gate && v.envStage == 0 && v.malletPhase >= 1.0f && v.age > (int) (0.05 * sampleRate))
+        // Voice ends only after the output has decayed below ~-90 dB, and never
+        // by hard-cutting a still-audible tail.
+        constexpr float kSilence = 3.16227766e-5f; // 10^(-90/20)
+        if (! v.gate && v.envStage == 0 && v.malletPhase >= 1.0f && v.age > (int) (0.05 * sampleRate)
+            && std::abs (v.lastOut) < kSilence && std::abs (v.declick) < kSilence)
         {
-            float energy = 0;
-            for (auto& layer : v.layers)
-                for (int u = 0; u < layer.unisonUsed; ++u)
-                    energy += std::abs (layer.unisons[(size_t) u].a.lastVel)
-                            + std::abs (layer.unisons[(size_t) u].b.lastVel);
-            if (energy < 1.0e-5f)
-                v.active = false;
+            v.active = false;
+            v.lastOut = 0;
+            v.declick = 0;
+            v.dampGain = 0;
         }
     }
 

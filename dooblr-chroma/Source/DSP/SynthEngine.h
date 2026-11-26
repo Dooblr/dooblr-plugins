@@ -156,6 +156,9 @@ namespace dooblrchroma::dsp
             juce::Random rng { 1 };
             Biquad malletColor;
             Biquad noiseLp, noiseHp;
+            float dampGain = 1.0f;   // smoothed release damper, starts at 1
+            float declick = 0;       // residual from a steal / retrigger fade
+            float lastOut = 0;
 
             void reset();
         };

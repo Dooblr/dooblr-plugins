@@ -52,6 +52,16 @@ Read `design/INDEX.md` first. This file has two parts:
 - **Presets**: 40 compiled-in factory programs, grouped in the menu as Mallets, Plucked,
   Struck, Winds, Bowed, Keys, Pads and FX (Init first). User presets use
   `common/PresetPaths` (`~/Library/Audio/Presets/dooblr/dooblr-chroma/`, `.dchroma`).
+- **Clicks**: a bare `(1-t)` on mallet noise started at full amplitude on the first sample
+  (the Hann pulse itself correctly started at 0), which was a click at every mallet attack.
+  Note-off applied `out *= max(env, 0.15) + 0.85` — always ≥ 1, and as much as 1.85× if the
+  noise envelope was still high — a step discontinuity at every typical-length release.
+  Mallet noise now uses the same Hann window as the pulse. Release uses a smoothed damper
+  that starts at 1 and decays with time constant Release × Decay (minimum 2 ms). A ~2 ms
+  residual fade covers steal and retrigger so a ringing tail is not hard-cut. Voices end
+  only after the output has dropped below about -90 dBFS.
+- **0.1.3**: click-free note-on / note-off (windowed mallet noise, smoothed release damper,
+  steal/retrigger fade).
 - **0.1.2**: gain staging (energy-normalized modal banks, output soft-clip) and 30 additional
   factory presets (40 total).
 - **0.1.1**: layout pass only — object-first Main page, Advanced detail page, readable knobs, hide-not-dim for inapplicable controls.
@@ -63,9 +73,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrChroma`, product "dooblr-chroma", code Dbch)
-- Version: 0.1.2
+- Version: 0.1.3
 - Last source change: 2026-11-26
-- Source tree: `e526025f7bc8` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chroma`)
+- Source tree: `321559b81125` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chroma`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-chroma/scripts/build.sh` (build dir `~/dooblr-build/chroma-build`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrChromaTests` (Tests/CMakeLists.txt)
@@ -227,7 +237,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | file | role |
 |---|---|
 | `CMakeLists.txt` | CMake build: DooblrChroma |
-| `README.md` | Readme: dooblr-chroma 0.1.2 |
+| `README.md` | Readme: dooblr-chroma 0.1.3 |
 | `Source/DSP/Biquad.h` | A reusable, non-nested transposes-form-II biquad. [Biquad] |
 | `Source/DSP/Modes.{h,cpp}` | Concert-pitch C4 used as the resonator reference when Pitch is 0.00. |
 | `Source/DSP/SynthEngine.{h,cpp}` | Continuous noise has much higher RMS than a short mallet pulse through (x-x1). [ResonatorSettings, LayerSettings, Settings, SynthEngine, ...] |
@@ -259,5 +269,5 @@ Read `design/INDEX.md` first. This file has two parts:
 
 ### Tests
 
-- `Tests/ChromaTests.cpp` (12): Metadata, Silence, C4, ModalRatios, CouplingStability, NoNanParallelAndFx, PresetRoundTrip, UserPresetFile, MacrosLive, RealtimeAndCpu, GainStaging, Editor
+- `Tests/ChromaTests.cpp` (13): Metadata, Silence, C4, ModalRatios, CouplingStability, NoNanParallelAndFx, PresetRoundTrip, UserPresetFile, MacrosLive, RealtimeAndCpu, GainStaging, Editor, ClickFree
 <!-- END AUTO-GENERATED -->

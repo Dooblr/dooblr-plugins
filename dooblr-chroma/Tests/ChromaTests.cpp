@@ -256,7 +256,7 @@ namespace
         check (p->getLatencySamples() == 0, "zero reported latency");
         check (p->getNumPrograms() >= 9, "Init plus at least 8 factory programs");
         check (p->getNumPrograms() >= 40, "40 factory programs (got " + std::to_string (p->getNumPrograms()) + ")");
-        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
+        check (juce::String (JucePlugin_VersionString) == "0.1.3", "version 0.1.3");
         check ((int) p->getParameters().size() > 80, "a full parameter set is published");
     }
 
@@ -838,12 +838,316 @@ namespace
         editor->setSize (1080, 660);
     }
 
+
+    void testClickFree()
+    {
+        constexpr double sr = 48000.0;
+        const int onS = (int) (0.05 * sr);
+
+        auto maxDelta = [] (const std::vector<float>& x, size_t from, size_t to) {
+            to = std::min (to, x.size());
+            if (to <= from + 1) return 0.0f;
+            float m = 0.0f;
+            for (size_t i = from + 1; i < to; ++i)
+                m = std::max (m, std::abs (x[i] - x[i - 1]));
+            return m;
+        };
+        auto jumpAt = [] (const std::vector<float>& x, int sample) {
+            if (sample < 1 || (size_t) sample >= x.size()) return 0.0f;
+            return std::abs (x[(size_t) sample] - x[(size_t) sample - 1]);
+        };
+        auto hfRms = [] (const std::vector<float>& x, size_t from, size_t to, double sampleRate, double fc = 8000.0) {
+            to = std::min (to, x.size());
+            if (to <= from + 1) return 0.0;
+            const float a = (float) std::exp (-2.0 * 3.14159265358979323846 * fc / sampleRate);
+            double acc = 0.0;
+            float y = 0.0f, x1 = x[from];
+            int n = 0;
+            for (size_t i = from + 1; i < to; ++i)
+            {
+                y = a * (y + x[i] - x1);
+                x1 = x[i];
+                acc += (double) y * y;
+                ++n;
+            }
+            return n > 0 ? std::sqrt (acc / (double) n) : 0.0;
+        };
+        auto continuity = [&] (const std::string& label, const std::vector<float>& x, int sample, int preMs) {
+            const int pre = std::max (2, (int) (0.001 * (double) preMs * sr));
+            const int pre0 = std::max (0, sample - pre);
+            const float typ = maxDelta (x, (size_t) pre0, (size_t) std::max (pre0 + 1, sample));
+            const float jump = jumpAt (x, sample);
+            const float ratio = jump / std::max (typ, 1.0e-5f);
+            check (ratio <= 3.0f,
+                   label + " sample-to-sample jump " + fmt (jump, 4) + " is at most 3x the "
+                   + std::to_string (preMs) + " ms before it (typical " + fmt (typ, 4)
+                   + ", ratio " + fmt (ratio, 2) + ")");
+
+            const int win = std::max (2, (int) (0.002 * sr));
+            const double hfPre = hfRms (x, (size_t) pre0, (size_t) std::max (pre0 + 1, sample), sr);
+            const double hfAt = hfRms (x, (size_t) std::max (0, sample - 1),
+                                       (size_t) std::min ((int) x.size(), sample + win), sr);
+            const double hfRatio = hfAt / std::max (hfPre, 1.0e-6);
+            check (hfRatio <= 8.0,
+                   label + " high-frequency energy at the boundary is at most 8x the "
+                   + std::to_string (preMs) + " ms before it (ratio " + fmt (hfRatio, 2) + ")");
+        };
+
+        auto checkOnOff = [&] (const std::string& label, Processor& p, int hold) {
+            const int total = onS + hold + (int) (0.4 * sr);
+            const auto r = render (p, total, { { onS, on (60, 1.0f) }, { onS + hold, off (60) } });
+            check (r.finite(), label + " is finite");
+            check (std::abs (r.left[(size_t) onS]) <= 0.01f
+                       && jumpAt (r.left, onS) <= 0.01f,
+                   label + " starts from silence (x[on]=" + fmt (r.left[(size_t) onS], 5)
+                       + ", jump=" + fmt (jumpAt (r.left, onS), 5) + ")");
+            continuity (label + " note-off", r.left, onS + hold, 5);
+        };
+
+        for (const auto& fac : presets::factory())
+        {
+            {
+                auto p = makeProcessor();
+                presets::apply (p->getState(), fac);
+                checkOnOff (fac.name.toStdString() + " 80 ms", *p, (int) (0.08 * sr));
+            }
+            {
+                auto p = makeProcessor();
+                presets::apply (p->getState(), fac);
+                checkOnOff (fac.name.toStdString() + " 400 ms", *p, (int) (0.4 * sr));
+            }
+        }
+
+        const dsp::ResType types[] = {
+            dsp::ResType::string, dsp::ResType::bar, dsp::ResType::marimba, dsp::ResType::plate,
+            dsp::ResType::drumhead, dsp::ResType::membrane, dsp::ResType::openTube,
+            dsp::ResType::closedTube, dsp::ResType::manual
+        };
+        for (auto type : types)
+        {
+            for (int density = 0; density < 4; ++density)
+            {
+                auto p = makeProcessor();
+                dryScientific (*p);
+                set (*p, id::l1_a_type, (float) (int) type);
+                set (*p, id::l1_a_density, (float) density);
+                const auto label = std::string (dsp::resTypeName (type)) + " density " + std::to_string (density);
+                checkOnOff (label, *p, (int) (0.08 * sr));
+            }
+        }
+
+        // Short and long resonator release on Init.
+        for (float rel : { 0.0f, 0.35f, 1.0f })
+        {
+            auto p = makeProcessor();
+            set (*p, id::l1_a_release, rel);
+            checkOnOff (std::string ("Init release ") + fmt (rel, 2), *p, (int) (0.08 * sr));
+        }
+
+        // Retrigger the same note while it is still ringing.
+        {
+            auto p = makeProcessor();
+            const int rtrig = onS + (int) (0.08 * sr);
+            const int offS = rtrig + (int) (0.3 * sr);
+            const auto r = render (*p, offS + (int) (0.3 * sr),
+                                   { { onS, on (60, 1.0f) }, { rtrig, on (60, 1.0f) }, { offS, off (60) } });
+            check (r.finite(), "retrigger is finite");
+            continuity ("retrigger", r.left, rtrig, 5);
+            continuity ("retrigger note-off", r.left, offS, 5);
+        }
+
+        // Voice steal: more notes than kMaxVoices, overlapping.
+        {
+            auto p = makeProcessor();
+            std::vector<Event> ev;
+            ev.push_back ({ onS, on (48, 1.0f) });
+            const int step = (int) (0.04 * sr);
+            for (int i = 1; i <= 8; ++i)
+                ev.push_back ({ onS + i * step, on (48 + i, 1.0f) });
+            const int stealAt = onS + 8 * step;
+            const int offS = stealAt + (int) (0.3 * sr);
+            ev.push_back ({ offS, off (56) });
+            const auto r = render (*p, offS + (int) (0.3 * sr), ev);
+            check (r.finite(), "steal is finite");
+            continuity ("voice steal", r.left, stealAt, 5);
+            continuity ("steal note-off", r.left, offS, 5);
+        }
+    }
+
+
+    void diagnoseClicks()
+    {
+        auto dbfs = [] (double v) {
+            return v <= 1.0e-12 ? -240.0 : 20.0 * std::log10 (v);
+        };
+        auto maxDelta = [] (const std::vector<float>& x, size_t from, size_t to) {
+            to = std::min (to, x.size());
+            from = std::min (from, to);
+            float m = 0;
+            for (size_t i = from + 1; i < to; ++i)
+                m = std::max (m, std::abs (x[i] - x[i - 1]));
+            return m;
+        };
+        auto maxAbs = [] (const std::vector<float>& x, size_t from, size_t to) {
+            to = std::min (to, x.size());
+            from = std::min (from, to);
+            float m = 0;
+            for (size_t i = from; i < to; ++i)
+                m = std::max (m, std::abs (x[i]));
+            return m;
+        };
+        auto mean = [] (const std::vector<float>& x, size_t from, size_t to) {
+            to = std::min (to, x.size());
+            from = std::min (from, to);
+            if (to <= from) return 0.0;
+            double s = 0;
+            for (size_t i = from; i < to; ++i) s += x[i];
+            return s / (double) (to - from);
+        };
+        // Simple one-pole highpass energy (fc ~ 8 kHz at 48 k) as a click proxy.
+        auto hfRms = [] (const std::vector<float>& x, size_t from, size_t to, double sr, double fc = 8000.0) {
+            to = std::min (to, x.size());
+            from = std::min (from, to);
+            if (to <= from + 1) return 0.0;
+            const float a = (float) std::exp (-2.0 * 3.14159265358979323846 * fc / sr);
+            double acc = 0;
+            float y = 0, x1 = x[from];
+            int n = 0;
+            for (size_t i = from + 1; i < to; ++i)
+            {
+                y = a * (y + x[i] - x1);
+                x1 = x[i];
+                acc += (double) y * y;
+                ++n;
+            }
+            return n > 0 ? std::sqrt (acc / n) : 0.0;
+        };
+        auto dump = [&] (const char* label, const std::vector<float>& x, int onS, int offS, double sr) {
+            const int ms3 = (int) (0.003 * sr);
+            const int ms10 = (int) (0.010 * sr);
+            const int ms20 = (int) (0.020 * sr);
+            const int body0 = onS + (int) (0.080 * sr);
+            const int body1 = onS + (int) (0.200 * sr);
+            const float dOn = maxDelta (x, (size_t) onS, (size_t) onS + ms3);
+            const float dAtt = maxDelta (x, (size_t) onS + ms3, (size_t) onS + ms10);
+            const float dBody = maxDelta (x, (size_t) std::max (0, body0), (size_t) std::max (0, body1));
+            const float dOff = maxDelta (x, (size_t) std::max (0, offS - 2), (size_t) offS + ms3);
+            const float dAft = maxDelta (x, (size_t) offS + ms3, (size_t) offS + ms20);
+            const double hfOn = hfRms (x, (size_t) onS, (size_t) onS + ms3, sr);
+            const double hfBody = hfRms (x, (size_t) std::max (0, body0), (size_t) std::max (0, body1), sr);
+            const double hfOff = hfRms (x, (size_t) std::max (0, offS - 2), (size_t) offS + ms3, sr);
+            std::cout << "  " << label
+                      << "  peak=" << fmt (maxAbs (x, 0, x.size()), 4)
+                      << "  dOn=" << fmt (dOn, 4) << " (" << fmt (dbfs (dOn), 1) << "dB)"
+                      << "  dAtt=" << fmt (dAtt, 4)
+                      << "  dBody=" << fmt (dBody, 4)
+                      << "  dOff=" << fmt (dOff, 4) << " (" << fmt (dbfs (dOff), 1) << "dB)"
+                      << "  dAft=" << fmt (dAft, 4)
+                      << "  hfOn/body=" << fmt (hfBody > 1e-12 ? hfOn / hfBody : 0, 2)
+                      << "  hfOff/body=" << fmt (hfBody > 1e-12 ? hfOff / hfBody : 0, 2)
+                      << "  mean10ms=" << fmt (mean (x, (size_t) onS, (size_t) onS + ms10), 5)
+                      << "  x[on..on+7]=";
+            for (int i = 0; i < 8; ++i)
+                std::cout << " " << fmt (x[(size_t) (onS + i)], 5);
+            std::cout << "  x[off-2..off+6]=";
+            for (int i = -2; i < 7; ++i)
+            {
+                const int s = offS + i;
+                if (s >= 0 && (size_t) s < x.size())
+                    std::cout << " " << fmt (x[(size_t) s], 5);
+            }
+            std::cout << "\n";
+        };
+
+        const double sr = 48000.0;
+        const int hold = (int) (0.4 * sr);
+        const int total = (int) (1.2 * sr);
+        const int onS = (int) (0.05 * sr);
+
+        std::cout << "=== factory, 400 ms note, vel 1, off then ring ===\n";
+        const char* names[] = { "Init", "Marimba", "Plucked String", "Bass Drum", "Open Pipe",
+                                "Noise Pad", "Thin Cymbal", "Bowed Bar", "Bottle" };
+        for (auto* name : names)
+        {
+            auto* fac = findFactory (name);
+            if (fac == nullptr) { std::cout << "  missing " << name << "\n"; continue; }
+            auto p = makeProcessor();
+            presets::apply (p->getState(), *fac);
+            const auto r = render (*p, total, { { onS, on (60, 1.0f) }, { onS + hold, off (60) } });
+            dump (name, r.left, onS, onS + hold, sr);
+        }
+
+        std::cout << "=== short 80 ms Init note (env still in hold at off) ===\n";
+        {
+            auto p = makeProcessor();
+            const auto r = render (*p, total, { { onS, on (60, 1.0f) }, { onS + (int) (0.08 * sr), off (60) } });
+            dump ("Init-80ms", r.left, onS, onS + (int) (0.08 * sr), sr);
+        }
+
+        std::cout << "=== dry types, 400 ms ===\n";
+        for (auto type : { dsp::ResType::string, dsp::ResType::bar, dsp::ResType::plate,
+                           dsp::ResType::drumhead, dsp::ResType::openTube, dsp::ResType::closedTube })
+        {
+            auto p = makeProcessor();
+            dryScientific (*p);
+            set (*p, id::l1_a_type, (float) (int) type);
+            set (*p, id::l1_a_density, 1.0f);
+            const auto r = render (*p, total, { { onS, on (60, 1.0f) }, { onS + hold, off (60) } });
+            dump (dsp::resTypeName (type), r.left, onS, onS + hold, sr);
+        }
+
+        std::cout << "=== Init retrigger (same note at 200 ms, no off) ===\n";
+        {
+            auto p = makeProcessor();
+            const int rtrig = onS + (int) (0.2 * sr);
+            const auto r = render (*p, total, { { onS, on (60, 1.0f) }, { rtrig, on (60, 1.0f) },
+                                                { onS + hold, off (60) } });
+            dump ("retrigger-2nd", r.left, rtrig, onS + hold, sr);
+        }
+
+        std::cout << "=== steal (8 overlapping notes, last is C4) ===\n";
+        {
+            auto p = makeProcessor();
+            std::vector<Event> ev;
+            ev.push_back ({ onS, on (48, 1.0f) });
+            for (int i = 1; i <= 8; ++i)
+                ev.push_back ({ onS + i * (int) (0.03 * sr), on (48 + i, 1.0f) });
+            const int lastOn = onS + 8 * (int) (0.03 * sr);
+            ev.push_back ({ lastOn + hold, off (56) });
+            const auto r = render (*p, total, ev);
+            dump ("steal", r.left, lastOn, lastOn + hold, sr);
+        }
+
+        std::cout << "=== Init mixDirect=0.3 ===\n";
+        {
+            auto p = makeProcessor();
+            set (*p, id::mixDirect, 0.3f);
+            const auto r = render (*p, total, { { onS, on (60, 1.0f) }, { onS + hold, off (60) } });
+            dump ("direct", r.left, onS, onS + hold, sr);
+        }
+
+        std::cout << "=== Init release=0, decay=0.4 ===\n";
+        {
+            auto p = makeProcessor();
+            set (*p, id::l1_a_release, 0.0f);
+            set (*p, id::l1_a_decay, 0.4f);
+            const auto r = render (*p, total, { { onS, on (60, 1.0f) }, { onS + hold, off (60) } });
+            dump ("short-rel", r.left, onS, onS + hold, sr);
+        }
+    }
+
     struct TestCase { const char* name; std::function<void()> run; };
 }
 
-int main()
+int main (int argc, char** argv)
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
+
+    if (argc > 1 && juce::String (argv[1]) == "click")
+    {
+        diagnoseClicks();
+        return 0;
+    }
 
     const std::vector<TestCase> tests {
         { "metadata",                    testMetadata },
@@ -857,6 +1161,7 @@ int main()
         { "macros are live",             testMacrosLive },
         { "CPU benchmark",               testRealtimeAndCpu },
         { "gain staging",                testGainStaging },
+        { "click-free on/off",           testClickFree },
         { "editor layout",               testEditor },
     };
 

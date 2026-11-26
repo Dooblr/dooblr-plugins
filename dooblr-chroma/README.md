@@ -1,4 +1,4 @@
-# dooblr-chroma 0.1.2
+# dooblr-chroma 0.1.3
 
 A physical-modelling instrument (VST3, MIDI in). Two modal resonators are struck by a mallet and/or a filtered noise source, mixed in parallel or joined through a stable bidirectional coupling. Two layers can play together or be split across the keyboard. A compact master chain (EQ, compressor, distortion, chorus, delay, reverb) and four macros sit at the end.
 
