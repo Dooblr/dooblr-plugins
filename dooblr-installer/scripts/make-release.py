@@ -35,6 +35,7 @@ SUITE = [
     ('dooblr-generate', 'dooblr-generate', 'Text-to-sample generator (instrument)',             'vst3', 'dooblr-generate.vst3', 'dooblr-generate', None),
     ('dooblr-sub',       'dooblr-sub',       'Sub-harmonic generator, tone shift, system check and one-click Fix', 'vst3', 'dooblr-sub.vst3',       'dooblr-sub',       None),
     ('dooblr-rhythm',    'dooblr-rhythm',    'Intelligent virtual percussionist (instrument)',      'vst3', 'dooblr-rhythm.vst3',    'dooblr-rhythm',    None),
+    ('dooblr-chroma',    'dooblr-chroma',    'Physical-modelling resonator instrument',           'vst3', 'dooblr-chroma.vst3',    'dooblr-chroma',    None),
     ('dooblr-chords',   'dooblr-chords',   'Chord progression generator (Max for Live MIDI effect, Ableton Live only)',
                                                                                                     'm4l',  'dooblr-chords',        'dooblr-chords',   None),
     ('dooblr-titan',    'dooblr-titan',    'MIDI clip tightener and variation writer (Max for Live MIDI effect, Ableton Live only)',
