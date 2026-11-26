@@ -74,6 +74,20 @@ feature sets in one original-design instrument. The circuit behaviour follows
 - Tested headlessly: link codec, pairing, loopback session, layout parity; device JSON, cords,
   ES5 syntax, .amxd round trip and a rendered preview. Next: a first run in Live.
 
+## 0.3.5: Main / Advanced editor and Unified / Independent filter
+
+- The VST editor is two tabs: Main (oscillator core, mixer, filter cutoff/resonance/env,
+  Filter Mode, stacked filter and amp ADSR with mini graphs, Glide) and Advanced (pulse width,
+  sync, Lo Freq/Key, filter model/drive/key track, HPF, envelope velocity and Sync to Amp,
+  all Poly-Mod and LFO, voices/unison/vintage, performance, Echo and Reverb).
+- New append-only `filterMode` parameter, default Independent (per-voice, the 0.3.3 sound).
+  Unified is one shared filter on the summed voices; its envelope is last-note retrigger,
+  release when no gates remain; mid-note switches crossfade in ~5 ms.
+- Inapplicable VST controls are hidden. Parameter IDs otherwise unchanged.
+  Max for Live panel unchanged (`layout::pages()` still Sound / Modulation / Voices / FX).
+- Tested at 940×600, 1080×660 and 2400×1400, including Unified vs Independent stability,
+  sum-processing (driven intermod) and click-free mid-note switching.
+
 ## 0.3.3: tab bar polish
 
 - Tab buttons keep the same width on every page (they no longer stretch on FX, which has no

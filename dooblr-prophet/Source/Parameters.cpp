@@ -206,6 +206,10 @@ namespace dooblrprophet::params
             addPercent (layout, id::reverbTone, "Reverb Tone", verb.tone);
         }
 
+        // Added in 0.3.5: append-only. Independent is the historical per-voice filter.
+        layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::filterMode), "Filter Mode",
+                                                                  filterModeNames(), 0));
+
         return layout;
     }
 

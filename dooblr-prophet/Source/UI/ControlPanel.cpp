@@ -200,7 +200,7 @@ namespace dooblrprophet::ui
 
     std::vector<juce::Rectangle<int>> ControlPanel::layoutCells (int width, std::vector<std::pair<int, juce::Rectangle<int>>>* slots) const
     {
-        constexpr int gap = 6, minKnobWidth = 56, stackCol = 70;
+        constexpr int gap = 6, stackCol = 70;
 
         // Units of the flow: each shown unslotted item, and each slot (always, shown or not).
         struct Unit { bool knob = true; int width = 0; int slot = -1; int stack = -1; juce::Rectangle<int> bounds; };

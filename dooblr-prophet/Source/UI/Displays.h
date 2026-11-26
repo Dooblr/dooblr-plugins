@@ -154,9 +154,11 @@ namespace dooblrprophet::ui
     class EnvelopeDisplay final : public GraphView
     {
     public:
-        explicit EnvelopeDisplay (SettingsSource source);
+        enum class Which { both, filter, amp };
+
+        explicit EnvelopeDisplay (SettingsSource source, Which which = Which::both);
         /** The time span shown (attack + decay + a sustain hold + release, of the longer one). */
-        static float spanSeconds (const dsp::Settings& s) noexcept;
+        static float spanSeconds (const dsp::Settings& s, Which which = Which::both) noexcept;
 
     private:
         void drawBackground (juce::Graphics& g, juce::Rectangle<float> plot) override;
@@ -165,6 +167,7 @@ namespace dooblrprophet::ui
         bool changed (const dsp::Settings& a, const dsp::Settings& b) const override;
         void trace (juce::Path& path, const dsp::EnvSettings& env, juce::Rectangle<float> plot, float span, float hold) const;
         juce::Path filterPath, ampPath;
+        Which which = Which::both;
     };
 
     /** Modulation page: the LFO wave (two cycles) and how much of it is applied now. */

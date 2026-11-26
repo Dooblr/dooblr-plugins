@@ -455,6 +455,7 @@ namespace
             { id::reverbMix, { { id::reverbOn, 1.0f } } },
             { id::reverbSize, { { id::reverbOn, 1.0f } } },
             { id::reverbTone, { { id::reverbOn, 1.0f } } },
+            { id::filterMode, { { id::lpfDrive, 1.0f }, { id::lpfReso, 0.85f }, { id::lpfCutoff, 800.0f }, { id::vintage, 0.0f } } },
         };
 
         // Mod wheel up, a chord with mixed velocities, then bend, pressure and a legato note.
@@ -788,12 +789,10 @@ namespace
                            sizeLabel + "header items do not overlap: " + header[i]->getComponentID().toStdString() + " / " + header[j]->getComponentID().toStdString());
             }
 
-            check (Editor::numPages == 4, sizeLabel + "four tabs");
-            check (std::string (Editor::pageName (Editor::soundPage)) == "Sound"
-                       && std::string (Editor::pageName (Editor::modulationPage)) == "Modulation"
-                       && std::string (Editor::pageName (Editor::voicesPage)) == "Voices"
-                       && std::string (Editor::pageName (Editor::fxPage)) == "FX",
-                   sizeLabel + "tabs are Sound, Modulation, Voices, FX");
+            check (Editor::numPages == 2, sizeLabel + "two tabs");
+            check (std::string (Editor::pageName (Editor::mainPage)) == "Main"
+                       && std::string (Editor::pageName (Editor::advancedPage)) == "Advanced",
+                   sizeLabel + "tabs are Main, Advanced");
 
             for (int page = 0; page < Editor::numPages; ++page)
             {
@@ -805,7 +804,13 @@ namespace
                 for (auto& graph : editor->getGraphs (page))
                 {
                     blocks.push_back (graph->getBounds());
-                    check (graph->getHeight() >= 120, label + "graph at least 120 px (" + std::to_string (graph->getHeight()) + ")");
+                    const auto id = graph->getComponentID();
+                    const bool mini = id == "graph_fenv" || id == "graph_aenv";
+                    // 940x600 gives leftover to the strip after the stacked ADSR rows; 100 px still reads.
+                    const int minH = mini ? 80 : (size.x <= 940 ? 100 : 120);
+                    check (graph->getHeight() >= minH, label + (mini ? "envelope mini-graph at least 80 px (" : "graph at least "
+                                                           + std::to_string (minH) + " px (")
+                                                           + std::to_string (graph->getHeight()) + ")");
                 }
                 for (auto& panel : editor->getPanels (page))
                 {
@@ -835,15 +840,15 @@ namespace
                 }
             }
 
-            // Tab buttons keep the same width on every page (FX has no mode switch, so they used
-            // to stretch). Status sits in the leftover gap: one line, never overlapping tabs or switches.
-            editor->selectPage (Editor::soundPage);
+            // Tab buttons keep the same width on every page (Advanced has more mode switches).
+            // Status sits in the leftover gap: one line, never overlapping tabs or switches.
+            editor->selectPage (Editor::mainPage);
             std::array<int, Editor::numPages> tabWidths {};
             for (int i = 0; i < Editor::numPages; ++i)
             {
                 auto* tab = editor->findChildWithID ("page_" + juce::String (Editor::pageName (i)));
                 tabWidths[(size_t) i] = tab != nullptr ? tab->getWidth() : 0;
-                check (tabWidths[(size_t) i] >= 84 && tabWidths[(size_t) i] <= 108,
+                check (tabWidths[(size_t) i] >= 84 && tabWidths[(size_t) i] <= 112,
                        sizeLabel + "tab width capped: " + Editor::pageName (i)
                            + " (" + std::to_string (tabWidths[(size_t) i]) + ")");
             }
@@ -856,7 +861,7 @@ namespace
                 {
                     auto* tab = editor->findChildWithID ("page_" + juce::String (Editor::pageName (i)));
                     check (tab != nullptr && tab->getWidth() == tabWidths[(size_t) i],
-                           label + "tab width matches Sound: " + Editor::pageName (i)
+                           label + "tab width matches Main: " + Editor::pageName (i)
                                + " (" + std::to_string (tab != nullptr ? tab->getWidth() : 0)
                                + " vs " + std::to_string (tabWidths[(size_t) i]) + ")");
                     for (auto& t : editor->getModeToggles (page))
@@ -875,36 +880,112 @@ namespace
                                label + "status does not overlap mode switch");
                 }
             }
-            editor->selectPage (Editor::soundPage);
+            editor->selectPage (Editor::mainPage);
             check (editor->getStatusText() == "2x oversampled" || editor->getStatusText() == "4x Poly-Mod FM",
-                   sizeLabel + "Sound status is the oversampling line (" + editor->getStatusText().toStdString() + ")");
+                   sizeLabel + "Main status is the oversampling line (" + editor->getStatusText().toStdString() + ")");
             check (! editor->getStatusText().containsIgnoreCase ("ladder"),
-                   sizeLabel + "Sound status does not repeat the ladder model");
+                   sizeLabel + "Main status does not repeat the ladder model");
         }
 
         editor->setSize (1080, 660);
+        editor->selectPage (Editor::mainPage);
+        editor->updateEnablement();
 
-        // Dimming: ignored controls follow the modes.
-        const auto enabled = [&] (int page, const char* pid)
+        // Filter and amp ADSR are stacked, A/D/S/R columns aligned; mini graphs sit in each row.
+        {
+            ui::ControlPanel *filterEnv = nullptr, *ampEnv = nullptr;
+            for (auto& panel : editor->getPanels (Editor::mainPage))
+            {
+                if (panel->getTitle() == "FILTER ENVELOPE") filterEnv = panel.get();
+                if (panel->getTitle() == "AMP ENVELOPE") ampEnv = panel.get();
+            }
+            check (filterEnv != nullptr && ampEnv != nullptr, "Main has stacked Filter and Amp envelope panels");
+            if (filterEnv != nullptr && ampEnv != nullptr)
+            {
+                check (filterEnv->getBounds().getY() < ampEnv->getBounds().getY(), "Filter envelope sits above Amp envelope");
+                const char* fids[] { id::fenvAttack, id::fenvDecay, id::fenvSustain, id::fenvRelease };
+                const char* aids[] { id::aenvAttack, id::aenvDecay, id::aenvSustain, id::aenvRelease };
+                for (int i = 0; i < 4; ++i)
+                {
+                    auto* f = filterEnv->findControl (fids[i]);
+                    auto* a = ampEnv->findControl (aids[i]);
+                    check (f != nullptr && a != nullptr, std::string ("ADSR column present: ") + fids[i]);
+                    if (f == nullptr || a == nullptr) continue;
+                    const auto fx = editor->getLocalPoint (f, f->getBounds().getTopLeft()).x;
+                    const auto ax = editor->getLocalPoint (a, a->getBounds().getTopLeft()).x;
+                    check (std::abs (fx - ax) <= 2, std::string ("ADSR columns aligned: ") + fids[i]
+                                                        + " vs " + aids[i] + " (dx " + std::to_string (fx - ax) + ")");
+                }
+            }
+            bool foundMode = false, foundCutoff = false;
+            for (auto& panel : editor->getPanels (Editor::mainPage))
+                if (panel->getTitle() == "LOW-PASS")
+                {
+                    foundMode = panel->findControl (id::filterMode) != nullptr;
+                    foundCutoff = panel->findControl (id::lpfCutoff) != nullptr;
+                }
+            check (foundMode && foundCutoff, "Filter Mode toggle sits in the Main LOW-PASS panel next to Cutoff");
+            juce::Component *fenvGraph = nullptr, *aenvGraph = nullptr;
+            for (auto& graph : editor->getGraphs (Editor::mainPage))
+            {
+                if (graph->getComponentID() == "graph_fenv") fenvGraph = graph.get();
+                if (graph->getComponentID() == "graph_aenv") aenvGraph = graph.get();
+            }
+            check (fenvGraph != nullptr && aenvGraph != nullptr, "each envelope row has a mini graph");
+            if (fenvGraph != nullptr && filterEnv != nullptr)
+                check (std::abs (fenvGraph->getBounds().getY() - filterEnv->getBounds().getY()) <= 4
+                           && fenvGraph->getBounds().getRight() <= filterEnv->getBounds().getX() + 1,
+                       "filter envelope graph sits in the filter envelope row");
+            if (aenvGraph != nullptr && ampEnv != nullptr)
+                check (std::abs (aenvGraph->getBounds().getY() - ampEnv->getBounds().getY()) <= 4
+                           && aenvGraph->getBounds().getRight() <= ampEnv->getBounds().getX() + 1,
+                       "amp envelope graph sits in the amp envelope row");
+        }
+
+        // Visible knobs stay at least minKnobWidth at every size, including 940x600.
+        for (auto size : { juce::Point<int> (940, 600), juce::Point<int> (1080, 660), juce::Point<int> (2400, 1400) })
+        {
+            editor->setSize (size.x, size.y);
+            const auto sizeLabel = std::to_string (size.x) + "x" + std::to_string (size.y) + " ";
+            for (int page = 0; page < Editor::numPages; ++page)
+            {
+                editor->selectPage (page);
+                editor->updateEnablement();
+                for (auto& panel : editor->getPanels (page))
+                    for (auto* child : panel->getChildren())
+                        if (auto* slider = dynamic_cast<juce::Slider*> (child);
+                            slider != nullptr && slider->isVisible()
+                            && slider->getSliderStyle() == juce::Slider::RotaryHorizontalVerticalDrag)
+                            check (slider->getWidth() >= ui::ControlPanel::minKnobWidth,
+                                   sizeLabel + "knob at least " + std::to_string (ui::ControlPanel::minKnobWidth)
+                                       + " px: " + slider->getComponentID().toStdString()
+                                       + " (" + std::to_string (slider->getWidth()) + ")");
+            }
+        }
+        editor->setSize (1080, 660);
+        editor->selectPage (Editor::mainPage);
+
+        // Inapplicable controls are hidden (same rules the device uses to dim).
+        const auto shown = [&] (int page, const char* pid)
         {
             for (auto& panel : editor->getPanels (page))
-                if (auto* c = panel->findControl (pid)) return ! ui::isDimmed (*c);
+                if (auto* c = panel->findControl (pid)) return c->isVisible();
             return false;
         };
         set (*p, id::osc1Mode, 1.0f);
         editor->updateEnablement();
-        check (! enabled (Editor::oscillatorsPage, id::osc1Shape) && enabled (Editor::oscillatorsPage, id::osc1Saw), "Switched osc 1: Shape dimmed, switches live");
+        check (! shown (Editor::mainPage, id::osc1Shape) && shown (Editor::mainPage, id::osc1Saw), "Switched osc 1: Shape hidden, switches live");
         set (*p, id::osc1Mode, 0.0f);
         editor->updateEnablement();
-        check (enabled (Editor::oscillatorsPage, id::osc1Shape) && ! enabled (Editor::oscillatorsPage, id::osc1Saw), "Variable osc 1: switches dimmed, Shape live");
+        check (shown (Editor::mainPage, id::osc1Shape) && ! shown (Editor::mainPage, id::osc1Saw), "Variable osc 1: switches hidden, Shape live");
         set (*p, id::voiceMode, 1.0f);
         editor->updateEnablement();
-        check (enabled (Editor::voicesPage, id::unisonVoices) && ! enabled (Editor::voicesPage, id::voices)
-                   && ui::isDimmed (editor->getVoicePresetButton (0)) && editor->getVoicePresetButton (0).isEnabled(), "Unison: Unison / Detune live, poly Voices dimmed");
+        check (shown (Editor::advancedPage, id::unisonVoices) && ! shown (Editor::advancedPage, id::voices)
+                   && ! editor->getVoicePresetButton (0).isVisible(), "Unison: Unison / Detune live, poly Voices hidden");
         set (*p, id::voiceMode, 0.0f);
         set (*p, id::lfoSync, 1.0f);
         editor->updateEnablement();
-        check (! enabled (Editor::soundPage, id::lfoRate) && enabled (Editor::modulationPage, id::lfoDivision), "LFO Sync: Rate dimmed, Division live");
+        check (! shown (Editor::advancedPage, id::lfoRate) && shown (Editor::advancedPage, id::lfoDivision), "LFO Sync: Rate hidden, Division live");
         set (*p, id::lfoSync, 0.0f);
         editor->updateEnablement();
 
@@ -954,39 +1035,44 @@ namespace
                 check (graph->getReadout().isEmpty(), std::string ("no readout without hover: ") + Editor::pageName (page)
                                                           + " " + graph->getComponentID().toStdString());
 
-        const auto onSound = [&] (const char* pid)
+        const auto onMain = [&] (const char* pid)
         {
-            for (auto& panel : editor->getPanels (Editor::soundPage))
+            for (auto& panel : editor->getPanels (Editor::mainPage))
                 if (panel->findControl (pid) != nullptr) return true;
             return false;
         };
-        const auto onModulation = [&] (const char* pid)
+        const auto onAdvanced = [&] (const char* pid)
         {
-            for (auto& panel : editor->getPanels (Editor::modulationPage))
+            for (auto& panel : editor->getPanels (Editor::advancedPage))
                 if (panel->findControl (pid) != nullptr) return true;
             return false;
         };
-        check (onSound (id::osc1Shape) && onSound (id::mixOsc1) && onSound (id::lpfCutoff) && onSound (id::hpfCutoff)
-                   && onSound (id::fenvAttack) && onSound (id::aenvAttack) && onSound (id::lfoRate) && onSound (id::lfoWheel)
-                   && onSound (id::pmodFiltEnv) && onSound (id::pmodDestFreq1) && onSound (id::lfoDestFreq1) && onSound (id::lfoDestLpf),
-               "Sound tab holds oscillators, mixer, filter, both envelopes and basic modulation");
-        check (onModulation (id::pmodDestShape1) && onModulation (id::pmodDestFilter) && onModulation (id::lfoDivision)
-                   && onModulation (id::lfoNoiseMix) && onModulation (id::lfoDestShape1) && onModulation (id::lfoDestAmp),
-               "Modulation tab holds extra Poly-Mod and LFO destinations, tempo sync and noise mix");
-        check (! onSound (id::lfoDestAmp) && ! onModulation (id::lfoRate), "basic LFO stays on Sound; extra dests stay on Modulation");
+        check (onMain (id::osc1Shape) && onMain (id::mixOsc1) && onMain (id::lpfCutoff) && onMain (id::filterMode)
+                   && onMain (id::fenvAttack) && onMain (id::aenvAttack) && onMain (id::glide)
+                   && ! onMain (id::hpfCutoff) && ! onMain (id::lfoRate) && ! onMain (id::pmodFiltEnv)
+                   && ! onMain (id::lpfDrive) && ! onMain (id::osc1PW) && ! onMain (id::fenvVelAmt),
+               "Main tab holds oscillators, mixer, filter with Mode, both ADSRs and Glide");
+        check (onAdvanced (id::hpfCutoff) && onAdvanced (id::lpfDrive) && onAdvanced (id::lpfModel) && onAdvanced (id::lpfKeyTrack)
+                   && onAdvanced (id::fenvVelAmt) && onAdvanced (id::fenvSync) && onAdvanced (id::aenvVelAmt)
+                   && onAdvanced (id::pmodFiltEnv) && onAdvanced (id::pmodDestFilter) && onAdvanced (id::lfoRate)
+                   && onAdvanced (id::lfoDivision) && onAdvanced (id::voices) && onAdvanced (id::vintage)
+                   && onAdvanced (id::echoMix) && onAdvanced (id::reverbMix) && onAdvanced (id::osc1PW),
+               "Advanced tab holds deep oscillator, filter, envelope, modulation, voices and FX settings");
+        check (! onAdvanced (id::lpfCutoff) && ! onAdvanced (id::fenvAttack) && ! onAdvanced (id::filterMode) && ! onMain (id::echoOn),
+               "essentials stay on Main; deep settings stay on Advanced");
 
-        editor->selectPage (Editor::soundPage);
-        check (editor->getSelectedPage() == Editor::soundPage, "starts on Sound");
+        editor->selectPage (Editor::mainPage);
+        check (editor->getSelectedPage() == Editor::mainPage, "starts on Main");
         // Button::triggerClick is asynchronous; call onClick like the rest of the suite.
-        auto* modulationTab = dynamic_cast<juce::Button*> (editor->findChildWithID ("page_Modulation"));
-        auto* soundTab = dynamic_cast<juce::Button*> (editor->findChildWithID ("page_Sound"));
-        check (modulationTab != nullptr && soundTab != nullptr, "Sound and Modulation tab buttons exist");
-        if (modulationTab != nullptr)
-            modulationTab->onClick();
-        check (editor->getSelectedPage() == Editor::modulationPage, "Modulation tab switches the page");
-        if (soundTab != nullptr)
-            soundTab->onClick();
-        check (editor->getSelectedPage() == Editor::soundPage, "Sound tab switches back");
+        auto* advancedTab = dynamic_cast<juce::Button*> (editor->findChildWithID ("page_Advanced"));
+        auto* mainTab = dynamic_cast<juce::Button*> (editor->findChildWithID ("page_Main"));
+        check (advancedTab != nullptr && mainTab != nullptr, "Main and Advanced tab buttons exist");
+        if (advancedTab != nullptr)
+            advancedTab->onClick();
+        check (editor->getSelectedPage() == Editor::advancedPage, "Advanced tab switches the page");
+        if (mainTab != nullptr)
+            mainTab->onClick();
+        check (editor->getSelectedPage() == Editor::mainPage, "Main tab switches back");
 
         // The FX snapshot shows both modules on (a ping-pong echo into a hall).
         p->applyFxPreset (0, 2);
@@ -1011,9 +1097,9 @@ namespace
 
         // Hover readout last, so the snapshots show the graphs without one.
         editor->setSize (1080, 660);
-        editor->selectPage (Editor::soundPage);
+        editor->selectPage (Editor::mainPage);
         auto* filterGraph = editor->getFilterDisplay();
-        check (filterGraph != nullptr, "Sound page has the filter graph");
+        check (filterGraph != nullptr, "Main page has the filter graph");
         if (filterGraph != nullptr)
         {
             filterGraph->setHoverPoint (filterGraph->getPlotArea().getCentre());
@@ -1246,6 +1332,146 @@ namespace
         return t;
     }
 
+
+    void testFilterMode()
+    {
+        // Default is Independent (the 0.3.3 per-voice filter) so existing sessions sound the same.
+        {
+            auto p = makeProcessor();
+            check (juce::roundToInt (get (*p, id::filterMode)) == 0, "filterMode defaults to Independent");
+            auto* choice = dynamic_cast<juce::AudioParameterChoice*> (param (*p, id::filterMode));
+            check (choice != nullptr && choice->choices == params::filterModeNames(), "filterMode choices are Independent, Unified");
+        }
+
+        const auto twoNotes = std::vector<Event> { { 0, on (48, 1.0f) }, { 0, on (67, 1.0f) } };
+
+        const auto patch = [] (Processor& p, bool unified, bool driven)
+        {
+            set (p, id::vintage, 0.0f);
+            set (p, id::lpfKeyTrack, 0.0f);
+            set (p, id::lpfEnvAmt, 0.0f);
+            set (p, id::hpfEnvAmt, 0.0f);
+            set (p, id::aenvAttack, 0.001f);
+            set (p, id::aenvSustain, 1.0f);
+            set (p, id::aenvRelease, 0.2f);
+            set (p, id::lfoWheel, 0.0f);
+            set (p, id::lfoInitial, 0.0f);
+            set (p, id::mixOsc2, 0.7f);
+            set (p, id::lpfCutoff, 800.0f);
+            if (driven)
+            {
+                set (p, id::lpfDrive, 1.0f);
+                set (p, id::lpfReso, 0.85f);
+            }
+            else
+            {
+                set (p, id::lpfDrive, 0.0f);
+                set (p, id::lpfReso, 0.0f);
+            }
+            set (p, id::filterMode, unified ? 1.0f : 0.0f);
+        };
+
+        const auto n = (int) defaultRate;
+        const auto relDiff = [] (const Render& a, const Render& b)
+        {
+            double sum = 0.0, level = 0.0;
+            for (size_t i = 0; i < a.left.size(); ++i)
+            {
+                const auto da = (double) a.left[i] - b.left[i];
+                sum += da * da;
+                level += 0.5 * ((double) a.left[i] * a.left[i] + (double) b.left[i] * b.left[i]);
+            }
+            const auto rmsDiff = a.left.empty() ? 0.0 : std::sqrt (sum / (double) a.left.size());
+            const auto rms = a.left.empty() ? 0.0 : std::sqrt (level / (double) a.left.size());
+            return rms > 0.0 ? rmsDiff / rms : rmsDiff;
+        };
+
+        // Both modes stay finite on a driven two-note chord.
+        for (int mode = 0; mode < 2; ++mode)
+        {
+            auto p = makeProcessor();
+            patch (*p, mode == 1, true);
+            const auto r = render (*p, n, twoNotes);
+            const auto label = std::string (mode == 0 ? "Independent" : "Unified") + " driven chord: ";
+            check (r.finite(), label + "no NaN / Inf");
+            check (r.peak() > 0.01f && r.peak() < 6.0f, label + "audible and bounded (peak " + fmt (r.peak(), 3) + ")");
+            check (r.denormals() == 0, label + "no denormal samples");
+        }
+
+        // Linear filters commute with a sum: with drive/reso/key-track/vintage off, the two modes
+        // match. A driven ladder does not, so Unified is really filtering the summed dry voices.
+        {
+            auto linI = makeProcessor(), linU = makeProcessor();
+            patch (*linI, false, false);
+            patch (*linU, true, false);
+            const auto a = render (*linI, n, twoNotes), b = render (*linU, n, twoNotes);
+            const auto linear = relDiff (a, b);
+            check (a.finite() && b.finite(), "linear Independent / Unified both finite");
+            check (linear < 0.12, "linear: Unified matches the sum of Independent voices (rel " + std::to_string (linear) + ")");
+
+            auto drvI = makeProcessor(), drvU = makeProcessor();
+            patch (*drvI, false, true);
+            patch (*drvU, true, true);
+            const auto c = render (*drvI, n, twoNotes), d = render (*drvU, n, twoNotes);
+            const auto driven = relDiff (c, d);
+            check (c.finite() && d.finite(), "driven Independent / Unified both finite");
+            check (driven > 0.05, "driven: Unified differs from the per-voice sum (intermod, rel " + std::to_string (driven) + ")");
+            note ("filterMode linear rel " + std::to_string (linear) + ", driven rel " + std::to_string (driven));
+        }
+
+        // Mid-note switch: a ~5 ms crossfade, no sample-to-sample click.
+        {
+            auto p = makeProcessor();
+            patch (*p, false, true);
+            const int total = n;            // 1 s
+            const int switchAt = n / 2;
+            Render out;
+            out.left.reserve ((size_t) total);
+            out.right.reserve ((size_t) total);
+            juce::AudioBuffer<float> buffer (2, blockSize);
+            juce::MidiBuffer midi;
+            bool switched = false;
+            for (int start = 0; start < total; start += blockSize)
+            {
+                if (! switched && start >= switchAt)
+                {
+                    set (*p, id::filterMode, 1.0f);
+                    switched = true;
+                }
+                const auto m = std::min (blockSize, total - start);
+                buffer.setSize (2, m, false, false, true);
+                buffer.clear();
+                midi.clear();
+                if (start == 0)
+                    midi.addEvent (on (48, 1.0f), 0);
+                if (start == 0)
+                    midi.addEvent (on (67, 1.0f), 0);
+                p->processBlock (buffer, midi);
+                for (int i = 0; i < m; ++i)
+                {
+                    out.left.push_back (buffer.getSample (0, i));
+                    out.right.push_back (buffer.getSample (1, i));
+                }
+            }
+            check (out.finite(), "mid-note switch: finite");
+            const auto maxJump = [] (const std::vector<float>& x, size_t from, size_t to)
+            {
+                float m = 0.0f;
+                to = std::min (to, x.size());
+                from = std::min (from, to);
+                for (size_t i = std::max<size_t> (from, 1); i < to; ++i)
+                    m = std::max (m, std::abs (x[i] - x[i - 1]));
+                return m;
+            };
+            const auto pre = maxJump (out.left, (size_t) (switchAt - (int) (0.1 * defaultRate)), (size_t) switchAt);
+            const auto around = maxJump (out.left, (size_t) switchAt, (size_t) (switchAt + (int) (0.02 * defaultRate)));
+            check (around <= pre * 3.0f + 0.02f, "mid-note switch does not click (jump " + fmt (around, 4)
+                                                     + " vs pre " + fmt (pre, 4) + ")");
+            check (out.peak() > 0.01f, "mid-note switch stays audible");
+            note ("mid-note switch jump " + fmt (around, 4) + " vs pre-switch " + fmt (pre, 4));
+        }
+    }
+
     void testFilterEnvSync()
     {
         struct Adsr { float a, d, s, r; };
@@ -1383,32 +1609,33 @@ namespace
             check (onCount >= 20 && onCount <= 70, "Random syncs the filter env in about 20% of patches (" + std::to_string (onCount) + " of 200)");
         }
 
-        // Editor: the filter ADSR knobs dim while synced; the graph shows the effective envelope.
+        // Editor: the filter ADSR knobs hide while synced; the graph shows the effective envelope.
         {
             auto p = makeProcessor();
             std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
             auto* editor = dynamic_cast<Editor*> (base.get());
-            const auto enabled = [&] (const char* pid)
+            const auto isShown = [&] (const char* pid)
             {
-                for (auto& panel : editor->getPanels (Editor::envelopesPage))
-                    if (auto* c = panel->findControl (pid)) return ! ui::isDimmed (*c);
+                for (int page = 0; page < Editor::numPages; ++page)
+                    for (auto& panel : editor->getPanels (page))
+                        if (auto* c = panel->findControl (pid)) return c->isVisible();
                 return false;
             };
             bool found = false;
-            for (auto& panel : editor->getPanels (Editor::envelopesPage))
-                if (panel->getTitle() == "FILTER ENVELOPE" && panel->findControl (id::fenvSync) != nullptr) found = true;
-            check (found, "Sync to Amp sits in the Filter Envelope panel");
+            for (auto& panel : editor->getPanels (Editor::advancedPage))
+                if (panel->findControl (id::fenvSync) != nullptr) found = true;
+            check (found, "Sync to Amp sits on the Advanced page");
             editor->updateEnablement();
-            check (enabled (id::fenvAttack) && enabled (id::fenvRelease), "sync off: filter ADSR knobs live");
+            check (isShown (id::fenvAttack) && isShown (id::fenvRelease), "sync off: filter ADSR knobs live");
             set (*p, id::fenvSync, 1.0f);
             editor->updateEnablement();
-            check (! enabled (id::fenvAttack) && ! enabled (id::fenvDecay) && ! enabled (id::fenvSustain) && ! enabled (id::fenvRelease)
-                       && enabled (id::fenvVelAmt) && enabled (id::fenvSync) && enabled (id::aenvAttack),
-                   "sync on: filter Attack/Decay/Sustain/Release dimmed, Velocity and the amp ADSR live");
+            check (! isShown (id::fenvAttack) && ! isShown (id::fenvDecay) && ! isShown (id::fenvSustain) && ! isShown (id::fenvRelease)
+                       && isShown (id::fenvVelAmt) && isShown (id::fenvSync) && isShown (id::aenvAttack),
+                   "sync on: filter Attack/Decay/Sustain/Release hidden, Velocity and the amp ADSR live");
             editor->setSize (1080, 660);
-            editor->selectPage (Editor::soundPage);
+            editor->selectPage (Editor::mainPage);
             auto* envGraph = editor->getEnvelopeDisplay();
-            check (envGraph != nullptr, "Sound page has the envelope graph");
+            check (envGraph != nullptr, "Main page has the filter envelope graph");
             if (envGraph == nullptr) return;
             auto& graph = *envGraph;
             graph.refresh();
@@ -1428,7 +1655,7 @@ namespace
             set (*p, id::fenvSync, 0.0f);
             editor->updateEnablement();
             graph.refresh();
-            check (enabled (id::fenvAttack) && std::abs (graph.getShownSettings().effectiveFilterEnv().release - get (*p, id::fenvRelease)) < 1.0e-6f,
+            check (isShown (id::fenvAttack) && std::abs (graph.getShownSettings().effectiveFilterEnv().release - get (*p, id::fenvRelease)) < 1.0e-6f,
                    "sync off: knobs live again and the graph shows the filter's own envelope");
         }
     }
@@ -1621,7 +1848,7 @@ namespace
                         }
                         else if (auto* preset = dynamic_cast<juce::TextButton*> (c); preset != nullptr && c->getComponentID().startsWith ("voicesPreset"))
                         {
-                            // The 5 / 6 / 10 voice buttons: dimmed outside Poly, still clickable.
+                            // The 5 / 6 / 10 voice buttons (hidden outside Poly; only visible ones are swept).
                             ++buttons;
                             const auto count = c->getComponentID().fromFirstOccurrenceOf ("voicesPreset", false, false).getIntValue();
                             const auto before = get (*p, id::voices);
@@ -1681,9 +1908,9 @@ namespace
                 }
 
                 check (hitsOk == hits, label + "every button, switch, knob and box is under the pointer at its centre (" + std::to_string (hitsOk) + " of " + std::to_string (hits) + ")");
-                check (buttons > 0 && buttonsOk == buttons, label + "every parameter toggle and page button clicks, dimmed or not (" + std::to_string (buttonsOk) + " of " + std::to_string (buttons) + ")");
+                check (buttons > 0 && buttonsOk == buttons, label + "every visible parameter toggle and page button clicks (" + std::to_string (buttonsOk) + " of " + std::to_string (buttons) + ")");
                 check (segments > 0 && segmentsOk == segments, label + "every mode switch segment clicks (" + std::to_string (segmentsOk) + " of " + std::to_string (segments) + ")");
-                check (knobs > 0 && knobsOk == knobs, label + "every knob drags, dimmed or not (" + std::to_string (knobsOk) + " of " + std::to_string (knobs) + ")");
+                check (knobs > 0 && knobsOk == knobs, label + "every visible knob drags (" + std::to_string (knobsOk) + " of " + std::to_string (knobs) + ")");
                 note (label + std::to_string (hitsOk) + "/" + std::to_string (hits) + " hit-tests, " + std::to_string (buttonsOk) + "/" + std::to_string (buttons)
                       + " buttons, " + std::to_string (segmentsOk) + "/" + std::to_string (segments) + " switch segments, " + std::to_string (knobsOk) + "/" + std::to_string (knobs) + " knobs");
                 for (const auto& f : failures)
@@ -1691,7 +1918,8 @@ namespace
             }
         }
 
-        // The reported case, explicitly: Variable mode (the default), Oscillators page, both oscillators.
+        // Variable mode hides the inapplicable wave switches; they appear and click in Switched.
+        // Osc 1 Sync lives on Advanced and stays clickable.
         {
             auto p = makeProcessor();
             std::unique_ptr<juce::AudioProcessorEditor> base (p->createEditor());
@@ -1699,17 +1927,37 @@ namespace
             editor->setSize (1080, 660);
             TestWindow window (*editor);
             PeerMouse mouse { *window.getPeer() };
-            editor->selectPage (Editor::oscillatorsPage);
+            editor->selectPage (Editor::mainPage);
             editor->updateEnablement();
-            for (auto* pid : { id::osc1Tri, id::osc1Pulse, id::osc1Sync, id::osc2Tri, id::osc2Pulse })
+            for (auto* pid : { id::osc1Tri, id::osc1Pulse, id::osc2Tri, id::osc2Pulse })
             {
                 juce::Component* c = nullptr;
-                for (auto& panel : editor->getPanels (Editor::oscillatorsPage))
+                for (auto& panel : editor->getPanels (Editor::mainPage))
                     if (auto* f = panel->findControl (pid)) c = f;
+                check (c != nullptr && ! c->isVisible(), juce::String ("Variable mode hides ").toStdString() + pid);
+            }
+            set (*p, id::osc1Mode, 1.0f);
+            set (*p, id::osc2Mode, 1.0f);
+            editor->updateEnablement();
+            for (auto* pid : { id::osc1Tri, id::osc1Pulse, id::osc2Tri, id::osc2Pulse })
+            {
+                juce::Component* c = nullptr;
+                for (auto& panel : editor->getPanels (Editor::mainPage))
+                    if (auto* f = panel->findControl (pid)) c = f;
+                check (c != nullptr && c->isVisible(), juce::String ("Switched mode shows ").toStdString() + pid);
                 const auto before = get (*p, pid);
                 mouse.click (editor->getLocalPoint (c, c->getLocalBounds().getCentre()).toFloat());
-                check (! juce::exactlyEqual (get (*p, pid), before), juce::String ("Variable mode: clicking ").toStdString() + pid + " selects it");
+                check (! juce::exactlyEqual (get (*p, pid), before), juce::String ("Switched mode: clicking ").toStdString() + pid + " selects it");
             }
+            editor->selectPage (Editor::advancedPage);
+            editor->updateEnablement();
+            juce::Component* sync = nullptr;
+            for (auto& panel : editor->getPanels (Editor::advancedPage))
+                if (auto* f = panel->findControl (id::osc1Sync)) sync = f;
+            check (sync != nullptr && sync->isVisible(), "Osc 1 Sync is on Advanced and visible");
+            const auto before = get (*p, id::osc1Sync);
+            mouse.click (editor->getLocalPoint (sync, sync->getLocalBounds().getCentre()).toFloat());
+            check (! juce::exactlyEqual (get (*p, id::osc1Sync), before), "clicking Osc 1 Sync selects it");
         }
     }
 
@@ -2488,7 +2736,8 @@ namespace
 
     void testLinkLayoutParity()
     {
-        // The editor builds from the same layout the device gets, and both dim the same controls.
+        // The Max for Live layout (pages()) is unchanged. The VST editor uses editorPages()
+        // (Main / Advanced) but still hosts every device control, and hides the IDs the device dims.
         auto p = makeProcessor();
         auto editor = std::unique_ptr<juce::AudioProcessorEditor> (p->createEditorIfNeeded());
         auto* e = dynamic_cast<Editor*> (editor.get());
@@ -2496,24 +2745,34 @@ namespace
         if (e == nullptr)
             return;
 
-        const auto& pages = layout::pages();
-        int missing = 0, total = 0;
-        for (int page = 0; page < (int) pages.size(); ++page)
+        const auto& devicePages = layout::pages();
+        check ((int) devicePages.size() == 4
+                   && juce::String (devicePages[0].name) == "Sound"
+                   && juce::String (devicePages[1].name) == "Modulation"
+                   && juce::String (devicePages[2].name) == "Voices"
+                   && juce::String (devicePages[3].name) == "FX",
+               "device layout stays Sound, Modulation, Voices, FX");
+
+        const auto findInEditor = [&] (const char* pid) -> juce::Component*
         {
-            const auto& panels = e->getPanels (page);
-            check (panels.size() == pages[(size_t) page].panels.size(), "panel count, page " + std::to_string (page));
-            for (size_t i = 0; i < panels.size() && i < pages[(size_t) page].panels.size(); ++i)
-            {
-                check (panels[i]->getTitle() == pages[(size_t) page].panels[i].title, std::string ("panel title ") + pages[(size_t) page].panels[i].title);
-                for (const auto& c : pages[(size_t) page].panels[i].controls)
+            for (int page = 0; page < Editor::numPages; ++page)
+                for (auto& panel : e->getPanels (page))
+                    if (auto* c = panel->findControl (pid))
+                        return c;
+            return nullptr;
+        };
+
+        int missing = 0, total = 0;
+        for (const auto& page : devicePages)
+            for (const auto& panel : page.panels)
+                for (const auto& c : panel.controls)
                 {
                     ++total;
-                    if (panels[i]->findControl (c.id) == nullptr)
+                    if (findInEditor (c.id) == nullptr)
                         ++missing;
                 }
-            }
-        }
-        check (missing == 0, "every layout control is in the editor (" + std::to_string (total) + ")");
+        check (missing == 0, "every device layout control is in the editor (" + std::to_string (total) + ")");
+        check (findInEditor (id::filterMode) != nullptr, "Filter Mode is in the editor");
 
         juce::Random random (77);
         int mismatches = 0;
@@ -2523,14 +2782,14 @@ namespace
             if (patch % 3 == 0) set (*p, id::voiceMode, (float) (patch % 9 / 3));
             e->updateEnablement();
             const auto dimmed = rules::dimmedControls ([&p] (const char* pid) { return get (*p, pid); });
-            for (int page = 0; page < (int) pages.size(); ++page)
-                for (size_t i = 0; i < pages[(size_t) page].panels.size(); ++i)
-                    for (const auto& c : pages[(size_t) page].panels[i].controls)
-                        if (auto* control = e->getPanels (page)[i]->findControl (c.id))
-                            if (ui::isDimmed (*control) != dimmed.contains (c.id))
+            for (const auto& page : devicePages)
+                for (const auto& panel : page.panels)
+                    for (const auto& c : panel.controls)
+                        if (auto* control = findInEditor (c.id))
+                            if (control->isVisible() == dimmed.contains (c.id))
                                 ++mismatches;
         }
-        check (mismatches == 0, "editor and device dim the same controls over 40 patches (" + std::to_string (mismatches) + " mismatches)");
+        check (mismatches == 0, "editor hides the same controls the device dims over 40 patches (" + std::to_string (mismatches) + " mismatches)");
         editor.reset();
     }
 
@@ -2567,6 +2826,7 @@ int main()
         { "random patch",                              testRandomPatch },
         { "editor",                                    testEditor },
         { "filter graph handles",                      testFilterHandles },
+        { "filter mode Unified / Independent",         testFilterMode },
         { "filter env Sync to Amp",                    testFilterEnvSync },
         { "real mouse: every control clicks",          testRealMouse },
         { "FX: off is bit-identical (bypass)",         testFxBypass },

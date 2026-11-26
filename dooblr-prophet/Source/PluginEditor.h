@@ -16,11 +16,12 @@ namespace dooblrprophet
 {
     /**
         The editor (design/dooblr-design-system.md): a 60 px header (title, version, undo / redo,
-        presets, output), a horizontal tab bar (Sound / Modulation / Voices / FX) with equal-width
-        tab buttons and the page's mode switches, then per page a graph strip and the control
-        panels. The Sound tab holds oscillators, mixer, filter envelope, filter, amp envelope and
-        basic modulation. Ignored controls are dimmed, never hidden. Cmd-Z undoes, Cmd-Shift-Z /
-        Cmd-Y redo; every other key goes to the host.
+        presets, output), a horizontal tab bar (Main / Advanced) with equal-width tab buttons and
+        the page's mode switches, then per page a graph strip and the control panels. Main holds
+        the musical essentials (oscillators, mixer, filter with Unified / Independent mode, stacked
+        filter and amp ADSR). Everything else is on Advanced. Inapplicable controls are hidden.
+        The Max for Live panel still uses the 0.3.3 Sound / Modulation / Voices / FX layout.
+        Cmd-Z undoes, Cmd-Shift-Z / Cmd-Y redo; every other key goes to the host.
     */
     class DooblrProphetEditor final : public juce::AudioProcessorEditor,
                                       private juce::Timer,
@@ -29,14 +30,16 @@ namespace dooblrprophet
     public:
         enum Page
         {
-            soundPage = 0,
-            modulationPage,
-            voicesPage,
-            fxPage,
+            mainPage = 0,
+            advancedPage,
             numPages,
-            oscillatorsPage = soundPage,
-            filtersPage = soundPage,
-            envelopesPage = soundPage
+            soundPage = mainPage,
+            oscillatorsPage = mainPage,
+            filtersPage = mainPage,
+            envelopesPage = mainPage,
+            modulationPage = advancedPage,
+            voicesPage = advancedPage,
+            fxPage = advancedPage
         };
 
         /** An FX module's preset box with its caption. Picking one sets the preset and the macros it

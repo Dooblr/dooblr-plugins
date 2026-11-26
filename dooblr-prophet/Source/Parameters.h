@@ -115,7 +115,12 @@ namespace dooblrprophet::params
 
         // Appended (IDs are append-only: never reorder or reuse)
         inline constexpr const char* lpfModel      = "lpfModel";      // 0 CEM3320 style, 1 SSM2040 style
+        // Added in 0.3.5: shared vs per-voice filter. Independent (0) is the 0.3.3
+        // per-voice path and the default, so existing sessions sound the same.
+        inline constexpr const char* filterMode    = "filterMode";    // 0 Independent, 1 Unified
     }
+
+    enum class FilterMode { independent = 0, unified };
 
     enum class VoiceMode { poly = 0, unison, mono };
     enum class OscMode { variable = 0, switched };
@@ -127,6 +132,12 @@ namespace dooblrprophet::params
     inline const juce::StringArray& lpfModelNames()
     {
         static const juce::StringArray names { "3320 (Rev3)", "2040 (Rev2 / 6)" };
+        return names;
+    }
+
+    inline const juce::StringArray& filterModeNames()
+    {
+        static const juce::StringArray names { "Independent", "Unified" };
         return names;
     }
 

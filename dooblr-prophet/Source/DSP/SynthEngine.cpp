@@ -75,6 +75,8 @@ namespace dooblrprophet::dsp
         highPass.reset();
         decimator4.reset();
         decimator2.reset();
+        dryDecimator4.reset();
+        dryDecimator2.reset();
         feedPrimed = false;
         feedState = 0.0f;
     }
@@ -127,6 +129,8 @@ namespace dooblrprophet::dsp
             highPass.reset();
             decimator4.reset();
             decimator2.reset();
+            dryDecimator4.reset();
+            dryDecimator2.reset();
             feedPrimed = false;
             feedState = 0.0f;
             filterEnv.reset();
@@ -189,7 +193,7 @@ namespace dooblrprophet::dsp
         ampEnv.setTimes (sampleRate, s.ampEnv.attack * scale, s.ampEnv.decay * scale, s.ampEnv.sustain, s.ampEnv.release * scale);
     }
 
-    void Voice::render (float* out, int numSamples, const SubBlock& b)
+    void Voice::render (float* filteredOut, float* dryOut, int numSamples, const SubBlock& b)
     {
         if (! active)
             return;
@@ -299,6 +303,7 @@ namespace dooblrprophet::dsp
                 lowPass.setCoefficients (std::clamp (std::exp2 (lpOct), 8.0f, nyquistGuard) * piOverOs, k);
 
             float rendered[model::oversamplePolyModFm];
+            float dryRendered[model::oversamplePolyModFm];
             float polyModLast = 0.0f;
             for (int j = 0; j < os; ++j)
             {
@@ -320,6 +325,7 @@ namespace dooblrprophet::dsp
                 const auto noiseOut = random.bipolar();
 
                 const auto mixed = o1 * b.mix[0] + o2 * b.mix[1] + subOut * (0.7f * b.mix[2]) + noiseOut * (0.6f * b.mix[3] + model::thermalNoise);
+                dryRendered[j] = mixed;
 
                 if (polyModFilter)
                 {
@@ -331,16 +337,20 @@ namespace dooblrprophet::dsp
                 rendered[j] = lowPass.process (highPass.process (mixed) * drive) * inverseDrive;
             }
 
-            float filtered;
+            float filtered, dry;
             if (os == 4)
             {
                 const auto first = decimator4.process (rendered[0], rendered[1]);
                 const auto second = decimator4.process (rendered[2], rendered[3]);
                 filtered = decimator2.process (first, second);
+                const auto dryFirst = dryDecimator4.process (dryRendered[0], dryRendered[1]);
+                const auto drySecond = dryDecimator4.process (dryRendered[2], dryRendered[3]);
+                dry = dryDecimator2.process (dryFirst, drySecond);
             }
             else
             {
                 filtered = decimator2.process (rendered[0], rendered[1]);
+                dry = dryDecimator2.process (dryRendered[0], dryRendered[1]);
             }
 
             // Cutoff / resonance CV feedthrough: a small high-passed term proportional to the CV.
@@ -355,7 +365,10 @@ namespace dooblrprophet::dsp
             if (lfoAmp)
                 amp *= 1.0f - 0.5f * (b.lfoAmount - lfo);
 
-            out[i] += filtered * amp;
+            if (filteredOut != nullptr)
+                filteredOut[i] += filtered * amp;
+            if (dryOut != nullptr)
+                dryOut[i] += dry * amp;
 
             if (fadeStep != 0.0f)
             {
@@ -397,6 +410,8 @@ namespace dooblrprophet::dsp
         secondsSincePrepare = 0.0; // oscillators and filters "warm up" again (analog-reference.md)
         for (int i = 0; i < maxVoices; ++i)
             voices[(size_t) i].prepare (sampleRate, (uint32_t) i + 1);
+        dryBus.assign ((size_t) subBlockSize, 0.0f);
+        uniBus.assign ((size_t) subBlockSize, 0.0f);
         reset();
     }
 
@@ -413,6 +428,11 @@ namespace dooblrprophet::dsp
         lfoPhase = 0.0;
         lfoHeld = lfoSmoothed = 0.0f;
         smoothersPrimed = false;
+        resetUnifiedFilter();
+        unifiedModeMix = settings.filterUnified ? 1.0f : 0.0f;
+        unifiedFilterEnv.reset();
+        unifiedKeyNote = 60;
+        unifiedVelocity = 1.0f;
     }
 
     void SynthEngine::setSettings (const Settings& newSettings)
@@ -500,6 +520,8 @@ namespace dooblrprophet::dsp
 
         if (chosen != nullptr)
             chosen->start (note, velocity, 0.0f, 1.0f, ++order);
+
+        triggerUnifiedFilter (note, velocity);
     }
 
     void SynthEngine::startUnison (int note, float velocity)
@@ -525,6 +547,7 @@ namespace dooblrprophet::dsp
                 voice.start (note, velocity, spread * settings.unisonDetune * maxUnisonDetuneCents, gain, ++order);
         }
         monoSustained = false;
+        triggerUnifiedFilter (note, velocity);
     }
 
     void SynthEngine::removeFromStack (int note) noexcept
@@ -568,6 +591,7 @@ namespace dooblrprophet::dsp
                     if (voices[(size_t) i].isGateOn())
                         releaseVoice (voices[(size_t) i]);
             }
+            releaseUnifiedFilterIfIdle();
             return;
         }
 
@@ -581,6 +605,7 @@ namespace dooblrprophet::dsp
                     releaseVoice (voice);
             }
         }
+        releaseUnifiedFilterIfIdle();
     }
 
     void SynthEngine::allNotesOff()
@@ -590,6 +615,7 @@ namespace dooblrprophet::dsp
         for (auto& voice : voices)
             if (voice.isGateOn())
                 releaseVoice (voice);
+        releaseUnifiedFilterIfIdle();
     }
 
     void SynthEngine::allSoundOff()
@@ -598,6 +624,7 @@ namespace dooblrprophet::dsp
         monoSustained = false;
         for (auto& voice : voices)
             voice.kill();
+        unifiedFilterEnv.noteOff();
     }
 
     void SynthEngine::handleMidi (const juce::MidiMessage& m)
@@ -650,6 +677,7 @@ namespace dooblrprophet::dsp
                             if (voices[(size_t) i].isGateOn())
                                 releaseVoice (voices[(size_t) i]);
                     monoSustained = false;
+                    releaseUnifiedFilterIfIdle();
                 }
                 sustainPedal = down;
             }
@@ -795,21 +823,129 @@ namespace dooblrprophet::dsp
         }
 
         std::fill (left, left + n, 0.0f);
+        std::fill (dryBus.begin(), dryBus.begin() + n, 0.0f);
         bool anyActive = false;
         for (auto& voice : voices)
         {
             if (voice.isActive())
             {
-                voice.render (left, n, block);
+                voice.render (left, dryBus.data(), n, block);
                 anyActive = true;
             }
         }
 
+        // Keep the shared filter running whenever anything is sounding so a mid-note
+        // mode switch can crossfade against a live, already-settled filter state.
+        if (anyActive)
+            processUnifiedFilter (uniBus.data(), dryBus.data(), n);
+        else
+            resetUnifiedFilter();
+
+        const auto targetMix = s.filterUnified ? 1.0f : 0.0f;
+        const auto modeCoef = 1.0f - std::exp (-1.0f / (0.005f * (float) sampleRate)); // ~5 ms
         const auto gain = voiceHeadroom * outputGain;
         for (int i = 0; i < n; ++i)
         {
-            left[i] = anyActive ? left[i] * gain : 0.0f;
+            const auto independent = anyActive ? left[i] : 0.0f;
+            const auto unified = anyActive ? uniBus[(size_t) i] : 0.0f;
+            const auto mixed = independent + (unified - independent) * unifiedModeMix;
+            left[i] = mixed * gain;
             right[i] = left[i];
+            unifiedModeMix += (targetMix - unifiedModeMix) * modeCoef;
+        }
+    }
+
+    int SynthEngine::gatedVoices() const noexcept
+    {
+        int count = 0;
+        for (const auto& voice : voices)
+            count += voice.isGateOn() ? 1 : 0;
+        return count;
+    }
+
+    void SynthEngine::triggerUnifiedFilter (int note, float velocity)
+    {
+        // Last-note retrigger: every note-on restarts the shared filter envelope.
+        // Release starts only when no gates remain (see releaseUnifiedFilterIfIdle).
+        unifiedKeyNote = note;
+        unifiedVelocity = velocity;
+        unifiedFilterEnv.noteOn();
+    }
+
+    void SynthEngine::releaseUnifiedFilterIfIdle()
+    {
+        if (gatedVoices() == 0)
+            unifiedFilterEnv.noteOff();
+    }
+
+    void SynthEngine::resetUnifiedFilter()
+    {
+        unifiedLowPass.reset();
+        unifiedHighPass.reset();
+        unifiedFeedPrimed = false;
+        unifiedFeedState = 0.0f;
+        unifiedLastCv = 0.0f;
+        lastUnifiedVintage = -1.0f;
+    }
+
+    void SynthEngine::processUnifiedFilter (float* dest, const float* source, int numSamples)
+    {
+        const auto& s = settings;
+        const auto sr = (float) sampleRate;
+        const auto nyquistGuard = 0.45f * sr;
+        const auto fenv = s.effectiveFilterEnv();
+
+        if (! juce::exactlyEqual (lastUnifiedVintage, s.vintage)
+            || ! juce::exactlyEqual (lastUnifiedFilterEnv.attack, fenv.attack)
+            || ! juce::exactlyEqual (lastUnifiedFilterEnv.decay, fenv.decay)
+            || ! juce::exactlyEqual (lastUnifiedFilterEnv.sustain, fenv.sustain)
+            || ! juce::exactlyEqual (lastUnifiedFilterEnv.release, fenv.release))
+        {
+            lastUnifiedVintage = s.vintage;
+            lastUnifiedFilterEnv = fenv;
+            unifiedFilterEnv.setTimes (sampleRate, fenv.attack, fenv.decay, fenv.sustain, fenv.release);
+        }
+
+        unifiedLowPass.setModel (model::ladderModel (s.lpfModel));
+        // One instrument-wide filter: no per-voice stage mismatch.
+        const float mismatch[4] { 0.0f, 0.0f, 0.0f, 0.0f };
+        unifiedLowPass.setStageMismatch (mismatch);
+
+        const auto filterVel = 1.0f - s.filterEnv.velocity + s.filterEnv.velocity * unifiedVelocity;
+        const auto keyOctaves = s.lpfKeyTrack * ((float) unifiedKeyNote - 60.0f) / 12.0f;
+        const auto lpfStatic = block.lpfOctaves + keyOctaves + s.atFilter * block.aftertouch * aftertouchToCutoffOctaves;
+        const auto hpfStatic = block.hpfOctaves;
+        const auto k = model::ladderK (model::ladderModel (s.lpfModel), block.lpfReso);
+        const auto drive = block.lpfDrive;
+        const auto inverseDrive = 1.0f / drive;
+        const auto feedCoef = std::exp (-2.0f * pi * model::feedthroughHighPassHz / sr);
+        const auto piOverSr = pi / sr;
+        const bool polyModFilter = s.pmodFilter && s.pmodFiltEnv != 0.0f;
+        const bool lfoLp = s.lfoLpf, lfoHp = s.lfoHpf;
+
+        for (int i = 0; i < numSamples; ++i)
+        {
+            const auto fe = unifiedFilterEnv.next() * filterVel;
+            const auto lfo = block.lfo[i];
+            const auto hpOct = hpfStatic + s.hpfEnvAmt * fe * envToCutoffOctaves + (lfoHp ? lfo * lfoToCutoffOctaves : 0.0f);
+            const auto hpHz = std::clamp (std::exp2 (hpOct), 8.0f, nyquistGuard);
+            unifiedHighPass.setCoefficients (std::tan (hpHz * piOverSr), block.hpfReso);
+
+            auto lpOct = lpfStatic + s.lpfEnvAmt * fe * envToCutoffOctaves + (lfoLp ? lfo * lfoToCutoffOctaves : 0.0f);
+            if (polyModFilter)
+                lpOct += s.pmodFiltEnv * fe * polyModToCutoffOctaves;
+
+            const auto hz = std::clamp (std::exp2 (lpOct), 8.0f, nyquistGuard);
+            unifiedLowPass.setCoefficients (hz * piOverSr, k);
+
+            auto filtered = unifiedLowPass.process (unifiedHighPass.process (source[i]) * drive) * inverseDrive;
+
+            const auto cv = model::cutoffFeedthrough * lpOct + model::resonanceFeedthrough * k;
+            if (! unifiedFeedPrimed) { unifiedLastCv = cv; unifiedFeedPrimed = true; }
+            unifiedFeedState = feedCoef * (unifiedFeedState + cv - unifiedLastCv);
+            unifiedLastCv = cv;
+            filtered += unifiedFeedState;
+            dest[i] = filtered;
         }
     }
 }

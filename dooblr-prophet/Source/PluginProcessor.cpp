@@ -25,7 +25,8 @@ namespace dooblrprophet
     X(lfoDestFreq1) X(lfoDestFreq2) X(lfoDestShape1) X(lfoDestShape2) X(lfoDestLpf) X(lfoDestHpf) X(lfoDestAmp) \
     X(lpfModel) X(fenvSync) \
     X(echoOn) X(echoPreset) X(echoMix) X(echoTime) X(echoSync) X(echoDivision) X(echoFeedback) X(echoPingPong) \
-    X(reverbOn) X(reverbPreset) X(reverbMix) X(reverbSize) X(reverbTone)
+    X(reverbOn) X(reverbPreset) X(reverbMix) X(reverbSize) X(reverbTone) \
+    X(filterMode)
 
     struct DooblrProphetProcessor::RawParameters
     {
@@ -111,6 +112,7 @@ namespace dooblrprophet
         s.hpfReso = f (r.hpfReso);
         s.hpfEnvAmt = f (r.hpfEnvAmt);
         s.lpfModel = juce::jlimit (0, 1, i (r.lpfModel));
+        s.filterUnified = i (r.filterMode) != 0;
 
         s.filterEnv = { f (r.fenvAttack), f (r.fenvDecay), f (r.fenvSustain), f (r.fenvRelease), f (r.fenvVelAmt) };
         s.ampEnv = { f (r.aenvAttack), f (r.aenvDecay), f (r.aenvSustain), f (r.aenvRelease), f (r.aenvVelAmt) };

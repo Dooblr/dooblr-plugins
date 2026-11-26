@@ -12,10 +12,8 @@ namespace dooblrprophet::ui
     {
         switch (page)
         {
-            case 0: return Palette::accent;                 // Sound
-            case 1: return Palette::frozen;                 // Modulation
-            case 2: return Palette::spectrum;               // Voices
-            case 3: return juce::Colour (0xffb59be6);       // FX
+            case 0: return Palette::accent;                 // Main
+            case 1: return Palette::frozen;                 // Advanced
             default: return Palette::accent;
         }
     }
@@ -558,7 +556,19 @@ namespace dooblrprophet::ui
     }
 
     //==============================================================================
-    EnvelopeDisplay::EnvelopeDisplay (SettingsSource s) : GraphView (std::move (s), "Filter and amp envelopes")
+    static const char* envelopeAccessibleTitle (EnvelopeDisplay::Which which)
+    {
+        switch (which)
+        {
+            case EnvelopeDisplay::Which::filter: return "Filter envelope";
+            case EnvelopeDisplay::Which::amp:    return "Amp envelope";
+            case EnvelopeDisplay::Which::both:   return "Filter and amp envelopes";
+        }
+        return "Filter and amp envelopes";
+    }
+
+    EnvelopeDisplay::EnvelopeDisplay (SettingsSource s, Which w)
+        : GraphView (std::move (s), envelopeAccessibleTitle (w)), which (w)
     {
         filterPath.preallocateSpace (3 * 1200);
         ampPath.preallocateSpace (3 * 1200);
@@ -566,14 +576,21 @@ namespace dooblrprophet::ui
 
     bool EnvelopeDisplay::changed (const dsp::Settings& a, const dsp::Settings& b) const
     {
-        return ! sameEnv (a.effectiveFilterEnv(), b.effectiveFilterEnv()) || ! sameEnv (a.ampEnv, b.ampEnv)
-               || a.filterEnvSync != b.filterEnvSync;
+        const bool filterChanged = ! sameEnv (a.effectiveFilterEnv(), b.effectiveFilterEnv()) || a.filterEnvSync != b.filterEnvSync;
+        const bool ampChanged = ! sameEnv (a.ampEnv, b.ampEnv);
+        if (which == Which::filter) return filterChanged;
+        if (which == Which::amp) return ampChanged;
+        return filterChanged || ampChanged;
     }
 
-    float EnvelopeDisplay::spanSeconds (const dsp::Settings& s) noexcept
+    float EnvelopeDisplay::spanSeconds (const dsp::Settings& s, Which which) noexcept
     {
         const auto length = [] (const dsp::EnvSettings& e) { return e.attack + e.decay + e.release; };
-        const auto longest = juce::jmax (length (s.effectiveFilterEnv()), length (s.ampEnv));
+        float longest = 0.0f;
+        if (which != Which::amp)
+            longest = juce::jmax (longest, length (s.effectiveFilterEnv()));
+        if (which != Which::filter)
+            longest = juce::jmax (longest, length (s.ampEnv));
         return juce::jmax (0.05f, longest * 1.25f);
     }
 
@@ -581,8 +598,12 @@ namespace dooblrprophet::ui
     {
         drawHorizontalGrid (g, plot, 4);
         const auto titleArea = juce::Rectangle<float> (plot.getX(), 2.0f, plot.getWidth(), (float) titleStripHeight - 2.0f);
-        drawTitle (g, titleArea, "Filter envelope", Palette::dynamic);
-        drawTitle (g, titleArea.withTrimmedLeft (150.0f), "Amp envelope", Palette::master);
+        if (which != Which::amp)
+            drawTitle (g, titleArea, "Filter envelope", Palette::dynamic);
+        if (which == Which::both)
+            drawTitle (g, titleArea.withTrimmedLeft (150.0f), "Amp envelope", Palette::master);
+        else if (which == Which::amp)
+            drawTitle (g, titleArea, "Amp envelope", Palette::master);
     }
 
     void EnvelopeDisplay::trace (juce::Path& path, const dsp::EnvSettings& env, juce::Rectangle<float> plot, float span, float hold) const
@@ -608,15 +629,25 @@ namespace dooblrprophet::ui
 
     void EnvelopeDisplay::drawCurves (juce::Graphics& g, juce::Rectangle<float> plot)
     {
-        const auto span = spanSeconds (settings);
+        const auto span = spanSeconds (settings, which);
         const auto fenv = settings.effectiveFilterEnv(); // what the voices run: the amp ADSR when synced
+        const auto showFilter = which != Which::amp;
+        const auto showAmp = which != Which::filter;
         // Both hold their sustain until the same moment (the longer attack + decay), like one held key.
-        const auto keyUp = juce::jmax (fenv.attack + fenv.decay, settings.ampEnv.attack + settings.ampEnv.decay) + 0.15f * span;
-        trace (filterPath, fenv, plot, span, keyUp - fenv.attack - fenv.decay);
-        trace (ampPath, settings.ampEnv, plot, span, keyUp - settings.ampEnv.attack - settings.ampEnv.decay);
+        auto keyUp = 0.15f * span;
+        if (showFilter) keyUp = juce::jmax (keyUp, fenv.attack + fenv.decay);
+        if (showAmp) keyUp = juce::jmax (keyUp, settings.ampEnv.attack + settings.ampEnv.decay);
+        if (showFilter && showAmp)
+            keyUp = juce::jmax (fenv.attack + fenv.decay, settings.ampEnv.attack + settings.ampEnv.decay) + 0.15f * span;
+        else
+            keyUp += 0.15f * span;
+        if (showFilter)
+            trace (filterPath, fenv, plot, span, keyUp - fenv.attack - fenv.decay);
+        if (showAmp)
+            trace (ampPath, settings.ampEnv, plot, span, keyUp - settings.ampEnv.attack - settings.ampEnv.decay);
 
         const juce::PathStrokeType stroke (2.0f, juce::PathStrokeType::curved, juce::PathStrokeType::rounded);
-        if (settings.filterEnvSync)
+        if (showFilter && showAmp && settings.filterEnvSync)
         {
             // Identical curves: the amp one wide underneath, the filter one dashed on top, so both read.
             g.setColour (Palette::master);
@@ -629,10 +660,16 @@ namespace dooblrprophet::ui
         }
         else
         {
-            g.setColour (Palette::dynamic);
-            g.strokePath (filterPath, stroke);
-            g.setColour (Palette::master);
-            g.strokePath (ampPath, stroke);
+            if (showFilter)
+            {
+                g.setColour (Palette::dynamic);
+                g.strokePath (filterPath, stroke);
+            }
+            if (showAmp)
+            {
+                g.setColour (Palette::master);
+                g.strokePath (ampPath, stroke);
+            }
         }
 
         const auto x = plot.getX() + plot.getWidth() * keyUp / span;
@@ -645,7 +682,7 @@ namespace dooblrprophet::ui
         const auto plot = getPlotArea();
         if (! plot.contains (p))
             return {};
-        const auto t = (p.x - plot.getX()) / plot.getWidth() * spanSeconds (settings);
+        const auto t = (p.x - plot.getX()) / plot.getWidth() * spanSeconds (settings, which);
         return formatSeconds (t);
     }
 

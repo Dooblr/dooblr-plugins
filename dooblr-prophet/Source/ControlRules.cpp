@@ -65,12 +65,11 @@ namespace dooblrprophet::rules
         {
             case 0:
             {
-                // Ladder model is already on the Sound page (LOW-PASS Model). The tab bar only
-                // needs the oversampling state, which has no other on-screen readout.
+                // Main tab-bar caption: oversampling state, which has no other on-screen readout.
                 const bool fm = s.pmodFreq1 && (std::abs (s.pmodFiltEnv) > 1.0e-4f || s.pmodOsc2 > 1.0e-4f);
                 return fm ? juce::String ("4x Poly-Mod FM") : juce::String ("2x oversampled");
             }
-            case 2: return juce::String (activeVoices) + " sounding";
+            case 1: return juce::String (activeVoices) + " sounding";
             default: return {};
         }
     }

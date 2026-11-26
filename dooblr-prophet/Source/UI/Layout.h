@@ -9,10 +9,10 @@
 namespace dooblrprophet::layout
 {
     /**
-        The editor's pages as data: every page's mode switches, panels (in order, with their
-        controls in order) and panel rows. The editor builds itself from this, and the remote link
-        (Link/RemoteLink.h) sends the same description to the Max for Live device, so the two
-        surfaces cannot drift apart (0.3.0).
+        pages() is the Max for Live / RemoteLink layout (Sound / Modulation / Voices / FX) and must
+        stay unchanged so the 0.3.3 panel keeps working without a device update.
+
+        editorPages() is the VST editor layout (Main / Advanced, 0.3.5). The two can diverge.
     */
     struct Control
     {
@@ -49,6 +49,7 @@ namespace dooblrprophet::layout
     };
 
     const std::vector<Page>& pages();
+    const std::vector<Page>& editorPages();
 
     inline constexpr int voicePresetCounts[] { 5, 6, 10 };
     inline constexpr int numVoicePresets = 3;

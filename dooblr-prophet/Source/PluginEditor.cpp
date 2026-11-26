@@ -52,7 +52,7 @@ namespace dooblrprophet
 
     const char* DooblrProphetEditor::pageName (int page)
     {
-        return layout::pages()[(size_t) juce::jlimit (0, (int) numPages - 1, page)].name;
+        return layout::editorPages()[(size_t) juce::jlimit (0, (int) numPages - 1, page)].name;
     }
 
     DooblrProphetEditor::DooblrProphetEditor (DooblrProphetProcessor& p)
@@ -176,28 +176,32 @@ namespace dooblrprophet
         auto& tap = synth.getEngine().getVoiceTap();
 
         auto& apvts = synth.getState();
-        auto& sound = pages[(size_t) soundPage];
-        sound.graphs.push_back (std::make_unique<ui::OscillatorDisplay> (source));
-        sound.graphs.back()->setComponentID ("graph_osc");
-        sound.graphs.push_back (std::make_unique<ui::FilterDisplay> (
+        auto& main = pages[(size_t) mainPage];
+        main.graphs.push_back (std::make_unique<ui::OscillatorDisplay> (source));
+        main.graphs.back()->setComponentID ("graph_osc");
+        main.graphs.push_back (std::make_unique<ui::FilterDisplay> (
             source, ui::FilterDisplay::Parameters { apvts.getParameter (id::lpfCutoff), apvts.getParameter (id::lpfReso),
                                                     apvts.getParameter (id::hpfCutoff), apvts.getParameter (id::hpfReso) }));
-        sound.graphs.back()->setComponentID ("graph_filter");
-        sound.graphs.push_back (std::make_unique<ui::EnvelopeDisplay> (source));
-        sound.graphs.back()->setComponentID ("graph_env");
-        pages[(size_t) modulationPage].graphs.push_back (std::make_unique<ui::LfoDisplay> (source, tap));
-        pages[(size_t) modulationPage].graphs.back()->setComponentID ("graph_lfo");
-        pages[(size_t) voicesPage].graphs.push_back (std::make_unique<ui::VoiceDisplay> (source, tap));
-        pages[(size_t) voicesPage].graphs.back()->setComponentID ("graph_voices");
-        pages[(size_t) fxPage].graphs.push_back (std::make_unique<ui::FxDisplay> (source, [&p = synth] { return p.getHostBpm(); }));
-        pages[(size_t) fxPage].graphs.back()->setComponentID ("graph_fx");
+        main.graphs.back()->setComponentID ("graph_filter");
+        main.graphs.push_back (std::make_unique<ui::EnvelopeDisplay> (source, ui::EnvelopeDisplay::Which::filter));
+        main.graphs.back()->setComponentID ("graph_fenv");
+        main.graphs.push_back (std::make_unique<ui::EnvelopeDisplay> (source, ui::EnvelopeDisplay::Which::amp));
+        main.graphs.back()->setComponentID ("graph_aenv");
+
+        auto& advanced = pages[(size_t) advancedPage];
+        advanced.graphs.push_back (std::make_unique<ui::LfoDisplay> (source, tap));
+        advanced.graphs.back()->setComponentID ("graph_lfo");
+        advanced.graphs.push_back (std::make_unique<ui::VoiceDisplay> (source, tap));
+        advanced.graphs.back()->setComponentID ("graph_voices");
+        advanced.graphs.push_back (std::make_unique<ui::FxDisplay> (source, [&p = synth] { return p.getHostBpm(); }));
+        advanced.graphs.back()->setComponentID ("graph_fx");
 
         for (auto& content : pages)
             for (auto& graph : content.graphs)
                 addChildComponent (*graph);
 
-        // The pages, panels and controls come from layout::pages() (shared with the remote link).
-        const auto& layoutPages = layout::pages();
+        // VST editor pages (Main / Advanced). layout::pages() is left for the M4L panel.
+        const auto& layoutPages = layout::editorPages();
         jassert ((int) layoutPages.size() == numPages);
 
         for (int page = 0; page < numPages; ++page)
@@ -245,7 +249,7 @@ namespace dooblrprophet
                         updateEnablement();
                         updateUndoButtons();
                     };
-                    panel.addExtra (picker, 150, -1, module == 0 ? id::echoMix : id::reverbMix, true);
+                    panel.addExtra (picker, 76, -1, module == 0 ? id::echoMix : id::reverbMix, true);
                 }
             }
 
@@ -312,34 +316,51 @@ namespace dooblrprophet
 
     void DooblrProphetEditor::updateEnablement()
     {
-        // Ignored controls are dimmed, never disabled: a disabled JUCE component swallows clicks, so
-        // the Saw / Triangle / Pulse switches could not be switched on in Variable mode (0.1.4 fix).
-        // The rules live in ControlRules.cpp, shared with the remote link.
+        // Inapplicable controls are hidden in the VST editor (0.3.5). The same rule set still
+        // dims those IDs on the Max for Live panel (layout::pages() is unchanged). Hidden
+        // rather than disabled: a disabled JUCE component swallows clicks (0.1.4).
         const auto dimmed = rules::dimmedControls ([this] (const char* pid) { return valueOf (state, pid); });
-        const auto& layoutPages = layout::pages();
+        const auto& layoutPages = layout::editorPages();
+        bool layoutDirty = false;
 
         for (int page = 0; page < numPages; ++page)
             for (size_t i = 0; i < pages[(size_t) page].panels.size(); ++i)
                 for (const auto& c : layoutPages[(size_t) page].panels[i].controls)
-                    if (auto* control = pages[(size_t) page].panels[i]->findControl (c.id))
-                        ui::setDimmed (*control, dimmed.contains (c.id));
+                {
+                    auto& panel = *pages[(size_t) page].panels[i];
+                    layoutDirty = panel.setShown (c.id, ! dimmed.contains (c.id)) || layoutDirty;
+                    if (auto* control = panel.findControl (c.id))
+                        ui::setDimmed (*control, false);
+                }
 
         for (int module = 0; module < 2; ++module)
         {
             auto& picker = fxPresetPickers[(size_t) module];
-            ui::setDimmed (picker.box, dimmed.contains (module == 0 ? layout::echoPresetPickerId : layout::reverbPresetPickerId));
+            const auto id = module == 0 ? layout::echoPresetPickerId : layout::reverbPresetPickerId;
+            const bool shown = ! dimmed.contains (id);
+            for (int page = 0; page < numPages; ++page)
+                for (auto& panel : pages[(size_t) page].panels)
+                    layoutDirty = panel->setShown (picker, shown) || layoutDirty;
+            ui::setDimmed (picker.box, false);
             const auto index = juce::roundToInt (valueOf (state, module == 0 ? id::echoPreset : id::reverbPreset));
             if (picker.box.getSelectedItemIndex() != index && ! picker.box.isPopupActive())
                 picker.box.setSelectedItemIndex (index, juce::dontSendNotification);
         }
 
         const auto voices = juce::roundToInt (valueOf (state, id::voices));
+        const bool showVoicePresets = ! dimmed.contains (layout::voicePresetsId);
 
         for (size_t i = 0; i < voicePresetButtons.size(); ++i)
         {
-            ui::setDimmed (voicePresetButtons[i], dimmed.contains (layout::voicePresetsId));
+            for (int page = 0; page < numPages; ++page)
+                for (auto& panel : pages[(size_t) page].panels)
+                    layoutDirty = panel->setShown (voicePresetButtons[i], showVoicePresets) || layoutDirty;
+            ui::setDimmed (voicePresetButtons[i], false);
             voicePresetButtons[i].setToggleState (voices == layout::voicePresetCounts[i], juce::dontSendNotification);
         }
+
+        if (layoutDirty)
+            resized();
     }
 
     void DooblrProphetEditor::setStatus (const juce::String& text)
@@ -728,36 +749,87 @@ namespace dooblrprophet
                 height = juce::jmax (height, content.panels[(size_t) row[i]]->getPreferredHeight (widths[i]));
 
             rowHeights.push_back (height);
-            panelsHeight += height + panelGap;
+            panelsHeight += height + (rowHeights.size() == rows.size() ? 0 : panelGap);
             widthsPerRow.push_back (std::move (widths));
         }
 
-        const auto graphHeight = juce::jmax (minGraphHeight, area.getHeight() - panelsHeight);
-        auto graphStrip = area.removeFromTop (graphHeight);
-        const auto nGraphs = (int) content.graphs.size();
-
-        if (nGraphs <= 1)
+        const auto isEnvelopeRow = [&] (const std::vector<int>& row) -> ui::GraphView*
         {
-            if (nGraphs == 1)
-                content.graphs[0]->setBounds (graphStrip);
+            if (row.size() != 1)
+                return nullptr;
+            auto& panel = *content.panels[(size_t) row[0]];
+            const auto title = panel.getTitle();
+            const char* graphId = nullptr;
+            if (title == "FILTER ENVELOPE")
+                graphId = "graph_fenv";
+            else if (title == "AMP ENVELOPE")
+                graphId = "graph_aenv";
+            else
+                return nullptr;
+            for (auto& graph : content.graphs)
+                if (graph->getComponentID() == graphId)
+                    return graph.get();
+            return nullptr;
+        };
+
+        // Mini envelope graphs sit in their ADSR rows, not in the top strip.
+        int stripCount = 0;
+        for (auto& graph : content.graphs)
+        {
+            const auto id = graph->getComponentID();
+            if (id != "graph_fenv" && id != "graph_aenv")
+                ++stripCount;
         }
-        else
-        {
-            const auto gw = (graphStrip.getWidth() - panelGap * (nGraphs - 1)) / nGraphs;
 
-            for (int i = 0; i < nGraphs; ++i)
+        // Envelope rows need enough height for the mini graph beside the knobs.
+        for (size_t r = 0; r < rows.size(); ++r)
+            if (isEnvelopeRow (rows[r]) != nullptr)
             {
-                content.graphs[(size_t) i]->setBounds (i + 1 == nGraphs ? graphStrip : graphStrip.removeFromLeft (gw));
+                const auto bump = juce::jmax (0, 88 - rowHeights[r]);
+                rowHeights[r] += bump;
+                panelsHeight += bump;
+            }
+
+        // Prefer a 120 px strip, but shrink to 80 before clipping panels. Leftover goes to the graphs.
+        const auto stripFloor = stripCount > 0 ? 80 : 0;
+        const auto leftover = area.getHeight() - panelsHeight;
+        const auto graphHeight = leftover >= minGraphHeight ? leftover
+                                : leftover >= stripFloor ? leftover
+                                : stripFloor;
+        auto graphStrip = area.removeFromTop (juce::jmin (graphHeight, juce::jmax (0, area.getHeight())));
+
+        if (stripCount > 0)
+        {
+            const auto gw = stripCount > 1 ? (graphStrip.getWidth() - panelGap * (stripCount - 1)) / stripCount
+                                           : graphStrip.getWidth();
+            int placed = 0;
+            for (auto& graph : content.graphs)
+            {
+                const auto id = graph->getComponentID();
+                if (id == "graph_fenv" || id == "graph_aenv")
+                    continue;
+                ++placed;
+                graph->setBounds (placed == stripCount ? graphStrip : graphStrip.removeFromLeft (gw));
                 graphStrip.removeFromLeft (panelGap);
             }
         }
 
         for (size_t r = 0; r < rows.size(); ++r)
         {
-            area.removeFromTop (panelGap);
+            if (r > 0)
+                area.removeFromTop (panelGap);
             auto rowArea = area.removeFromTop (rowHeights[r]);
             const auto& row = rows[r];
             const auto& widths = widthsPerRow[r];
+
+            if (auto* envGraph = isEnvelopeRow (row))
+            {
+                const auto graphW = juce::jlimit (140, 260, rowArea.getWidth() * 22 / 100);
+                envGraph->setBounds (rowArea.removeFromLeft (graphW));
+                rowArea.removeFromLeft (panelGap);
+                content.panels[(size_t) row[0]]->setBounds (rowArea);
+                continue;
+            }
 
             for (size_t i = 0; i < row.size(); ++i)
             {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <vector>
 #include <atomic>
 #include <cstdint>
 
@@ -52,6 +53,7 @@ namespace dooblrprophet::dsp
         float lpfCutoff = 4000.0f, lpfReso = 0.15f, lpfDrive = 0.2f, lpfEnvAmt = 0.35f, lpfKeyTrack = 0.5f;
         float hpfCutoff = 20.0f, hpfReso = 0.0f, hpfEnvAmt = 0.0f;
         int lpfModel = 0;                // 0 CEM3320 style ("Rev3"), 1 SSM2040 style ("Rev2" / P6)
+        bool filterUnified = false;       // false: per-voice (Independent, default); true: one shared filter
 
         EnvSettings filterEnv { 0.005f, 0.6f, 0.3f, 0.5f, 0.3f };
         EnvSettings ampEnv { 0.003f, 0.8f, 0.8f, 0.35f, 0.3f };
@@ -118,7 +120,9 @@ namespace dooblrprophet::dsp
         /** Fades out quickly and goes idle (voice count reduced, mode change, all sound off). */
         void kill();
 
-        void render (float* out, int numSamples, const SubBlock& block);
+        /** Adds the per-voice filtered signal to filteredOut and the pre-filter mix to dryOut
+            (either pointer may be null). Both are amplitude-scaled. */
+        void render (float* filteredOut, float* dryOut, int numSamples, const SubBlock& block);
 
         bool isActive() const noexcept { return active; }
         bool isGateOn() const noexcept { return active && gate; }
@@ -145,6 +149,7 @@ namespace dooblrprophet::dsp
         SubOscillator sub;
         LadderFilter lowPass;
         HalfbandDecimator decimator4, decimator2;   // 4x -> 2x, 2x -> 1x
+        HalfbandDecimator dryDecimator4, dryDecimator2; // pre-filter path, same rates
         int oversample = 0;
         HighPassFilter highPass;
         Envelope filterEnv, ampEnv;
@@ -246,5 +251,25 @@ namespace dooblrprophet::dsp
 
         VoiceMode lastMode = VoiceMode::poly;
         VoiceTap tap;
+
+        // Unified filter: one ladder + HPF on the summed dry voices. Crossfaded with
+        // the per-voice path so switching mid-note is click-free (~5 ms).
+        LadderFilter unifiedLowPass;
+        HighPassFilter unifiedHighPass;
+        Envelope unifiedFilterEnv;
+        int unifiedKeyNote = 60;
+        float unifiedModeMix = 0.0f;     // 0 Independent, 1 Unified, smoothed
+        bool unifiedFeedPrimed = false;
+        float unifiedFeedState = 0.0f, unifiedLastCv = 0.0f;
+        EnvSettings lastUnifiedFilterEnv {};
+        float lastUnifiedVintage = -1.0f;
+        std::vector<float> dryBus, uniBus;
+
+        void processUnifiedFilter (float* dest, const float* source, int numSamples);
+        int gatedVoices() const noexcept;
+        void triggerUnifiedFilter (int note, float velocity);
+        void releaseUnifiedFilterIfIdle();
+        void resetUnifiedFilter();
+        float unifiedVelocity = 1.0f;
     };
 }

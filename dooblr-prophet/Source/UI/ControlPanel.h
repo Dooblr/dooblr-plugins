@@ -74,6 +74,7 @@ namespace dooblrprophet::ui
         juce::Rectangle<int> getSlotBounds (int slot) const;
 
         static constexpr int titleHeight = 16, knobWidth = 70, knobHeight = 72, comboWidth = 128, toggleWidth = 104;
+        static constexpr int minKnobWidth = 56;
 
     private:
         struct Item
