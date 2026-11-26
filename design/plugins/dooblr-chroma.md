@@ -40,9 +40,20 @@ Read `design/INDEX.md` first. This file has two parts:
   On position injects a delayed, impedance-weighted force with a conservative gain bound so the
   loop cannot blow up; Off is a parallel Balance mix. Excitation enters resonator A only when
   coupled. The compressor is feed-forward with no look-ahead; plugin latency is 0.
-- **Presets**: factory programs are compiled in (Init plus Marimba, Kalimba, Steel Drum, Bells,
-  Plucked String, Noise Pad, Open Pipe, Coupled Plates, Bass Drum). User presets use
+- **Gain**: 0.1.0/0.1.1 used a fixed per-mode gain of 0.12, so loudness grew with mode count
+  (Init forte LoadCheck peak 4.669, about +13 dBFS). Banks are now L2-normalized with a
+  mallet-spectrum weight (`kModalScale / sqrt(sum (shape · w(f))^2)`, `w = 1/(1+(f/600)^3)`)
+  so a dense inharmonic bank does not steal gain from the partials a short mallet actually
+  excites. Strike gains use |shape| so bipolar plate and membrane modes do not cancel at the
+  onset. Stacked layers and coupled A+B are also 1/sqrt(N)-scaled. Continuous noise is
+  scaled by `kNoiseExcitation`. Output stays at 0 dB; a gentle tanh soft-clip above 0.95 is
+  a last-resort guard only. A single forte note on a factory preset should peak around
+  -6 to -3 dBFS, and a 3-note chord stays below 0 dBFS.
+- **Presets**: 40 compiled-in factory programs, grouped in the menu as Mallets, Plucked,
+  Struck, Winds, Bowed, Keys, Pads and FX (Init first). User presets use
   `common/PresetPaths` (`~/Library/Audio/Presets/dooblr/dooblr-chroma/`, `.dchroma`).
+- **0.1.2**: gain staging (energy-normalized modal banks, output soft-clip) and 30 additional
+  factory presets (40 total).
 - **0.1.1**: layout pass only — object-first Main page, Advanced detail page, readable knobs, hide-not-dim for inapplicable controls.
 - **0.1.0 deferrals**: per-layer exciters and FX (they are shared); graphic (10-band) noise
   shaping; randomiser; a file-chooser for Load (Load opens the first user preset; Save writes a
@@ -52,9 +63,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: JUCE instrument VST3 (target `DooblrChroma`, product "dooblr-chroma", code Dbch)
-- Version: 0.1.1
+- Version: 0.1.2
 - Last source change: 2026-11-26
-- Source tree: `fd15941bf51e` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chroma`)
+- Source tree: `e526025f7bc8` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chroma`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-chroma/scripts/build.sh` (build dir `~/dooblr-build/chroma-build`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrChromaTests` (Tests/CMakeLists.txt)
@@ -216,14 +227,14 @@ Read `design/INDEX.md` first. This file has two parts:
 | file | role |
 |---|---|
 | `CMakeLists.txt` | CMake build: DooblrChroma |
-| `README.md` | Readme: dooblr-chroma 0.1.1 |
+| `README.md` | Readme: dooblr-chroma 0.1.2 |
 | `Source/DSP/Biquad.h` | A reusable, non-nested transposes-form-II biquad. [Biquad] |
 | `Source/DSP/Modes.{h,cpp}` | Concert-pitch C4 used as the resonator reference when Pitch is 0.00. |
-| `Source/DSP/SynthEngine.{h,cpp}` | Tube radius: clockwise (higher) = longer decay = smaller actual radius, and darker? [ResonatorSettings, LayerSettings, Settings, SynthEngine, ...] |
+| `Source/DSP/SynthEngine.{h,cpp}` | Continuous noise has much higher RMS than a short mallet pulse through (x-x1). [ResonatorSettings, LayerSettings, Settings, SynthEngine, ...] |
 | `Source/Parameters.{h,cpp}` | Per-layer, per-resonator (l1/l2, a/b) l1 resonator a |
 | `Source/PluginEditor.{h,cpp}` | Global exciters / mixer / play / fx — always bound [DooblrChromaEditor] |
 | `Source/PluginProcessor.{h,cpp}` | [DooblrChromaProcessor] |
-| `Source/Presets.{h,cpp}` | [Factory] |
+| `Source/Presets.{h,cpp}` | Struck / drums --- [Factory] |
 | `Source/UI/ControlPanel.{h,cpp}` | Object body + mallet at the hit position. [Knob, Choice, Toggle, Panel, ...] |
 | `Source/UI/Theme.{h,cpp}` | Flat, understated look for knobs, buttons and combo boxes. [DooblrLookAndFeel] |
 | `Source/UndoHistory.{h,cpp}` | Undo/redo of the plug-in's own UI edits, built on juce::UndoManager. [ParameterUndoHistory, Change, Pending] |
@@ -248,5 +259,5 @@ Read `design/INDEX.md` first. This file has two parts:
 
 ### Tests
 
-- `Tests/ChromaTests.cpp` (11): Metadata, Silence, C4, ModalRatios, CouplingStability, NoNanParallelAndFx, PresetRoundTrip, UserPresetFile, MacrosLive, RealtimeAndCpu, Editor
+- `Tests/ChromaTests.cpp` (12): Metadata, Silence, C4, ModalRatios, CouplingStability, NoNanParallelAndFx, PresetRoundTrip, UserPresetFile, MacrosLive, RealtimeAndCpu, GainStaging, Editor
 <!-- END AUTO-GENERATED -->

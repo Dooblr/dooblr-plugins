@@ -83,6 +83,14 @@ namespace
         return r == nullptr ? 0.0f : r->convertFrom0to1 (r->getValue());
     }
 
+    const presets::Factory* findFactory (const juce::String& name)
+    {
+        for (const auto& f : presets::factory())
+            if (f.name == name)
+                return &f;
+        return nullptr;
+    }
+
     void dryScientific (Processor& p)
     {
         set (p, id::mixDirect, 0.0f);
@@ -247,7 +255,8 @@ namespace
         check (p->acceptsMidi() && ! p->producesMidi() && ! p->isMidiEffect(), "instrument, MIDI in only");
         check (p->getLatencySamples() == 0, "zero reported latency");
         check (p->getNumPrograms() >= 9, "Init plus at least 8 factory programs");
-        check (juce::String (JucePlugin_VersionString) == "0.1.1", "version 0.1.1");
+        check (p->getNumPrograms() >= 40, "40 factory programs (got " + std::to_string (p->getNumPrograms()) + ")");
+        check (juce::String (JucePlugin_VersionString) == "0.1.2", "version 0.1.2");
         check ((int) p->getParameters().size() > 80, "a full parameter set is published");
     }
 
@@ -444,7 +453,10 @@ namespace
         ::setenv ("DOOBLR_PRESET_MUSIC", music.getFullPathName().toRawUTF8(), 1);
 
         auto p = makeProcessor();
-        presets::apply (p->getState(), presets::factory()[1]); // Marimba
+        const auto* marimba = findFactory ("Marimba");
+        check (marimba != nullptr, "Marimba factory preset exists");
+        if (marimba != nullptr)
+            presets::apply (p->getState(), *marimba);
         const auto file = presets::userDirectory().getChildFile ("MarimbaCopy.dchroma");
         check (p->saveUserPreset (file).isNotEmpty(), "save user preset");
         check (file.existsAsFile(), "user preset file exists under PresetPaths");
@@ -478,7 +490,10 @@ namespace
     void testRealtimeAndCpu()
     {
         auto p = makeProcessor();
-        presets::apply (p->getState(), presets::factory()[1]); // Marimba, typical
+        const auto* marimba = findFactory ("Marimba");
+        check (marimba != nullptr, "Marimba factory preset exists");
+        if (marimba != nullptr)
+            presets::apply (p->getState(), *marimba);
         set (*p, id::l1_a_density, 2.0f); // 30 modes
         juce::MidiBuffer dummy;
         juce::AudioBuffer<float> buffer (2, 512);
@@ -607,6 +622,71 @@ namespace
                 walk (ch);
         };
         walk (&root);
+    }
+
+
+    void testGainStaging()
+    {
+        constexpr float minusOneDb = 0.89125094f; // 10^(-1/20)
+        auto dbfs = [] (float peak) {
+            return peak <= 0.0f ? -120.0 : 20.0 * std::log10 ((double) peak);
+        };
+
+        check ((int) presets::factory().size() == 40, "factory list has 40 presets");
+
+        // Per-preset: one forte note stays under -1 dBFS; a 3-note chord stays under 0 dBFS.
+        for (const auto& fac : presets::factory())
+        {
+            auto p = makeProcessor();
+            presets::apply (p->getState(), fac);
+            const auto single = render (*p, 48000, { { 0, on (60, 1.0f) } });
+            check (single.finite(), fac.name.toStdString() + " single note is finite");
+            check (single.peak() > 0.04f,
+                   fac.name.toStdString() + " single note is audible (peak " + fmt (single.peak(), 3)
+                       + ", " + fmt (dbfs (single.peak()), 1) + " dBFS)");
+            check (single.peak() <= minusOneDb,
+                   fac.name.toStdString() + " single vel-127 note peak "
+                       + fmt (single.peak(), 3) + " (" + fmt (dbfs (single.peak()), 1)
+                       + " dBFS) is <= -1 dBFS");
+
+            auto c = makeProcessor();
+            presets::apply (c->getState(), fac);
+            const auto chord = render (*c, 48000, { { 0, on (48, 1.0f) }, { 0, on (60, 1.0f) }, { 0, on (67, 1.0f) } });
+            check (chord.finite(), fac.name.toStdString() + " chord is finite");
+            check (chord.peak() <= 1.0f,
+                   fac.name.toStdString() + " 3-note chord peak " + fmt (chord.peak(), 3)
+                       + " (" + fmt (dbfs (chord.peak()), 1) + " dBFS) is <= 0 dBFS");
+        }
+
+        // Per type / density, a dry forte mallet note is bounded and roughly consistent.
+        const dsp::ResType types[] = {
+            dsp::ResType::string, dsp::ResType::bar, dsp::ResType::marimba, dsp::ResType::plate,
+            dsp::ResType::drumhead, dsp::ResType::membrane, dsp::ResType::openTube,
+            dsp::ResType::closedTube, dsp::ResType::manual
+        };
+        std::vector<float> typePeaks;
+        for (auto type : types)
+        {
+            for (int density = 0; density < 4; ++density)
+            {
+                auto p = makeProcessor();
+                dryScientific (*p);
+                set (*p, id::l1_a_type, (float) (int) type);
+                set (*p, id::l1_a_density, (float) density);
+                const auto r = render (*p, 24000, { { 0, on (60, 1.0f) } });
+                const auto label = std::string (dsp::resTypeName (type)) + " density " + std::to_string (density);
+                check (r.finite() && r.peak() > 0.05f, label + " produces audio (peak " + fmt (r.peak(), 3) + ")");
+                check (r.peak() <= minusOneDb,
+                       label + " single vel-127 peak " + fmt (r.peak(), 3) + " ("
+                           + fmt (dbfs (r.peak()), 1) + " dBFS) is <= -1 dBFS");
+                typePeaks.push_back (r.peak());
+            }
+        }
+        const auto lo = *std::min_element (typePeaks.begin(), typePeaks.end());
+        const auto hi = *std::max_element (typePeaks.begin(), typePeaks.end());
+        check (hi / std::max (lo, 1.0e-6f) <= 10.0f,
+               "type/density loudness is consistent (min " + fmt (lo, 3) + ", max " + fmt (hi, 3)
+                   + ", ratio " + fmt (hi / std::max (lo, 1.0e-6f), 2) + ")");
     }
 
     void testEditor()
@@ -776,6 +856,7 @@ int main()
         { "user presets (PresetPaths)",  testUserPresetFile },
         { "macros are live",             testMacrosLive },
         { "CPU benchmark",               testRealtimeAndCpu },
+        { "gain staging",                testGainStaging },
         { "editor layout",               testEditor },
     };
 

@@ -19,6 +19,31 @@ namespace dooblrchroma::dsp
         {
             return (std::abs (v) < 1.0e-30f) ? 0.0f : v;
         }
+
+        // 0.1.0 used a fixed 0.12 per-mode scale, so loudness grew with mode count
+        // (density 70 was many times hotter than density 4) and a forte Init note
+        // peaked around +13 dBFS. Gains are now divided by sqrt(mode count).
+        // kModalScale is calibrated so a single forte mallet note sits near -6..-3 dBFS.
+        // High-frequency modes are down-weighted in the energy sum so a dense
+        // inharmonic bank does not steal gain from the partials the mallet
+        // actually excites (a 2–4 ms pulse is a low-pass).
+        constexpr float kLegacyModeGain = 0.12f;
+        constexpr float kModalScale = 0.018f;
+        constexpr float kModalWeightHz = 600.0f;
+        constexpr float kModalWeightPow = 3.0f;
+        constexpr float kCoupledMix = 0.70710678f; // 1/sqrt(2)
+        // Continuous noise has much higher RMS than a short mallet pulse through (x-x1).
+        constexpr float kNoiseExcitation = 0.16f;
+
+        float softClip (float x) noexcept
+        {
+            constexpr float t = 0.95f;
+            const float ax = std::abs (x);
+            if (ax <= t)
+                return x;
+            const float y = t + (1.0f - t) * std::tanh ((ax - t) / (1.0f - t));
+            return std::copysign (y, x);
+        }
     }
 
     void SynthEngine::ModalBank::clear()
@@ -60,6 +85,7 @@ namespace dooblrchroma::dsp
         const float hit = std::clamp (hitPos, 0.0f, 1.0f);
 
         int written = 0;
+        float amps[kMaxModes] {}, shapes[kMaxModes] {}, coupleShape[kMaxModes] {}, polesR[kMaxModes] {};
         for (int i = 0; i < n; ++i)
         {
             const float freq = f0 * ratios[i];
@@ -77,18 +103,41 @@ namespace dooblrchroma::dsp
             m.a2 = -r * r;
             m.freq = freq;
 
-            float amp = hitAmplitude (rs.type, i, ratios[i], hit);
+            float shape = hitAmplitude (rs.type, i, ratios[i], hit);
             // A tiny floor keeps a mode from vanishing at a node, but we still honour the shape.
-            if (std::abs (amp) < 0.02f)
-                amp = (amp < 0.0f ? -0.02f : 0.02f);
-            amp *= std::pow (std::max (ratios[i], 0.25f), tone / 6.0206f);
-            // (1-r) is ~1e-5 at long T60 and makes the instrument inaudible.
-            // A fixed scale keeps mallet loudness independent of decay time.
-            m.gain = amp * 0.12f;
-            m.coupleGain = hitAmplitude (rs.type, i, ratios[i], 0.85f) * (1.0f - r);
+            if (std::abs (shape) < 0.02f)
+                shape = (shape < 0.0f ? -0.02f : 0.02f);
+            const float tilt = std::pow (std::max (ratios[i], 0.25f), tone / 6.0206f);
+            shapes[written] = shape;
+            amps[written] = shape * tilt;
+            coupleShape[written] = hitAmplitude (rs.type, i, ratios[i], 0.85f);
+            polesR[written] = r;
             ++written;
         }
         n = written;
+
+        // |shape| keeps bipolar plate / membrane / high-N string modes from
+        // cancelling at the mallet onset. L2 (energy) normalisation, not L1,
+        // is what keeps loudness stable once the mallet pulse has dephased
+        // across the bank: L1 over-penalises high density because the peak
+        // is not a one-sample coherent sum.
+        float energy = 0.0f;
+        for (int i = 0; i < n; ++i)
+        {
+            const float tilt = (shapes[i] != 0.0f) ? std::abs (amps[i] / shapes[i]) : 1.0f;
+            amps[i] = std::abs (shapes[i]) * tilt;
+            const float w = 1.0f / (1.0f + std::pow (modes[(size_t) i].freq / kModalWeightHz, kModalWeightPow));
+            energy += shapes[i] * shapes[i] * w * w;
+        }
+        const float norm = kModalScale / std::sqrt (std::max (energy, 1.0e-8f));
+        for (int i = 0; i < n; ++i)
+        {
+            auto& m = modes[(size_t) i];
+            m.gain = amps[i] * norm;
+            // Keep the couple-pickup to mode-gain ratio of 0.1.0 so the bounded loop
+            // does not get louder or quieter just because banks were renormalized.
+            m.coupleGain = coupleShape[i] * (1.0f - polesR[i]) * (norm / kLegacyModeGain);
+        }
 
         const int harmonic = juce::roundToInt (rs.lowCut);
         lowCutOn = harmonic > 0;
@@ -675,11 +724,17 @@ namespace dooblrchroma::dsp
                 n = v.noiseLp.process (n);
                 if (! bp)
                     n = v.noiseHp.process (n);
-                noiseSig = n * v.env * noiseAmt * (1.0f + lfo) * (0.4f + 0.6f * v.velocity);
+                noiseSig = n * v.env * noiseAmt * (1.0f + lfo) * (0.4f + 0.6f * v.velocity) * kNoiseExcitation;
             }
 
             const float excitation = mallet + noiseSig;
             float res = 0.0f;
+
+            int nActiveLayers = 0;
+            for (int li = 0; li < 2; ++li)
+                if (s.layers[li].level > 1.0e-5f)
+                    ++nActiveLayers;
+            const float stackNorm = nActiveLayers > 1 ? (1.0f / std::sqrt ((float) nActiveLayers)) : 1.0f;
 
             for (int li = 0; li < 2; ++li)
             {
@@ -727,10 +782,10 @@ namespace dooblrchroma::dsp
                         pair.coupleA = flush (0.995f * pair.a.lastCoupleVel);
                         pair.coupleB = flush (0.995f * pair.b.lastCoupleVel);
                         juce::ignoreUnused (ya, yb);
-                        layerOut += pair.a.lastVel + pair.b.lastVel;
+                        layerOut += (pair.a.lastVel + pair.b.lastVel) * kCoupledMix;
                     }
                 }
-                res += layerOut * ls.level * invUnison;
+                res += layerOut * ls.level * invUnison * stackNorm;
             }
 
             // On release, shorten resonator decay by ramping a damper gain toward 0
@@ -821,6 +876,8 @@ namespace dooblrchroma::dsp
             fx.process (l, r, settings, (float) sampleRate);
             l *= gain;
             r *= gain;
+            l = softClip (l);
+            r = softClip (r);
             if (! std::isfinite (l)) l = 0;
             if (! std::isfinite (r)) r = 0;
             L[i] = l;

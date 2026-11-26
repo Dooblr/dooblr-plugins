@@ -10,6 +10,7 @@ namespace dooblrchroma::presets
     struct Factory
     {
         juce::String name;
+        juce::String category; // empty = Init / ungrouped
         std::vector<std::pair<juce::String, float>> values;
     };
 

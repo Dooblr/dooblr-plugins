@@ -121,8 +121,9 @@ int main (int argc, char* argv[])
         std::printf ("%s%s", p > 0 ? ", " : "", instance->getProgramName (p).toRawUTF8());
     std::printf (")\n");
 
-    if (instance->getNumPrograms() < 9)
-        return fail ("expected the Init + 8 factory programs");
+    if (instance->getNumPrograms() < 40)
+        return fail ("expected 40 factory programs (Init plus 39), got "
+                      + juce::String (instance->getNumPrograms()));
 
     juce::AudioBuffer<float> buffer (2, blockSize);
     bool finite = true;
@@ -170,6 +171,9 @@ int main (int argc, char* argv[])
 
     if (peak < 0.05f)
         return fail ("MIDI note-ons produced (almost) silent output");
+
+    if (peak >= 1.0f)
+        return fail ("output peak is at or above 0 dBFS (" + juce::String (peak, 3) + ")");
 
     std::printf ("  load check passed\n");
     return 0;

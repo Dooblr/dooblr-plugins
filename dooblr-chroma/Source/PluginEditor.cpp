@@ -299,12 +299,23 @@ namespace dooblrchroma
     {
         presetBox.clear (juce::dontSendNotification);
         int i = 1;
+        juce::String lastCategory;
         for (const auto& f : presets::factory())
+        {
+            if (f.category.isNotEmpty() && f.category != lastCategory)
+            {
+                if (i > 1)
+                    presetBox.addSeparator();
+                presetBox.addSectionHeading (f.category);
+                lastCategory = f.category;
+            }
             presetBox.addItem (f.name, i++);
+        }
         const auto name = owner.getPresetName();
         bool found = false;
-        for (int id = 1; id < i; ++id)
-            if (presetBox.getItemText (id - 1) == name)
+        const auto& fac = presets::factory();
+        for (int id = 1; id <= (int) fac.size(); ++id)
+            if (fac[(size_t) (id - 1)].name == name)
             {
                 presetBox.setSelectedId (id, juce::dontSendNotification);
                 found = true;
