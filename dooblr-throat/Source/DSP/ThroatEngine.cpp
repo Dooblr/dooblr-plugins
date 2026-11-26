@@ -185,6 +185,7 @@ namespace dooblrthroat::dsp
     {
         proven_.setFormant (double (settings_.formant));
         proven_.setVoice (settings_.voice);
+        proven_.setVowelLoop (settings_.vowelLoop);
         if (auto* v = live())
         {
             applySource (*v, settings_);

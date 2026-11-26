@@ -64,6 +64,7 @@ namespace dooblrthroat::dsp
         int mode = 0; // 0 speak, 1 syllable
         int syl = 0;
         double hz = 261.63;
+        unsigned cacheGen = 0; // which phrase cache this clip was made from
     };
 
     struct ProvenCache
@@ -76,6 +77,7 @@ namespace dooblrthroat::dsp
         ProvenClip speak;
         std::vector<ProvenClip> syllables;
         ProvenStats stats {};
+        unsigned gen = 0;
     };
 
     class ProvenEngine
@@ -96,6 +98,9 @@ namespace dooblrthroat::dsp
         // 0 darker .. 0.5 neutral .. 1 brighter. Applied at the next note synthesis.
         void setFormant (double amount) noexcept { formant_.store (amount, std::memory_order_release); }
         void setSustaining (bool on) noexcept { sustaining_.store (on, std::memory_order_release); }
+        // Vowel Loop (0.4.1): while sustaining, loop the vowel (Sing: the syllable's
+        // vowel; Speak: the line's last vowel). Off: every clip plays once.
+        void setVowelLoop (bool on) noexcept { vowelLoop_.store (on, std::memory_order_release); }
 
         // Message thread / worker: (re)build the speak clip and one clip per syllable
         // as WORLD features at a reference pitch. If wait is true (offline bounce / tests),
@@ -160,6 +165,22 @@ namespace dooblrthroat::dsp
         std::atomic<double> formant_ { 0.5 };
         std::atomic<unsigned> noteGen_ { 0 };
         std::atomic<unsigned> noteDone_ { 0 };
+        std::atomic<bool> vowelLoop_ { true };
+        std::atomic<bool> preparing_ { false };
+        std::atomic<unsigned> liveCacheGen_ { 0 };
+        std::atomic<unsigned> reqCacheGen_ { 0 };
+
+        // Audio-thread-only declick state (no atomics needed: render() and
+        // armPlayback() both run on the audio thread).
+        static constexpr int kTailMax = 512;
+        float tail_[kTailMax] {};
+        int tailLen_ = 0;
+        int tailPos_ = 0;
+        float lastGate_ = 0.0f;
+        bool inXfade_ = false;
+        bool lastLooping_ = false;
+        void captureTail (const ProvenPlay* play) noexcept;
+        void mixTail (float* out, size_t n) noexcept;
 
         mutable std::mutex mutex_;
         std::condition_variable cv_;

@@ -31,6 +31,7 @@ namespace dooblrthroat::dsp
         float formantTune = 0.0f;
         float formant = 0.5f;   // 0 darker .. 0.5 neutral .. 1 brighter (Natural)
         int voice = 0;          // 0 Auto, 1 Bright, 2 Deep
+        bool vowelLoop = true;  // 0.4.1: hold the vowel while the key is down (Natural)
         int clarityMode = 6; // 0 waveguide, 1 A, 2 B, 3 C, 4 K, 5 E espeak, 6 P piper (default), 7 M
     };
 

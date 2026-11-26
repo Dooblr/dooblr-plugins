@@ -13,7 +13,7 @@ namespace dooblrthroat
     X(breath) X(tension) X(brightness) X(fry) X(roughness) X(pressure) X(voiced) \
     X(vibratoDepth) X(vibratoRate) X(glide) X(bendRange) \
     X(attack) X(decay) X(sustain) X(release) X(output) \
-    X(mode) X(rate) X(effort) X(formantTune) X(engine) X(voice) X(formant)
+    X(mode) X(rate) X(effort) X(formantTune) X(engine) X(voice) X(formant) X(vowelLoop)
 
     struct DooblrThroatProcessor::RawParameters
     {
@@ -108,6 +108,7 @@ namespace dooblrthroat
         s.formantTune = f (r.formantTune);
         s.formant = f (r.formant);
         s.voice = i (r.voice);
+        s.vowelLoop = b (r.vowelLoop);
         // 0.3.0 default is Natural (Piper). Old sets that lack the engine param
         // also get this default (stateVersion stays 1). Tract is the waveguide fallback.
         s.clarityMode = (i (r.engine) == 1) ? 0 : 6;

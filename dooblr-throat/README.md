@@ -57,6 +57,9 @@ The editor has two pages.
   note's pitch and holds its vowel while the key is down; the closing
   consonant plays on release. **Speak** says the whole line on one note-on, at
   **Rate**, and stops on release or at the end.
+- **Vowel Loop** (switch under Mode, default on) — on: a held note keeps its
+  vowel going until you let go (Sing: each syllable's vowel; Speak: the last
+  vowel of the line). Off: each clip plays once and ends on its own.
 - **Voice** — **Auto** darkens the formants a little on low notes (about 16%
   lower at C2, none from C4 up) so a bass note sounds like a lower voice, not a
   slowed-down one. **Bright** keeps half of that shift; **Deep** adds 10% more.
@@ -77,7 +80,7 @@ The editor has two pages.
 The Advanced controls shape the Tract engine; Natural ignores them (except
 pitch bend). Empty text keeps the vowel-pad behaviour of 0.1.x (always Tract).
 
-### How Natural works (0.4.0)
+### How Natural works (0.4.0, declick 0.4.1)
 
 When the phrase changes, a worker thread runs Piper for the whole line and for
 each syllable and stores WORLD features (F0, spectral envelope, aperiodicity)
@@ -90,6 +93,19 @@ of Piper's own intonation; Sing holds the note within ±15 cents. Up to 0.3.0
 the clip was made once at C4 and resampled to the note, which slowed and
 darkened low notes (4× longer at C2) and made them unintelligible.
 
+0.4.1 removes the remaining clicks: on every retrigger, stop or phrase edit the
+sounding clip fades out over 5 ms while the next one starts (no added latency),
+the note gate is ramped per sample instead of every 16 samples, a phrase edit
+lets the clip that is playing finish instead of cutting it, the Tract voice no
+longer sounds while the first Natural cache is still being built, and a loop
+crossfade that has started always completes.
+
+The vowel loop (0.4.1) is about 60 ms of whole pitch periods placed where the
+vowel is loudest and steadiest, with its length trimmed by correlation to the
+clip's real period and a 10 ms crossfade at the seam. 0.4.0 looped about
+120 ms, which pulsed audibly on short or gliding vowels. In Speak the loop is
+searched in the last 250 ms of the line's final voiced stretch.
+
 On Tract, one FDTD voice; legato re-pitches the same airway with glide.
 
 ## Factory presets
@@ -97,7 +113,7 @@ On Tract, one FDTD voice; legato re-pitches the same airway with glide.
 Init, Close Front, Open Back, Soft Breath, Spoken, Choir Lead, Low Voice,
 Whisper, Spoken Line, Sung Phrase.
 
-## Limits of v0.4.0
+## Limits of v0.4.1
 
 - English text only. Natural uses a low-quality en_US Piper voice; the first
   render after a phrase edit takes a fraction of a second to about a second.
@@ -105,7 +121,12 @@ Whisper, Spoken Line, Sung Phrase.
   note-on in Sing and 55–70 ms in Speak on an M-series Mac (worker time plus
   the voice's own onset). Repeating the same syllable on the same note is
   instant. Play slightly ahead of the beat for tight timing.
-- Speak does not hold its last vowel; a held Speak note ends with the line.
+- With Vowel Loop on, a long held Speak note holds its last vowel, which for
+  lines ending in a consonant is the vowel before it; the final consonant then
+  plays on release.
+- A held vowel is a loop of the synthesized vowel, not a newly sung sustain:
+  very long holds sound static, and a speech recognizer may hear the
+  stretched last vowel as an extra word.
 - Voice / Source / Effort / Tuning colour the Tract model; they do not
   reshape the Natural recording.
 - The Lessac-trained voice is for personal, non-commercial use (see
@@ -127,4 +148,4 @@ JUCE 8.0.15, C++20, arm64. From this directory:
 Default build directory: `~/dooblr-build/dooblr-throat`. JUCE is reused from
 `~/dooblr-build/_deps/juce-src` when present. After tests and LoadCheck pass,
 the bundle is installed to `/Library/Audio/Plug-Ins/VST3/dooblr-throat.vst3`
-(no sudo). Version 0.4.0.
+(no sudo). Version 0.4.1.

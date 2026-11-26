@@ -66,6 +66,8 @@ namespace dooblrthroat
         juce::TextButton undoButton { "Undo" }, redoButton { "Redo" }, saveButton { "Save" }, loadButton { "Load" };
         juce::TextButton restartButton { "Reset" };
         juce::TextButton mainPageButton { "Main" }, advancedPageButton { "Advanced" };
+        juce::ToggleButton vowelLoopButton { "Vowel Loop" };
+        std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> vowelLoopAttachment;
         juce::ComboBox presetBox, modeBox, engineBox, voiceBox;
         juce::Slider outputSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };
         juce::Slider rateSlider { juce::Slider::LinearHorizontal, juce::Slider::TextBoxRight };

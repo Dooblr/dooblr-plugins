@@ -215,14 +215,14 @@ namespace
         check (p->getNumPrograms() == 10, "Init + 9 factory programs (" + std::to_string (p->getNumPrograms()) + ")");
         check (p->getProgramName (0) == "Init", "first program is Init");
         check (juce::String (JucePlugin_VersionString) == DOOBLRTHROAT_PROJECT_VERSION, "JUCE version string matches CMake");
-        check (p->getParameters().size() == 29, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
+        check (p->getParameters().size() == 30, "parameter count (" + std::to_string (p->getParameters().size()) + ")");
 
         for (auto* expected : { id::vowel, id::height, id::back, id::nasal, id::female, id::child,
                                 id::breath, id::tension, id::brightness, id::fry, id::roughness, id::pressure, id::voiced,
                                 id::vibratoDepth, id::vibratoRate, id::glide, id::bendRange,
                                 id::attack, id::decay, id::sustain, id::release, id::output,
                                 id::mode, id::rate, id::effort, id::formantTune, id::engine,
-                                id::voice, id::formant })
+                                id::voice, id::formant, id::vowelLoop })
             check (p->getState().getParameter (expected) != nullptr, std::string ("parameter id ") + expected);
     }
 
@@ -720,6 +720,10 @@ namespace
             p.getState().getParameter (id::mode)->convertTo0to1 (1.0f));
         p.getState().getParameter (id::rate)->setValueNotifyingHost (
             p.getState().getParameter (id::rate)->convertTo0to1 (1.2f));
+        // The key is never released here, so this checks the play-once path (Vowel Loop
+        // off). With Vowel Loop on, a held Speak note holds its last vowel until note-off
+        // (covered in testVowelLoopToggle).
+        p.getState().getParameter (id::vowelLoop)->setValueNotifyingHost (0.0f);
         p.setNonRealtime (true);
         p.prepareToPlay (48000.0, 512);
         p.applyBodyOnMessageThread();
@@ -1524,6 +1528,112 @@ namespace
     }
 
 
+    // 0.4.1: render a held note with Vowel Loop on/off (Natural, offline).
+    juce::AudioBuffer<float> renderHeld (const juce::String& text, int mode, int midiNote, bool loop,
+                                         double holdSec, double totalSec, double sr = 48000.0);
+    juce::AudioBuffer<float> renderHeld (const juce::String& text, int mode, int midiNote, bool loop,
+                                         double holdSec, double totalSec, double sr)
+    {
+        Processor p;
+        auto setP = [&p] (const char* pid, float v)
+        {
+            if (auto* r = p.getState().getParameter (pid))
+                r->setValueNotifyingHost (r->convertTo0to1 (v));
+        };
+        setP (id::mode, float (mode));
+        setP (id::vowelLoop, loop ? 1.0f : 0.0f);
+        p.setPhraseText (text);
+        p.setNonRealtime (true);
+        p.prepareToPlay (sr, 256);
+        p.applyBodyOnMessageThread();
+        const int n = int (sr * totalSec), offAt = int (sr * holdSec);
+        juce::AudioBuffer<float> all (1, n);
+        all.clear();
+        for (int done = 0; done < n; done += 256)
+        {
+            juce::AudioBuffer<float> buf (2, 256);
+            buf.clear();
+            juce::MidiBuffer midi;
+            if (done == 0) midi.addEvent (juce::MidiMessage::noteOn (1, midiNote, (juce::uint8) 110), 0);
+            if (offAt >= done && offAt < done + 256) midi.addEvent (juce::MidiMessage::noteOff (1, midiNote), offAt - done);
+            p.processBlock (buf, midi);
+            all.copyFrom (0, done, buf, 0, 0, std::min (256, n - done));
+        }
+        p.releaseResources();
+        return all;
+    }
+
+    double rmsBetween (const juce::AudioBuffer<float>& b, double sr, double t0, double t1);
+    double rmsBetween (const juce::AudioBuffer<float>& b, double sr, double t0, double t1)
+    {
+        const int a = std::clamp (int (t0 * sr), 0, b.getNumSamples()), e = std::clamp (int (t1 * sr), 0, b.getNumSamples());
+        double s = 0;
+        for (int i = a; i < e; ++i) s += double (b.getSample (0, i)) * b.getSample (0, i);
+        return e > a ? std::sqrt (s / (e - a)) : 0.0;
+    }
+
+    // Worst |second difference| over the local (20 ms) median level, as in the
+    // offline click detector; 0 when nothing is flagged. A seamless loop stays below 12.
+    double worstClickRatio (const juce::AudioBuffer<float>& b, double sr, double t0, double t1);
+    double worstClickRatio (const juce::AudioBuffer<float>& b, double sr, double t0, double t1)
+    {
+        const int a = std::max (2, int (t0 * sr)), e = std::min (b.getNumSamples(), int (t1 * sr));
+        const float* x = b.getReadPointer (0);
+        const int hop = 16, win = int (0.02 * sr) / hop;
+        std::vector<double> peaks;
+        for (int i = a; i + hop <= e; i += hop)
+        {
+            double m = 0;
+            for (int k = i; k < i + hop; ++k) m = std::max (m, std::abs (double (x[k]) - 2.0 * x[k - 1] + x[k - 2]));
+            peaks.push_back (m);
+        }
+        double worst = 0;
+        for (size_t j = 0; j < peaks.size(); ++j)
+        {
+            const size_t lo = j >= size_t (win / 2) ? j - size_t (win / 2) : 0, hi = std::min (peaks.size(), j + size_t (win / 2) + 1);
+            std::vector<double> w (peaks.begin() + long (lo), peaks.begin() + long (hi));
+            std::nth_element (w.begin(), w.begin() + long (w.size() / 2), w.end());
+            const double med = std::max (1.0e-6, w[w.size() / 2] / 2.0);
+            if (peaks[j] <= 0.004 || peaks[j] / med < 12.0)
+                continue;
+            // Periodic guard (as click_detect.py): low voices have sharp glottal closures
+            // every period; a click must also beat the loudest other peak within +/-30 ms
+            // (excluding +/-2 ms) by 2.5x.
+            const size_t nearB = size_t (0.03 * sr) / hop, exB = size_t (0.002 * sr) / hop + 1;
+            double other = 0;
+            for (size_t q = (j > nearB ? j - nearB : 0); q < std::min (peaks.size(), j + nearB + 1); ++q)
+                if ((q > j ? q - j : j - q) > exB) other = std::max (other, peaks[q]);
+            if (peaks[j] > 2.5 * other)
+                worst = std::max (worst, peaks[j] / med);
+        }
+        return worst;
+    }
+
+    void testVowelLoopToggle();
+    void testVowelLoopToggle()
+    {
+        const double sr = 48000.0;
+        for (int note : { 36, 69 })
+        {
+            auto on = renderHeld ("ah", 0, note, true, 2.5, 3.0);
+            auto off = renderHeld ("ah", 0, note, false, 2.5, 3.0);
+            const auto onMid = rmsBetween (on, sr, 1.6, 2.2), offMid = rmsBetween (off, sr, 1.6, 2.2);
+            check (onMid > 0.01, "Sing loop on sustains at MIDI " + std::to_string (note) + " (rms " + std::to_string (onMid) + ")");
+            check (offMid < onMid * 0.05, "Sing loop off plays once at MIDI " + std::to_string (note) + " (rms " + std::to_string (offMid) + ")");
+            const auto r = worstClickRatio (on, sr, 0.5, 2.4);
+            check (r < 12.0, "Sing vowel loop is click-free at MIDI " + std::to_string (note) + " (worst ratio " + std::to_string (r) + ")");
+            check (rmsBetween (on, sr, 2.9, 3.0) < 1.0e-3, "loop releases after note-off at MIDI " + std::to_string (note));
+        }
+        auto sOn = renderHeld ("hello there", 1, 45, true, 2.5, 3.0);
+        auto sOff = renderHeld ("hello there", 1, 45, false, 2.5, 3.0);
+        const auto a = rmsBetween (sOn, sr, 1.6, 2.2), b = rmsBetween (sOff, sr, 1.6, 2.2);
+        check (a > 0.01, "Speak holds its last vowel with Vowel Loop on (rms " + std::to_string (a) + ")");
+        check (b < a * 0.05, "Speak ends with the line with Vowel Loop off (rms " + std::to_string (b) + ")");
+        const auto r = worstClickRatio (sOn, sr, 1.2, 2.4);
+        check (r < 12.0, "Speak last-vowel loop is click-free (worst ratio " + std::to_string (r) + ")");
+        check (rmsBetween (sOn, sr, 2.9, 3.0) < 1.0e-3, "Speak held vowel releases after note-off");
+    }
+
 int main()
 {
     juce::ScopedJuceInitialiser_GUI juceInitialiser;
@@ -1548,6 +1658,7 @@ int main()
         { "coarticulation and TA",         testCoarticulationAndTargetApproximation },
         { "editor layout no clip",        testEditorLayoutNoClipOrOverlap },
         { "Natural target F0, duration, hold", testNaturalTargetF0DurationAndHold },
+        { "Vowel Loop toggle",           testVowelLoopToggle },
         { "diction wavs",                 testWriteDictionWavs },
         { "AB / held wavs",              testWriteAbAndHeldWavs },
         { "sample rates and block sizes", testSampleRatesAndBlockSizes },

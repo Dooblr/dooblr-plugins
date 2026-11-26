@@ -104,7 +104,7 @@ namespace dooblrthroat
         styleLabel (rateCaption, "Rate", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         styleLabel (voiceCaption, "Voice", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         styleLabel (formantCaption, "Formant", 11.0f, Palette::textMuted, juce::Justification::centredRight);
-        styleLabel (hintLabel, "Sing: each note plays the next syllable and holds its vowel.  Speak: one note plays the whole phrase.", 13.0f,
+        styleLabel (hintLabel, "Sing: each note plays the next syllable.  Speak: one note plays the whole phrase.  Vowel Loop holds the vowel while the key is down.", 13.0f,
                     Palette::textMuted, juce::Justification::centred);
         styleLabel (engineCaption, "Engine", 11.0f, Palette::textMuted, juce::Justification::centredRight);
         modeBox.setComponentID (id::mode);
@@ -159,6 +159,10 @@ namespace dooblrthroat
         formantSlider.setDoubleClickReturnValue (true, 0.5);
         addAndMakeVisible (levelCaption);
         addAndMakeVisible (levelSlider);
+        vowelLoopButton.setComponentID (id::vowelLoop);
+        vowelLoopButton.setTooltip ("On: a held note keeps singing its vowel until you let go (Sing: each syllable; Speak: the last vowel of the line). Off: each clip plays once.");
+        vowelLoopAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (state, id::vowelLoop, vowelLoopButton);
+        addAndMakeVisible (vowelLoopButton);
         for (auto* s : { &rateSlider, &formantSlider, &levelSlider })
         {
             s->setColour (juce::Slider::textBoxOutlineColourId, Palette::divider);
@@ -473,7 +477,8 @@ namespace dooblrthroat
                                     (juce::Component*) &voiceCaption, (juce::Component*) &voiceBox,
                                     (juce::Component*) &rateCaption, (juce::Component*) &rateSlider,
                                     (juce::Component*) &formantCaption, (juce::Component*) &formantSlider,
-                                    (juce::Component*) &levelCaption, (juce::Component*) &levelSlider })
+                                    (juce::Component*) &levelCaption, (juce::Component*) &levelSlider,
+                                    (juce::Component*) &vowelLoopButton })
             c->setVisible (! advancedPage);
         for (auto* s : { &rateSlider, &formantSlider })
         {
@@ -524,7 +529,14 @@ namespace dooblrthroat
                 ctl.setBounds (col.withSizeKeepingCentre (side, side).withY (col.getY()));
             }
             else
+            {
                 ctl.setBounds (col.removeFromTop (32).withSizeKeepingCentre (juce::jmin (140, col.getWidth()), 32));
+                if (&ctl == &modeBox)
+                {
+                    col.removeFromTop (18);
+                    vowelLoopButton.setBounds (col.removeFromTop (28).withSizeKeepingCentre (juce::jmin (140, col.getWidth()), 28));
+                }
+            }
         };
         column (modeCaption, modeBox, false);
         column (voiceCaption, voiceBox, false);

@@ -8,7 +8,7 @@ namespace dooblrthroat::params
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
         Every ID through "output" was added in 0.1.0. "mode" and "rate" were added in 0.2.0.
-        "effort" and "formantTune" were added in 0.2.1. "engine" was added in 0.3.0. "voice" and "formant" were added in 0.4.0. */
+        "effort" and "formantTune" were added in 0.2.1. "engine" was added in 0.3.0. "voice" and "formant" were added in 0.4.0. "vowelLoop" was added in 0.4.1. */
     namespace id
     {
         inline constexpr const char* vowel      = "vowel";
@@ -40,6 +40,7 @@ namespace dooblrthroat::params
         inline constexpr const char* engine       = "engine";
         inline constexpr const char* voice        = "voice";
         inline constexpr const char* formant      = "formant";
+        inline constexpr const char* vowelLoop    = "vowelLoop";
     }
 
     /** Choice 0 is the vowel pad; 1..N_VOWELS are the named vowels. */

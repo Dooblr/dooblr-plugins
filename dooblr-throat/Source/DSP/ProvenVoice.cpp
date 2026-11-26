@@ -391,19 +391,41 @@ namespace dooblrthroat::dsp
         // window inside the voiced span and make its length a whole number of
         // periods at the note F0 so the crossfade joins in phase.
         void findLoop (const std::vector<float>& audio, const WorldFeatures& feat, double hz, int fs,
-                       int& loopStart, int& loopEnd)
+                       int& loopStart, int& loopEnd, bool lastVowel = false)
         {
             loopStart = 0;
             loopEnd = 0;
             if (! feat.valid() || audio.size() < 64 || ! (hz > 20.0) || fs <= 0) return;
             const int n = int (audio.size());
             int first = -1, last = -1;
-            for (int i = 0; i < feat.f0n; ++i)
-                if (feat.f0[size_t (i)] > 40.0)
+            if (lastVowel)
+            {
+                // Speak: the last voiced run that is long enough to be a vowel.
+                int runStart = -1;
+                for (int i = 0; i <= feat.f0n; ++i)
                 {
-                    if (first < 0) first = i;
-                    last = i;
+                    const bool v = i < feat.f0n && feat.f0[size_t (i)] > 40.0;
+                    if (v && runStart < 0) runStart = i;
+                    if (! v && runStart >= 0)
+                    {
+                        if (i - 1 - runStart >= 12) { first = runStart; last = i - 1; }
+                        runStart = -1;
+                    }
                 }
+                // A fully voiced line ("I love you") is one long run; keep only its
+                // last ~250 ms so the loop lands on the final vowel, not an early one.
+                if (first >= 0 && feat.framePeriod > 0.0)
+                    first = std::max (first, last - int (250.0 / feat.framePeriod));
+            }
+            else
+            {
+                for (int i = 0; i < feat.f0n; ++i)
+                    if (feat.f0[size_t (i)] > 40.0)
+                    {
+                        if (first < 0) first = i;
+                        last = i;
+                    }
+            }
             if (first < 0 || last - first < 8) return;
             auto toSamp = [&] (int i) {
                 i = std::clamp (i, 0, feat.f0n - 1);
@@ -411,25 +433,67 @@ namespace dooblrthroat::dsp
             };
             const int vs = toSamp (first + 1), ve = toSamp (last - 1);
             if (ve - vs < fs / 20) return;
-            // Loudest 20 ms window inside the voiced span.
-            const int win = std::max (32, fs / 50);
-            double best = -1.0;
-            int bestCentre = (vs + ve) / 2;
-            for (int c = vs + win / 2; c + win / 2 < ve; c += win / 4)
-            {
-                double e = 0.0;
-                for (int k = c - win / 2; k < c + win / 2; ++k)
-                    e += double (audio[size_t (k)]) * audio[size_t (k)];
-                if (e > best) { best = e; bestCentre = c; }
-            }
+            // Loop length: whole pitch periods, about 60 ms (at least two periods).
+            // 0.4.0 used ~120 ms, which in a short or gliding vowel spans an
+            // audible level / formant swing that repeats at ~8 Hz ("na-na").
             const double period = double (fs) / hz;
-            const int periods = std::max (2, int (std::floor (0.12 * fs / period)));
+            const int periods = std::max (2, int (std::floor (0.06 * fs / period)));
             int len = int (std::llround (periods * period));
             const int maxLen = (ve - vs) * 3 / 4;
             while (len > maxLen && len > int (2 * period) + 1)
                 len = int (std::llround ((std::floor (len / period) - 1.0) * period));
+            // Place it where the voiced span is loud AND steady: score each
+            // candidate by its energy times the quietest / loudest energy of its
+            // sub-blocks (one pitch period or 5 ms, whichever is longer).
+            const int sub = std::max ({ 16, fs / 200, int (period) });
+            double best = -1.0;
+            int bestCentre = (vs + ve) / 2;
+            for (int c = vs + len / 2; c + len / 2 < ve; c += std::max (8, sub / 2))
+            {
+                double total = 0.0, lo = 1.0e30, hi = 0.0;
+                for (int k0 = c - len / 2; k0 + sub <= c + len / 2; k0 += sub)
+                {
+                    double e = 0.0;
+                    for (int k = k0; k < k0 + sub; ++k)
+                        e += double (audio[size_t (k)]) * audio[size_t (k)];
+                    total += e;
+                    lo = std::min (lo, e);
+                    hi = std::max (hi, e);
+                }
+                const double steady = hi > 0.0 ? lo / hi : 0.0;
+                const double score = total * steady;
+                if (score > best) { best = score; bestCentre = c; }
+            }
             if (len < 64) return;
             int s = std::clamp (bestCentre - len / 2, vs, std::max (vs, ve - len));
+            // Trim the length to the clip's real period: Sing keeps a little of
+            // the voice's own intonation, so `period` from the MIDI note can be off
+            // by a few samples per cycle, and the 10 ms seam crossfade would then
+            // blend two glottal pulses out of phase (a soft flam every loop).
+            // Pick the length within +/-4% whose seam region (the 10 ms before the
+            // loop end vs the 10 ms before the loop start) correlates best.
+            {
+                const int w = std::max (16, fs / 100);
+                if (s >= w)
+                {
+                    const int lo = std::max (int (2 * period * 0.9), int (len * 0.96));
+                    const int hi = std::min (n - 1 - s, int (len * 1.04) + 1);
+                    double bestR = -2.0;
+                    int bestLen = len;
+                    for (int L = lo; L <= hi; ++L)
+                    {
+                        double xy = 0.0, xx = 0.0, yy = 0.0;
+                        for (int k = 0; k < w; ++k)
+                        {
+                            const double a = audio[size_t (s - w + k)], b = audio[size_t (s + L - w + k)];
+                            xy += a * b; xx += a * a; yy += b * b;
+                        }
+                        const double r = (xx > 0.0 && yy > 0.0) ? xy / std::sqrt (xx * yy) : -1.0;
+                        if (r > bestR) { bestR = r; bestLen = L; }
+                    }
+                    len = bestLen;
+                }
+            }
             loopStart = s;
             loopEnd = std::min (n - 1, s + len);
             if (loopEnd - loopStart < 64) { loopStart = loopEnd = 0; }
@@ -816,6 +880,7 @@ namespace dooblrthroat::dsp
             pendingSyllables_ = syllables;
             pendingLength_ = lengthScale;
             pending_ = true;
+            preparing_.store (true, std::memory_order_release);
             ++generation_;
             error_.clear();
             if (! started_ && ! stop_.load (std::memory_order_acquire))
@@ -886,6 +951,11 @@ namespace dooblrthroat::dsp
                     formant = formant_.load (std::memory_order_acquire);
                     voice = voice_.load (std::memory_order_acquire);
                     cacheCopy = ownedCache_.get();
+                    // A note armed just before a phrase edit asked for the old cache;
+                    // it gets the new one instead of waiting for a clip that never comes.
+                    auto want = reqCacheGen_.load (std::memory_order_acquire);
+                    if (cacheCopy != nullptr && want != cacheCopy->gen)
+                        reqCacheGen_.compare_exchange_strong (want, cacheCopy->gen, std::memory_order_acq_rel);
                 }
                 else
                     continue;
@@ -895,6 +965,8 @@ namespace dooblrthroat::dsp
             {
                 const auto outRate = outputRate_.load (std::memory_order_acquire);
                 auto cache = buildCache (kind, phrase, syllables, length, outRate);
+                if (cache != nullptr)
+                    cache->gen = gen;
                 {
                     std::lock_guard<std::mutex> g (mutex_);
                     working_ = false;
@@ -906,6 +978,10 @@ namespace dooblrthroat::dsp
                 }
                 if (cache != nullptr)
                     publishCache (std::move (cache));
+                {
+                    std::lock_guard<std::mutex> g (mutex_);
+                    if (! pending_) preparing_.store (false, std::memory_order_release);
+                }
                 readyCv_.notify_all();
                 continue;
             }
@@ -925,20 +1001,19 @@ namespace dooblrthroat::dsp
     {
         auto* raw = next.get();
         std::unique_ptr<ProvenCache> oldCache;
-        std::unique_ptr<ProvenPlay> oldPlay;
         {
+            // The sounding play clip is independent of the cache, so a phrase
+            // edit lets it finish instead of cutting it (that cut was a click).
             std::lock_guard<std::mutex> g (mutex_);
             oldCache = std::move (ownedCache_);
-            oldPlay = std::move (ownedPlay_);
             ownedCache_ = std::move (next);
-            liveCache_.store (raw, std::memory_order_release);
-            livePlay_.store (nullptr, std::memory_order_release);
+            liveCache_.store (raw, std::memory_order_seq_cst);
+            liveCacheGen_.store (raw != nullptr ? raw->gen : 0u, std::memory_order_seq_cst);
             readyFlag_.store (raw != nullptr, std::memory_order_release);
         }
-        while (inRender_.load (std::memory_order_acquire) != 0)
+        while (inRender_.load (std::memory_order_seq_cst) != 0)
             std::this_thread::yield();
         oldCache.reset();
-        oldPlay.reset();
     }
 
     void ProvenEngine::publishPlay (std::unique_ptr<ProvenPlay> next)
@@ -949,9 +1024,9 @@ namespace dooblrthroat::dsp
             std::lock_guard<std::mutex> g (mutex_);
             old = std::move (ownedPlay_);
             ownedPlay_ = std::move (next);
-            livePlay_.store (raw, std::memory_order_release);
+            livePlay_.store (raw, std::memory_order_seq_cst);
         }
-        while (inRender_.load (std::memory_order_acquire) != 0)
+        while (inRender_.load (std::memory_order_seq_cst) != 0)
             std::this_thread::yield();
         old.reset();
     }
@@ -1016,12 +1091,13 @@ namespace dooblrthroat::dsp
         play->samples = (clip->world.fs == outRate) ? std::move (native)
                                                     : resampleSinc (native, clip->world.fs, outRate);
         fadeEdges (play->samples, outRate);
-        findLoop (play->samples, clip->world, hz, outRate, play->loopStart, play->loopEnd);
+        findLoop (play->samples, clip->world, hz, outRate, play->loopStart, play->loopEnd, mode == 0);
         play->rate = outRate;
         play->hz = hz;
         play->midi = midiOfHz (hz);
         play->mode = mode;
         play->syl = syl;
+        play->cacheGen = cache.gen;
         return play;
     }
 
@@ -1036,6 +1112,8 @@ namespace dooblrthroat::dsp
             return false;
         if (mode == 1 && play->syl != syl)
             return false;
+        if (play->cacheGen != reqCacheGen_.load (std::memory_order_acquire))
+            return false;
         return midiOfHz (play->hz) == midiOfHz (hz);
     }
 
@@ -1043,16 +1121,29 @@ namespace dooblrthroat::dsp
     {
         if (! std::isfinite (midiHz) || midiHz < 1.0)
             midiHz = 261.626;
+        // Guard the play pointer the same way render() does: the worker frees a
+        // replaced clip only after inRender_ drops back to zero.
+        inRender_.store (1, std::memory_order_seq_cst);
+        const auto* current = livePlay_.load (std::memory_order_seq_cst);
+        // Declick: whatever is sounding now fades out over ~5 ms instead of
+        // jumping to the start of the next clip (or to silence while it renders).
+        if (engaged_.load (std::memory_order_acquire) && playMatchesRequest (current))
+            captureTail (current);
         playMode_.store (mode, std::memory_order_release);
         playSyl_.store (syl, std::memory_order_release);
         playPos_.store (0.0, std::memory_order_release);
         playHz_.store (midiHz, std::memory_order_release);
         playRatio_.store (1.0, std::memory_order_release);
-        engaged_.store (liveCache_.load (std::memory_order_acquire) != nullptr, std::memory_order_release);
-        const auto* existing = livePlay_.load (std::memory_order_acquire);
-        if (playMatchesRequest (existing))
+        reqCacheGen_.store (liveCacheGen_.load (std::memory_order_acquire), std::memory_order_release);
+        inXfade_ = false;
+        // Stay engaged while the first cache is still building, so the Tract
+        // voice never sounds in its place (it used to leak on the first notes).
+        engaged_.store (liveCache_.load (std::memory_order_acquire) != nullptr
+                            || preparing_.load (std::memory_order_acquire),
+                        std::memory_order_release);
+        if (playMatchesRequest (current))
         {
-            const auto ratio = (existing->hz > 1.0) ? (midiHz / existing->hz) : 1.0;
+            const auto ratio = (current->hz > 1.0) ? (midiHz / current->hz) : 1.0;
             playRatio_.store (std::clamp (std::isfinite (ratio) ? ratio : 1.0, 0.5, 2.0),
                               std::memory_order_release);
             noteDone_.store (noteGen_.load (std::memory_order_acquire), std::memory_order_release);
@@ -1061,10 +1152,72 @@ namespace dooblrthroat::dsp
         {
             noteGen_.fetch_add (1, std::memory_order_acq_rel);
         }
+        inRender_.store (0, std::memory_order_seq_cst);
         // Real time: the worker polls every 5 ms, so the audio thread never
         // touches the condition variable. Offline: wake it and wait.
         if (offline_.load (std::memory_order_acquire))
             waitNoteReady();
+    }
+
+    void ProvenEngine::captureTail (const ProvenPlay* play) noexcept
+    {
+        // Audio thread, inside the inRender_ guard. Continue the current clip
+        // from the play head for a few ms with a linear fade-out; any part of an
+        // older tail still sounding is folded in so back-to-back notes stay smooth.
+        float prev[kTailMax] {};
+        int prevLen = 0;
+        for (int k = tailPos_; k < tailLen_; ++k)
+            prev[prevLen++] = tail_[k];
+        tailLen_ = 0;
+        tailPos_ = 0;
+        const int len = std::clamp ((play != nullptr ? play->rate : 48000) / 200, 16, kTailMax);
+        if (play != nullptr && ! play->samples.empty())
+        {
+            const auto& s = play->samples;
+            const auto sz = int (s.size());
+            auto pos = playPos_.load (std::memory_order_relaxed);
+            auto inc = playRatio_.load (std::memory_order_relaxed);
+            if (! std::isfinite (inc) || inc <= 0.0) inc = 1.0;
+            const auto loopStart = play->loopStart, loopEnd = play->loopEnd;
+            const bool looping = (lastLooping_ || inXfade_) && loopEnd > loopStart + 32;
+            const int xfade = looping ? std::max (0, std::min ({ play->rate / 100, (loopEnd - loopStart) / 3, loopStart })) : 0;
+            auto at = [&] (double p) -> float
+            {
+                if (p < 0.0 || p >= double (sz)) return 0.0f;
+                if (p >= double (sz - 1)) return s[size_t (sz - 1)];
+                const auto j = int (p);
+                const auto t = float (p - double (j));
+                return s[size_t (j)] + (s[size_t (j + 1)] - s[size_t (j)]) * t;
+            };
+            for (int k = 0; k < len; ++k)
+            {
+                if (looping && pos >= double (loopEnd))
+                    pos -= double (loopEnd - loopStart);
+                float y;
+                if (looping && xfade > 0 && pos >= double (loopEnd - xfade) && pos < double (loopEnd))
+                {
+                    const auto t = float ((pos - double (loopEnd - xfade)) / double (xfade));
+                    y = (1.0f - t) * at (pos) + t * at (pos - double (loopEnd - loopStart));
+                }
+                else
+                    y = at (pos);
+                const auto fade = 1.0f - float (k + 1) / float (len);
+                tail_[k] = y * lastGate_ * fade;
+                pos += inc;
+            }
+            tailLen_ = len;
+        }
+        for (int k = 0; k < prevLen; ++k)
+        {
+            if (k >= tailLen_) { tail_[k] = 0.0f; tailLen_ = k + 1; }
+            tail_[k] += prev[k];
+        }
+    }
+
+    void ProvenEngine::mixTail (float* out, size_t n) noexcept
+    {
+        for (size_t i = 0; i < n && tailPos_ < tailLen_; ++i)
+            out[i] += tail_[tailPos_++];
     }
 
     void ProvenEngine::startSpeakPlayback (double midiHz) noexcept
@@ -1079,6 +1232,11 @@ namespace dooblrthroat::dsp
 
     void ProvenEngine::stopPlayback() noexcept
     {
+        inRender_.store (1, std::memory_order_seq_cst);
+        const auto* current = livePlay_.load (std::memory_order_seq_cst);
+        if (engaged_.load (std::memory_order_acquire) && playMatchesRequest (current))
+            captureTail (current);
+        inRender_.store (0, std::memory_order_seq_cst);
         playPos_.store (0.0, std::memory_order_release);
         engaged_.store (false, std::memory_order_release);
         sustaining_.store (false, std::memory_order_release);
@@ -1105,8 +1263,8 @@ namespace dooblrthroat::dsp
         const auto* play = livePlay_.load (std::memory_order_acquire);
         if (play == nullptr || play->samples.empty())
             return true;
-        const bool canLoop = sustaining_.load (std::memory_order_acquire)
-                          && play->mode == 1
+        const bool canLoop = vowelLoop_.load (std::memory_order_acquire)
+                          && sustaining_.load (std::memory_order_acquire)
                           && play->loopEnd > play->loopStart + 32;
         if (canLoop)
             return false;
@@ -1116,24 +1274,35 @@ namespace dooblrthroat::dsp
     bool ProvenEngine::render (float* out, size_t n, double gate) noexcept
     {
         if (out == nullptr || n == 0) return false;
-        inRender_.store (1, std::memory_order_release);
-        const auto* play = livePlay_.load (std::memory_order_acquire);
-        const auto g = float (std::clamp (gate, 0.0, 1.5));
+        inRender_.store (1, std::memory_order_seq_cst);
+        const auto* play = livePlay_.load (std::memory_order_seq_cst);
+        // The engine envelope arrives once per 16-sample step; ramp it so the
+        // attack / release is smooth instead of a staircase.
+        const auto g1 = float (std::clamp (std::isfinite (gate) ? gate : 0.0, 0.0, 1.5));
+        const auto g0 = lastGate_;
+        lastGate_ = g1;
         if (play == nullptr || play->samples.empty()
             || ! playMatchesRequest (play))
         {
             for (size_t i = 0; i < n; ++i) out[i] = 0;
-            inRender_.store (0, std::memory_order_release);
+            mixTail (out, n);
+            lastLooping_ = false;
+            inXfade_ = false;
+            inRender_.store (0, std::memory_order_seq_cst);
             return false;
         }
         const auto& s = play->samples;
         const auto sz = int (s.size());
         const auto loopStart = play->loopStart;
         const auto loopEnd = play->loopEnd;
-        const bool canLoop = sustaining_.load (std::memory_order_relaxed)
-                          && play->mode == 1
-                          && loopEnd > loopStart + 32;
-        const int xfade = canLoop ? std::max (0, std::min ({ play->rate / 100, (loopEnd - loopStart) / 3, loopStart })) : 0;
+        const bool validLoop = loopEnd > loopStart + 32;
+        const bool loopWanted = validLoop
+                             && vowelLoop_.load (std::memory_order_relaxed)
+                             && sustaining_.load (std::memory_order_relaxed);
+        // Pitch-synchronous loop (whole periods) with a 10 ms crossfade from the
+        // run-in. Once a crossfade starts it always completes, so releasing the
+        // key mid-fade cannot step the waveform.
+        const int xfade = validLoop ? std::max (0, std::min ({ play->rate / 100, (loopEnd - loopStart) / 3, loopStart })) : 0;
         auto pos = playPos_.load (std::memory_order_relaxed);
         auto inc = playRatio_.load (std::memory_order_relaxed);
         if (! std::isfinite (inc) || inc <= 0.0) inc = 1.0;
@@ -1145,13 +1314,19 @@ namespace dooblrthroat::dsp
             const auto t = float (p - double (j));
             return s[size_t (j)] + (s[size_t (j + 1)] - s[size_t (j)]) * t;
         };
+        const auto invN = 1.0f / float (n);
         for (size_t i = 0; i < n; ++i)
         {
-            if (canLoop && pos >= double (loopEnd))
-                pos = double (loopStart) + (pos - double (loopEnd));
-            float y = 0;
-            if (canLoop && xfade > 0 && pos >= double (loopEnd - xfade) && pos < double (loopEnd))
+            const bool looping = validLoop && (loopWanted || inXfade_);
+            if (looping && pos >= double (loopEnd))
             {
+                pos -= double (loopEnd - loopStart);
+                inXfade_ = false;
+            }
+            float y = 0;
+            if (looping && xfade > 0 && pos >= double (loopEnd - xfade) && pos < double (loopEnd))
+            {
+                inXfade_ = true;
                 const auto t = float ((pos - double (loopEnd - xfade)) / double (xfade));
                 const auto a = sampleAt (pos);
                 const auto b = sampleAt (pos - double (loopEnd - loopStart)); // the run-in to loopStart
@@ -1159,11 +1334,14 @@ namespace dooblrthroat::dsp
             }
             else
                 y = sampleAt (pos);
+            const auto g = g0 + (g1 - g0) * float (i + 1) * invN;
             out[i] = y * g;
             pos += inc;
         }
+        lastLooping_ = loopWanted;
+        mixTail (out, n);
         playPos_.store (pos, std::memory_order_relaxed);
-        inRender_.store (0, std::memory_order_release);
+        inRender_.store (0, std::memory_order_seq_cst);
         return true;
     }
 

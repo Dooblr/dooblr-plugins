@@ -113,6 +113,8 @@ namespace dooblrthroat::params
 
         layout.add (std::make_unique<juce::AudioParameterChoice> (pid (id::voice), "Voice", voiceNames(), 0));
         addPercent (layout, id::formant, "Formant", 0.5f);
+        // 0.4.1. Default on keeps 0.4.0 Sing behaviour (vowel held while the key is down).
+        addBool (layout, id::vowelLoop, "Vowel Loop", true);
 
         return layout;
     }
