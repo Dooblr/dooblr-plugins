@@ -36,8 +36,8 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - Kind: JUCE effect VST3 (target `DooblrFeedback`, product "dooblr-feedback", code Dbfb)
 - Version: 0.1.3
-- Last source change: 2026-11-06
-- Source tree: `f7bdf8420a6e` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-feedback`)
+- Last source change: 2026-11-26
+- Source tree: `8354543703de` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-feedback`)
 - Window: resize limits 940x600..2400x1400; default size 1080x660
 - Build/test: `dooblr-feedback/scripts/build.sh` (build dir `~/dooblr-build/dooblr-feedback`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrFeedbackTests` (Tests/CMakeLists.txt)
@@ -66,7 +66,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | safety | bool | Safety | on/off | true |  |
 | safetyTrigger | choice | Safety trigger | [Feedback, Always] | 0 (Feedback) |  |
 | safetyThreshold | float | Safety threshold | -24..0 step 0.1 | -6 |  |
-| safetyDepth | float | Safety depth | 3..49 (custom mapping) | 12 |  |
+| safetyDepth | float | Safety depth | 3..61 (custom mapping) | 24 |  |
 | safetyRelease | float | Safety release | 0.2..5 step 0.01 skew centre 1 | 1.5 |  |
 | recoverSpeed | choice | Recover speed | [Slow, Normal, Fast] | 0 (Slow) |  |
 | bellQ | float | Bell Q | 0.7..16 step 0.1 skew centre 4 | 4 |  |

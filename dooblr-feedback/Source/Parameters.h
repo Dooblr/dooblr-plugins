@@ -6,7 +6,7 @@ namespace dooblrfeedback::params
 {
     /** State-tree version written with every saved state (bump when a migration is needed).
         1: 0.1.0. 2: 0.1.1 (Range high default 16 -> 20 kHz, Max cut gains an infinite top, Safety). */
-    inline constexpr int stateVersion = 2;
+    inline constexpr int stateVersion = 3;
 
     /** Parameter IDs. Append-only: never rename or reorder (hosts store automation by ID).
         IDs up to bypass were added in 0.1.0; the safety IDs in 0.1.1; recoverSpeed in 0.1.2;
@@ -55,8 +55,10 @@ namespace dooblrfeedback::params
 
     /** Max cut: 3 - 30 dB, and the top of the knob (maxCutInfinite) is a full-depth notch. */
     inline constexpr float maxCutFinite = 30.0f, maxCutInfinite = 31.0f;
-    /** Safety depth: 3 - 48 dB, and the top of the knob (safetyDepthMute) mutes. */
-    inline constexpr float safetyDepthFinite = 48.0f, safetyDepthMute = 49.0f;
+    /** Safety depth: 3 - 60 dB, and the top of the knob (safetyDepthMute) mutes.
+        0.1.2 and earlier topped out at 48 dB, with mute stored as 49. */
+    inline constexpr float safetyDepthFinite = 60.0f, safetyDepthMute = 61.0f;
+    inline constexpr float legacySafetyMute = 48.5f;
     /** The 0.1.0 default for Range high: a 0.1.0 session that still has it is moved to 20 kHz. */
     inline constexpr float legacyRangeHigh = 16000.0f, defaultRangeHigh = 20000.0f;
     /** High-pass (0.1.3): 20-400 Hz, log, default 80 Hz. Off by default. */

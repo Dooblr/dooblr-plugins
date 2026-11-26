@@ -866,9 +866,11 @@ namespace dooblrfeedback::dsp
             // keeps climbing, so growth must hold for growthSec without a dip (which restarts it).
             const auto growing = tr.strongWindowFrames > 0 && strongNow && strongAfter >= t.growthSec
                               && strongRise >= t.growthDb && strongRise >= t.growthDbPerSec * strongAfter;
-            const auto runaway = tr.windowFrames > 0 && after >= fastSec && rise >= fastRiseDb
-                              && rise >= fastDbPerSec * after && tr.maxDropDb <= 0.75f
-                              && tr.prominence >= tr.windowProminence + 2.0f;
+            const auto hf = tr.freq >= fastHfHz;
+            const auto runaway = tr.windowFrames > 0 && after >= (hf ? fastSecHf : fastSec)
+                              && rise >= (hf ? fastRiseDbHf : fastRiseDb)
+                              && rise >= (hf ? fastDbPerSecHf : fastDbPerSec) * after && tr.maxDropDb <= 0.75f
+                              && tr.prominence >= tr.windowProminence + (hf ? 1.0f : 2.0f);
             const auto confirmed = growing || runaway || (float) tr.strongFrames * hopSec >= t.stableSec;
             if (! confirmed) continue;
 
@@ -1174,8 +1176,8 @@ namespace dooblrfeedback::dsp
 
     //==============================================================================
     /*  Auto-recover (0.1.2): once a floating notch has been quiet for Recover after seconds, it
-        steps back toward 0 dB slowly and cautiously. Each stage lowers the cut a little (25 % of
-        it, 3 - 6 dB), glides there (a ramp in dB, smoothed again by the filter: no clicks), then
+        steps back toward 0 dB. Each stage lowers the cut a little (20 % of it, 2 - 4 dB), glides
+        there (a ramp in dB, smoothed again by the filter and by the graph: no clicks), then
         waits and listens. If the ring comes back - the usual ringing test, or the level at the
         notch rising more than the removed cut explains - reonset() puts the cut straight back to
         where the stage started plus a margin and doubles this notch's recovery time for next
@@ -1184,8 +1186,8 @@ namespace dooblrfeedback::dsp
     float FeedbackEngine::recoverStageTarget (float cutDb) noexcept
     {
         if (cutDb > bellCapDb) return bellCapDb;
-        if (cutDb <= 3.5f) return 0.0f;
-        return cutDb - juce::jlimit (3.0f, 6.0f, 0.25f * cutDb);
+        if (cutDb <= 2.5f) return 0.0f;
+        return cutDb - juce::jlimit (2.0f, 4.0f, 0.2f * cutDb);
     }
 
     float FeedbackEngine::expectedRecoverySec (float cutDb, float recoverAfterSec, int speed) noexcept

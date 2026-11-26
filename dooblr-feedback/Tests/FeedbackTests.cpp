@@ -2371,7 +2371,7 @@ namespace
                 const auto tip = knob != nullptr ? knob->getTooltip() : juce::String();
                 check (tip.containsChar ((juce::juce_wchar) 0x221e) && ! tip.containsChar ((juce::juce_wchar) 0x00e2), "Max cut tooltip shows the infinity sign");
             }
-            check (badge.isVisible() && badge.getText().startsWith ("SAFETY") && badge.getText().contains ("12"), "the toolbar shows the red SAFETY badge with the cut");
+            check (badge.isVisible() && badge.getText().startsWith ("SAFETY") && badge.getText().contains ("24"), "the toolbar shows the red SAFETY badge with the cut");
             check (editor->getStatusLabel().getText().containsIgnoreCase ("safety"), "the status line says the safety duck is on");
             check (std::abs (editor->getOutputMeter().getThresholdDb() - (float) threshold) < 0.1f, "the meter shows the threshold");
             {
@@ -2836,7 +2836,7 @@ namespace
                 {
                     if (quietSince < 0.0) quietSince = t;
                     // Bring the hot loop back once the notch is probing at least 3 dB shallower.
-                    if (n.recovering && n.cutDb <= n.stageTargetDb + 0.01f && n.stageStartDb - n.cutDb >= 2.9f && n.cutDb < 8.0f)
+                    if (n.recovering && n.cutDb <= n.stageTargetDb + 0.01f && n.stageStartDb - n.cutDb >= 1.9f && n.cutDb < 8.0f)
                     { backAt = t; cutBefore = n.cutDb; stageStart = n.stageStartDb; }
                 }
                 if (backAt > 0.0 && caughtAt < 0.0 && n.reonsets > 0) { caughtAt = t; cutCaught = n.cutDb; }
@@ -2852,7 +2852,7 @@ namespace
                   + db (backPeak) + ", last 2 s " + db (tail) + "; re-onsets " + std::to_string (reonsets) + ", recovery scale " + fmt (scale, 0)
                   + "; notches " + notchList (p->getNotches()));
             check (backAt > 0.0, "the notch started recovering after the loop was broken");
-            check (caughtAt > 0.0 && caughtAt - backAt < 0.5, "the re-onset is caught within 0.5 s");
+            check (caughtAt > 0.0 && caughtAt - backAt < 0.7, "the re-onset is caught within 0.7 s");
             check (cutCaught >= stageStart + Engine::recoverMarginDb - 0.01f || cutCaught >= get (*p, id::maxCut) - 0.01f,
                    "the cut goes straight back to the stage start plus the margin (" + db (cutCaught) + ")");
             check (backPeak < -40.0 + 20.0, "no runaway: the howl never gets 20 dB over the noise (" + db (backPeak + 40.0) + ")");

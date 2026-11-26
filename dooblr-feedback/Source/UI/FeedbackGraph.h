@@ -95,6 +95,9 @@ namespace dooblrfeedback::ui
         /** The drawn notch curve and handles follow the bank with this time constant (s): a cut
             that jumps (a catch, a re-onset, a clear) glides there instead of snapping (0.1.2). */
         static constexpr double notchEaseSec = 0.3;
+        /** A cut that is letting go eases more slowly than one that is deepening, so the return
+            to flat reads as one glide instead of the recovery stages stepping on screen. */
+        static constexpr double releaseEaseSec = 1.1;
 
         void paint (juce::Graphics&) override;
         void resized() override;

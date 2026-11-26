@@ -21,7 +21,7 @@ Read `design/INDEX.md` first. This file has two parts:
 - Kind: JUCE instrument VST3 (target `DooblrThroat`, product "dooblr-throat", code Dbth)
 - Version: 0.4.0
 - Last source change: 2026-11-26
-- Source tree: `9d132af3d8e7` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-throat`)
+- Source tree: `83aa2f3342bc` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-throat`)
 - Window: resize limits 900x560..2400x1600; default size 980x600
 - Build/test: `dooblr-throat/scripts/build.sh` (build dir `~/dooblr-build/dooblr-throat`), runs the tests, then installs the VST3 to `/Library/Audio/Plug-Ins/VST3`
 - Build/test: target `DooblrThroatTests` (Tests/CMakeLists.txt)
@@ -113,6 +113,7 @@ Read `design/INDEX.md` first. This file has two parts:
 | `Tests/standalone_render.cpp` | Standalone renderer used to compile-check the DSP without JUCE. |
 | `Tools/LoadCheck/CMakeLists.txt` | CMake build: DooblrThroatLoadCheck |
 | `Tools/LoadCheck/LoadCheck.cpp` | DooblrThroatLoadCheck: loads a built or installed dooblr-throat.vst3 the way a host does. |
+| `Tools/write_foundation.py` |  |
 | `cmake/build-espeak-ng.sh` | Build a static, audio-less espeak-ng (klatt on) into $1, from the fetched source in $2. |
 | `cmake/bundle-resources.sh` | Copy ONNX Runtime, the Piper voice and a trimmed English espeak-ng-data tree into a .vst3 bundle, fix... |
 | `cmake/sign-bundle.sh` | Ad-hoc signs a plug-in bundle so `codesign --verify --deep --strict` passes. |

@@ -73,13 +73,20 @@ namespace dooblrfeedback::params
 
     void migrateParameterTree (juce::ValueTree& tree, int fromVersion)
     {
-        if (fromVersion >= 2) return;
-        // 0.1.0 defaulted Range high to 16 kHz, which hid howls at 16 - 20 kHz (0.1.1 fix): a
-        // session still at exactly that value is moved to the new 20 kHz default.
-        for (auto child : tree)
-            if (child.hasType ("PARAM") && child.getProperty ("id").toString() == id::rangeHigh
-                && std::abs ((float) (double) child.getProperty ("value", 0.0) - legacyRangeHigh) < 0.5f)
-                child.setProperty ("value", (double) defaultRangeHigh, nullptr);
+        if (fromVersion < 2)
+            // 0.1.0 defaulted Range high to 16 kHz, which hid howls at 16 - 20 kHz (0.1.1 fix): a
+            // session still at exactly that value is moved to the new 20 kHz default.
+            for (auto child : tree)
+                if (child.hasType ("PARAM") && child.getProperty ("id").toString() == id::rangeHigh
+                    && std::abs ((float) (double) child.getProperty ("value", 0.0) - legacyRangeHigh) < 0.5f)
+                    child.setProperty ("value", (double) defaultRangeHigh, nullptr);
+        if (fromVersion < 3)
+            // Mute used to be stored as 49, just above the old 48 dB top. Anything at that detent
+            // is still mute; a finite depth in the old range is left as it was.
+            for (auto child : tree)
+                if (child.hasType ("PARAM") && child.getProperty ("id").toString() == id::safetyDepth
+                    && (float) (double) child.getProperty ("value", 0.0) >= legacySafetyMute)
+                    child.setProperty ("value", (double) safetyDepthMute, nullptr);
     }
 
     juce::StringArray safetyTriggerNames() { return { "Feedback", "Always" }; }
@@ -189,7 +196,7 @@ namespace dooblrfeedback::params
         layout.add (std::make_unique<juce::AudioParameterChoice> (juce::ParameterID { id::safetyTrigger, 1 }, "Safety trigger", safetyTriggerNames(), 0));
         layout.add (floatParam (id::safetyThreshold, "Safety threshold", { -24.0f, 0.0f, 0.1f }, -6.0f, "dBFS", 1));
         layout.add (std::make_unique<juce::AudioParameterFloat> (
-            juce::ParameterID { id::safetyDepth, 1 }, "Safety depth", detentRange (3.0f, safetyDepthFinite, safetyDepthMute, 0.96f), 12.0f,
+            juce::ParameterID { id::safetyDepth, 1 }, "Safety depth", detentRange (3.0f, safetyDepthFinite, safetyDepthMute, 0.96f), 24.0f,
             Attributes().withLabel ("dB")
                         .withStringFromValueFunction ([] (float v, int) { return isMuteDepth (v) ? juce::String ("Mute") : formatCut (v, true); })
                         .withValueFromStringFunction ([] (const juce::String& text)

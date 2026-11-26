@@ -214,7 +214,8 @@ namespace dooblrfeedback::ui
 
     // The drawn bank eases toward the real one (time-based, so the same at any frame rate): a
     // new notch grows in from 0 dB, a cleared or freed one shrinks back to 0 dB, and depth,
-    // frequency and Q changes glide (one-pole, notchEaseSec). Cuts ease on the drawn scale
+    // frequency and Q changes glide (one-pole, notchEaseSec). A cut that is letting go uses the
+    // slower releaseEaseSec, so the return to flat does not step. Cuts ease on the drawn scale
     // (a full notch's 120 dB is drawn as the line under 30 dB), then land exactly.
     bool FeedbackGraph::easeDrawnNotches (double dtSeconds)
     {
@@ -238,8 +239,10 @@ namespace dooblrfeedback::ui
                 }
                 const auto cut = std::min (d.cutDb, drawCap), freq = d.freq, q = d.q;
                 const auto target = std::min (t.cutDb, drawCap);
+                const auto releasing = target + 0.01f < cut;
+                const auto step = (float) (1.0 - std::exp (-std::max (0.0, dtSeconds) / (releasing ? releaseEaseSec : notchEaseSec)));
                 d = t;
-                d.cutDb = cut + (target - cut) * k;
+                d.cutDb = cut + (target - cut) * step;
                 d.freq = freq * std::pow (t.freq / std::max (1.0f, freq), k);
                 d.q = q * std::pow (t.q / std::max (0.01f, q), k);
                 if (std::abs (d.cutDb - target) < 0.02f && std::abs (d.freq - t.freq) < 0.01f && std::abs (d.q - t.q) < 0.01f)

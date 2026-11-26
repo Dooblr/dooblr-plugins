@@ -67,10 +67,10 @@ Version 0.1.3. Built with JUCE 8.0.15 (C++20, CMake). **Latency: 0 samples.**
   resort. When the output peak is over **Threshold** (−24 to 0 dBFS, default −6) *and* the
   detector reports a runaway (within the last 0.5 s a notch was engaged or re-triggered, a
   ringing notch sat at Max cut, or a confirmed howl found the bank full), the main level falls
-  by **Depth** (3–40 dB or **Mute**, default 12 dB) with a 5 ms time constant, is held while
+  by **Depth** (3–60 dB or **Mute**, default 24 dB) with a 5 ms time constant, is held while
   the condition lasts plus 80 ms, then recovers over **Recover** (0.2–5 s, default 1.5 s),
   linear in dB. "Duck when: Always" drops the feedback condition (a plain over-level duck).
-  Loud music without feedback never ducks in Feedback mode. A red **SAFETY −12 dB** badge
+  Loud music without feedback never ducks in Feedback mode. A red **SAFETY −24 dB** badge
   shows in the toolbar while it ducks, the status line counts the ducks, and the output
   meter shows the threshold as a red dashed tick. On by default, Feedback mode. No latency.
 - **HOLD.** Off by default. A floating band that has been quiet (no feedback in its

@@ -131,7 +131,7 @@ namespace dooblrfeedback::dsp
             bool safety = true;              // on / off
             bool safetyAlways = false;       // false: only while the detector reports a runaway
             float safetyThresholdDb = -6.0f; // peak dBFS, after the notches
-            float safetyDepthDb = 12.0f;     // positive dB; >= fullDuckDb mutes
+            float safetyDepthDb = 24.0f;     // positive dB; >= fullDuckDb mutes
             float safetyReleaseSec = 1.5f;
         };
 
@@ -171,13 +171,14 @@ namespace dooblrfeedback::dsp
         static constexpr int controlInterval = 16;
         static constexpr float minQ = 4.0f;
         static constexpr float mergeFadeDbPerSec = 60.0f;
-        /** Auto-recover stages: each one lowers the cut by 25 % of it (3 - 6 dB; a cut of 3.5 dB or
+        /** Auto-recover stages: each one lowers the cut by 20 % of it (2 - 4 dB; a cut of 2.5 dB or
             less goes to 0), glides there at recoverGlideDbPerSec[speed] and then probes for
-            recoverDwellSec[speed]. Cuts deeper than bellCapDb (a true notch) first glide to bellCapDb
-            at recoverDeepDbPerSec (that part is inaudible). Both are slowed by the notch's recoverScale.
-            A re-onset restores the cut the stage started from plus recoverMarginDb. */
-        static constexpr float recoverGlideDbPerSec[3] { 0.5f, 1.0f, 2.0f };
-        static constexpr float recoverDwellSec[3] { 8.0f, 4.0f, 2.0f };
+            recoverDwellSec[speed]. Smaller steps than 0.1.2, and a little faster, so the return
+            reads as one smooth motion. Cuts deeper than bellCapDb (a true notch) first glide to
+            bellCapDb at recoverDeepDbPerSec (that part is inaudible). Both are slowed by the notch's
+            recoverScale. A re-onset restores the cut the stage started from plus recoverMarginDb. */
+        static constexpr float recoverGlideDbPerSec[3] { 0.75f, 1.5f, 3.0f };
+        static constexpr float recoverDwellSec[3] { 5.0f, 2.5f, 1.25f };
         static constexpr float recoverDeepDbPerSec = 30.0f, recoverMarginDb = 3.0f, recoverMaxScale = 8.0f;
         /** A level rise at the notch this much beyond what the removed cut explains is a re-onset. */
         static constexpr float reonsetRiseDb = 5.0f;
@@ -195,8 +196,12 @@ namespace dooblrfeedback::dsp
             returns to 1 after safetyCalmSec without a duck. */
         static constexpr int safetyStages = 3;
         static constexpr float safetyDwellFraction = 0.3f, safetyMaxScale = 4.0f, safetyCalmSec = 10.0f;
-        /** The seed (runaway) confirmation: rise since the window filled, over at least fastSec. */
+        /** The seed (runaway) confirmation: rise since the window filled, over at least fastSec.
+            Above fastHfHz the bar is lower: a high howl grows in Hz-wide clusters and only just
+            clears 20 dB/s when the loop gain is near 1, so the full-band test caught it late. */
         static constexpr float fastSec = 0.08f, fastRiseDb = 9.0f, fastDbPerSec = 60.0f;
+        static constexpr float fastHfHz = 3000.0f;
+        static constexpr float fastSecHf = 0.06f, fastRiseDbHf = 4.0f, fastDbPerSecHf = 18.0f;
         static constexpr float strongDipDb = 1.5f; // a dip this deep restarts the strong-run growth window
 
         void prepare (double sampleRate, int maxBlockSize);
