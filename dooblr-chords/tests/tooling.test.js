@@ -59,25 +59,22 @@ test('validator: catches duplicate ids, dangling lines and bad indices', () => {
   assert.ok(validate(p, 'x', MAIN).some((e) => new RegExp('outside ' + width + 'x169').test(e)));
 
   p = clone();
-  const mainDials = p.patcher.boxes.filter((w) => w.box.varname === 'color' || w.box.varname === 'chromatic').map((w) => w.box);
+  const mainDials = p.patcher.boxes.filter((w) => w.box.varname === 'spice' || w.box.varname === 'length').map((w) => w.box);
   mainDials[1].presentation_rect = mainDials[0].presentation_rect.slice();
   assert.ok(validate(p, 'x', MAIN).some((e) => /overlap in presentation/.test(e)));
 
   p = clone();
-  const register = p.patcher.boxes.find((w) => w.box.varname === 'register').box;
-  register.presentation_rect = [140, 84, 64, 72]; // on-screen, not parked
-  assert.ok(validate(p, 'x', MAIN).some((e) => /not parked off-screen/.test(e)));
+  const adv = p.patcher.boxes.find((w) => w.box.varname === 'advanced').box.patcher;
+  const register = adv.boxes.find((w) => w.box.varname === 'register').box;
+  register.presentation_rect = [700, 10, 56, 72];
+  assert.ok(validate(p, 'x', MAIN).some((e) => /outside 560x300/.test(e)));
 
   p = clone();
-  assert.ok(validate(p, 'x', MAIN.replace(/register: \[[^\]]+\]/, 'register: [700, 150, 46, 58]'))
-    .some((e) => /outside 640x169/.test(e)));
-
-  p = clone();
-  assert.ok(validate(p, 'x', MAIN.replace(/spread: \[[^\]]+\]/, 'spread: [284, 84, 64, 72]'))
-    .some((e) => /overlap inside the advanced panel/.test(e)));
-
-  p = clone();
-  assert.ok(validate(p, 'x', MAIN).every((e) => !/overlap/.test(e)), 'two mutually exclusive panels may occupy the same space');
+  const adv2 = p.patcher.boxes.find((w) => w.box.varname === 'advanced').box.patcher;
+  const color = adv2.boxes.find((w) => w.box.varname === 'color').box;
+  const chromatic = adv2.boxes.find((w) => w.box.varname === 'chromatic').box;
+  chromatic.presentation_rect = color.presentation_rect.slice();
+  assert.ok(validate(p, 'x', MAIN).some((e) => /overlap in presentation/.test(e)));
 
   p = clone();
   const pre = p.patcher.boxes.find((w) => /^prepend param /.test(w.box.text || '')).box;

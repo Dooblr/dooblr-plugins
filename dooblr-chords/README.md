@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.7.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.8.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -18,9 +18,16 @@ Version 0.7.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 * **Color** (0 to 100) colours the tones of the chord type Notes has chosen:
   sus or add variants, and (when Notes is 9th or 11th) altered tensions,
   skipping avoid notes. It does not change how many notes each chord has.
-* **Spice** (the Chromatic parameter, 0 to 100) adds borrowed chords, secondary
-  dominants, tritone substitutions and the Neapolitan. At 0 the progression
-  is strictly diatonic.
+* **Spice** is a new 0–100 macro (default 35) on the main view. It sets
+  **Color** and **Chromatic** together along a fixed curve through the
+  factory default (Spice 35 = Color 35, Chromatic 10). The original Color
+  and Chromatic parameters keep their names, varnames and saved values, and
+  remain individually available in the Advanced window. Older Sets that
+  have no Spice parameter recall Color and Chromatic unchanged; the Spice
+  dial is then derived from those two so it does not smash a recalled Set.
+  Chromatic itself still adds borrowed chords, secondary dominants, tritone
+  substitutions and the Neapolitan. At Chromatic 0 the progression is
+  strictly diatonic.
 * **Generation** walks a functional Markov chain (tonic, pre-dominant,
   dominant) and ends on a cadence: an authentic V–I, or a turnaround that
   loops back to the start.
@@ -46,7 +53,8 @@ Version 0.7.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
   chords and regenerates the rest.
 * **Velocity**, plus **Humanize** for small timing and velocity changes. Humanize
   is off by default.
-* **Source**: open **SOURCE …**, drop a `.mid` file on the drop zone, or
+* **Source**: press **ADVANCED** and use the Source section in the floating
+  window. Drop a `.mid` file on the drop zone, or
   select a MIDI clip in Live and press **USE CLIP**. The device detects the source's chords
   (block chords and arpeggios, bass inversions, up to 16 chords) and its key,
   shows both, and sets Root, Mode and Length to match.
@@ -104,32 +112,37 @@ inside the device (not separate Max windows).
    to the next empty slot, and the chords appear in the blocks.
 4. Or switch the tab to **LIVE**, press play in Live, and the same
    progression is performed in real time from the next bar. Press
-   **New Progression** for a new seed starting on the next bar.
+   **New Progression** for a new seed starting on the next bar, or
+   **TO CLIP** to write the sounding progression into a Session slot
+   without stopping playback.
 5. Click a block to lock it, then press **Reroll** to change the others.
 6. Press **LEAD** (the large gold toggle) and Generate / New Lead again
    for a melody over those chords. The blocks stay, with a LEAD header, so
    you can see what the line follows. Lead works in LIVE too.
-7. Press **ADVANCED …** for Bars per Chord, voicing, velocity, humanize,
-   Density, Seed, Write and Evolve. Density is dimmed unless Lead is on.
-   Evolve is dimmed in CLIP mode. Press **SOURCE …** to drop a `.mid` file,
-   use a clip as the source, or pick a variation or B section. Each panel
-   has a title and a close (×) button; they close again when the device is
-   reloaded.
+7. Press **ADVANCED** to open a floating Max window with Color, Chromatic,
+   Notes, Bars per Chord, voicing, velocity, humanize, Density, Seed, Write,
+   Evolve, Bus Channel and the Source section (drop a `.mid` file, USE CLIP,
+   CLEAR, VAR/B). Density is dimmed unless Lead is on. Evolve is dimmed in
+   CLIP mode. Those parameters stay saved and automatable; they just live
+   in the subpatcher window.
 
 ## Controls
 
-The device is 640 × 169 px. The left rail holds the CLIP / LIVE tab, Generate
-(or New Progression), LEAD and Reroll. The
-main pane shows the key, length, Notes, Color, Spice and the chord blocks, with
-**ADVANCED …** and **SOURCE …** in the corner. Those buttons open an overlay
-that covers the chord display (and the rest of the main pane) until you
-close it. The js moves the panel on-screen and parks the controls underneath
-off-screen, so they cannot be clicked through the overlay.
+The device is 400 × 169 px. The left rail holds the CLIP / LIVE tab,
+Generate (or New Progression), TO CLIP, LEAD, Reroll and ADVANCED. The main
+pane is built around two large knobs — **SPICE** (how adventurous) and
+**LENGTH** (how many chords) — plus a compact Key / Mode selector (kept on
+the main view because changing key is a primary musical choice) and the
+chord blocks with the playhead. **ADVANCED** opens a real floating Max
+window (`p advanced`) for everything else, including Source. live.*
+parameters in that window remain device parameters: they are saved with the
+Set and can be automated.
 
 | Section | Control | What it does |
 |---|---|---|
 | Actions (left) | **CLIP / LIVE** | Mode switch, teal when LIVE is selected. CLIP writes Session clips. LIVE plays the progression as MIDI in real time. |
 | | **Generate** | In CLIP: picks a new seed, clears locks and writes a clip to the next empty slot. In LIVE the label reads **New Progression** (or **New Lead**) and the new sequence starts on the next bar; no clip is written. |
+| | **TO CLIP** | LIVE only. Writes the sounding progression (Evolve included) to the next empty Session slot, with a `· LIVE` name, without stopping playback. Dimmed in CLIP. |
 | | **Reroll** | Picks a new seed, keeps locked chords and writes a clip (CLIP) or starts them on the next bar (LIVE). It is dimmed until a chord is locked. |
 | | source badge | When a source is loaded, a small chip such as `VAR · my riff` appears under Reroll, so that state is not hidden in the Source panel. |
 | Main | **Root**, **Mode**, **Length** | Key, scale and number of chords. |
@@ -144,6 +157,7 @@ off-screen, so they cannot be clicked through the overlay.
 | | Seed | The current seed. Type a number to recall a progression. It is drawn at 60% when every chord is locked, because it then only affects Humanize. |
 | | Write | Writes the progression shown into the next empty slot again, unchanged. Dimmed in LIVE mode, with a tooltip explaining why. |
 | | **Evolve** | LIVE only: Off, every cycle, every 2 cycles, or every 4 cycles. Lightly mutates one or two inner unlocked chords at those boundaries. Dimmed in CLIP mode. |
+| | **Bus Channel** | A, B, C or D. The global harmony bus letter that dooblr-chord-receiver devices listen to. |
 | SOURCE panel | drop zone | Drop a `.mid` file to load it as the source. The path is saved with the Set. |
 | | **USE CLIP** | Loads the MIDI clip shown in the Detail View (else the clip in the highlighted slot). Uses the loop if looping, else start to end marker. |
 | | CLEAR | Forgets the source. Generate makes fresh progressions again. |
@@ -276,7 +290,7 @@ the files in `device/`, because they are generated.
     are not restored.
 15. Check that the ♭ and ♯ signs show in the blocks. If they show as boxes,
     send the js the message `ascii 1`.
-16. The device is 640 px wide. The main view shows the left rail (Generate, LEAD,
+16. The device is 400 px wide. The main view shows the left rail (CLIP/LIVE, Generate, TO CLIP, LEAD,
     Reroll), Key, Length, Notes, Color, Spice and the chord blocks, with ADVANCED …
     and SOURCE … in the top-right. The Advanced and Source controls are not
     on the main view. Press ADVANCED …: a panel covers the chord display,
@@ -362,6 +376,13 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
+* The 0.8.0 harmony bus and TO CLIP in Live: global `send`/`receive`
+  `dooblr_chords_bus` across devices on different tracks, hello/request
+  latency, CLIP-mode chord-from-transport tracking, Bus Channel in the
+  Advanced panel, and TO CLIP writing the sounding cycle (after Evolve)
+  without glitching live MIDI. Global send/receive is the standard Max
+  path between M4L devices in one Live set; `---` names would stay local
+  to one device and were not used.
 * The 0.7.0 LIVE mode in Live: a 10ms `Task` plus `LiveAPI` `live_set`
   (`is_playing`, `current_song_time`, `tempo`, `signature_numerator`,
   `signature_denominator`) staying in phase with the transport, starting on
@@ -391,6 +412,6 @@ the files in `device/`, because they are generated.
   `live.text` mode-1 openers (`set` may echo; the js ignores repeats),
   `live.drop` only while the Source panel is open, `live.text` buttons with
   `parameter_enable` 0, the × and ellipsis glyphs, Color/Spice captions with
-  `showname` off, 8.5 pt button labels, and how the 640 px device sits in
+  `showname` off, 8.5 pt button labels, and how the 400 px device sits in
   Live's device chain. `scripts/render-layout.py` only approximates Live's
   widgets.

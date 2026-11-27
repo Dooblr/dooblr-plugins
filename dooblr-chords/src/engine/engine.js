@@ -5,7 +5,7 @@ DC.engine = (function () {
   var T = DC.theory, C = DC.chords, G = DC.generator, V = DC.voicing, RN = DC.render;
   var A = DC.analysis, DV = DC.derive, MF = DC.midifile, L = DC.lead;
 
-  var VERSION = '0.7.0';
+  var VERSION = '0.8.0';
   var KINDS = [{ id: 'var', label: 'VAR', long: 'Variation' }, { id: 'b', label: 'B', long: 'B section' }];
   var DURATIONS = [
     { label: '1/2', beats: 2 },
@@ -18,7 +18,7 @@ DC.engine = (function () {
     root: 0, mode: 1, length: 4, duration: 1, color: 35, chromatic: 10,
     register: 60, spread: 25, bass: 1, velocity: 100, humanize: 0, seed: 1, kind: 0,
     lead: 0, density: 50, notes: 3,
-    playmode: 0, evolve: 0
+    playmode: 0, evolve: 0, buschan: 0, spice: 35
   };
 
   function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
@@ -61,6 +61,8 @@ DC.engine = (function () {
     o.notes = normalizeNotes(o.notes);
     o.playmode = o.playmode ? 1 : 0;
     o.evolve = clamp(Math.round(o.evolve), 0, 3);
+    o.buschan = clamp(Math.round(o.buschan), 0, 3);
+    o.spice = clamp(Math.round(o.spice), 0, 100);
     return o;
   }
 
@@ -228,5 +230,32 @@ DC.engine = (function () {
     PLAYMODES: PLAYMODES, EVOLVE_LABELS: EVOLVE_LABELS, evolveEvery: evolveEvery,
     sourceFromMidi: sourceFromMidi, analyzeSource: analyzeSource, sourceDisplay: sourceDisplay,
     isMidiPath: MF.isMidiPath, baseName: MF.baseName
+  };
+})();
+
+
+// Spice is an additive macro (0-100, default 35) that sets Color and Chromatic
+// together along a fixed curve through the factory default (35, 35, 10).
+// Color and Chromatic keep their original names, varnames and saved values.
+DC.spice = (function () {
+  function clamp(v, lo, hi) { return v < lo ? lo : (v > hi ? hi : v); }
+  function colorFromSpice(s) { return clamp(Math.round(+s || 0), 0, 100); }
+  function chromaticFromSpice(s) {
+    s = clamp(Math.round(+s || 0), 0, 100);
+    if (s <= 35) { return Math.round(s * 10 / 35); }
+    return 10 + Math.round((s - 35) * 90 / 65);
+  }
+  function spiceFromParts(color, chromatic) {
+    var c = clamp(Math.round(+color || 0), 0, 100);
+    var k = clamp(Math.round(+chromatic || 0), 0, 100);
+    if (Math.abs(chromaticFromSpice(c) - k) <= 2) { return c; }
+    var fromK = k <= 10 ? Math.round(k * 35 / 10) : 35 + Math.round((k - 10) * 65 / 90);
+    return clamp(Math.round((c + fromK) / 2), 0, 100);
+  }
+  return {
+    DEFAULT: 35,
+    colorFromSpice: colorFromSpice,
+    chromaticFromSpice: chromaticFromSpice,
+    spiceFromParts: spiceFromParts
   };
 })();

@@ -309,7 +309,7 @@ test('EVOLVE fires at cycle wrap, not mid-cycle, and keeps bookkeeping clean', (
 });
 
 test('defaults add playmode CLIP and evolve Off without changing Notes', () => {
-  assert.equal(E.VERSION, '0.7.0');
+  assert.equal(E.VERSION, '0.8.0');
   assert.equal(E.DEFAULTS.playmode, 0);
   assert.equal(E.DEFAULTS.evolve, 0);
   assert.equal(E.DEFAULTS.notes, 3);

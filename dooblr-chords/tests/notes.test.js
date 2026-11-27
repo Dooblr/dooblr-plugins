@@ -46,7 +46,7 @@ function assertClipVoices(b, n, label) {
 }
 
 test('default Notes is Triad (3), and 0.6.0 Auto/2 values fall back to a triad', () => {
-  assert.equal(E.VERSION, '0.7.0');
+  assert.equal(E.VERSION, '0.8.0');
   assert.equal(E.DEFAULTS.notes, 3);
   assert.equal(E.normalize({}).notes, 3);
   assert.equal(E.normalize({ notes: 0 }).notes, 3);

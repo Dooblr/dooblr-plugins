@@ -178,7 +178,9 @@ function loadController(opts) {
     return m.length ? m[m.length - 1] : undefined;
   };
   const midi = () => out.outlets.filter((o) => o[0] === 2);
-  return { ctx, out, live: mock.live, lastState, lastActive, lastMsg, midi };
+  const busMsgs = () => out.outlets.filter((o) => o[0] === 3).map((o) => o[1]);
+  const lastBus = () => { const m = busMsgs(); return m.length ? JSON.parse(m[m.length - 1]) : null; };
+  return { ctx, out, live: mock.live, lastState, lastActive, lastMsg, midi, busMsgs, lastBus };
 }
 
 // ---- controller --------------------------------------------------------------
@@ -331,7 +333,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.deepStrictEqual(t.lastMsg('length', 'set'), ['set', 4]);
   assert.match(t.lastMsg('srcinfo', 'set')[1], /my riff .* A Natural Minor .* 4 chords, 4 bars/);
   assert.strictEqual(t.lastMsg('srcbadge', 'set')[1], 'VAR \u00B7 my riff');
-  assert.ok(t.out.named.srcbadge.rect[0] < 2000, 'badge is on screen when a source is loaded');
+  assert.deepStrictEqual(t.lastMsg('srcbadge', 'hidden'), ['hidden', 0], 'badge is shown when a source is loaded');
   assert.strictEqual(t.lastActive('kind'), 1);
   assert.strictEqual(t.lastActive('clearsource'), 1);
   assert.strictEqual(t.live.calls.length, 0, 'loading a source writes nothing');
@@ -358,7 +360,7 @@ test('a dropped .mid file becomes the source; Generate writes a variation of it'
   assert.strictEqual(t.lastState().heading, 'PROGRESSION');
   assert.ok(t.lastMsg('srcdrop', 'clear'));
   assert.strictEqual(t.lastActive('kind'), 0);
-  assert.ok(t.out.named.srcbadge.rect[0] >= 2000, 'badge is parked when the source is cleared');
+  assert.deepStrictEqual(t.lastMsg('srcbadge', 'hidden'), ['hidden', 1], 'badge is hidden when the source is cleared');
 });
 
 test('dropped files that are not usable MIDI report a warning and keep the old source', () => {
@@ -521,76 +523,57 @@ test('display shows the source strip, the VARIATION heading and changed chords',
   assert.deepStrictEqual(b.outlets.map((o) => o.slice()), [[0, 'lock', 0]]);
 });
 
-test('overlay panels start closed, toggle from js, and reset on init', () => {
+test('ADVANCED opens the floating Advanced window', () => {
   const t = loadController();
-  const rectOf = (name) => t.out.named[name] && t.out.named[name].rect;
-  const parked = (name) => { const r = rectOf(name); assert.ok(r && r[0] >= 2000, name + ' should be parked, got ' + r); };
-  const shown = (name, expected) => {
-    const r = rectOf(name);
-    assert.ok(r && r[0] < 2000, name + ' should be on screen, got ' + r);
-    if (expected) { assert.deepStrictEqual(r, expected); }
-  };
   t.ctx.loadbang();
-  ['adv_bg', 'adv_title', 'adv_close', 'duration', 'seed', 'write', 'register', 'spread',
-    'velocity', 'humanize', 'bass', 'src_bg', 'src_title', 'src_close', 'srcdrop',
-    'useclip', 'clearsource', 'kind', 'srcinfo'].forEach(parked);
-  ['root', 'mode', 'length', 'color', 'chromatic', 'blocks', 'key_label'].forEach((n) => shown(n));
-  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
-  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
-
-  t.ctx.openpanel('advanced', 1);
-  shown('adv_bg', [128, 0, 512, 169]);
-  shown('duration');
-  shown('write');
-  shown('register');
-  parked('src_bg');
-  parked('srcdrop');
-  parked('root');
-  parked('blocks');
-  parked('color');
-  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 1]);
-  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
-  assert.ok(t.out.posts.some((p) => /panel open advanced/.test(p)));
-
-  // A repeated 1 is ignored (idempotent); the set-echo from the opener must not close it.
-  const rectsBefore = t.out.named.adv_bg.msgs.filter((m) => m[0] === 'presentation_rect').length;
-  t.ctx.openpanel('advanced', 1);
-  assert.strictEqual(t.out.named.adv_bg.msgs.filter((m) => m[0] === 'presentation_rect').length, rectsBefore);
-  shown('adv_bg', [128, 0, 512, 169]);
-
-  t.ctx.openpanel('source', 1);
-  shown('src_bg', [128, 0, 512, 169]);
-  shown('srcdrop');
-  shown('kind');
-  parked('adv_bg');
-  parked('write');
-  parked('root');
-  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
-  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 1]);
-  assert.ok(t.out.posts.some((p) => /panel open source/.test(p)));
-
-  t.ctx.openpanel('source', 0);
-  parked('src_bg');
-  parked('adv_bg');
-  shown('root');
-  shown('blocks');
-  assert.deepStrictEqual(t.lastMsg('open_source', 'set'), ['set', 0]);
-  assert.ok(t.out.posts.some((p) => /panel closed/.test(p)));
-
-  t.ctx.openpanel('advanced', 1);
   t.ctx.init();
-  parked('adv_bg');
-  parked('src_bg');
-  shown('blocks');
-  assert.deepStrictEqual(t.lastMsg('open_advanced', 'set'), ['set', 0]);
+  t.ctx.openadvanced();
+  const adv = t.out.named.advanced;
+  assert.ok(adv, 'advanced box is looked up');
+  const sels = adv.msgs.map((m) => m[0]);
+  assert.ok(sels.includes('open'), 'sends open to the subpatcher');
+  assert.ok(sels.includes('front'), 'brings the window to the front');
+  assert.ok(t.out.posts.some((p) => /advanced window open/.test(p)));
+});
 
-  t.ctx.openpanel('advanced');
-  shown('adv_bg', [128, 0, 512, 169]);
-  t.ctx.openpanel('advanced');
-  parked('adv_bg');
-  t.ctx.closepanel();
-  parked('adv_bg');
-  shown('root');
+test('Spice macro sets Color and Chromatic after init, and does not smash them before init', () => {
+  const t = loadController();
+  t.ctx.loadbang();
+  t.ctx.param('spice', 100);
+  // Before init, Spice must not overwrite recalled Color/Chromatic.
+  assert.strictEqual(t.ctx.settings.color, 35);
+  assert.strictEqual(t.ctx.settings.chromatic, 10);
+  t.ctx.init();
+  // Init derives Spice from the recalled Color+Chromatic (factory curve => 35).
+  assert.strictEqual(t.ctx.settings.spice, 35);
+  assert.deepStrictEqual(t.lastMsg('spice', 'set'), ['set', 35]);
+
+  t.ctx.param('spice', 0);
+  assert.strictEqual(t.ctx.settings.color, 0);
+  assert.strictEqual(t.ctx.settings.chromatic, 0);
+  assert.deepStrictEqual(t.lastMsg('color', 'set'), ['set', 0]);
+  assert.deepStrictEqual(t.lastMsg('chromatic', 'set'), ['set', 0]);
+
+  t.ctx.param('spice', 100);
+  assert.strictEqual(t.ctx.settings.color, 100);
+  assert.strictEqual(t.ctx.settings.chromatic, 100);
+
+  t.ctx.param('spice', 35);
+  assert.strictEqual(t.ctx.settings.color, 35);
+  assert.strictEqual(t.ctx.settings.chromatic, 10);
+
+  // Off-curve Color/Chromatic update the Spice dial only — no write-back.
+  const colorSets = (t.out.named.color.msgs || []).filter((m) => m[0] === 'set').length;
+  const chromSets = (t.out.named.chromatic.msgs || []).filter((m) => m[0] === 'set').length;
+  t.ctx.param('color', 80);
+  t.ctx.param('chromatic', 10);
+  assert.strictEqual(t.ctx.settings.color, 80);
+  assert.strictEqual(t.ctx.settings.chromatic, 10);
+  assert.strictEqual((t.out.named.color.msgs || []).filter((m) => m[0] === 'set').length, colorSets,
+    'Color is not written back when the Advanced Color knob moves');
+  assert.strictEqual((t.out.named.chromatic.msgs || []).filter((m) => m[0] === 'set').length, chromSets,
+    'Chromatic is not written back when the Advanced Chromatic knob moves');
+  assert.ok(t.lastMsg('spice', 'set')[1] > 35, 'Spice dial follows the off-curve pair');
 });
 
 test('Lead toggle writes a monophonic lead clip and relabels Generate', () => {
@@ -747,4 +730,90 @@ test('switching to CLIP or notifydeleted flushes held LIVE notes', () => {
   t.ctx.notifydeleted();
   const gone = t.midi().filter((o) => o[1] === 128);
   assert.strictEqual(gone.length, held2.length);
+});
+
+
+// ---- 0.8.0 harmony bus + TO CLIP -------------------------------------------
+
+test('CLIP and LIVE both broadcast the current chord; hello is answered instantly', () => {
+  const t = loadController();
+  t.ctx.init();
+  t.ctx.generate(); // writes a clip and sets current
+  t.out.outlets = [];
+  t.ctx.clock(1, 0, 4, 120);
+  const at0 = t.lastBus();
+  assert.ok(at0, 'expected a harmony broadcast in CLIP');
+  assert.equal(at0.type, 'harmony');
+  assert.equal(at0.ch, 0);
+  assert.equal(at0.index, 0);
+  assert.ok(Array.isArray(at0.chord) && at0.chord.length >= 3);
+  assert.equal(at0.scale.length, 7);
+  t.out.outlets = [];
+  t.ctx.clock(1, 4, 4, 120);
+  assert.equal(t.lastBus().index, 1, 'CLIP follows transport position');
+  t.ctx.param('buschan', 2);
+  t.out.outlets = [];
+  t.ctx.bus(JSON.stringify({ type: 'hello', v: 1, ch: 2 }));
+  const hello = t.lastBus();
+  assert.ok(hello);
+  assert.equal(hello.ch, 2);
+  assert.equal(hello.type, 'harmony');
+  // hello for another channel is ignored
+  t.out.outlets = [];
+  t.ctx.bus(JSON.stringify({ type: 'hello', v: 1, ch: 0 }));
+  assert.equal(t.lastBus(), null);
+});
+
+test('TO CLIP writes the sounding LIVE progression, including Evolve, and does not stop playback', () => {
+  const t = loadController();
+  t.ctx.init();
+  t.ctx.param('playmode', 1);
+  t.ctx.param('evolve', 1);
+  assert.strictEqual(t.lastActive('commit'), 1);
+  assert.strictEqual(t.lastActive('write'), 0);
+  const slotsBefore = t.live.slots.filter((s) => s.clip).length;
+  t.out.outlets = [];
+  t.ctx.clock(1, 0, 4, 120);
+  const held = t.midi().filter((o) => o[1] === 144).map((o) => o[2]).sort((a, b) => a - b);
+  assert.ok(held.length > 0);
+  const sounding = t.ctx.soundingBuild();
+  assert.ok(sounding && sounding.notes);
+  t.ctx.commit();
+  const clips = t.live.slots.filter((s) => s.clip);
+  assert.equal(clips.length, slotsBefore + 1, 'TO CLIP must write one new clip');
+  const clip = clips[clips.length - 1].clip;
+  assert.match(clip.name, /LIVE/);
+  const written = clip.notes.map((n) => ({ pitch: n.pitch, start_time: n.start_time, duration: n.duration, velocity: n.velocity, mute: n.mute || 0 }));
+  const expected = JSON.parse(JSON.stringify(sounding.notes)).map((n) => ({
+    pitch: n.pitch, start_time: n.start_time, duration: n.duration, velocity: n.velocity, mute: n.mute || 0
+  }));
+  assert.deepEqual(written, expected, 'clip notes must equal the sounding cycle, including voicing and timing');
+  // playback must still be holding the same notes (commit emitted no midi offs)
+  const after = t.midi().filter((o) => o[0] === 2);
+  const offs = after.filter((o) => o[1] === 128);
+  assert.equal(offs.length, 0, 'TO CLIP must not glitch live MIDI');
+  assert.deepEqual(t.ctx.soundingBuild().notes.map((n) => n.pitch), sounding.notes.map((n) => n.pitch));
+
+  // After a cycle wrap with Evolve, the next TO CLIP matches the evolved build.
+  t.ctx.clock(1, 16, 4, 120);
+  const evolved = t.ctx.soundingBuild();
+  assert.ok(evolved.evolved || evolved.display.some((d) => d.changed), 'evolve should have mutated at cycle 1');
+  t.ctx.commit();
+  const clip2 = t.live.slots.filter((s) => s.clip).pop().clip;
+  const written2 = clip2.notes.map((n) => n.pitch + '@' + n.start_time).sort();
+  const expected2 = JSON.parse(JSON.stringify(evolved.notes)).map((n) => n.pitch + '@' + n.start_time).sort();
+  assert.deepEqual(written2, expected2);
+  assert.match(clip2.name, /LIVE/);
+});
+
+test('TO CLIP is dimmed in CLIP mode and does not write a clip', () => {
+  const t = loadController();
+  t.ctx.init();
+  t.ctx.generate();
+  const n = t.live.slots.filter((s) => s.clip).length;
+  assert.strictEqual(t.lastActive('commit'), 0);
+  const hint = t.lastMsg('commit', 'annotation');
+  assert.ok(hint && /CLIP mode/.test(hint[1]), 'tooltip explains dimming');
+  t.ctx.commit();
+  assert.equal(t.live.slots.filter((s) => s.clip).length, n);
 });

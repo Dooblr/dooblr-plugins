@@ -16,8 +16,9 @@
 //   dropfile <path>      a .mid file dropped on the SOURCE drop zone (live.drop)
 //   useclip              read the clip shown in Live's Detail View as the source
 //   clearsource          forget the source and go back to fresh progressions
-//   openpanel <name> [v] open or close the Advanced or Source overlay panel
-//   closepanel           close any open overlay panel
+//   commit               write the sounding LIVE progression to the next empty clip (tag · LIVE)
+//   bus <json>           a hello (or other) message from receive dooblr_chords_bus
+//   openadvanced         open the floating Advanced window (p advanced)
 // With a source loaded, Generate/Reroll/Write make a VARIATION or a B SECTION
 // of it (the VAR/B switch, param kind) instead of a fresh progression.
 // Outlets:
@@ -27,11 +28,12 @@
 
 autowatch = 0;
 inlets = 1;
-outlets = 3;
-setinletassist(0, 'init, param <name> <value>, generate, reroll, write, lock <index>, dropfile <path>, useclip, clearsource, openpanel, closepanel');
+outlets = 4;
+setinletassist(0, 'init, param <name> <value>, generate, reroll, write, commit, lock <index>, dropfile <path>, useclip, clearsource, openadvanced, bus');
 setoutletassist(0, 'setstate <json> to the chord display');
 setoutletassist(1, 'set <seed> to the Seed number box');
 setoutletassist(2, 'raw MIDI bytes to midiout');
+setoutletassist(3, 'harmony bus JSON to send dooblr_chords_bus');
 
 var self = this;
 var E = DC.engine;
@@ -39,7 +41,7 @@ var S = DC.scheduler;
 
 var PARAM_NAMES = ['root', 'mode', 'length', 'duration', 'color', 'chromatic',
   'register', 'spread', 'bass', 'velocity', 'humanize', 'seed', 'kind', 'lead', 'density', 'notes',
-  'playmode', 'evolve'];
+  'playmode', 'evolve', 'buschan', 'spice'];
 
 var settings = E.normalize(E.DEFAULTS);
 var locks = [];
@@ -57,71 +59,26 @@ var BUTTON_HINTS = {
   write: 'Write puts the progression shown below into the next empty clip slot without changing it.',
   playmode: 'CLIP writes Session clips when you press Generate. LIVE plays the generated progression as MIDI in real time, synced to Live\'s transport, and does not write clips.',
   evolve: 'EVOLVE (LIVE only) lightly varies one or two inner unlocked chords at cycle boundaries: Off, every cycle, every 2 cycles, or every 4 cycles. The first and last chords stay put. Deterministic for a given seed and cycle.',
+  commit: 'TO CLIP writes the progression as it is currently playing in LIVE mode — including Evolve mutations and settings already applied — into the next empty Session clip slot. Live playback is not stopped or retriggered. It is dimmed in CLIP mode; use Generate, Reroll or Write there.',
+  buschan: 'Bus Channel (A, B, C or D) is the harmony link that dooblr-chord-receiver devices listen to. Use a different letter when two dooblr-chords devices share a Set.',
   useclip: 'USE CLIP reads the MIDI clip shown in the Detail View (or the selected clip) as the source.',
   clearsource: 'CLEAR forgets the source, so Generate makes fresh progressions again.',
   kind: 'VAR writes a variation of the source: same key, length and rhythm, some chords swapped. B writes a contrasting B section that leads back to the source.',
   lead: 'LEAD writes a monophonic melody over the chord progression instead of the chords themselves. The same seed, key, length and locks shape the line.',
+  spice: 'Spice is a macro for how adventurous the progression is. It sets Color and Chromatic together along a fixed curve. The individual Color and Chromatic knobs stay in the Advanced window.',
   notes: 'Notes sets the chord type: a triad (3 notes), 7th (4), 9th (5) or 11th (6). Color and Spice still colour the tones — alterations, borrowed chords and substitutions — but they do not change how many notes each chord has. When Bass is on, the bass is one of those notes: it takes the root out of the upper voicing, so a triad still has three sounding voices. A slash bass is also one of the N.'
 };
 
-// Overlay panels. Members are parked off-screen in the saved patcher (x = PARK_X).
-// js shows a panel by sending presentation_rect to the stored open position,
-// and parks it again to close. Covered main-view controls are parked the same
-// way so nothing under the overlay stays clickable. Open/closed is not a
-// saved parameter. The first name in each list is the backdrop.
-var PANELS = {
-  advanced: ['adv_bg', 'adv_title', 'adv_close', 'adv_bars_label', 'adv_seed_label', 'bass_label',
-    'duration', 'seed', 'write', 'register', 'spread', 'velocity', 'humanize', 'density', 'bass',
-    'evolve_label', 'evolve'],
-  source: ['src_bg', 'src_title', 'src_close', 'srcdrop', 'useclip', 'clearsource', 'kind', 'srcinfo']
-};
-var PANEL_NAMES = ['advanced', 'source'];
-var PARK_X = 2000;
-var BADGE_RECT = [8, 142, 108, 22];
-var COVERED_RECTS = {
-  key_label: [136, 4, 50, 14],
-  root: [136, 22, 52, 24],
-  mode: [196, 22, 120, 24],
-  length_label: [136, 52, 52, 14],
-  length: [136, 66, 52, 24],
-  color_label: [326, 4, 70, 14],
-  color: [326, 18, 70, 76],
-  spice_label: [404, 4, 70, 14],
-  chromatic: [404, 18, 70, 76],
-  notes_label: [196, 52, 128, 14],
-  notes: [196, 66, 128, 24],
-  blocks: [136, 99, 496, 66]
-};
-var PANEL_RECTS = {
-  adv_bg: [128, 0, 512, 169],
-  adv_title: [140, 8, 200, 16],
-  adv_close: [456, 6, 22, 22],
-  adv_bars_label: [140, 36, 100, 14],
-  adv_seed_label: [304, 36, 40, 14],
-  bass_label: [460, 84, 48, 14],
-  duration: [140, 50, 148, 24],
-  seed: [304, 50, 88, 24],
-  write: [404, 50, 64, 24],
-  register: [140, 84, 56, 72],
-  spread: [204, 84, 56, 72],
-  velocity: [268, 84, 56, 72],
-  humanize: [332, 84, 56, 72],
-  density: [396, 84, 56, 72],
-  bass: [460, 100, 48, 22],
-  evolve_label: [512, 36, 116, 14],
-  evolve: [512, 50, 116, 24],
-  src_bg: [128, 0, 512, 169],
-  src_title: [140, 8, 200, 16],
-  src_close: [456, 6, 22, 22],
-  srcdrop: [140, 40, 248, 52],
-  useclip: [400, 40, 92, 24],
-  clearsource: [500, 40, 52, 24],
-  kind: [140, 100, 248, 28],
-  srcinfo: [400, 72, 200, 80]
-};
-var openPanel = null;
-var applyingPanel = false;
+// The compact source chip on the main view (hidden when no source is loaded).
+var BADGE_RECT = [268, 16, 124, 20];
 var badgeOn = false;
+
+// Spice macro: do not apply Spice -> Color/Chromatic during init (that would
+// smash recalled Color and Chromatic on older Sets that have no Spice). After
+// init, Spice writes those two with `set` (no output) and Color/Chromatic only
+// update the Spice dial, never write back, so there is no feedback loop.
+var spiceReady = false;
+var applyingMacro = false;
 
 // LIVE scheduler. The host polls Live's transport every 10ms with a Max Task
 // and feeds { playing, beats, barBeats, tempo } into the pure js scheduler.
@@ -131,8 +88,11 @@ var deviceObs = null;
 var lastPlayIndex = -1;
 var lastPlayCycle = -1;
 var MIDI_OUT = 2;
+var BUS_OUT = 3;
+var lastHarmonyId = '';
+var lastHarmonyAt = 0;
 var BOUNDARY_PARAMS = {
-  root: 1, mode: 1, length: 1, duration: 1, color: 1, chromatic: 1, notes: 1,
+  root: 1, mode: 1, length: 1, duration: 1, color: 1, chromatic: 1, spice: 1, notes: 1,
   register: 1, spread: 1, bass: 1, velocity: 1, humanize: 1, density: 1, lead: 1,
   kind: 1, seed: 1
 };
@@ -143,16 +103,18 @@ function isLive() { return !!settings.playmode; }
 // ---- messages -------------------------------------------------------------
 
 function loadbang() {
-  closepanel();
   refresh();
 }
 
 function init() {
   ready = true;
-  closepanel();
+  spiceReady = true;
+  syncSpiceFromParts();
   refresh();
   applyPlayMode(-1);
+  startClock();
   bindDevice();
+  broadcastHarmony(null, true);
 }
 
 function notifydeleted() { teardownLive(); }
@@ -177,6 +139,24 @@ function param(name, value) {
     S.setEvolveEvery(sched, E.evolveEvery(settings.evolve));
     refresh();
     return;
+  }
+  if (name === 'buschan') {
+    refresh();
+    broadcastHarmony(null, true);
+    return;
+  }
+  if (name === 'spice') {
+    if (spiceReady) { applySpice(settings.spice); }
+    refresh();
+    if (isLive() && BOUNDARY_PARAMS.spice && sched.started && sched.playing) {
+      S.queueBuild(sched, current, 'chord');
+      setStatus('info', 'LIVE: that change applies at the next chord.');
+      sendState();
+    }
+    return;
+  }
+  if ((name === 'color' || name === 'chromatic') && spiceReady) {
+    syncSpiceFromParts();
   }
   refresh();
   if (isLive() && BOUNDARY_PARAMS[name] && sched.started && sched.playing) {
@@ -221,12 +201,25 @@ function reroll() {
 function write() {
   if (!guard()) { return; }
   if (isLive()) {
-    setStatus('info', 'Write is only for CLIP mode: it creates a Session clip. Switch to CLIP to write this progression.');
+    setStatus('info', 'Write is only for CLIP mode: it creates a Session clip. Switch to CLIP to use Write, or press TO CLIP to capture what is playing live.');
     sendState();
     return;
   }
   if (!current) { refresh(); }
   writeClip();
+}
+
+function commit() {
+  if (!guard()) { return; }
+  if (!isLive()) {
+    setStatus('info', 'TO CLIP is only for LIVE mode: it writes the sounding progression to a Session clip without stopping playback. Switch to LIVE to use it.');
+    sendState();
+    return;
+  }
+  var build = soundingBuild() || current;
+  if (!build) { refresh(); build = current; }
+  if (!build) { return; }
+  writeClip(build, { tag: 'LIVE' });
 }
 
 function lock(index) {
@@ -369,36 +362,59 @@ function readFileBytes(path) {
 
 function errText(e) { return (e && e.message) ? e.message : String(e); }
 
-function openpanel(name, value) {
-  // Ignore outlet echo from our own "set" on the opener buttons.
-  if (applyingPanel) { return; }
-  var key = String(name || '');
-  if (key !== 'advanced' && key !== 'source') { return; }
-  // live.text in toggle mode sends 1 when turned on and 0 when turned off.
-  // A bang (no value) toggles. Opening one panel closes the other.
-  var next = openPanel;
-  if (value === 0 || value === '0') {
-    if (openPanel === key) { next = null; }
-  } else if (value === undefined || value === 'bang') {
-    next = (openPanel === key) ? null : key;
-  } else {
-    next = key;
-  }
-  if (next === openPanel) { return; }
-  openPanel = next;
-  applyPanelVisibility();
-  post('dooblr-chords: panel ' + (openPanel ? 'open ' + openPanel : 'closed') + '\n');
+function openadvanced() {
+  try {
+    var box = self.patcher.getnamed('advanced');
+    if (box) {
+      box.message('open');
+      box.message('front');
+    }
+  } catch (e) {}
+  try {
+    var tp = self.patcher.getnamed('thispatcher');
+    if (tp) {
+      tp.message('script', 'sendbox', 'advanced', 'open');
+      tp.message('script', 'sendbox', 'advanced', 'front');
+    }
+  } catch (e2) {}
+  post('dooblr-chords: advanced window open\n');
 }
 
-function closepanel() {
-  if (applyingPanel) { return; }
-  if (openPanel === null) {
-    applyPanelVisibility();
-    return;
+function applySpice(s) {
+  if (applyingMacro) { return; }
+  applyingMacro = true;
+  try {
+    settings.color = DC.spice.colorFromSpice(s);
+    settings.chromatic = DC.spice.chromaticFromSpice(s);
+    settings = E.normalize(settings);
+    setControl('color', settings.color);
+    setControl('chromatic', settings.chromatic);
+  } finally {
+    applyingMacro = false;
   }
-  openPanel = null;
-  applyPanelVisibility();
-  post('dooblr-chords: panel closed\n');
+}
+
+function syncSpiceFromParts() {
+  if (applyingMacro) { return; }
+  var next = DC.spice.spiceFromParts(settings.color, settings.chromatic);
+  settings.spice = next;
+  applyingMacro = true;
+  try { setControl('spice', next); } finally { applyingMacro = false; }
+}
+
+function getObj(varname) {
+  try {
+    var obj = self.patcher.getnamed(varname);
+    if (obj) { return obj; }
+  } catch (e) {}
+  try {
+    var box = self.patcher.getnamed('advanced');
+    if (box && box.subpatcher) {
+      var sp = box.subpatcher();
+      if (sp) { return sp.getnamed(varname); }
+    }
+  } catch (e2) {}
+  return null;
 }
 
 function anything() {
@@ -465,7 +481,7 @@ function refresh() {
 
 function setControl(varname, value) {
   try {
-    var obj = self.patcher.getnamed(varname);
+    var obj = getObj(varname);
     if (obj) { obj.message('set', value); }
   } catch (e) {
     post('dooblr-chords: could not set ' + varname + ': ' + e + '\n');
@@ -474,7 +490,7 @@ function setControl(varname, value) {
 
 function clearDrop() {
   try {
-    var obj = self.patcher.getnamed('srcdrop');
+    var obj = getObj('srcdrop');
     if (obj) { obj.message('clear'); }
   } catch (e) {
     post('dooblr-chords: could not clear the drop zone: ' + e + '\n');
@@ -488,7 +504,7 @@ function updateSourceInfo() {
     text = d.name + ' \u00B7 ' + d.detectedKey + ' \u00B7 ' + d.chords.length + ' chords, ' + d.bars + ' bars';
   }
   try {
-    var obj = self.patcher.getnamed('srcinfo');
+    var obj = getObj('srcinfo');
     if (obj) { obj.message('set', text); }
   } catch (e) {
     post('dooblr-chords: could not update srcinfo: ' + e + '\n');
@@ -507,93 +523,13 @@ function updateSourceBadge() {
     badgeOn = true;
   }
   try {
-    var obj = self.patcher.getnamed('srcbadge');
-    if (obj) { obj.message('set', text); }
+    var obj = getObj('srcbadge');
+    if (obj) {
+      obj.message('set', text);
+      obj.message('hidden', badgeOn ? 0 : 1);
+    }
   } catch (e) {
     post('dooblr-chords: could not update srcbadge: ' + e + '\n');
-  }
-  placeRect('srcbadge', BADGE_RECT, badgeOn);
-}
-
-function parkedRect(rect) {
-  return [PARK_X, rect[1], rect[2], rect[3]];
-}
-
-function setRect(varname, rect) {
-  try {
-    var obj = self.patcher.getnamed(varname);
-    if (obj) { obj.message('presentation_rect', rect[0], rect[1], rect[2], rect[3]); }
-  } catch (e) {
-    post('dooblr-chords: could not move ' + varname + ': ' + e + '\n');
-  }
-  try {
-    var tp = self.patcher.getnamed('thispatcher');
-    if (tp) { tp.message('script', 'sendbox', varname, 'presentation_rect', rect[0], rect[1], rect[2], rect[3]); }
-  } catch (e2) {}
-}
-
-function placeRect(varname, rect, on) {
-  if (!rect) { return; }
-  setRect(varname, on ? rect : parkedRect(rect));
-}
-
-function sendBack(varname) {
-  try {
-    var obj = self.patcher.getnamed(varname);
-    if (obj && self.patcher.sendtoback) { self.patcher.sendtoback(obj); }
-  } catch (e) {}
-  try {
-    var tp = self.patcher.getnamed('thispatcher');
-    if (tp) { tp.message('script', 'sendtoback', varname); }
-  } catch (e2) {}
-}
-
-function sendFront(varname) {
-  try {
-    var obj = self.patcher.getnamed(varname);
-    if (obj && self.patcher.bringtofront) { self.patcher.bringtofront(obj); }
-  } catch (e) {}
-  try {
-    var tp = self.patcher.getnamed('thispatcher');
-    if (tp) { tp.message('script', 'bringtofront', varname); }
-  } catch (e2) {}
-}
-
-function raisePanel(name) {
-  var members = PANELS[name], j;
-  sendBack(members[0]);
-  for (j = 1; j < members.length; j++) { sendFront(members[j]); }
-  sendFront('open_advanced');
-  sendFront('open_source');
-}
-
-function applyPanelVisibility() {
-  var i, j, name, members, show, vn, wasApplying;
-  wasApplying = applyingPanel;
-  applyingPanel = true;
-  try {
-    if (openPanel) {
-      for (vn in COVERED_RECTS) {
-        if (COVERED_RECTS.hasOwnProperty(vn)) { placeRect(vn, COVERED_RECTS[vn], false); }
-      }
-    }
-    for (i = 0; i < PANEL_NAMES.length; i++) {
-      name = PANEL_NAMES[i];
-      members = PANELS[name];
-      show = openPanel === name;
-      for (j = 0; j < members.length; j++) { placeRect(members[j], PANEL_RECTS[members[j]], show); }
-      if (show) { raisePanel(name); }
-    }
-    if (!openPanel) {
-      for (vn in COVERED_RECTS) {
-        if (COVERED_RECTS.hasOwnProperty(vn)) { placeRect(vn, COVERED_RECTS[vn], true); }
-      }
-    }
-    placeRect('srcbadge', BADGE_RECT, badgeOn);
-    setControl('open_advanced', openPanel === 'advanced' ? 1 : 0);
-    setControl('open_source', openPanel === 'source' ? 1 : 0);
-  } finally {
-    applyingPanel = wasApplying;
   }
 }
 
@@ -630,7 +566,7 @@ function sendState() {
 
 function setActive(varname, on, annotation) {
   try {
-    var obj = self.patcher.getnamed(varname);
+    var obj = getObj(varname);
     if (!obj) { return; }
     obj.message('active', on ? 1 : 0);
     if (annotation) { obj.message('annotation', annotation); }
@@ -648,7 +584,7 @@ var TEXT_MUTED = [0.541, 0.569, 0.612];
 function setPartlyIgnored(varname, partly, annotation, base) {
   var c = base || TEXT_PRIMARY;
   try {
-    var obj = self.patcher.getnamed(varname);
+    var obj = getObj(varname);
     if (!obj) { return; }
     obj.message('textcolor', c[0], c[1], c[2], partly ? 0.6 : 1);
     if (annotation) { obj.message('annotation', annotation); }
@@ -664,8 +600,11 @@ function updateButtons() {
   var live = isLive();
   setActive('generate', ready, BUTTON_HINTS.generate + (ready ? '' : waiting));
   setActive('write', ready && !live, live
-    ? BUTTON_HINTS.write + ' It is dimmed because LIVE mode plays the progression in real time and does not write Session clips. Switch to CLIP to use Write.'
+    ? BUTTON_HINTS.write + ' It is dimmed because LIVE mode plays the progression in real time. Press TO CLIP to write the sounding progression, or switch to CLIP to use Write.'
     : BUTTON_HINTS.write + (ready ? '' : waiting));
+  setActive('commit', ready && live, live
+    ? BUTTON_HINTS.commit
+    : BUTTON_HINTS.commit + ' It is dimmed in CLIP mode: switch to LIVE to write the sounding progression.');
   var canReroll = ready && lockCount() > 0;
   setActive('reroll', canReroll, BUTTON_HINTS.reroll +
     (canReroll ? '' : (ready ? ' It is dimmed because no chord is locked yet: click a chord block to lock it.' : waiting)));
@@ -686,6 +625,7 @@ function updateButtons() {
   setActive('evolve', ready && live, live
     ? BUTTON_HINTS.evolve
     : BUTTON_HINTS.evolve + ' It is dimmed in CLIP mode: Evolve only runs while the device is playing a live progression.');
+  setActive('buschan', ready, BUTTON_HINTS.buschan + (ready ? '' : waiting));
   setGenerateLabel(leadOn, live);
 }
 
@@ -693,7 +633,7 @@ function setGenerateLabel(leadOn, live) {
   if (live === undefined) { live = isLive(); }
   var label = live ? (leadOn ? 'New Lead' : 'New Progression') : (leadOn ? 'Generate Lead' : 'Generate');
   try {
-    var obj = self.patcher.getnamed('generate');
+    var obj = getObj('generate');
     if (!obj) { return; }
     obj.message('text', label);
     obj.message('texton', label);
@@ -713,13 +653,13 @@ function applyPlayMode(previous) {
   if (live) {
     startClock();
     if (previous === 0 || previous === -1) {
-      setStatus('info', 'LIVE: plays on the next bar when the transport is running. Incoming MIDI still passes through.');
+      setStatus('info', 'LIVE: plays on the next bar when the transport is running. Incoming MIDI still passes through. TO CLIP writes the sounding progression to a Session slot.');
     }
   } else {
     silenceLive();
-    stopClock();
+    startClock();
     if (previous === 1) {
-      setStatus('info', 'CLIP: Generate writes a clip into the next empty slot.');
+      setStatus('info', 'CLIP: Generate writes a clip into the next empty slot. Receivers still follow this progression from the transport.');
     }
   }
 }
@@ -811,47 +751,83 @@ function emitMidi(out) {
 }
 
 function tick() {
-  if (!isLive()) { return; }
-  var clock = readTransport();
-  if (!clock) { return; }
-  if (current && !sched.build) { S.setBuild(sched, current); }
-  var hooks = {
-    evolve: function (prev, cycle) {
-      var next = E.evolveBuild(prev, cycle, locks);
-      if (next) { current = next; }
-      return next;
+  var clockSnap = readTransport();
+  if (isLive()) {
+    if (!clockSnap) { broadcastHarmony(null, false); return; }
+    if (current && !sched.build) { S.setBuild(sched, current); }
+    var hooks = {
+      evolve: function (prev, cycle) {
+        var next = E.evolveBuild(prev, cycle, locks);
+        if (next) { current = next; }
+        return next;
+      }
+    };
+    var out = S.process(sched, clockSnap, hooks);
+    emitMidi(out);
+    if (sched.build) { current = sched.build; }
+    if (out.chordIndex !== lastPlayIndex || out.cycle !== lastPlayCycle || out.started !== !!sched.started) {
+      sendState();
     }
-  };
-  var out = S.process(sched, clock, hooks);
-  emitMidi(out);
-  if (sched.build) { current = sched.build; }
-  if (out.chordIndex !== lastPlayIndex || out.cycle !== lastPlayCycle || out.started !== !!sched.started) {
-    sendState();
   }
+  broadcastHarmony(clockSnap, false);
 }
 
 // Tests and a manual bang can step the clock without a Task.
 function clock(playing, beats, barBeats, tempo) {
-  if (!isLive()) { return; }
   var snap = {
     playing: !!playing,
     beats: typeof beats === 'number' ? beats : 0,
     barBeats: barBeats > 0 ? barBeats : 4,
     tempo: tempo > 0 ? tempo : 120
   };
-  if (current && !sched.build) { S.setBuild(sched, current); }
-  var hooks = {
-    evolve: function (prev, cycle) {
-      var next = E.evolveBuild(prev, cycle, locks);
-      if (next) { current = next; }
-      return next;
-    }
-  };
-  var out = S.process(sched, snap, hooks);
-  emitMidi(out);
-  if (sched.build) { current = sched.build; }
-  sendState();
+  var out;
+  if (isLive()) {
+    if (current && !sched.build) { S.setBuild(sched, current); }
+    var hooks = {
+      evolve: function (prev, cycle) {
+        var next = E.evolveBuild(prev, cycle, locks);
+        if (next) { current = next; }
+        return next;
+      }
+    };
+    out = S.process(sched, snap, hooks);
+    emitMidi(out);
+    if (sched.build) { current = sched.build; }
+    sendState();
+  }
+  broadcastHarmony(snap, true);
   return out;
+}
+
+function broadcastHarmony(clockSnap, force) {
+  var P = DC.protocol;
+  var build = soundingBuild() || current;
+  if (!build || !P) { return; }
+  var playing = !!(clockSnap && clockSnap.playing);
+  var beats = (clockSnap && typeof clockSnap.beats === 'number') ? clockSnap.beats : 0;
+  var opts = { playing: playing, beats: beats, channel: settings.buschan };
+  if (isLive() && sched.started && sched.chordIndex >= 0) {
+    opts.index = sched.chordIndex;
+    opts.playing = true;
+  }
+  var payload = P.fromBuild(build, opts);
+  if (!payload) { return; }
+  var id = P.identity(payload);
+  var now = (typeof Date !== 'undefined' && Date.now) ? Date.now() : 0;
+  if (!force && id === lastHarmonyId && now && (now - lastHarmonyAt) < 250) { return; }
+  lastHarmonyId = id;
+  lastHarmonyAt = now;
+  outlet(BUS_OUT, P.encode(payload));
+}
+
+// Incoming bus messages (hello from a receiver on this channel).
+function bus() {
+  var raw = Array.prototype.slice.call(arguments).join(' ');
+  var msg = DC.protocol.decode(raw);
+  if (!msg) { return; }
+  if (msg.type === 'hello' && DC.protocol.clampChan(msg.ch) === settings.buschan) {
+    broadcastHarmony(readTransport(), true);
+  }
 }
 
 // ---- Live API ---------------------------------------------------------------
@@ -945,8 +921,10 @@ function addNotes(clip, notes, lengthBeats) {
   return (n === notes.length || n < 0) ? method : null;
 }
 
-function writeClip() {
-  if (!current) { return false; }
+function writeClip(build, opts) {
+  build = build || current;
+  opts = opts || {};
+  if (!build) { return false; }
   var track = findTrack();
   if (!track) {
     setStatus('warn', 'Could not find this track, so no clip was written.');
@@ -955,23 +933,25 @@ function writeClip() {
   }
   var slot = findEmptySlot(track);
   if (!slot) {
-    setStatus('warn', 'Every clip slot on this track is full. Add a scene, then press Write.');
+    setStatus('warn', 'Every clip slot on this track is full. Add a scene, then press Write or TO CLIP.');
     sendState();
     return false;
   }
-  slot.api.call('create_clip', current.lengthBeats);
+  slot.api.call('create_clip', build.lengthBeats);
   var clip = new LiveAPI(slot.api.unquotedpath + ' clip');
   if (!clip || Number(clip.id) === 0) {
     setStatus('warn', 'Live did not create a clip in slot ' + (slot.index + 1) + '.');
     sendState();
     return false;
   }
-  clip.set('name', current.clipName);
-  var method = addNotes(clip, current.notes, current.lengthBeats);
+  var name = build.clipName || '';
+  if (opts.tag) { name = name + ' · ' + opts.tag; }
+  clip.set('name', name);
+  var method = addNotes(clip, build.notes, build.lengthBeats);
   if (!method) {
     setStatus('warn', 'Clip in slot ' + (slot.index + 1) + ' has no notes: see the Max window.');
   } else {
-    setStatus('ok', 'Wrote ' + current.clipName + ' to slot ' + (slot.index + 1) + '.');
+    setStatus('ok', 'Wrote ' + name + ' to slot ' + (slot.index + 1) + '.');
   }
   sendState();
   return !!method;
