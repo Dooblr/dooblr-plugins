@@ -17,13 +17,13 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: Max for Live MIDI effect that writes chord progressions into Session View clip slots.
-- Version: 0.7.0
+- Version: 0.8.0
 - Last source change: 2026-11-26
-- Source tree: `8ba04f6133e0` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chords`)
+- Source tree: `aee87cefabc6` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chords`)
 - Build/test: `dooblr-chords/scripts/build.js`
-- Device: device width 640 px
+- Device: device width 400 px
 
-### Parameters (24 rows, 24 parameters after loops; from `src/patcher/dooblr-chords.maxpat`)
+### Parameters (27 rows, 27 parameters after loops; from `src/patcher/dooblr-chords.maxpat`)
 
 `{n}` = index or name filled in by a loop; `x` = loop condition or repeat count.
 
@@ -33,10 +33,13 @@ Read `design/INDEX.md` first. This file has two parts:
 | reroll | live.text enum | Reroll | [off, on] |  |  |
 | root | live.menu enum | Root | [C, C#, D, Eb, E, F, F#, G, Ab, A, Bb, B] | 0 |  |
 | mode | live.menu enum | Mode | [Major, Natural Minor, Dorian, Phrygian, Lydian, Mixolydian, Harmonic Minor] | 1 |  |
-| length | live.numbox int | Length | 2..16 | 4 |  |
+| length | live.dial int | Length | 2..16 | 4 |  |
+| lead | live.text enum | Lead | [off, on] | 0 |  |
+| playmode | live.tab enum | Play Mode | [CLIP, LIVE] | 0 |  |
+| commit | live.text enum | TO CLIP | [off, on] |  |  |
+| spice | live.dial int | Spice | 0..100 | 35 |  |
 | color | live.dial int | Color | 0..100 | 35 |  |
 | chromatic | live.dial int | Chromatic | 0..100 | 10 |  |
-| lead | live.text enum | Lead | [off, on] | 0 |  |
 | write | live.text enum | Write | [off, on] |  |  |
 | seed | live.numbox int | Seed | 1..99999 | 1 |  |
 | duration | live.tab enum | Duration | [1/2, 1, 2] | 1 |  |
@@ -51,8 +54,8 @@ Read `design/INDEX.md` first. This file has two parts:
 | kind | live.tab enum | Source Kind | [VAR, B] | 0 |  |
 | density | live.dial int | Density | 0..100 | 50 |  |
 | notes | live.tab enum | Notes | [TRI, 7TH, 9TH, 11TH] | 0 |  |
-| playmode | live.tab enum | Play Mode | [CLIP, LIVE] | 0 |  |
 | evolve | live.tab enum | Evolve | [Off, 1 cycle, 2 cycles, 4 cycles] | 0 |  |
+| buschan | live.tab enum | Bus Channel | [A, B, C, D] | 0 |  |
 
 ### Source map
 
@@ -75,9 +78,11 @@ Read `design/INDEX.md` first. This file has two parts:
 | `src/engine/lead.js` | dooblr-chords engine: monophonic lead line over a chord progression (ES5). |
 | `src/engine/manifest.json` | JSON data |
 | `src/engine/midifile.js` | dooblr-chords engine: Standard MIDI File reader (ES5, host independent). |
+| `src/engine/protocol.js` | dooblr-chords harmony bus protocol (ES5, host independent). |
 | `src/engine/render.js` | dooblr-chords engine: turn voiced chords into clip notes (ES5). |
 | `src/engine/rng.js` | dooblr-chords engine: seeded random numbers (ES5, host independent). |
 | `src/engine/scheduler.js` | dooblr-chords LIVE scheduler (ES5, host independent). |
+| `src/engine/snap.js` | dooblr-chord-receiver: pitch mapping and note-off bookkeeping (ES5). |
 | `src/engine/theory.js` | dooblr-chords engine: scales, modes and note spelling (ES5). |
 | `src/engine/voicing.js` | dooblr-chords engine: voicing and voice leading (ES5). |
 | `src/max/blocks.js` | dooblr-chords: chord block display (jsui + mgraphics, ES5 only). |
@@ -88,9 +93,12 @@ Read `design/INDEX.md` first. This file has two parts:
 | `tests/load-engine.js` | Loads the ES5 engine into a fresh VM context, in manifest order, with the post-ES5 built-ins removed so an... |
 | `tests/max-glue.test.js` | Runs the BUILT device scripts (device/dooblr-chords/*.js) in a VM with a mocked Max runtime (outlet, post,... |
 | `tests/notes.test.js` | Query once every voice of this chord has attacked (humanize may delay a start slightly). |
+| `tests/protocol.test.js` |  |
 | `tests/scheduler.test.js` | Prefer the time-ordered event list so a poll that crosses two chord boundaries offs-then-ons at the first,... |
 | `tests/smf.js` | Builds Standard MIDI File bytes for tests. |
+| `tests/snap.test.js` | Verify bookkeeping: every current sounding pitch has a matching hold. |
 | `tests/source.test.js` | Am F C G (one bar each), with a bass note under each chord. |
+| `tests/spice.test.js` | On-curve pairs invert back to the same spice (allow 1 for rounding). |
 | `tests/theory.test.js` | Church modes are rotations of the major scale at their parent offset. |
 | `tests/tooling.test.js` | Tests for the build tooling: amxd container, patcher validator, ES5 scanner. |
 | `tests/voicing-render.test.js` | The third (when present) is always voiced: it defines the quality. |
@@ -99,10 +107,13 @@ Read `design/INDEX.md` first. This file has two parts:
 
 - `tests/generator.test.js` (11): progression length matches the Length setting (2..16), same seed and settings give identical output; different seeds differ, chromatic 0 is strictly diatonic in every mode and colour, more chromatic means more substitutions, and all four kinds appear, raising Color only adds tones and keeps the roots (chromatic 0), progressions usually start on the tonic and end with a cadence, no diminished opening chord and no immediate repeats of a degree, lock and reroll keeps locked chords exactly, locked chords are stored relative to the key, so they follow a key change, clip name format, newSeed stays in range
 - `tests/lead.test.js` (7): lead output is deterministic for a given seed and settings, lead notes stay in the key when Spice is 0, lead is monophonic: one note at a time, no overlaps, lead lasts the full clip and does not run past the end, strong beats are mostly chord tones, clip names and heading show Lead; default build is still a chord clip, Lead uses locked chords in the harmonic grid
-- `tests/max-glue.test.js` (24): no Live API use before live.thisdevice, then writes into the first empty slot, fills slots in order and reports a full track without creating scenes, falls back to set_notes when add_new_notes adds nothing, finds the track from inside a rack, parameters update the preview without writing, lock and reroll keep locked chords, Reroll is dimmed without locks, Seed is drawn partly ignored when every chord is locked, shrinking Length drops locks beyond the end, a dropped .mid file becomes the source; Generate writes a variation of it, dropped files that are not usable MIDI report a warning and keep the old source, a path re-sent while the Set loads keeps the saved Root, Mode and Length, USE CLIP reads the Detail View clip loop, shifted to start at 0, USE CLIP falls back to the highlighted slot and explains audio or missing clips, with a source, locks survive Reroll and switching VAR/B clears them, display paints 4 and 12 chords and maps clicks to lock messages, display shows the source strip, the VARIATION heading and changed chords, overlay panels start closed, toggle from js, and reset on init, Lead toggle writes a monophonic lead clip and relabels Generate, Lead over a source names the clip Lead · <name> · VAR and keeps the source chords, Notes tab sets the chord type and clip name, LIVE mode does not write a clip; Generate is New Progression; Write is dimmed, LIVE clock emits note-ons at a bar line and matching note-offs on stop, no clip write, LIVE + LEAD labels New Lead and stays monophonic; CLIP generate label is restored, switching to CLIP or notifydeleted flushes held LIVE notes
+- `tests/max-glue.test.js` (28): no Live API use before live.thisdevice, then writes into the first empty slot, fills slots in order and reports a full track without creating scenes, falls back to set_notes when add_new_notes adds nothing, finds the track from inside a rack, parameters update the preview without writing, lock and reroll keep locked chords, Reroll is dimmed without locks, Seed is drawn partly ignored when every chord is locked, shrinking Length drops locks beyond the end, a dropped .mid file becomes the source; Generate writes a variation of it, dropped files that are not usable MIDI report a warning and keep the old source, a path re-sent while the Set loads keeps the saved Root, Mode and Length, USE CLIP reads the Detail View clip loop, shifted to start at 0, USE CLIP falls back to the highlighted slot and explains audio or missing clips, with a source, locks survive Reroll and switching VAR/B clears them, display paints 4 and 12 chords and maps clicks to lock messages, display shows the source strip, the VARIATION heading and changed chords, ADVANCED opens the floating Advanced window, Spice macro sets Color and Chromatic after init, and does not smash them before init, Lead toggle writes a monophonic lead clip and relabels Generate, Lead over a source names the clip Lead · <name> · VAR and keeps the source chords, Notes tab sets the chord type and clip name, LIVE mode does not write a clip; Generate is New Progression; Write is dimmed, LIVE clock emits note-ons at a bar line and matching note-offs on stop, no clip write, LIVE + LEAD labels New Lead and stays monophonic; CLIP generate label is restored, switching to CLIP or notifydeleted flushes held LIVE notes, CLIP and LIVE both broadcast the current chord; hello is answered instantly, TO CLIP writes the sounding LIVE progression, including Evolve, and does not stop playback, TO CLIP is dimmed in CLIP mode and does not write a clip
 - `tests/notes.test.js` (6): default Notes is Triad (3), and 0.6.0 Auto/2 values fall back to a triad, each Notes setting writes exactly N unique MIDI notes, including the bass, the clip note list has exactly N unique sounding voices at each chord onset, Color and Spice do not change the Notes count, block names and applyNotes spelling match the chord type, Notes forces VAR/B derived chords to N sounding voices
+- `tests/protocol.test.js` (4): protocol encode/decode round-trips harmony and hello, CLIP/LIVE position: chord index follows song beats around the loop, payload includes key, scale, chord pcs, bass and a name, identity ignores beat so keep-alives can be skipped
 - `tests/scheduler.test.js` (14): nextBar snaps to the current bar line or the next one, chordAt follows song position around the loop, LIVE waits for the next bar, then attacks the chord for that position, starts immediately when transport is already on a bar line, every note-on gets exactly one note-off: loop, stop, no overlaps, mode switch to CLIP releases held notes, knob changes apply at the next chord boundary, not immediately, Generate/Reroll in LIVE applies at the next bar, playhead jump releases then attacks the chord at the new position, LEAD is monophonic live, still offs-before-ons, EVOLVE mutates inner chords deterministically with seed and cycle, EVOLVE fires at cycle wrap, not mid-cycle, and keeps bookkeeping clean, defaults add playmode CLIP and evolve Off without changing Notes, reroll mid-play releases then attacks, no leftover pitches
+- `tests/snap.test.js` (8): TONES snaps to the nearest chord tone; ties go down; exact stays, snap direction up/down, including already-a-tone, SCALE snaps to the key/mode, BASS uses the incoming octave, FOLLOW transposes from the reference, Range wraps a snapped pitch into one octave at register, refcount: two inputs mapped to one output, one note-off does not cut the other, retrigger on chord change remaps held notes; offs before ons; no stuck pitches, passthrough with no harmony sends the original pitch; flush clears it, every note-on has exactly one note-off after flush, including retrigger mid-hold
 - `tests/source.test.js` (12): midifile reads notes in beats, names, running status and note-on 0 offs, midifile reads format 1, other divisions and rounds the length up to whole bars, midifile rejects files that are not SMF with readable errors, analysis finds the chords and key of a block-chord clip, analysis merges repeated chords, ignores muted notes and reports empty clips, analysis round-trips generated progressions (pitch classes match), VAR keeps the key, length, rhythm, first and last chords, and is deterministic, VAR with Chromatic 0 stays in the key; other lengths use uniform slots, VAR keeps locked chords, B section moves away, ends on a chord that leads home, and fills the clip, B section keeps the rhythm plan when asked (locks during Reroll), engine without a source is unchanged by the kind setting
+- `tests/spice.test.js` (4): Spice curve goes through (0,0,0), the factory default (35,35,10), and (100,100,100), Spice is monotonic in both Color and Chromatic, off-curve Color/Chromatic do not snap to the curve; spice is a blend, engine.normalize keeps spice in 0-100 and leaves Color/Chromatic independent
 - `tests/theory.test.js` (5): modes have the expected interval sets, diatonic triad qualities per mode, key spelling follows the key signature, chord building and naming, extensions avoid minor-9th clashes except b9/b13 on dominants
 - `tests/tooling.test.js` (4): amxd: chunk layout and round trip, validator: the source patcher is clean, validator: catches duplicate ids, dangling lines and bad indices, ES5 scanner rejects ES2015+ syntax and accepts ES5
 - `tests/voicing-render.test.js` (9): every note is a valid MIDI note (0..127) at extreme settings, voicings contain the right pitch classes, and slash basses are lowest, voice leading moves upper voices less than naive root position, register keeps the upper voicing near the chosen note, spread opens the voicing, notes fill the clip: starts, durations and total length, humanize is off by default, seeded, and bounded, rhythm pattern registry is an extension point, rng: uniform range and stable streams
