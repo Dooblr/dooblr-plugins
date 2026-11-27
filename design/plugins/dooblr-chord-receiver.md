@@ -17,9 +17,9 @@ Read `design/INDEX.md` first. This file has two parts:
 ## Generated map
 
 - Kind: Max for Live MIDI effect that snaps incoming notes to a dooblr-chords harmony bus.
-- Version: 0.1.0
+- Version: 0.1.1
 - Last source change: 2026-11-26
-- Source tree: `814b74948b86` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chord-receiver`)
+- Source tree: `a213cfd5d361` (stale check: compare with `git rev-parse --short=12 HEAD:dooblr-chord-receiver`)
 - Build/test: `dooblr-chord-receiver/scripts/build.js`
 - Device: device width 360 px
 
@@ -41,7 +41,7 @@ Read `design/INDEX.md` first. This file has two parts:
 
 | file | role |
 |---|---|
-| `README.md` | Readme: dooblr-chord-receiver 0.1.0 |
+| `README.md` | Readme: dooblr-chord-receiver 0.1.1 |
 | `package.json` | npm package: scripts and dev dependencies |
 | `scripts/amxd.js` | Reader/writer for the unfrozen Max for Live device container (.amxd). |
 | `scripts/build.js` |  |
