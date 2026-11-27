@@ -65,14 +65,14 @@ test('validator: catches duplicate ids, dangling lines and bad indices', () => {
 
   p = clone();
   const adv = p.patcher.boxes.find((w) => w.box.varname === 'advanced').box.patcher;
-  const register = adv.boxes.find((w) => w.box.varname === 'register').box;
+  const register = adv.boxes.find((w) => w.box.varname === 'ui_register').box;
   register.presentation_rect = [700, 10, 56, 72];
   assert.ok(validate(p, 'x', MAIN).some((e) => /outside 560x300/.test(e)));
 
   p = clone();
   const adv2 = p.patcher.boxes.find((w) => w.box.varname === 'advanced').box.patcher;
-  const color = adv2.boxes.find((w) => w.box.varname === 'color').box;
-  const chromatic = adv2.boxes.find((w) => w.box.varname === 'chromatic').box;
+  const color = adv2.boxes.find((w) => w.box.varname === 'ui_color').box;
+  const chromatic = adv2.boxes.find((w) => w.box.varname === 'ui_chromatic').box;
   chromatic.presentation_rect = color.presentation_rect.slice();
   assert.ok(validate(p, 'x', MAIN).some((e) => /overlap in presentation/.test(e)));
 

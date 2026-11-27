@@ -118,6 +118,9 @@ function validate(patcher, label, mainSource) {
         if (v.parameter_type === 2 && Array.isArray(v.parameter_enum) && v.parameter_mmax !== undefined &&
             v.parameter_mmax !== v.parameter_enum.length - 1) { err(prefix + ': ' + b.id + ' enum length and parameter_mmax disagree'); }
         if (b.parameter_enable !== 1) { err(prefix + ': ' + b.id + ' has parameter attributes but parameter_enable is not 1'); }
+        if (!tree.isDevice) {
+          err(prefix + ': ' + b.id + ' (' + (b.varname || '') + ') is a saved parameter in a subpatcher; saved live.* parameters must live in the parent patcher so older Sets keep a compatible undo history');
+        }
       }
     });
 

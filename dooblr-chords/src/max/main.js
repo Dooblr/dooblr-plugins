@@ -3,7 +3,7 @@
 // writes the result to device/dooblr-chords/dooblr_chords.js.
 //
 // Messages in:
-//   init                 from live.thisdevice; LiveAPI is safe after this
+//   init                 from live.thisdevice; LiveAPI bind / Set writes wait for a deferred postInit
 //   param <name> <value> from each live.* control (via [prepend param <name>])
 //   generate             new seed, clear locks; write a clip (CLIP) or queue at next bar (LIVE)
 //   reroll               new seed, keep locked chords; write a clip (CLIP) or queue at next bar (LIVE)
@@ -73,12 +73,21 @@ var BUTTON_HINTS = {
 var BADGE_RECT = [268, 16, 124, 20];
 var badgeOn = false;
 
-// Spice macro: do not apply Spice -> Color/Chromatic during init (that would
-// smash recalled Color and Chromatic on older Sets that have no Spice). After
-// init, Spice writes those two with `set` (no output) and Color/Chromatic only
-// update the Spice dial, never write back, so there is no feedback loop.
+// Spice macro: never apply Spice -> Color/Chromatic, and never setControl
+// Spice from Color/Chromatic, during init or Set restore (that writes into
+// Live's undo history and can raise AManeuver during RestoreDocument). After
+// postInit, Spice writes those two with `set` (no output) and Color/Chromatic
+// only update the Spice dial, never write back, so there is no feedback loop.
 var spiceReady = false;
 var applyingMacro = false;
+var liveReady = false;
+
+// Defer Live Set modifications out of observer callbacks, document restore,
+// and the current stack. Task.schedule is the js equivalent of deferlow.
+var deferQueue = [];
+var deferTask = null;
+var deferRunning = false;
+var inNotification = 0;
 
 // LIVE scheduler. The host polls Live's transport every 10ms with a Max Task
 // and feeds { playing, beats, barBeats, tempo } into the pure js scheduler.
@@ -106,14 +115,82 @@ function loadbang() {
   refresh();
 }
 
+function defer(fn) {
+  if (!fn) { return; }
+  deferQueue.push(fn);
+  kickDefer();
+}
+
+function kickDefer() {
+  if (deferRunning) { return; }
+  if (inNotification) {
+    if (typeof Task !== 'undefined' && !deferTask) {
+      try {
+        deferTask = new Task(flushDefer, self);
+        deferTask.schedule(0);
+      } catch (e) {
+        deferTask = null;
+      }
+    }
+    return;
+  }
+  if (typeof Task === 'undefined') {
+    flushDefer();
+    return;
+  }
+  if (deferTask) { return; }
+  try {
+    deferTask = new Task(flushDefer, self);
+    deferTask.schedule(0);
+  } catch (e) {
+    deferTask = null;
+    flushDefer();
+  }
+}
+
+function flushDefer() {
+  deferTask = null;
+  if (deferRunning) { return; }
+  deferRunning = true;
+  try {
+    while (deferQueue.length && !inNotification) {
+      var fn = deferQueue.shift();
+      try { fn(); } catch (e) { post('dooblr-chords: deferred: ' + e + '\n'); }
+    }
+  } finally {
+    deferRunning = false;
+    if (deferQueue.length && !inNotification) { kickDefer(); }
+  }
+}
+
+function deferLater(fn, ms) {
+  if (typeof Task === 'undefined') { defer(fn); return; }
+  try {
+    var t = new Task(fn, self);
+    t.schedule(ms || 0);
+  } catch (e) {
+    defer(fn);
+  }
+}
+
 function init() {
+  // live.thisdevice often bangs in the middle of RestoreDocumentAndInitializeHistory.
+  // Do not construct LiveAPI observers, start the clock, broadcast, or set
+  // live.* parameters here — those writes can fatal with AManeuver::UnDo.
+  deferLater(postInit, 250);
+}
+
+function postInit() {
+  if (liveReady) { return; }
+  liveReady = true;
   ready = true;
   spiceReady = true;
-  syncSpiceFromParts();
+  // Do not setControl spice / color / chromatic: trust recalled values.
   refresh();
   applyPlayMode(-1);
   startClock();
   bindDevice();
+  syncUiClones();
   broadcastHarmony(null, true);
 }
 
@@ -443,6 +520,7 @@ function lockCount() {
 function pickNewSeed() {
   settings.seed = E.newSeed(Math.random());
   outlet(1, 'set', settings.seed);
+  setControl('seed', settings.seed);
 }
 
 function guard() {
@@ -479,21 +557,51 @@ function refresh() {
   updateSourceInfo();
 }
 
+function controlValue(varname, value) {
+  if (varname === 'notes') { return E.tabFromNotes(value); }
+  return value;
+}
+
 function setControl(varname, value) {
+  if (inNotification) {
+    defer(function () { setControl(varname, value); });
+    return;
+  }
+  var v = controlValue(varname, value);
   try {
     var obj = getObj(varname);
-    if (obj) { obj.message('set', value); }
+    if (obj) { obj.message('set', v); }
   } catch (e) {
     post('dooblr-chords: could not set ' + varname + ': ' + e + '\n');
+  }
+  try {
+    var ui = getObj('ui_' + varname);
+    if (ui) { ui.message('set', v); }
+  } catch (e2) {}
+}
+
+function syncUiClones() {
+  var names = ['color', 'chromatic', 'notes', 'duration', 'seed', 'register',
+    'spread', 'velocity', 'humanize', 'density', 'bass', 'evolve', 'buschan', 'kind'];
+  var i, name, obj;
+  for (i = 0; i < names.length; i++) {
+    name = names[i];
+    obj = getObj('ui_' + name);
+    if (!obj) { continue; }
+    try { obj.message('set', controlValue(name, settings[name])); } catch (e) {}
   }
 }
 
 function clearDrop() {
-  try {
-    var obj = getObj('srcdrop');
-    if (obj) { obj.message('clear'); }
-  } catch (e) {
-    post('dooblr-chords: could not clear the drop zone: ' + e + '\n');
+  var names = ['srcdrop', 'ui_srcdrop'];
+  var i, obj;
+  for (i = 0; i < names.length; i++) {
+    try {
+      obj = getObj(names[i]);
+      if (obj) { obj.message('clear'); }
+    } catch (e) {
+      post('dooblr-chords: could not clear the drop zone: ' + e + '\n');
+    }
   }
 }
 
@@ -702,15 +810,23 @@ function bindDevice() {
     deviceObs.property = 'is_active';
   } catch (e) {
     deviceObs = null;
+    deferLater(bindDeviceRetry, 250);
   }
 }
 
 function onDevice(args) {
+  inNotification++;
   try {
     var prop = args && args[0];
     var val = args && args[1];
-    if (String(prop) === 'is_active' && Number(val) === 0) { silenceLive(); }
+    if (String(prop) === 'is_active' && Number(val) === 0) { defer(silenceLive); }
   } catch (e) {}
+  inNotification--;
+  if (deferQueue.length) { kickDefer(); }
+}
+
+function bindDeviceRetry() {
+  if (!deviceObs) { bindDevice(); }
 }
 
 function readTransport() {
@@ -925,6 +1041,10 @@ function writeClip(build, opts) {
   build = build || current;
   opts = opts || {};
   if (!build) { return false; }
+  if (inNotification) {
+    defer(function () { writeClip(build, opts); });
+    return false;
+  }
   var track = findTrack();
   if (!track) {
     setStatus('warn', 'Could not find this track, so no clip was written.');

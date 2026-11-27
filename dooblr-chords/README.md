@@ -5,7 +5,7 @@ functional chord progressions and writes each one as a new MIDI clip into the
 next empty Session View clip slot on its own track, so variations pile up
 down the track.
 
-Version 0.8.0. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
+Version 0.8.1. Built for Live 11.3.43 with its bundled Max 8.5.8 on macOS
 (Apple Silicon). The device uses only the classic `js`/`jsui` objects (ES5) and
 `live.*` controls.
 
@@ -376,6 +376,15 @@ the files in `device/`, because they are generated.
 * `set` on the `srcinfo` comment and on the Root, Mode and Length controls
   (changes them without output; the js updates its own settings), and
   `active 0` dimming the `live.tab` VAR/B.
+* The 0.8.1 restore/LiveAPI hardening: saved live.* parameters stay in the
+  parent patcher (the Advanced window uses `parameter_enable 0` UI clones),
+  `live.thisdevice` defers observer bind, clock start and any `set` on
+  parameters by 250ms (and retries bind if the Live Set is not yet available),
+  LiveAPI `set`/`call` never runs inside an observer callback (`defer` /
+  `flushDefer` / `inNotification` guard, including clip writing), and init
+  no longer writes Spice from Color/Chromatic into the Set. Replacing a
+  loaded `.amxd` on disk while Live is running is still unsafe; quit Live
+  first.
 * The 0.8.0 harmony bus and TO CLIP in Live: global `send`/`receive`
   `dooblr_chords_bus` across devices on different tracks, hello/request
   latency, CLIP-mode chord-from-transport tracking, Bus Channel in the

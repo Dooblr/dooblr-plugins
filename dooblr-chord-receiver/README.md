@@ -1,4 +1,4 @@
-# dooblr-chord-receiver 0.1.0
+# dooblr-chord-receiver 0.1.1
 
 A Max for Live MIDI effect that snaps incoming notes to the harmony a
 [dooblr-chords](../dooblr-chords) sender is currently playing. Drop it in front

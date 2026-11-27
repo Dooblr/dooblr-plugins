@@ -1,6 +1,6 @@
 {
   "name": "dooblr-chord-receiver",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "Max for Live MIDI effect that snaps incoming notes to a dooblr-chords harmony bus.",
   "scripts": {

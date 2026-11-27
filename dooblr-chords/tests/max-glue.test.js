@@ -41,7 +41,17 @@ function makeLive(ctx, opts) {
     return { tracks: 'Track', devices: 'Device', chains: 'Chain', clip_slots: 'ClipSlot' }[kind] || (t[t.length - 1] === 'clip' ? 'Clip' : 'Unknown');
   }
   function LiveAPI(p, p2) {
-    if (typeof p === 'function') { this._cb = p; p = p2; }
+    if (typeof p === 'function') {
+      this._cb = p;
+      live.observers = live.observers || {};
+      const path0 = p2;
+      if (path0 === 'live_set this_device' || (typeof path0 === 'string' && /this_device/.test(path0))) {
+        live.observers.device = p;
+      } else if (path0 === 'live_set') {
+        live.observers.song = p;
+      }
+      p = p2;
+    }
     let path = p === 'this_device' ? live.devicePath : String(p);
     if (/ canonical_parent$/.test(path)) {
       const base = path.replace(/ canonical_parent$/, '').split(' ');
@@ -75,10 +85,12 @@ function makeLive(ctx, opts) {
   };
   LiveAPI.prototype.getcount = function (prop) { return prop === 'clip_slots' && this.type === 'Track' ? live.slots.length : 0; };
   LiveAPI.prototype.set = function (prop, value) {
+    if (live.inNotification) { throw new Error('LiveAPI.set during notification: ' + prop); }
     live.calls.push(['set', prop, value]);
     if (this.type === 'Clip' && prop === 'name') { this._slot.clip.name = value; }
   };
   LiveAPI.prototype.call = function () {
+    if (live.inNotification) { throw new Error('LiveAPI.call during notification'); }
     const args = Array.prototype.slice.call(arguments);
     live.calls.push(['call'].concat(args.map((a) => (typeof a === 'object' ? '[object]' : a))));
     const name = args[0];
@@ -145,6 +157,7 @@ function loadController(opts) {
   };
   const mock = makeLive(ctx, opts);
   ctx.LiveAPI = mock.LiveAPI;
+  if (opts.Task) { ctx.Task = opts.Task; }
   const files = opts.files || {};
   const VmArray = vm.runInContext('Array', ctx);
   ctx.File = function (p, mode) {
@@ -544,9 +557,14 @@ test('Spice macro sets Color and Chromatic after init, and does not smash them b
   assert.strictEqual(t.ctx.settings.color, 35);
   assert.strictEqual(t.ctx.settings.chromatic, 10);
   t.ctx.init();
-  // Init derives Spice from the recalled Color+Chromatic (factory curve => 35).
-  assert.strictEqual(t.ctx.settings.spice, 35);
-  assert.deepStrictEqual(t.lastMsg('spice', 'set'), ['set', 35]);
+  // Init must not write Spice / Color / Chromatic into the Set (undo-safe).
+  // Recalled Spice stays as it was; the factory Color+Chromatic are untouched.
+  assert.strictEqual(t.ctx.settings.spice, 100);
+  assert.strictEqual(t.ctx.settings.color, 35);
+  assert.strictEqual(t.ctx.settings.chromatic, 10);
+  assert.strictEqual(t.lastMsg('spice', 'set'), undefined);
+  assert.strictEqual(t.lastMsg('color', 'set'), undefined);
+  assert.strictEqual(t.lastMsg('chromatic', 'set'), undefined);
 
   t.ctx.param('spice', 0);
   assert.strictEqual(t.ctx.settings.color, 0);
@@ -817,3 +835,95 @@ test('TO CLIP is dimmed in CLIP mode and does not write a clip', () => {
   t.ctx.commit();
   assert.equal(t.live.slots.filter((s) => s.clip).length, n);
 });
+
+// ---- 0.8.1 Live Set safety --------------------------------------------------
+
+function makeTaskHarness() {
+  const scheduled = [];
+  function Task(fn, ctxSelf) {
+    this._fn = fn;
+    this._self = ctxSelf;
+    this.interval = 0;
+    this.cancelled = false;
+  }
+  Task.prototype.schedule = function (ms) {
+    scheduled.push({ ms: ms || 0, fn: this._fn, t: this, repeat: false });
+  };
+  Task.prototype.cancel = function () { this.cancelled = true; };
+  Task.prototype['repeat'] = function () {
+    scheduled.push({ ms: this.interval, fn: this._fn, t: this, repeat: true });
+  };
+  function flush(filter) {
+    const todo = scheduled.splice(0, scheduled.length);
+    todo.forEach((item) => {
+      if (item.t.cancelled) { return; }
+      if (filter && !filter(item)) {
+        scheduled.push(item);
+        return;
+      }
+      item.fn.call(item._self);
+      if (item.repeat && !item.t.cancelled) { scheduled.push(item); }
+    });
+  }
+  return { Task, scheduled, flush };
+}
+
+test('init does not modify the Live Set or write live.* parameters', () => {
+  const t = loadController();
+  t.ctx.loadbang();
+  t.ctx.init();
+  const mods = t.live.calls.filter((c) => c[0] === 'set' || c[0] === 'call');
+  assert.deepStrictEqual(mods, [], 'no LiveAPI set/call during init');
+  assert.strictEqual(t.lastMsg('spice', 'set'), undefined);
+  assert.strictEqual(t.lastMsg('color', 'set'), undefined);
+  assert.strictEqual(t.lastMsg('chromatic', 'set'), undefined);
+  assert.ok(t.ctx.ready, 'without Task, postInit runs synchronously so tests can generate');
+});
+
+test('when Task is present, init defers bind and stays not-ready until the scheduled task', () => {
+  const h = makeTaskHarness();
+  const t = loadController({ Task: h.Task, slots: [0, 0] });
+  t.ctx.loadbang();
+  t.ctx.init();
+  assert.strictEqual(t.ctx.ready, false, 'still loading until postInit');
+  assert.strictEqual(t.ctx.generate(), undefined);
+  assert.match(t.lastState().status, /still loading/);
+  assert.ok(!t.live.slots[0].clip, 'no clip written before postInit');
+  const delayed = h.scheduled.filter((s) => s.ms >= 250 && !s.repeat);
+  assert.ok(delayed.length >= 1, 'postInit scheduled ~250ms later');
+  h.flush((s) => s.ms >= 250 && !s.repeat);
+  assert.strictEqual(t.ctx.ready, true);
+  t.ctx.generate();
+  assert.ok(t.live.slots[0].clip, 'clip written after postInit');
+});
+
+test('observer callbacks do not LiveAPI set/call; clip writes are deferred out of notifications', () => {
+  const t = loadController({ slots: [0, 0] });
+  t.ctx.init();
+  assert.ok(t.live.observers && t.live.observers.device, 'is_active observer installed');
+
+  t.live.inNotification = true;
+  t.ctx.inNotification = 1;
+  t.live.observers.device(['is_active', 0]);
+  const mods = t.live.calls.filter((c) => c[0] === 'set' || c[0] === 'call');
+  assert.deepStrictEqual(mods, [], 'observer itself does not modify the Set');
+
+  t.ctx.generate();
+  assert.ok(!t.live.slots[0].clip, 'writeClip queued, not run, during a notification');
+  t.live.inNotification = false;
+  t.ctx.inNotification = 0;
+  t.ctx.flushDefer();
+  assert.ok(t.live.slots[0].clip, 'queued clip write runs after the notification');
+});
+
+test('LiveAPI mock throws if set or call is invoked while inNotification is true', () => {
+  const t = loadController({ slots: [0] });
+  t.ctx.init();
+  t.live.inNotification = true;
+  const api = new t.ctx.LiveAPI('live_set tracks 0 clip_slots 0');
+  assert.throws(() => api.call('create_clip', 4), /during notification/);
+  t.live.inNotification = false;
+  api.call('create_clip', 4);
+  assert.ok(t.live.slots[0].clip);
+});
+

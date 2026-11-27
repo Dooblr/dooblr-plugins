@@ -96,7 +96,7 @@
           "maxclass": "comment",
           "numinlets": 1,
           "numoutlets": 0,
-          "text": "v0.1.0",
+          "text": "v0.1.1",
           "fontname": "Arial",
           "fontsize": 9,
           "textcolor": [
@@ -1302,7 +1302,7 @@
           "maxclass": "comment",
           "numinlets": 1,
           "numoutlets": 0,
-          "text": "dooblr-chord-receiver v0.1.0 \u2014 hidden patching objects. Presentation is the device UI.",
+          "text": "dooblr-chord-receiver v0.1.1 \u2014 hidden patching objects. Presentation is the device UI.",
           "fontname": "Arial",
           "fontsize": 9,
           "textcolor": [

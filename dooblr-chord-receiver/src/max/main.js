@@ -33,6 +33,11 @@ var lastHeard = 0;
 var connected = false;
 var clockTask = null;
 var deviceObs = null;
+var liveReady = false;
+var deferQueue = [];
+var deferTask = null;
+var deferRunning = false;
+var inNotification = 0;
 var STALE_MS = 1000;
 var MIDI_OUT = 0;
 var BUS_OUT = 1;
@@ -40,7 +45,64 @@ var UI_OUT = 2;
 
 function loadbang() { sendState(); }
 
+function defer(fn) {
+  if (!fn) { return; }
+  deferQueue.push(fn);
+  kickDefer();
+}
+
+function kickDefer() {
+  if (deferRunning) { return; }
+  if (inNotification) {
+    if (typeof Task !== 'undefined' && !deferTask) {
+      try {
+        deferTask = new Task(flushDefer, self);
+        deferTask.schedule(0);
+      } catch (e) { deferTask = null; }
+    }
+    return;
+  }
+  if (typeof Task === 'undefined') { flushDefer(); return; }
+  if (deferTask) { return; }
+  try {
+    deferTask = new Task(flushDefer, self);
+    deferTask.schedule(0);
+  } catch (e) {
+    deferTask = null;
+    flushDefer();
+  }
+}
+
+function flushDefer() {
+  deferTask = null;
+  if (deferRunning) { return; }
+  deferRunning = true;
+  try {
+    while (deferQueue.length && !inNotification) {
+      var fn = deferQueue.shift();
+      try { fn(); } catch (e) { post('dooblr-chord-receiver: deferred: ' + e + '\n'); }
+    }
+  } finally {
+    deferRunning = false;
+    if (deferQueue.length && !inNotification) { kickDefer(); }
+  }
+}
+
+function deferLater(fn, ms) {
+  if (typeof Task === 'undefined') { defer(fn); return; }
+  try {
+    var t = new Task(fn, self);
+    t.schedule(ms || 0);
+  } catch (e) { defer(fn); }
+}
+
 function init() {
+  deferLater(postInit, 250);
+}
+
+function postInit() {
+  if (liveReady) { return; }
+  liveReady = true;
   ready = true;
   startClock();
   bindDevice();
@@ -180,7 +242,10 @@ function bindDevice() {
   try {
     deviceObs = new LiveAPI(onDevice, 'live_set this_device');
     deviceObs.property = 'is_active';
-  } catch (e) { deviceObs = null; }
+  } catch (e) {
+    deviceObs = null;
+    deferLater(function () { if (!deviceObs) { bindDevice(); } }, 250);
+  }
   try {
     var song = new LiveAPI(onTransport, 'live_set');
     song.property = 'is_playing';
@@ -190,17 +255,23 @@ function bindDevice() {
 }
 
 function onDevice(args) {
+  inNotification++;
   try {
     if (String(args[0]) === 'is_active' && Number(args[1]) === 0) {
-      emit(Snap.flush(mapper));
+      defer(function () { emit(Snap.flush(mapper)); });
     }
   } catch (e) {}
+  inNotification--;
+  if (deferQueue.length) { kickDefer(); }
 }
 
 function onTransport(args) {
+  inNotification++;
   try {
     if (String(args[0]) === 'is_playing' && Number(args[1]) === 0) {
-      emit(Snap.flush(mapper));
+      defer(function () { emit(Snap.flush(mapper)); });
     }
   } catch (e) {}
+  inNotification--;
+  if (deferQueue.length) { kickDefer(); }
 }
