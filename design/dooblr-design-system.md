@@ -1131,8 +1131,28 @@ Read from **dooblr-reverb 0.1.0** (`R:` = `dooblr-reverb/Source`). An algorithmi
 
 ---
 
-## 17. Changelog
+## 17. dooblr-meter (MT)
 
+Read from **dooblr-meter 0.1.0** (`MT:` = `dooblr-meter/Source`). A loudness, translation and mix-insight meter, VST3 effect (category Fx Analyzer), plugin code `Dbmt`, zero latency, audio untouched unless an audition is on. Target names are generic ("Streaming −14", "Broadcast EU −23"); no third-party names or artwork anywhere in the UI.
+
+- **Window:** 940×600 min, 1080×660 default, 2400×1400 max, resizable (as §4). New for the suite: everything sits on one surface (`surface`) laid out at the window size up to 1080×660-ish and **scaled uniformly** above it (scale = min(W/1080, H/660), clamped 1–2), so text and controls grow instead of panels stretching.
+- **Header (58 px, `panel`):** 3 px `accent` brand bar, name 22 bold, subtitle "v0.1.0  loudness & translation meter" (11, `textMuted`). Main / Advanced tabs (TextButtons) left of centre. Right side, captions above (11 bold uppercase `textMuted`): TARGET combo, CURVE combo, LISTEN combo, MODE (Live | Song segmented buttons), Reset. While an audition is on, a status line ("LISTENING: Phone (level matched)", `dynamic`) sits left of the controls, or replaces the subtitle when the window is too narrow.
+- **Main page:**
+  - **Loudness** (left top): integrated in 36–46 px bold with "LUFS / INTEGRATED", the target and predicted playback change under it, then a two-column table (short-term, momentary, LRA, true peak, sample peak, PLR, PSR, RMS). Values outside the target draw in `danger`.
+  - **Stereo** (left bottom): vectorscope (dots in `accent`), correlation bars overall / low / mid / high, width S/M.
+  - **Loudness history** (centre top): short-term in `accent` (1.8 px), momentary in `momentary` @ 0.55 (1 px), the target ±1 LU as an `accent` @ 0.10 strip, overs as 2×6 px `danger` ticks along the top, the selected finding's span in `frozen` @ 0.16. Header note shows the mode and measured time.
+  - **Spectrum** (centre): long-term 1/3-octave in `dynamic` (2 px), live in `spectrum` (fill @ 0.12, line @ 0.6), the reference curve dashed with a ±3 dB band, bands outside the tolerance as columns @ 0.13 (`danger` above the curve, `momentary` below), and the selected finding's band in `frozen` @ 0.18 with a 1 px `frozen` @ 0.8 outline. Header note "1/3 octave   curve ±3 dB" (a legend, not a hint).
+  - **Translation** (right): 8 tiles (Club, BT speaker, Phone, Laptop, Earbuds, Headphones, Car, TV), each with name, score (0–100; `good` ≥ 75, `dynamic` 50–74, `danger` < 50), a score bar and a one-line reason. Click a tile to audition (the active tile fills `accent` @ 0.18 with a 1.2 px `accent` outline); click again to stop.
+  - **Findings** (bottom strip, scrolls): severity pill (FIX `danger`, WATCH `dynamic`, INFO `momentary`), title 12 bold, detail, "Try: …" fix line. Clicking a finding selects it and highlights its time span and band.
+- **Advanced page:** a settings panel (Custom loudness and Custom ceiling bar sliders, dimmed unless Target is Custom; History span, Spectrum slope, Spectrum averaging, Findings sensitivity combos; Level match, Mono, Freeze slide toggles), the delivery table (every target: LUFS, ceiling, playback policy, predicted change; the current one highlighted), All metrics, and the short-term distribution (1 LU bins, bins within ±1 LU of the target in `accent`).
+- **Colours:** existing tokens plus three aliases of existing band colours (no new hex): `danger` = `bandColour(4)` `0xffd9776b`, `good` = `bandColour(2)` `0xffa3c46c`, `momentary` = `bandColour(0)` `0xff6fa8dc`. No new font, radius or alpha token.
+- **Deviations:** the views are painted on a 30 Hz timer with paths built in `paint()`, not yet the §3 opaque / pre-rendered / display-synced model.
+
+---
+
+## 18. Changelog
+
+- **2026-11-27**: Added §17 dooblr-meter (MT, 0.1.0): loudness / true-peak / spectrum / stereo meter with delivery-target predictions, 8 translation profiles with Listen auditions, and rule-based findings; adds the uniformly scaled editor surface and three colour aliases of existing band colours. Changelog renumbered to §18. Additive only; no existing rule, token name or value changed; §11–§16 untouched; no JSON change.
 - **2026-11-26**: dooblr-throat 0.4.1 removes the remaining Natural clicks (5 ms fade-out of the sounding clip on retrigger / stop / phrase edit, per-sample gate ramp, phrase edits no longer cut the playing clip, no Tract bleed while the first cache builds) and adds a **Vowel Loop** pill switch on the Main page (append-only `vowelLoop`, default on: Sing holds its vowel as in 0.4.0, Speak now holds its last vowel while the key is down; off plays each clip once). `stateVersion` stays 1. Additive only; no new colour or font tokens; no existing rule changed; no JSON change.
 - **2026-11-26**: dooblr-reverb 0.1.1 makes the spectrum smooth: a fresh, evenly paced spectrum every VBlank frame whatever the host block size (steady-rate sample queue, one FFT per frame, time-based rise / fall ballistics, mean-power bins), and a frame repaints only the plot over two cached images (grid; curves + handles). §16 Display updated. Additive only; existing tokens only; no existing rule, token name or value changed; no JSON change.
 - **2026-11-26**: Added §16 dooblr-reverb (R, 0.1.0): algorithmic reverb with a centred Space hero knob in a top knob row, a display with the Decay Rate EQ (`accent`, % scale) and Post EQ (`dynamic`, dB scale) over the spectrum, layer pills, and a bottom bar with Analyzer / Predelay + Sync / In / Out / Bypass; adds the horizontal bar-slider look. Changelog renumbered to §17. Additive only; existing tokens only; no existing rule, token name or value changed; §11–§15 untouched; no JSON change.
